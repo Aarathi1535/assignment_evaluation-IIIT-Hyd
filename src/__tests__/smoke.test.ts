@@ -1,9 +1,4 @@
-import { loadEnvConfig } from '@next/env';
-// Load environment variables (.env.local) first
-loadEnvConfig(process.cwd());
-
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import mongoose from 'mongoose';
+import { describe, it, expect, beforeAll } from 'vitest';
 
 describe('Smoke Tests', () => {
   let healthGET: any;
@@ -11,16 +6,9 @@ describe('Smoke Tests', () => {
   let coursesGET: any;
 
   beforeAll(async () => {
-    const { connectDB } = await import('../lib/db');
-    await connectDB();
-
     healthGET = (await import('../app/api/health/route')).GET;
     registerPOST = (await import('../app/api/auth/register/route')).POST;
     coursesGET = (await import('../app/api/courses/route')).GET;
-  });
-
-  afterAll(async () => {
-    await mongoose.connection.close();
   });
 
   describe('Health API', () => {
@@ -48,19 +36,31 @@ describe('Smoke Tests', () => {
     });
 
     it('should prevent duplicate registration', async () => {
-      const req = new Request('http://localhost:3000/api/auth/register', {
+      const payload = {
+        name: 'Default Admin',
+        email: 'admin@university.edu',
+        password: 'admin-secure-password',
+        role: 'ADMIN',
+      };
+
+      // Register the first time (should succeed)
+      const req1 = new Request('http://localhost:3000/api/auth/register', {
         method: 'POST',
-        body: JSON.stringify({
-          name: 'Default Admin',
-          email: 'admin@university.edu',
-          password: 'admin-secure-password',
-          role: 'ADMIN',
-        }),
+        body: JSON.stringify(payload),
         headers: { 'Content-Type': 'application/json' },
       });
-      const res = await registerPOST(req as any);
-      expect(res.status).toBe(409);
-      const data = await res.json();
+      const res1 = await registerPOST(req1 as any);
+      expect(res1.status).toBe(201);
+
+      // Register the second time (should return 409 duplicate error)
+      const req2 = new Request('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res2 = await registerPOST(req2 as any);
+      expect(res2.status).toBe(409);
+      const data = await res2.json();
       expect(data.success).toBe(false);
       expect(data.message).toBe('Email already registered');
     });

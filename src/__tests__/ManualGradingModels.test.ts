@@ -1,8 +1,4 @@
-import { loadEnvConfig } from '@next/env';
-// Load environment variables (.env.local) first
-loadEnvConfig(process.cwd());
-
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 
 import AnswerScript from '../models/AnswerScript';
@@ -15,14 +11,6 @@ import RegradeRequest from '../models/RegradeRequest';
 import AuditLog from '../models/AuditLog';
 
 describe('Manual Grading Domain Models Tests', () => {
-    beforeAll(async () => {
-        const { connectDB } = await import('../lib/db');
-        await connectDB();
-    });
-
-    afterAll(async () => {
-        await mongoose.connection.close();
-    });
 
     describe('AnswerScript Model', () => {
         it('should validate and save a valid AnswerScript', async () => {

@@ -1,20 +1,8 @@
-import { loadEnvConfig } from '@next/env';
-// Load environment variables (.env.local) first
-loadEnvConfig(process.cwd());
-
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import Rubric from '../models/Rubric';
 
 describe('Rubric Model Tests', () => {
-    beforeAll(async () => {
-        const { connectDB } = await import('../lib/db');
-        await connectDB();
-    });
-
-    afterAll(async () => {
-        await mongoose.connection.close();
-    });
 
     it('should validate a correct Rubric document successfully', async () => {
         const examId = new mongoose.Types.ObjectId();
