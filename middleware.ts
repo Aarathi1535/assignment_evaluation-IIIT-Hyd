@@ -6,6 +6,23 @@ export default withAuth(
     const token = req.nextauth.token;
     const path = req.nextUrl.pathname;
 
+    // API route protection (JSON 401 instead of redirecting)
+    if (path.startsWith('/api')) {
+      // Allow public access ONLY to /api/auth/** and /api/health
+      if (path.startsWith('/api/auth') || path === '/api/health') {
+        return;
+      }
+      
+      // Protect all other API routes
+      if (!token) {
+        return NextResponse.json(
+          { success: false, message: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
+      return;
+    }
+
     if (token) {
       const userRole = token.role?.toLowerCase();
 
@@ -39,7 +56,7 @@ export default withAuth(
       authorized: ({ token, req }) => {
         const path = req.nextUrl.pathname;
 
-        // Allow unauthenticated access to login, register, and public APIs
+        // Allow public routes
         if (
           path.startsWith('/api') ||
           path === '/login' ||
@@ -48,7 +65,7 @@ export default withAuth(
           return true;
         }
 
-        // Require authentication for all other routes (dashboards and root "/")
+        // Require authentication for all other routes
         return !!token;
       },
     },
