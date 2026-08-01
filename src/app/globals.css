@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+@theme {
+  /* Brand colors */
+  --color-brand-primary: #4f46e5;     /* Indigo 600 */
+  --color-brand-secondary: #10b981;   /* Emerald 500 */
+  --color-brand-accent: #06b6d4;      /* Cyan 500 */
+
+  /* Background / Surface colors */
+  --color-bg-base: #f8fafc;           /* Slate 50 */
+  --color-bg-surface: #ffffff;
+  --color-bg-surface-hover: #f1f5f9;   /* Slate 100 */
+
+  /* Text colors */
+  --color-text-base: #0f172a;         /* Slate 900 */
+  --color-text-muted: #475569;        /* Slate 600 */
+  --color-text-light: #94a3b8;        /* Slate 400 */
+
+  /* Border color */
+  --color-border-base: #e2e8f0;       /* Slate 200 */
+  --color-border-muted: #f1f5f9;      /* Slate 100 */
+
+  /* Border radius tokens */
+  --radius-brand: 0.5rem;
+  --radius-brand-lg: 0.75rem;
+  --radius-brand-sm: 0.25rem;
+
+  /* Spacing tokens */
+  --spacing-brand-xs: 0.25rem;
+  --spacing-brand-sm: 0.5rem;
+  --spacing-brand-md: 1rem;
+  --spacing-brand-lg: 1.5rem;
+  --spacing-brand-xl: 2rem;
+  --spacing-brand-layout: 3rem;
+}

@@ -83,11 +83,11 @@ export default function ProfessorDashboardPage() {
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700/80 p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Quick Actions</h2>
           <div className="flex flex-wrap gap-4">
-            <Link href="/professor/courses/create" className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-505 hover:bg-indigo-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-indigo-500/10 cursor-pointer">
+            <Link href="/professor/courses/create" className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-indigo-500/10 cursor-pointer">
               <Plus className="h-5 w-5" />
               <span>Create Course</span>
             </Link>
-            <button className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-505 hover:bg-emerald-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-emerald-500/10 cursor-pointer">
+            <button className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-emerald-500/10 cursor-pointer">
               <Plus className="h-5 w-5" />
               <span>Create Exam</span>
             </button>

@@ -1,250 +1,179 @@
-# Assignment Evaluation Platform
-### Next.js Full Stack Implementation (Based on SMAI AI Evaluator POC)
+# Manual TA Grading and Assignment Management System
+### Next.js Full Stack Implementation
 
-A scalable full-stack Assignment Evaluation Platform built with **Next.js**, **TypeScript**, and **MongoDB**. This project is a migration of the original Python/FastAPI proof-of-concept into a production-ready architecture with a modern web interface.
-
-The platform is designed to support AI-powered assignment evaluation, course management, exam management, rubric-based grading, and future integrations with Tango, Vertex AI (Gemini), and DeepSeek.
+A scalable full-stack **Manual TA Grading and Assignment Management System** built with **Next.js**, **TypeScript**, and **MongoDB**. This platform streamlines course administration, exam coordination, manual grading by Teaching Assistants (TAs), student submissions, regrade requests, and audit logging.
 
 ---
 
 ## 🚀 Project Goals
 
-- Migrate the FastAPI proof-of-concept into a modern Next.js full-stack application.
-- Build a scalable layered architecture.
-- Support AI-assisted assignment evaluation.
-- Provide role-based access for Professors, Teaching Assistants, Students, and Administrators.
-- Enable future deployment as a production SaaS platform.
+- Establish a production-ready manual grading workflow for university environments.
+- Build a scalable layered architecture separating UI, services, and database concerns.
+- Support comprehensive manual grading capabilities including page-level script navigation, TA allocations, and annotations.
+- Provide a robust role-based access control (RBAC) security model for Professors, TAs, Students, and Administrators.
 
 ---
 
-# 🏗 Architecture
+## 🏗 Architecture & Workflow
 
-The project follows a layered architecture.
+The platform defines a clean, manual grading pipeline:
 
 ```
+Professor Creates Course/Exam 
+        │
+Professor Creates Rubric 
+        │
+Student Uploads AnswerScript 
+        │
+AnswerScript Pages Extracted 
+        │
+Professor Allocates Scripts to TAs 
+        │
+TAs Add Annotations & Comments 
+        │
+TAs Grade Script & Criteria 
+        │
+Student Views Grade 
+        │
+Student Submits Regrade Request 
+        │
+Audit Log Records All Grading Activity
+```
+
+### Layered Architecture Structure:
+```
 Frontend (Next.js + React)
-
         │
-
-API Routes
-
+API Routes / Server Actions
         │
-
 Service Layer
-
         │
-
 Repository Layer
-
         │
-
 MongoDB (Mongoose)
 ```
 
-Business logic is isolated from API routes to keep the codebase modular and maintainable.
-
 ---
 
-# 📁 Project Structure
+## 📁 Project Structure
 
 ```
-src/
-
-├── app/
-│   ├── api/
-│   ├── (dashboard)/
-│   └── (auth)/
-│
-├── components/
-│
-├── config/
-│
-├── lib/
-│
-├── middleware/
-│
-├── models/
-│
-├── repositories/
-│
-├── services/
-│
-├── validations/
-│
-└── types/
+├── middleware.ts            # Next.js authentication & RBAC middleware
+├── package.json             # Node dependencies and scripts
+├── tsconfig.json            # TypeScript configuration
+├── src/
+│   ├── app/                 # Next.js App Router (pages, dashboards, API routes)
+│   │   ├── (auth)/          # Authentication pages (login, register)
+│   │   ├── (dashboard)/     # Dashboards (admin, professor, ta, student)
+│   │   ├── api/             # Backend API routes
+│   │   ├── globals.css      # CSS styling with Tailwind CSS v4 design tokens
+│   │   └── layout.tsx       # Root layout
+│   ├── components/          # Reusable React components
+│   ├── config/              # Centralized environment configuration using Zod
+│   ├── constants/           # Centralized RBAC permissions registry
+│   ├── lib/                 # Core utilities (database connection, NextAuth options)
+│   ├── models/              # Mongoose database models
+│   ├── repositories/        # Database abstraction layer
+│   ├── scripts/             # Database seeding and utility scripts
+│   ├── services/            # Main business logic layer
+│   ├── types/               # Custom TypeScript definitions
+│   └── validations/         # Zod schemas for user input validations
 ```
 
 ---
 
-# 🛠 Technology Stack
+## 🛠 Technology Stack
 
-## Frontend
-
-- Next.js 16
+### Frontend & Styling
+- Next.js 16 (App Router)
 - React 19
 - TypeScript
-- Tailwind CSS
+- Tailwind CSS v4
 - React Hook Form
 - Zod
-- Lucide Icons
 
-## Backend
-
+### Backend & Database
 - Next.js Route Handlers
-- MongoDB Atlas
-- Mongoose
+- MongoDB Atlas (Cloud Database)
+- Mongoose (ODM)
 
-## Authentication
-
-- NextAuth (Planned)
-- JWT
-- RBAC Middleware
-
-## AI Integration (Planned)
-
-- Google Vertex AI (Gemini)
-- DeepSeek
-- Tango Evaluation Pipeline
+### Authentication & Authorization
+- NextAuth (JWT-based session management)
+- Role-Based Access Control (RBAC) permissions
 
 ---
 
-# 👥 User Roles
+## 👥 User Roles & Permissions
 
-- Administrator
-- Professor
-- Teaching Assistant (TA)
-- Student
-
-Role-Based Access Control (RBAC) is implemented to restrict access based on permissions.
-
----
-
-# 📚 Current Features
-
-## ✅ Week 1
-
-- Project Architecture
-- Folder Structure
-- MongoDB Integration
-- Environment Configuration
-- User Model
-- Course Model
-- Exam Model
-- Repository Pattern
-- Service Layer
-- RBAC Foundation
-
-## 🚧 Week 2 (In Progress)
-
-### Course Module
-
-- Create Course
-- View Courses
-- MongoDB Integration
-- Course Validation
-- Course Repository
-- Course Services
-
-### Dashboard
-
-- Professor Dashboard
-- Statistics Cards
-- Quick Actions
-- Course Creation Interface
+The system enforces strict Role-Based Access Control (RBAC) via middleware:
+- **Administrator**: Complete system and user management access.
+- **Professor**: Manages courses, exams, rubrics, publishes results, and allocates answer scripts to TAs.
+- **Teaching Assistant (TA)**: Views assigned courses, views only assigned scripts, grades scripts, and flags submissions for review.
+- **Student**: Uploads answer scripts, views graded results, and submits regrade requests.
 
 ---
 
-# 🔄 Planned Features
+## 📚 Features Roadmap
 
-- Authentication (NextAuth)
-- Course Management
-- Exam Management
-- Student Management
-- Assignment Upload
-- OCR Processing
-- AI Evaluation Pipeline
-- Manual Review Workflow
-- Result Publishing
-- Analytics Dashboard
-- Notification System
+### ✅ Week 1 (Completed)
+- Scalable full-stack architecture setup.
+- Mongoose integration and database models (User, Course, Exam, Rubric).
+- Strong environment validation using Zod.
+- Centralized RBAC permissions registry and hasPermission module.
+- Secure NextAuth JWT Authentication implementation.
+- Refactored edge-compatible middleware with permission-based routing guards.
+
+### ✅ Week 2 (Completed / In Progress)
+- Course creation and dashboard management interfaces.
+- Custom Tailwind v4 design tokens system setup.
+- Manual TA grading domain models implemented:
+  - `AnswerScript` (student submissions with unique constraints)
+  - `Page` (extracted script pages)
+  - `StudentMapping` (anonymous scanner mappings)
+  - `Allocation` (script assignments for TAs)
+  - `Annotation` (drawing position coordinate comments)
+  - `Grade` (criterion-level marks and overall score)
+  - `RegradeRequest` (student regrade workflow)
+  - `AuditLog` (grading activity logs)
 
 ---
 
-# ⚙ Environment Variables
+## ⚙ Environment Variables
 
-Create a `.env.local` file.
+Configure a `.env.local` file in the root folder with the following variables:
 
 ```env
 MONGODB_URI=your_mongodb_connection_string
-
 NEXTAUTH_SECRET=your_nextauth_secret
-
-JWT_SECRET=your_jwt_secret
+NEXTAUTH_URL=http://localhost:3000
 ```
 
 ---
 
-# ▶ Running the Project
+## ▶ Running the Project
 
-Install dependencies
+1. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-```bash
-npm install
-```
+2. **Run database seeding**:
+   ```bash
+   npm run seed
+   ```
 
-Start development server
+3. **Start the development server**:
+   ```bash
+   npm run dev
+   ```
 
-```bash
-npm run dev
-```
-
-Open
-
-```
-http://localhost:3000
-```
-
----
-
-# 📖 Development Principles
-
-- Layered Architecture
-- Repository Pattern
-- Service Pattern
-- Separation of Concerns
-- Type Safety
-- Input Validation
-- Scalable Folder Structure
-- Production Ready Codebase
+4. **Run unit tests**:
+   ```bash
+   npm run test
+   ```
 
 ---
 
-# 🗺 Development Roadmap
-
-## Week 1
-
-- Project Foundation
-- Database Models
-- Architecture
-- MongoDB Integration
-
-## Week 2
-
-- Course Management
-- Dashboard
-- CRUD Operations
-
-## Week 3+
-
-- Authentication
-- Exam Module
-- Assignment Upload
-- AI Evaluation
-- Analytics
-- Deployment
-
----
-
-# 📄 License
+## 📄 License
 
 This project is developed as part of the IIIT Hyderabad Assignment Evaluation research project.
