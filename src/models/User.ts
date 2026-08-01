@@ -1,11 +1,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
+import { UserRole } from '../constants/permissions';
 
-export enum UserRole {
-    PROFESSOR = 'PROFESSOR',
-    TA = 'TA',
-    STUDENT = 'STUDENT',
-    ADMIN = 'ADMIN'
-}
+export { UserRole };
 
 export interface IUser extends Document {
     name: string;

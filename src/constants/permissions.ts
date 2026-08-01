@@ -1,4 +1,9 @@
-import { UserRole } from '../models/User';
+export enum UserRole {
+    PROFESSOR = 'PROFESSOR',
+    TA = 'TA',
+    STUDENT = 'STUDENT',
+    ADMIN = 'ADMIN'
+}
 
 export enum Permission {
     // Admin permissions
@@ -17,7 +22,10 @@ export enum Permission {
 
     // Grading & Submissions
     VIEW_ALL_SUBMISSIONS = 'VIEW_ALL_SUBMISSIONS',
-    PERFORM_MANUAL_GRADING = 'PERFORM_MANUAL_GRADING',
+    VIEW_ASSIGNED_SCRIPTS = 'VIEW_ASSIGNED_SCRIPTS',
+    GRADE_SCRIPT = 'GRADE_SCRIPT',
+    ALLOCATE_SCRIPTS = 'ALLOCATE_SCRIPTS',
+    FLAG_FOR_REVIEW = 'FLAG_FOR_REVIEW',
     SAVE_MARKS_FEEDBACK = 'SAVE_MARKS_FEEDBACK',
     PUBLISH_GRADES = 'PUBLISH_GRADES',
 
@@ -38,15 +46,16 @@ export const RolePermissions: Record<UserRole, Permission[]> = {
         Permission.EDIT_EXAM,
         Permission.DELETE_EXAM,
         Permission.VIEW_ALL_SUBMISSIONS,
-        Permission.PERFORM_MANUAL_GRADING,
+        Permission.ALLOCATE_SCRIPTS,
         Permission.SAVE_MARKS_FEEDBACK,
         Permission.PUBLISH_GRADES,
         Permission.VIEW_ASSIGNED_COURSES
     ],
     [UserRole.TA]: [
         Permission.VIEW_ASSIGNED_COURSES,
-        Permission.VIEW_ALL_SUBMISSIONS,
-        Permission.PERFORM_MANUAL_GRADING,
+        Permission.VIEW_ASSIGNED_SCRIPTS,
+        Permission.GRADE_SCRIPT,
+        Permission.FLAG_FOR_REVIEW,
         Permission.SAVE_MARKS_FEEDBACK
     ],
     [UserRole.STUDENT]: [

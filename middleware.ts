@@ -1,5 +1,6 @@
 import { withAuth } from 'next-auth/middleware';
 import { NextResponse } from 'next/server';
+import { hasPermission, Permission, UserRole } from './src/constants/permissions';
 
 export default withAuth(
   function middleware(req) {
@@ -24,30 +25,35 @@ export default withAuth(
     }
 
     if (token) {
-      const userRole = token.role?.toLowerCase();
+      const rawRole = token.role as string;
+      const userRole = rawRole?.toUpperCase() as UserRole;
+      const userRoleLower = rawRole?.toLowerCase();
 
       // Redirect root path to their dashboard
       if (path === '/') {
-        return NextResponse.redirect(new URL(`/${userRole}`, req.url));
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
       // Redirect authenticated users away from /login and /register
       if (path === '/login' || path === '/register') {
-        return NextResponse.redirect(new URL(`/${userRole}`, req.url));
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
-      // Role-based dashboard authorization guard
-      if (path.startsWith('/admin') && userRole !== 'admin') {
-        return NextResponse.redirect(new URL(`/${userRole}`, req.url));
+      // Map routes to their required permissions using RolePermissions/hasPermission
+      let requiredPermission: Permission | null = null;
+      if (path.startsWith('/admin')) {
+        requiredPermission = Permission.MANAGE_USERS;
+      } else if (path.startsWith('/professor')) {
+        requiredPermission = Permission.CREATE_EXAM;
+      } else if (path.startsWith('/ta')) {
+        requiredPermission = Permission.GRADE_SCRIPT;
+      } else if (path.startsWith('/student')) {
+        requiredPermission = Permission.VIEW_OWN_RESULTS;
       }
-      if (path.startsWith('/professor') && userRole !== 'professor') {
-        return NextResponse.redirect(new URL(`/${userRole}`, req.url));
-      }
-      if (path.startsWith('/student') && userRole !== 'student') {
-        return NextResponse.redirect(new URL(`/${userRole}`, req.url));
-      }
-      if (path.startsWith('/ta') && userRole !== 'ta') {
-        return NextResponse.redirect(new URL(`/${userRole}`, req.url));
+
+      // Authorize access using the centralized permissions implementation
+      if (requiredPermission && !hasPermission(userRole, requiredPermission)) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
     }
   },
