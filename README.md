@@ -1,36 +1,250 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Assignment Evaluation Platform
+### Next.js Full Stack Implementation (Based on SMAI AI Evaluator POC)
 
-## Getting Started
+A scalable full-stack Assignment Evaluation Platform built with **Next.js**, **TypeScript**, and **MongoDB**. This project is a migration of the original Python/FastAPI proof-of-concept into a production-ready architecture with a modern web interface.
 
-First, run the development server:
+The platform is designed to support AI-powered assignment evaluation, course management, exam management, rubric-based grading, and future integrations with Tango, Vertex AI (Gemini), and DeepSeek.
+
+---
+
+## 🚀 Project Goals
+
+- Migrate the FastAPI proof-of-concept into a modern Next.js full-stack application.
+- Build a scalable layered architecture.
+- Support AI-assisted assignment evaluation.
+- Provide role-based access for Professors, Teaching Assistants, Students, and Administrators.
+- Enable future deployment as a production SaaS platform.
+
+---
+
+# 🏗 Architecture
+
+The project follows a layered architecture.
+
+```
+Frontend (Next.js + React)
+
+        │
+
+API Routes
+
+        │
+
+Service Layer
+
+        │
+
+Repository Layer
+
+        │
+
+MongoDB (Mongoose)
+```
+
+Business logic is isolated from API routes to keep the codebase modular and maintainable.
+
+---
+
+# 📁 Project Structure
+
+```
+src/
+
+├── app/
+│   ├── api/
+│   ├── (dashboard)/
+│   └── (auth)/
+│
+├── components/
+│
+├── config/
+│
+├── lib/
+│
+├── middleware/
+│
+├── models/
+│
+├── repositories/
+│
+├── services/
+│
+├── validations/
+│
+└── types/
+```
+
+---
+
+# 🛠 Technology Stack
+
+## Frontend
+
+- Next.js 16
+- React 19
+- TypeScript
+- Tailwind CSS
+- React Hook Form
+- Zod
+- Lucide Icons
+
+## Backend
+
+- Next.js Route Handlers
+- MongoDB Atlas
+- Mongoose
+
+## Authentication
+
+- NextAuth (Planned)
+- JWT
+- RBAC Middleware
+
+## AI Integration (Planned)
+
+- Google Vertex AI (Gemini)
+- DeepSeek
+- Tango Evaluation Pipeline
+
+---
+
+# 👥 User Roles
+
+- Administrator
+- Professor
+- Teaching Assistant (TA)
+- Student
+
+Role-Based Access Control (RBAC) is implemented to restrict access based on permissions.
+
+---
+
+# 📚 Current Features
+
+## ✅ Week 1
+
+- Project Architecture
+- Folder Structure
+- MongoDB Integration
+- Environment Configuration
+- User Model
+- Course Model
+- Exam Model
+- Repository Pattern
+- Service Layer
+- RBAC Foundation
+
+## 🚧 Week 2 (In Progress)
+
+### Course Module
+
+- Create Course
+- View Courses
+- MongoDB Integration
+- Course Validation
+- Course Repository
+- Course Services
+
+### Dashboard
+
+- Professor Dashboard
+- Statistics Cards
+- Quick Actions
+- Course Creation Interface
+
+---
+
+# 🔄 Planned Features
+
+- Authentication (NextAuth)
+- Course Management
+- Exam Management
+- Student Management
+- Assignment Upload
+- OCR Processing
+- AI Evaluation Pipeline
+- Manual Review Workflow
+- Result Publishing
+- Analytics Dashboard
+- Notification System
+
+---
+
+# ⚙ Environment Variables
+
+Create a `.env.local` file.
+
+```env
+MONGODB_URI=your_mongodb_connection_string
+
+NEXTAUTH_SECRET=your_nextauth_secret
+
+JWT_SECRET=your_jwt_secret
+```
+
+---
+
+# ▶ Running the Project
+
+Install dependencies
+
+```bash
+npm install
+```
+
+Start development server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+# 📖 Development Principles
 
-To learn more about Next.js, take a look at the following resources:
+- Layered Architecture
+- Repository Pattern
+- Service Pattern
+- Separation of Concerns
+- Type Safety
+- Input Validation
+- Scalable Folder Structure
+- Production Ready Codebase
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# 🗺 Development Roadmap
 
-## Deploy on Vercel
+## Week 1
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Project Foundation
+- Database Models
+- Architecture
+- MongoDB Integration
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Week 2
+
+- Course Management
+- Dashboard
+- CRUD Operations
+
+## Week 3+
+
+- Authentication
+- Exam Module
+- Assignment Upload
+- AI Evaluation
+- Analytics
+- Deployment
+
+---
+
+# 📄 License
+
+This project is developed as part of the IIIT Hyderabad Assignment Evaluation research project.
