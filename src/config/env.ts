@@ -1,18 +1,17 @@
-export const env = {
-    MONGODB_URI: process.env.MONGODB_URI || '',
-    JWT_SECRET: process.env.JWT_SECRET || '',
-    NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET || '',
-};
+import { z } from 'zod';
 
-// Validate required environment variables
-const requiredEnv = [
-    'MONGODB_URI',
-    'JWT_SECRET',
-    'NEXTAUTH_SECRET',
-] as const;
+const envSchema = z.object({
+    MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
+    NEXTAUTH_SECRET: z.string().min(1, 'NEXTAUTH_SECRET is required'),
+    NEXTAUTH_URL: z.string().min(1, 'NEXTAUTH_URL is required'),
+});
 
-for (const key of requiredEnv) {
-    if (!env[key]) {
-        throw new Error(`Missing required environment variable: ${key}`);
-    }
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+    console.error('❌ Invalid environment variables:', parsed.error.format());
+    throw new Error('Invalid environment variables');
 }
+
+export const env = parsed.data;
+export type Env = z.infer<typeof envSchema>;
