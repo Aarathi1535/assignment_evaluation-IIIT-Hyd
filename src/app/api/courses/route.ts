@@ -2,8 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../lib/db';
 import CourseService from '../../../services/CourseService';
 import { createCourseSchema } from '../../../validations/courseValidation';
+import { requirePermission } from '../../../lib/apiAuth';
+import { Permission } from '../../../constants/permissions';
 
 export async function GET() {
+  const auth = await requirePermission(Permission.VIEW_COURSES);
+  if (!auth.authorized) {
+    return auth.response;
+  }
+
   try {
     await connectDB();
     const courses = await CourseService.getAllCourses();
@@ -22,6 +29,11 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requirePermission(Permission.CREATE_COURSE);
+  if (!auth.authorized) {
+    return auth.response;
+  }
+
   try {
     await connectDB();
 
@@ -45,15 +57,11 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Convert semester from string to number since ICourse expects a number,
-    // and map other fields if TypeScript type casting is required.
     const courseData = {
       ...validationResult.data,
       semester: parseInt(validationResult.data.semester, 10)
     };
 
-    // Cast the object to any to bypass Mongoose's strict ObjectId vs string TS checks if any,
-    // or pass it directly.
     const newCourse = await CourseService.createCourse(courseData as any);
 
     return NextResponse.json({

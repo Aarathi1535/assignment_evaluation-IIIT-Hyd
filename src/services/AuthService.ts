@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import User, { IUser, UserRole } from '../models/User';
 import { RegisterInput } from '../validations/authValidation';
 
@@ -24,6 +25,30 @@ class AuthService {
         const { password: _, ...userWithoutPassword } = userObj;
 
         return userWithoutPassword as unknown as Omit<IUser, 'password'>;
+    }
+
+    async generateResetToken(email: string): Promise<string | null> {
+        const user = await User.findOne({ email: email.toLowerCase() });
+
+        if (!user) {
+            return null;
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiry = new Date(Date.now() + 3600000); // 1 hour
+
+        await User.findByIdAndUpdate(
+            user._id,
+            {
+                $set: {
+                    resetPasswordToken: token,
+                    resetPasswordExpires: expiry
+                }
+            },
+            { returnDocument: 'after', runValidators: true }
+        );
+
+        return token;
     }
 }
 

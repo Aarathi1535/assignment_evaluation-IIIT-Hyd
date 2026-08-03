@@ -1,6 +1,6 @@
 import { withAuth } from 'next-auth/middleware';
 import { NextResponse } from 'next/server';
-import { hasPermission, Permission, UserRole } from './src/constants/permissions';
+import { hasPermission, Permission, UserRole } from './constants/permissions';
 
 export default withAuth(
   function middleware(req) {
@@ -34,8 +34,22 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
-      // Redirect authenticated users away from /login and /register
-      if (path === '/login' || path === '/register') {
+      // Redirect authenticated users away from /login, /register, and /forgot-password
+      if (path === '/login' || path === '/register' || path === '/forgot-password') {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+
+      // Strict role-based route prefix check
+      if (path.startsWith('/admin') && userRole !== UserRole.ADMIN) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+      if (path.startsWith('/professor') && userRole !== UserRole.PROFESSOR) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+      if (path.startsWith('/ta') && userRole !== UserRole.TA) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+      if (path.startsWith('/student') && userRole !== UserRole.STUDENT) {
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
@@ -66,7 +80,8 @@ export default withAuth(
         if (
           path.startsWith('/api') ||
           path === '/login' ||
-          path === '/register'
+          path === '/register' ||
+          path === '/forgot-password'
         ) {
           return true;
         }

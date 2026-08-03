@@ -58,7 +58,7 @@ export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
 
   return (
     <div ref={containerRef} className="space-y-1.5 w-full relative">
-      <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+      <label className="text-sm font-bold text-slate-850">
         {label}
       </label>
 
@@ -67,7 +67,7 @@ export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
           setIsOpen(!isOpen);
           setSearch('');
         }}
-        className={`min-h-[46px] w-full flex flex-wrap items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-left focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all cursor-pointer ${
+        className={`min-h-[38px] w-full flex flex-wrap items-center gap-1.5 px-4 py-1.5 rounded-brand border border-slate-300 bg-white text-slate-900 text-left focus-within:ring-2 focus-within:ring-brand-primary/20 focus-within:border-brand-primary transition-all cursor-pointer ${
           error ? 'border-rose-500 focus-within:ring-rose-500/20 focus-within:border-rose-500' : ''
         }`}
       >
@@ -78,13 +78,13 @@ export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
               return (
                 <span
                   key={val}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-semibold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-brand-primary/10 text-brand-primary border border-brand-primary/20"
                 >
                   {opt ? opt.label : val}
                   <button
                     type="button"
                     onClick={(e) => handleRemove(val, e)}
-                    className="hover:bg-indigo-500/20 rounded-md p-0.5 transition-colors cursor-pointer"
+                    className="hover:bg-brand-primary/20 rounded p-0.5 transition-colors cursor-pointer"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -93,21 +93,21 @@ export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
             })}
           </div>
         ) : (
-          <span className="text-slate-400">{placeholder}</span>
+          <span className="text-slate-500">{placeholder}</span>
         )}
-        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none" />
       </div>
 
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-60 overflow-hidden flex flex-col">
-          <div className="flex items-center px-3 py-2 border-b border-slate-100 dark:border-slate-750 bg-slate-50/50 dark:bg-slate-800">
-            <Search className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+        <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-brand-lg shadow-lg max-h-60 overflow-hidden flex flex-col">
+          <div className="flex items-center px-3 py-1.5 border-b border-slate-100 bg-slate-50">
+            <Search className="h-4 w-4 text-slate-500 mr-2 shrink-0" />
             <input
               type="text"
               placeholder="Search..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-transparent text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
+              className="w-full bg-transparent text-sm text-slate-900 placeholder-slate-500 focus:outline-none"
             />
           </div>
           <div className="overflow-y-auto py-1">
@@ -119,22 +119,22 @@ export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
                     key={opt.value}
                     type="button"
                     onClick={() => handleSelect(opt.value)}
-                    className="w-full flex items-center justify-between px-4 py-2 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-950 dark:text-white cursor-pointer"
+                    className="w-full flex items-center justify-between px-4 py-2 text-sm text-left hover:bg-slate-50 text-slate-900 cursor-pointer"
                   >
-                    <span>{opt.label}</span>
-                    {isSelected && <Check className="h-4 w-4 text-indigo-500" />}
+                    <span className="font-medium text-slate-800">{opt.label}</span>
+                    {isSelected && <Check className="h-4 w-4 text-brand-primary" />}
                   </button>
                 );
               })
             ) : (
-              <p className="px-4 py-2 text-xs text-slate-400 dark:text-slate-500">No options found</p>
+              <p className="px-4 py-2 text-xs text-slate-500">No options found</p>
             )}
           </div>
         </div>
       )}
 
       {error && (
-        <p className="text-xs font-medium text-rose-500 dark:text-rose-400">
+        <p className="text-xs font-semibold text-rose-600">
           {error}
         </p>
       )}

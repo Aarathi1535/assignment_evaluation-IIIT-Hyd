@@ -9,7 +9,10 @@ import { FormInput } from '@/components/ui/FormInput';
 import { FormSelect } from '@/components/ui/FormSelect';
 import { SearchableSelect } from '@/components/ui/SearchableSelect';
 import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
-import { ArrowLeft, BookOpen, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { ArrowLeft, BookOpen, CheckCircle2, AlertCircle } from 'lucide-react';
 
 const formSchema = z.object({
   courseCode: z.string().trim().min(2, { message: 'Course code must be at least 2 characters long' }),
@@ -114,52 +117,49 @@ export default function CreateCoursePage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50/50 dark:bg-slate-900/50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-3xl mx-auto space-y-6">
+    <div className="min-h-screen bg-slate-50 py-6 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-3xl mx-auto space-y-5">
         
         {/* Back Button & Header */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <button
             onClick={() => router.push('/professor')}
-            className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition-all w-fit cursor-pointer"
+            className="flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition-all w-fit cursor-pointer"
           >
             <ArrowLeft className="h-4 w-4" />
             <span>Back to Dashboard</span>
           </button>
+          
           <div className="flex items-center gap-3 mt-2">
-            <div className="p-3 bg-indigo-500/10 rounded-2xl text-indigo-600 dark:text-indigo-400">
-              <BookOpen className="h-6 w-6" />
+            <div className="p-2.5 bg-brand-primary/10 rounded text-brand-primary flex items-center justify-center">
+              <BookOpen className="h-5 w-5" />
             </div>
-            <div>
-              <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                Create Course
-              </h1>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Register a new course under your account.
-              </p>
-            </div>
+            <PageHeader
+              title="Create Course"
+              description="Register a new course under your account."
+            />
           </div>
         </div>
 
         {/* Alerts */}
         {successMsg && (
-          <div className="flex items-center gap-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 rounded-2xl p-4 text-emerald-800 dark:text-emerald-300">
+          <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-brand p-3.5 text-emerald-800 text-sm font-semibold">
             <CheckCircle2 className="h-5 w-5 shrink-0" />
-            <p className="text-sm font-semibold">{successMsg}</p>
+            <span>{successMsg}</span>
           </div>
         )}
 
         {errorMsg && (
-          <div className="flex items-center gap-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-2xl p-4 text-rose-800 dark:text-rose-300">
+          <div className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-brand p-3.5 text-rose-800 text-sm font-semibold">
             <AlertCircle className="h-5 w-5 shrink-0" />
-            <p className="text-sm font-semibold">{errorMsg}</p>
+            <span>{errorMsg}</span>
           </div>
         )}
 
         {/* Form Card */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700/80 p-6 sm:p-8 shadow-sm">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card>
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               
               <FormInput
                 label="Course Code"
@@ -229,7 +229,7 @@ export default function CreateCoursePage() {
                     />
                   )}
                 />
-                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                <p className="text-xs text-slate-500 font-medium mt-1">
                   Optional. Select one or more teaching assistants.
                 </p>
               </div>
@@ -237,25 +237,25 @@ export default function CreateCoursePage() {
             </div>
 
             {/* Actions */}
-            <div className="flex justify-end items-center gap-4 pt-4 border-t border-slate-100 dark:border-slate-700/80">
-              <button
+            <div className="flex justify-end items-center gap-3 pt-4 border-t border-slate-100">
+              <Button
                 type="button"
+                variant="outline"
                 onClick={() => router.push('/professor')}
-                className="px-5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-750 font-medium transition-all cursor-pointer"
               >
                 Cancel
-              </button>
-              <button
+              </Button>
+              
+              <Button
                 type="submit"
-                disabled={loading}
-                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/50 text-white font-medium shadow-sm transition-all hover:scale-[1.02] cursor-pointer"
+                variant="primary"
+                isLoading={loading}
               >
-                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                <span>{loading ? 'Saving...' : 'Save Course'}</span>
-              </button>
+                Save Course
+              </Button>
             </div>
           </form>
-        </div>
+        </Card>
 
       </div>
     </div>

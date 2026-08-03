@@ -4,58 +4,62 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { FormInput } from '@/components/ui/FormInput';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/Card';
-import { KeyRound, AlertCircle } from 'lucide-react';
+import { Mail, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-const loginSchema = z.object({
+const forgotPasswordSchema = z.object({
   email: z.string().trim().email({ message: 'Invalid email address' }),
-  password: z.string().min(1, { message: 'Password is required' }),
 });
 
-type LoginValues = z.infer<typeof loginSchema>;
+type ForgotPasswordValues = z.infer<typeof forgotPasswordSchema>;
 
-export default function LoginPage() {
-  const router = useRouter();
+export default function ForgotPasswordPage() {
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors },
-  } = useForm<LoginValues>({
-    resolver: zodResolver(loginSchema),
+  } = useForm<ForgotPasswordValues>({
+    resolver: zodResolver(forgotPasswordSchema),
     defaultValues: {
       email: '',
-      password: '',
     },
   });
 
-  const onSubmit = async (values: LoginValues) => {
+  const onSubmit = async (values: ForgotPasswordValues) => {
     setIsLoading(true);
     setError(null);
+    setSuccess(null);
 
     try {
-      const res = await signIn('credentials', {
-        email: values.email,
-        password: values.password,
-        redirect: false,
+      const res = await fetch('/api/auth/reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(values),
       });
 
-      if (res?.error) {
-        setError(res.error || 'Invalid credentials');
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.message || 'Something went wrong. Please try again.');
         setIsLoading(false);
-      } else {
-        router.push('/');
-        router.refresh();
+        return;
       }
+
+      setSuccess('If an account with that email exists, a password reset link has been sent.');
+      reset();
     } catch (err) {
       setError('An unexpected error occurred. Please try again.');
+    } finally {
       setIsLoading(false);
     }
   };
@@ -65,13 +69,13 @@ export default function LoginPage() {
       <Card className="max-w-md w-full">
         <CardHeader className="text-center">
           <div className="mx-auto h-12 w-12 rounded-brand flex items-center justify-center bg-brand-primary/10 text-brand-primary">
-            <KeyRound className="h-6 w-6" />
+            <Mail className="h-6 w-6" />
           </div>
           <CardTitle className="mt-4 text-3xl font-black text-slate-900 tracking-tight">
-            Welcome back
+            Forgot password
           </CardTitle>
           <CardDescription className="mt-1 text-sm text-slate-600 font-medium">
-            Sign in to your account to continue
+            Enter your email address and we'll send you a recovery link
           </CardDescription>
         </CardHeader>
 
@@ -84,6 +88,13 @@ export default function LoginPage() {
               </div>
             )}
 
+            {success && (
+              <div className="flex items-center gap-2.5 p-3.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-semibold">
+                <CheckCircle2 className="h-5 w-5 shrink-0" />
+                <span>{success}</span>
+              </div>
+            )}
+
             <div className="space-y-4">
               <FormInput
                 label="Email Address"
@@ -92,24 +103,6 @@ export default function LoginPage() {
                 error={errors.email?.message}
                 {...register('email')}
               />
-
-              <div className="space-y-1">
-                <FormInput
-                  label="Password"
-                  type="password"
-                  placeholder="••••••••"
-                  error={errors.password?.message}
-                  {...register('password')}
-                />
-                <div className="flex justify-end">
-                  <Link
-                    href="/forgot-password"
-                    className="text-xs font-semibold text-brand-primary hover:text-brand-primary/80 transition-colors"
-                  >
-                    Forgot Password?
-                  </Link>
-                </div>
-              </div>
             </div>
 
             <Button
@@ -118,18 +111,17 @@ export default function LoginPage() {
               isLoading={isLoading}
               className="w-full mt-6"
             >
-              Sign In
+              Send Reset Link
             </Button>
           </form>
         </CardContent>
 
         <CardFooter className="text-center text-sm text-slate-600 mt-6">
-          Don't have an account?{' '}
           <Link
-            href="/register"
+            href="/login"
             className="font-bold text-brand-primary hover:text-brand-primary/80 transition-colors"
           >
-            Create an account
+            Back to Login
           </Link>
         </CardFooter>
       </Card>

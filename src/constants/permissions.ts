@@ -14,6 +14,7 @@ export enum Permission {
     EDIT_COURSE = 'EDIT_COURSE',
     DELETE_COURSE = 'DELETE_COURSE',
     ASSIGN_TAS = 'ASSIGN_TAS',
+    VIEW_COURSES = 'VIEW_COURSES',
 
     // Exam management
     CREATE_EXAM = 'CREATE_EXAM',
@@ -30,7 +31,6 @@ export enum Permission {
     PUBLISH_GRADES = 'PUBLISH_GRADES',
 
     // View permissions
-    VIEW_ASSIGNED_COURSES = 'VIEW_ASSIGNED_COURSES',
     VIEW_OWN_RESULTS = 'VIEW_OWN_RESULTS',
     REQUEST_REGRADE = 'REQUEST_REGRADE'
 }
@@ -49,16 +49,17 @@ export const RolePermissions: Record<UserRole, Permission[]> = {
         Permission.ALLOCATE_SCRIPTS,
         Permission.SAVE_MARKS_FEEDBACK,
         Permission.PUBLISH_GRADES,
-        Permission.VIEW_ASSIGNED_COURSES
+        Permission.VIEW_COURSES
     ],
     [UserRole.TA]: [
-        Permission.VIEW_ASSIGNED_COURSES,
+        Permission.VIEW_COURSES,
         Permission.VIEW_ASSIGNED_SCRIPTS,
         Permission.GRADE_SCRIPT,
         Permission.FLAG_FOR_REVIEW,
         Permission.SAVE_MARKS_FEEDBACK
     ],
     [UserRole.STUDENT]: [
+        Permission.VIEW_COURSES,
         Permission.VIEW_OWN_RESULTS,
         Permission.REQUEST_REGRADE
     ]
