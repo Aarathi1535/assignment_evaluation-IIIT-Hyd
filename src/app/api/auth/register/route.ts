@@ -42,8 +42,9 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    if (error.message === 'Email already registered') {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '';
+    if (message === 'Email already registered') {
       return NextResponse.json(
         {
           success: false,

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import Rubric from '../models/Rubric';

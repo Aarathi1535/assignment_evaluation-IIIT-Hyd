@@ -15,7 +15,7 @@ export async function GET() {
       },
       { status: statusCode }
     );
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       {
         success: false,

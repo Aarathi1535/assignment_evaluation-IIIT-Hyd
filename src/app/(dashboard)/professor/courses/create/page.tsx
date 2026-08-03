@@ -109,8 +109,9 @@ export default function CreateCoursePage() {
 
       setSuccessMsg('Course created successfully!');
       reset();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'An unexpected error occurred. Please try again.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.';
+      setErrorMsg(message);
     } finally {
       setLoading(false);
     }
@@ -224,7 +225,7 @@ export default function CreateCoursePage() {
                       options={taOptions}
                       value={field.value || []}
                       onChange={field.onChange}
-                      error={(errors.teachingAssistants as any)?.message}
+                      error={(errors.teachingAssistants as { message?: string })?.message}
                       placeholder="Search/Select Teaching Assistants"
                     />
                   )}

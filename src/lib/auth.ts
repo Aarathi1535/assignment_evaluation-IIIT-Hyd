@@ -44,7 +44,7 @@ export const authOptions: AuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as any).role;
+        token.role = (user as import('next-auth').User).role;
       }
       return token;
     },
@@ -52,9 +52,9 @@ export const authOptions: AuthOptions = {
       if (token) {
         session.user = {
           ...session.user,
-          id: token.id,
-          role: token.role,
-        } as any;
+          id: token.id as string,
+          role: token.role as string,
+        } as import('next-auth').Session['user'];
       }
       return session;
     }

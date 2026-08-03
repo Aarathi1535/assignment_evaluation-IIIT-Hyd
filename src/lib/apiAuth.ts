@@ -52,7 +52,12 @@ export async function requireAuth(): Promise<AuthResult> {
   return {
     authorized: true,
     response: null,
-    user: user as any,
+    user: {
+      id: user.id,
+      email: user.email || '',
+      name: user.name || '',
+      role: user.role as UserRole,
+    },
   };
 }
 

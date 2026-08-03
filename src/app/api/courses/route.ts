@@ -19,10 +19,11 @@ export async function GET() {
       message: 'Courses retrieved successfully',
       data: courses
     }, { status: 200 });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     return NextResponse.json({
       success: false,
-      message: error.message || 'An unexpected error occurred',
+      message,
       data: null
     }, { status: 500 });
   }
@@ -62,25 +63,26 @@ export async function POST(req: NextRequest) {
       semester: parseInt(validationResult.data.semester, 10)
     };
 
-    const newCourse = await CourseService.createCourse(courseData as any);
+    const newCourse = await CourseService.createCourse(courseData as unknown as Partial<import('@/models/Course').ICourse>);
 
     return NextResponse.json({
       success: true,
       message: 'Course created successfully',
       data: newCourse
     }, { status: 201 });
-  } catch (error: any) {
-    if (error.message === 'Course code already exists') {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    if (message === 'Course code already exists') {
       return NextResponse.json({
         success: false,
-        message: error.message,
+        message,
         data: null
       }, { status: 400 });
     }
 
     return NextResponse.json({
       success: false,
-      message: error.message || 'An unexpected error occurred',
+      message,
       data: null
     }, { status: 500 });
   }

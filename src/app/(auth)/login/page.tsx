@@ -54,7 +54,7 @@ export default function LoginPage() {
         router.push('/');
         router.refresh();
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred. Please try again.');
       setIsLoading(false);
     }
@@ -124,7 +124,7 @@ export default function LoginPage() {
         </CardContent>
 
         <CardFooter className="text-center text-sm text-slate-600 mt-6">
-          Don't have an account?{' '}
+          Don&apos;t have an account?{' '}
           <Link
             href="/register"
             className="font-bold text-brand-primary hover:text-brand-primary/80 transition-colors"

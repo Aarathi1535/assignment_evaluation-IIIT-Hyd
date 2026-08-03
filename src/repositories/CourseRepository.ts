@@ -36,4 +36,5 @@ class CourseRepository {
     }
 }
 
-export default new CourseRepository();
+const courseRepository = new CourseRepository();
+export default courseRepository;

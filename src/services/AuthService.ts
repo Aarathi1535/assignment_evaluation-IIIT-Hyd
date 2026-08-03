@@ -22,9 +22,10 @@ class AuthService {
         });
 
         const userObj = user.toObject();
-        const { password: _, ...userWithoutPassword } = userObj;
+        const userWithoutPassword = { ...userObj } as Partial<IUser>;
+        delete userWithoutPassword.password;
 
-        return userWithoutPassword as unknown as Omit<IUser, 'password'>;
+        return userWithoutPassword as Omit<IUser, 'password'>;
     }
 
     async generateResetToken(email: string): Promise<string | null> {
@@ -91,4 +92,5 @@ class AuthService {
     }
 }
 
-export default new AuthService();
+const authService = new AuthService();
+export default authService;

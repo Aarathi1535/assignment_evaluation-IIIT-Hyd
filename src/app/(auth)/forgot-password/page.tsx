@@ -57,7 +57,7 @@ export default function ForgotPasswordPage() {
 
       setSuccess('If an account with that email exists, a password reset link has been sent.');
       reset();
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred. Please try again.');
     } finally {
       setIsLoading(false);
@@ -75,7 +75,7 @@ export default function ForgotPasswordPage() {
             Forgot password
           </CardTitle>
           <CardDescription className="mt-1 text-sm text-slate-600 font-medium">
-            Enter your email address and we'll send you a recovery link
+            Enter your email address and we&apos;ll send you a recovery link
           </CardDescription>
         </CardHeader>
 
