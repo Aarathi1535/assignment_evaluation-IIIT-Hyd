@@ -1,4 +1,7 @@
-import 'dotenv/config';
+import { loadEnvConfig } from '@next/env';
+
+// Load environment configuration (.env.local) if present
+loadEnvConfig(process.cwd());
 
 async function run() {
   const { connectDB } = await import('../lib/db');
