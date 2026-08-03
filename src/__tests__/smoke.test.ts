@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 
 let mockSessionUser: any = {
@@ -25,6 +26,9 @@ describe('Smoke Tests', () => {
   let coursesGET: any;
   let coursesPOST: any;
   let resetPOST: any;
+  let resetPasswordPOST: any;
+  let AuthService: any;
+  let User: any;
 
   beforeAll(async () => {
     healthGET = (await import('../app/api/health/route')).GET;
@@ -32,6 +36,9 @@ describe('Smoke Tests', () => {
     coursesGET = (await import('../app/api/courses/route')).GET;
     coursesPOST = (await import('../app/api/courses/route')).POST;
     resetPOST = (await import('../app/api/auth/reset/route')).POST;
+    resetPasswordPOST = (await import('../app/api/auth/reset-password/route')).POST;
+    AuthService = (await import('../services/AuthService')).default;
+    User = (await import('../models/User')).default;
   });
 
   describe('Health API', () => {
@@ -266,13 +273,182 @@ describe('Smoke Tests', () => {
       expect(data.success).toBe(true);
 
       // Verify in the database that the token and expiry are set
-      const User = (await import('../models/User')).default;
       const user = await User.findOne({ email: 'reset-test@university.edu' });
       expect(user).not.toBeNull();
       expect(user?.resetPasswordToken).toBeDefined();
       expect(user?.resetPasswordToken).not.toBeNull();
       expect(user?.resetPasswordExpires).toBeDefined();
       expect(user?.resetPasswordExpires!.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('should reset password successfully with a valid token (happy path)', async () => {
+      // Register user
+      const email = 'happy-reset@university.edu';
+      const registerPayload = {
+        name: 'Happy Reset User',
+        email,
+        password: 'old-secure-password',
+        role: 'STUDENT',
+      };
+      const reqReg = new Request('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(registerPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await registerPOST(reqReg as any);
+
+      // Spy on token generation
+      const generateResetTokenSpy = vi.spyOn(AuthService, 'generateResetToken');
+
+      // Request reset
+      const reqReset = new Request('http://localhost:3000/api/auth/reset', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await resetPOST(reqReset as any);
+
+      // Retrieve the raw token from spy
+      const rawToken = await generateResetTokenSpy.mock.results[0].value;
+      expect(rawToken).not.toBeNull();
+
+      // Call reset-password API with the raw token
+      const reqResetPassword = new Request('http://localhost:3000/api/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token: rawToken, newPassword: 'new-secure-password' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resResetPassword = await resetPasswordPOST(reqResetPassword as any);
+      expect(resResetPassword.status).toBe(200);
+      const data = await resResetPassword.json();
+      expect(data.success).toBe(true);
+      expect(data.message).toContain('reset successfully');
+
+      // Verify user record in database: token and expiry cleared, password changed
+      const user = await User.findOne({ email });
+      expect(user?.resetPasswordToken).toBeNull();
+      expect(user?.resetPasswordExpires).toBeNull();
+
+      // Verify we can authenticate with new password using bcrypt
+      const bcrypt = await import('bcryptjs');
+      const match = await bcrypt.compare('new-secure-password', user!.password);
+      expect(match).toBe(true);
+
+      generateResetTokenSpy.mockRestore();
+    });
+
+    it('should reject password reset for an invalid token', async () => {
+      const reqResetPassword = new Request('http://localhost:3000/api/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token: 'completely-invalid-token', newPassword: 'new-secure-password' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resResetPassword = await resetPasswordPOST(reqResetPassword as any);
+      expect(resResetPassword.status).toBe(400);
+      const data = await resResetPassword.json();
+      expect(data.success).toBe(false);
+      expect(data.message).toBe('Invalid or expired token');
+    });
+
+    it('should reject password reset for an expired token', async () => {
+      // Register user
+      const email = 'expired-reset@university.edu';
+      const registerPayload = {
+        name: 'Expired Reset User',
+        email,
+        password: 'old-secure-password',
+        role: 'STUDENT',
+      };
+      const reqReg = new Request('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(registerPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await registerPOST(reqReg as any);
+
+      const generateResetTokenSpy = vi.spyOn(AuthService, 'generateResetToken');
+
+      // Request reset
+      const reqReset = new Request('http://localhost:3000/api/auth/reset', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await resetPOST(reqReset as any);
+
+      const rawToken = await generateResetTokenSpy.mock.results[0].value;
+
+      // Manually expire token in database
+      await User.findOneAndUpdate(
+        { email },
+        { resetPasswordExpires: new Date(Date.now() - 1000) } // 1 second ago
+      );
+
+      // Attempt to reset password
+      const reqResetPassword = new Request('http://localhost:3000/api/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token: rawToken, newPassword: 'new-secure-password' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resResetPassword = await resetPasswordPOST(reqResetPassword as any);
+      expect(resResetPassword.status).toBe(400);
+      const data = await resResetPassword.json();
+      expect(data.success).toBe(false);
+      expect(data.message).toBe('Invalid or expired token');
+
+      generateResetTokenSpy.mockRestore();
+    });
+
+    it('should reject password reset when reusing a token (single-use)', async () => {
+      // Register user
+      const email = 'reused-reset@university.edu';
+      const registerPayload = {
+        name: 'Reused Reset User',
+        email,
+        password: 'old-secure-password',
+        role: 'STUDENT',
+      };
+      const reqReg = new Request('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(registerPayload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await registerPOST(reqReg as any);
+
+      const generateResetTokenSpy = vi.spyOn(AuthService, 'generateResetToken');
+
+      // Request reset
+      const reqReset = new Request('http://localhost:3000/api/auth/reset', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await resetPOST(reqReset as any);
+
+      const rawToken = await generateResetTokenSpy.mock.results[0].value;
+
+      // Reset password first time
+      const reqReset1 = new Request('http://localhost:3000/api/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token: rawToken, newPassword: 'new-secure-password-1' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resReset1 = await resetPasswordPOST(reqReset1 as any);
+      expect(resReset1.status).toBe(200);
+
+      // Try to reset password second time with the same token
+      const reqReset2 = new Request('http://localhost:3000/api/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token: rawToken, newPassword: 'new-secure-password-2' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resReset2 = await resetPasswordPOST(reqReset2 as any);
+      expect(resReset2.status).toBe(400);
+      const data2 = await resReset2.json();
+      expect(data2.success).toBe(false);
+      expect(data2.message).toBe('Invalid or expired token');
+
+      generateResetTokenSpy.mockRestore();
     });
   });
 });

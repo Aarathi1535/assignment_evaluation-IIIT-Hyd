@@ -34,8 +34,8 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
-      // Redirect authenticated users away from /login, /register, and /forgot-password
-      if (path === '/login' || path === '/register' || path === '/forgot-password') {
+      // Redirect authenticated users away from /login, /register, /forgot-password, and /reset-password
+      if (path === '/login' || path === '/register' || path === '/forgot-password' || path === '/reset-password') {
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
@@ -81,7 +81,8 @@ export default withAuth(
           path.startsWith('/api') ||
           path === '/login' ||
           path === '/register' ||
-          path === '/forgot-password'
+          path === '/forgot-password' ||
+          path === '/reset-password'
         ) {
           return true;
         }

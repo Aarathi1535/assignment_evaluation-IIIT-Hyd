@@ -36,12 +36,13 @@ class AuthService {
 
         const token = crypto.randomBytes(32).toString('hex');
         const expiry = new Date(Date.now() + 3600000); // 1 hour
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
         await User.findByIdAndUpdate(
             user._id,
             {
                 $set: {
-                    resetPasswordToken: token,
+                    resetPasswordToken: hashedToken,
                     resetPasswordExpires: expiry
                 }
             },
@@ -49,6 +50,44 @@ class AuthService {
         );
 
         return token;
+    }
+
+    async resetPassword(token: string, newPassword: string): Promise<boolean> {
+        if (!token) {
+            throw new Error('Token is required');
+        }
+        if (!newPassword || newPassword.length < 8) {
+            throw new Error('Password must be at least 8 characters long');
+        }
+
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+        const user = await User.findOne({
+            resetPasswordToken: hashedToken,
+        });
+
+        if (!user) {
+            throw new Error('Invalid or expired token');
+        }
+
+        if (!user.resetPasswordExpires || user.resetPasswordExpires.getTime() < Date.now()) {
+            throw new Error('Invalid or expired token');
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await User.findByIdAndUpdate(
+            user._id,
+            {
+                $set: {
+                    password: hashedPassword,
+                    resetPasswordToken: null,
+                    resetPasswordExpires: null
+                }
+            },
+            { runValidators: true }
+        );
+
+        return true;
     }
 }
 
