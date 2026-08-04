@@ -48,7 +48,7 @@ export default function LoginPage() {
       });
 
       if (res?.error) {
-        setError(res.error || 'Invalid credentials');
+        setError('Invalid email or password.');
         setIsLoading(false);
       } else {
         router.push('/');
