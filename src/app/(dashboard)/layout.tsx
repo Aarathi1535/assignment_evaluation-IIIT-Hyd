@@ -11,6 +11,7 @@ import {
   X, 
   LogOut, 
   GraduationCap,
+  Users,
   LucideIcon
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
@@ -113,6 +114,7 @@ export default function DashboardLayout({
   const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
     ADMIN: [
       { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+      { label: 'Users', href: '/admin/users', icon: Users },
     ],
     PROFESSOR: [
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
