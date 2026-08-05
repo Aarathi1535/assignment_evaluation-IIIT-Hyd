@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../lib/db';
-import CourseService from '../../../services/CourseService';
-import { createCourseSchema } from '../../../validations/courseValidation';
+import ExamService from '../../../services/ExamService';
+import { createExamSchema } from '../../../validations/examValidation';
 import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
 
@@ -13,11 +13,11 @@ export async function GET() {
 
   try {
     await connectDB();
-    const courses = await CourseService.getAllCourses();
+    const exams = await ExamService.getAllExams();
     return NextResponse.json({
       success: true,
-      message: 'Courses retrieved successfully',
-      data: courses
+      message: 'Exams retrieved successfully',
+      data: exams
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -30,7 +30,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requirePermission(Permission.CREATE_COURSE);
+  const auth = await requirePermission(Permission.CREATE_EXAM);
   if (!auth.authorized) {
     return auth.response;
   }
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const validationResult = createCourseSchema.safeParse(body);
+    const validationResult = createExamSchema.safeParse(body);
     if (!validationResult.success) {
       return NextResponse.json({
         success: false,
@@ -58,9 +58,9 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const courseData = {
+    const examData = {
       ...validationResult.data,
-      semester: parseInt(validationResult.data.semester, 10)
+      examDate: new Date(validationResult.data.examDate)
     };
 
     const context = {
@@ -68,26 +68,15 @@ export async function POST(req: NextRequest) {
       ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined
     };
 
-    const newCourse = await CourseService.createCourse(
-      courseData as unknown as Partial<import('@/models/Course').ICourse>,
-      context
-    );
+    const newExam = await ExamService.createExam(examData as unknown as Partial<import('@/models/Exam').IExam>, context);
 
     return NextResponse.json({
       success: true,
-      message: 'Course created successfully',
-      data: newCourse
+      message: 'Exam created successfully',
+      data: newExam
     }, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-    if (message === 'Course code already exists') {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: 400 });
-    }
-
     return NextResponse.json({
       success: false,
       message,

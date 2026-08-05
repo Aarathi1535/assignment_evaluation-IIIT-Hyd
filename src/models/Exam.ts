@@ -17,6 +17,7 @@ export interface IExam extends Document {
     examDate: Date;
     totalMarks: number;
     status: ExamStatus;
+    numberOfQuestions: number;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -55,6 +56,10 @@ const ExamSchema = new Schema<IExam>(
             default: ExamStatus.DRAFT,
             required: true,
             index: true
+        },
+        numberOfQuestions: {
+            type: Number,
+            required: true
         },
         isActive: {
             type: Boolean,

@@ -12,7 +12,9 @@ import {
   LogOut, 
   GraduationCap,
   Users,
-  LucideIcon
+  LucideIcon,
+  FileText,
+  Plus
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 
@@ -118,7 +120,10 @@ export default function DashboardLayout({
     ],
     PROFESSOR: [
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
-      { label: 'Create Course', href: '/professor/courses/create', icon: BookOpen },
+      { label: 'Courses', href: '/professor/courses', icon: BookOpen },
+      { label: 'Exams', href: '/professor/exams', icon: FileText },
+      { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
+      { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
     ],
     TA: [
       { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
