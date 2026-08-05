@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { ArrowLeft, FileText, CheckCircle2, AlertCircle, BookOpen } from 'lucide-react';
 
 const formSchema = z.object({
@@ -70,6 +71,7 @@ export default function CreateExamPage() {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -82,6 +84,47 @@ export default function CreateExamPage() {
       status: 'DRAFT',
     },
   });
+  
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const selectedCourseId = watch('course');
+  const [courseStudents, setCourseStudents] = useState<{ value: string; label: string }[]>([]);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [fetchingRoster, setFetchingRoster] = useState(false);
+
+  useEffect(() => {
+    if (!selectedCourseId) {
+      setCourseStudents([]);
+      setSelectedStudentIds([]);
+      return;
+    }
+
+    async function loadCourseRoster() {
+      setFetchingRoster(true);
+      try {
+        const res = await fetch(`/api/courses/${selectedCourseId}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+          const enrolled = data.data.enrolledStudents || [];
+          const options = enrolled.map((s: { _id: string; name: string; email: string }) => ({
+            value: s._id,
+            label: `${s.name} (${s.email})`,
+          }));
+          setCourseStudents(options);
+          setSelectedStudentIds(options.map((o: { value: string; label: string }) => o.value));
+        } else {
+          setCourseStudents([]);
+          setSelectedStudentIds([]);
+        }
+      } catch {
+        setCourseStudents([]);
+        setSelectedStudentIds([]);
+      } finally {
+        setFetchingRoster(false);
+      }
+    }
+
+    loadCourseRoster();
+  }, [selectedCourseId]);
 
   const onSubmit = async (values: FormValues) => {
     if (!session?.user?.id) {
@@ -118,8 +161,26 @@ export default function CreateExamPage() {
         throw new Error(data.message || 'Failed to create exam');
       }
 
-      setSuccessMsg('Exam created successfully!');
+      const examId = data.data._id;
+
+      // Enroll selected students into the exam
+      if (selectedStudentIds.length > 0) {
+        const enrollRes = await fetch(`/api/exams/${examId}/enroll`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ studentIds: selectedStudentIds }),
+        });
+        const enrollData = await enrollRes.json();
+        if (!enrollRes.ok || !enrollData.success) {
+          throw new Error(enrollData.message || 'Failed to enroll students in exam');
+        }
+      }
+
+      setSuccessMsg('Exam created and students enrolled successfully!');
       reset();
+      setSelectedStudentIds([]);
       
       // Delay navigation slightly to let professor see success message
       setTimeout(() => {
@@ -226,6 +287,29 @@ export default function CreateExamPage() {
                   error={errors.course?.message}
                   {...register('course')}
                 />
+
+                {selectedCourseId && (
+                  <div className="md:col-span-2 mt-1">
+                    {fetchingRoster ? (
+                      <div className="flex items-center gap-2 text-sm text-slate-500 py-2">
+                        <LoadingSpinner size="sm" />
+                        <span>Loading course roster...</span>
+                      </div>
+                    ) : courseStudents.length === 0 ? (
+                      <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm font-semibold rounded-brand">
+                        No students are currently enrolled in the selected course.
+                      </div>
+                    ) : (
+                      <SearchableMultiSelect
+                        label="Enroll Students for this Exam"
+                        options={courseStudents}
+                        value={selectedStudentIds}
+                        onChange={(val) => setSelectedStudentIds(val)}
+                        placeholder="Search and select students to take this exam..."
+                      />
+                    )}
+                  </div>
+                )}
 
                 <FormInput
                   label="Exam Date"

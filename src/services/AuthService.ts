@@ -90,21 +90,41 @@ class AuthService {
             throw new Error('Invalid or expired token');
         }
 
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        try {
+            const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-        await User.findByIdAndUpdate(
-            user._id,
-            {
-                $set: {
-                    password: hashedPassword,
-                    resetPasswordToken: null,
-                    resetPasswordExpires: null
-                }
-            },
-            { runValidators: true }
-        );
+            await User.findByIdAndUpdate(
+                user._id,
+                {
+                    $set: {
+                        password: hashedPassword,
+                        resetPasswordToken: null,
+                        resetPasswordExpires: null
+                    }
+                },
+                { runValidators: true }
+            );
 
-        return true;
+            await writeAuditLog({
+                user: user._id as mongoose.Types.ObjectId,
+                action: 'PASSWORD_RESET',
+                outcome: 'SUCCESS',
+                entityId: user._id as mongoose.Types.ObjectId,
+                entityType: 'User'
+            });
+
+            return true;
+        } catch (error) {
+            await writeAuditLog({
+                user: user._id as mongoose.Types.ObjectId,
+                action: 'PASSWORD_RESET',
+                outcome: 'FAILURE',
+                entityId: user._id as mongoose.Types.ObjectId,
+                entityType: 'User',
+                details: { error: error instanceof Error ? error.message : 'Unknown error' }
+            });
+            throw error;
+        }
     }
 }
 

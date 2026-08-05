@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { SearchableMultiSelect } from '@/components/ui/SearchableMultiSelect';
 import { ArrowLeft, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 
 const formSchema = z.object({
@@ -52,6 +53,7 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -64,6 +66,68 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
       status: 'DRAFT',
     },
   });
+
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const selectedCourseId = watch('course');
+  const [courseStudents, setCourseStudents] = useState<{ value: string; label: string }[]>([]);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [fetchingRoster, setFetchingRoster] = useState(false);
+
+  useEffect(() => {
+    if (!selectedCourseId) {
+      setCourseStudents([]);
+      setSelectedStudentIds([]);
+      return;
+    }
+
+    async function loadCourseRoster() {
+      setFetchingRoster(true);
+      try {
+        const courseRes = await fetch(`/api/courses/${selectedCourseId}`);
+        const courseData = await courseRes.json();
+        
+        if (courseData.success && courseData.data) {
+          const enrolled = courseData.data.enrolledStudents || [];
+          const options = enrolled.map((s: { _id: string; name: string; email: string }) => ({
+            value: s._id,
+            label: `${s.name} (${s.email})`,
+          }));
+          setCourseStudents(options);
+
+          // Fetch exam's current student roster
+          const examStudentsRes = await fetch(`/api/exams/${id}/students`);
+          const examStudentsData = await examStudentsRes.json();
+
+          if (examStudentsData.success && Array.isArray(examStudentsData.data)) {
+            const examStudentIds = examStudentsData.data.map((m: { student: string | { _id: string } }) => 
+              typeof m.student === 'object' && m.student ? m.student._id : m.student
+            );
+            const currentSelected = options
+              .filter((opt: { value: string; label: string }) => examStudentIds.includes(opt.value))
+              .map((opt: { value: string; label: string }) => opt.value);
+            
+            if (currentSelected.length > 0) {
+              setSelectedStudentIds(currentSelected);
+            } else {
+              setSelectedStudentIds(options.map((o: { value: string; label: string }) => o.value));
+            }
+          } else {
+            setSelectedStudentIds(options.map((o: { value: string; label: string }) => o.value));
+          }
+        } else {
+          setCourseStudents([]);
+          setSelectedStudentIds([]);
+        }
+      } catch {
+        setCourseStudents([]);
+        setSelectedStudentIds([]);
+      } finally {
+        setFetchingRoster(false);
+      }
+    }
+
+    loadCourseRoster();
+  }, [selectedCourseId, id]);
 
   useEffect(() => {
     async function loadData() {
@@ -147,7 +211,22 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
         throw new Error(data.message || 'Failed to update exam');
       }
 
-      setSuccessMsg('Exam updated successfully!');
+      // Sync exam student enrollment
+      if (selectedStudentIds.length > 0) {
+        const enrollRes = await fetch(`/api/exams/${id}/enroll`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ studentIds: selectedStudentIds }),
+        });
+        const enrollData = await enrollRes.json();
+        if (!enrollRes.ok || !enrollData.success) {
+          throw new Error(enrollData.message || 'Failed to enroll students in exam');
+        }
+      }
+
+      setSuccessMsg('Exam and student enrollment updated successfully!');
       
       setTimeout(() => {
         router.push('/professor/exams');
@@ -239,6 +318,29 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
                 error={errors.course?.message}
                 {...register('course')}
               />
+
+              {selectedCourseId && (
+                <div className="md:col-span-2 mt-1">
+                  {fetchingRoster ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-500 py-2">
+                      <LoadingSpinner size="sm" />
+                      <span>Loading course roster...</span>
+                    </div>
+                  ) : courseStudents.length === 0 ? (
+                    <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm font-semibold rounded-brand">
+                      No students are currently enrolled in the selected course.
+                    </div>
+                  ) : (
+                    <SearchableMultiSelect
+                      label="Enroll Students for this Exam"
+                      options={courseStudents}
+                      value={selectedStudentIds}
+                      onChange={(val) => setSelectedStudentIds(val)}
+                      placeholder="Search and select students to take this exam..."
+                    />
+                  )}
+                </div>
+              )}
 
               <FormInput
                 label="Exam Date"

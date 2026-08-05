@@ -49,7 +49,7 @@ export async function PUT(
       ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined
     };
 
-    const updatedExam = await ExamService.updateExam(id, examData, auditContext);
+    const updatedExam = await ExamService.updateExam(id, examData, auth.user.id, auth.user.role, auditContext);
     if (!updatedExam) {
       return NextResponse.json({
         success: false,
@@ -66,6 +66,13 @@ export async function PUT(
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    if (message.includes('transition') || message.includes('not allowed')) {
+      return NextResponse.json({
+        success: false,
+        message,
+        data: null
+      }, { status: 400 });
+    }
     return NextResponse.json({
       success: false,
       message,
@@ -93,7 +100,7 @@ export async function DELETE(
       ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined
     };
 
-    const deletedExam = await ExamService.deleteExam(id, auditContext);
+    const deletedExam = await ExamService.deleteExam(id, auth.user.id, auth.user.role, auditContext);
     if (!deletedExam) {
       return NextResponse.json({
         success: false,
@@ -131,7 +138,7 @@ export async function GET(
 
   try {
     await connectDB();
-    const exam = await ExamService.getExamById(id);
+    const exam = await ExamService.getExamById(id, auth.user.id, auth.user.role);
     if (!exam) {
       return NextResponse.json({
         success: false,

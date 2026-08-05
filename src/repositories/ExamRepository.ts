@@ -1,4 +1,5 @@
 import Exam, { IExam } from '../models/Exam';
+import mongoose, { FilterQuery } from 'mongoose';
 
 class ExamRepository {
     async createExam(data: Partial<IExam>): Promise<IExam> {
@@ -6,25 +7,37 @@ class ExamRepository {
         return await exam.save();
     }
 
-    async getAllExams(): Promise<IExam[]> {
-        return await Exam.find({ isActive: true }).sort({ createdAt: -1 });
+    async getAllExams(filter: FilterQuery<IExam> = {}): Promise<IExam[]> {
+        return await Exam.find({ ...filter, isActive: true }).sort({ createdAt: -1 });
     }
 
-    async getExamById(id: string): Promise<IExam | null> {
-        return await Exam.findOne({ _id: id, isActive: true });
+    async getExamById(id: string, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
+        const query: FilterQuery<IExam> = { _id: id, isActive: true };
+        if (actingUserRole === 'PROFESSOR' && actingUserId) {
+            query.createdBy = new mongoose.Types.ObjectId(actingUserId);
+        }
+        return await Exam.findOne(query);
     }
 
-    async updateExam(id: string, data: Partial<IExam>): Promise<IExam | null> {
+    async updateExam(id: string, data: Partial<IExam>, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
+        const query: FilterQuery<IExam> = { _id: id, isActive: true };
+        if (actingUserRole === 'PROFESSOR' && actingUserId) {
+            query.createdBy = new mongoose.Types.ObjectId(actingUserId);
+        }
         return await Exam.findOneAndUpdate(
-            { _id: id, isActive: true },
+            query,
             data,
             { new: true, runValidators: true }
         );
     }
 
-    async deleteExam(id: string): Promise<IExam | null> {
+    async deleteExam(id: string, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
+        const query: FilterQuery<IExam> = { _id: id, isActive: true };
+        if (actingUserRole === 'PROFESSOR' && actingUserId) {
+            query.createdBy = new mongoose.Types.ObjectId(actingUserId);
+        }
         return await Exam.findOneAndUpdate(
-            { _id: id, isActive: true },
+            query,
             { isActive: false },
             { new: true }
         );

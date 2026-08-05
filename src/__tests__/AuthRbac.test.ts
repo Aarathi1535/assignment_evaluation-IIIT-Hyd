@@ -54,7 +54,7 @@ describe('Authentication & RBAC Tests', () => {
     describe('Student Role', () => {
       beforeEach(() => {
         mockSessionUser = {
-          id: 'student-id',
+          id: '000000000000000000000002',
           email: 'student@university.edu',
           name: 'Student User',
           role: 'STUDENT',
@@ -87,7 +87,7 @@ describe('Authentication & RBAC Tests', () => {
     describe('TA Role', () => {
       beforeEach(() => {
         mockSessionUser = {
-          id: 'ta-id',
+          id: '000000000000000000000004',
           email: 'ta@university.edu',
           name: 'TA User',
           role: 'TA',
@@ -114,7 +114,7 @@ describe('Authentication & RBAC Tests', () => {
     describe('Professor Role', () => {
       beforeEach(() => {
         mockSessionUser = {
-          id: 'prof-id',
+          id: '000000000000000000000003',
           email: 'prof@university.edu',
           name: 'Professor User',
           role: 'PROFESSOR',
@@ -144,7 +144,7 @@ describe('Authentication & RBAC Tests', () => {
     describe('Admin Role', () => {
       beforeEach(() => {
         mockSessionUser = {
-          id: 'admin-id',
+          id: '000000000000000000000001',
           email: 'admin@university.edu',
           name: 'Admin User',
           role: 'ADMIN',

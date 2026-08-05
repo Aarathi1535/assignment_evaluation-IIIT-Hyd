@@ -7,6 +7,7 @@ export interface ICourse extends Document {
     academicYear: string;
     professor: mongoose.Types.ObjectId;
     teachingAssistants: mongoose.Types.ObjectId[];
+    enrolledStudents?: mongoose.Types.ObjectId[];
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -40,6 +41,12 @@ const CourseSchema = new Schema<ICourse>(
             required: true
         },
         teachingAssistants: [
+            {
+                type: Schema.Types.ObjectId,
+                ref: 'User'
+            }
+        ],
+        enrolledStudents: [
             {
                 type: Schema.Types.ObjectId,
                 ref: 'User'

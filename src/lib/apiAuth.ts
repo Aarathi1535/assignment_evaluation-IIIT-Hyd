@@ -75,6 +75,16 @@ export async function requirePermission(permission: Permission): Promise<AuthRes
   const role = user.role?.toUpperCase() as UserRole;
 
   if (!hasPermission(role, permission)) {
+    const { writeAuditLog } = await import('./audit');
+    await writeAuditLog({
+      user: user.id,
+      action: 'AUTHORIZATION_FAILURE',
+      outcome: 'FAILURE',
+      details: {
+        attemptedPermission: permission,
+        role
+      }
+    });
     return {
       authorized: false,
       response: NextResponse.json(

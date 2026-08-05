@@ -2,18 +2,38 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../lib/db';
 import UserService from '../../../services/UserService';
 import { createUserSchema } from '../../../validations/userValidation';
-import { requirePermission } from '../../../lib/apiAuth';
+import { requirePermission, requireAuth } from '../../../lib/apiAuth';
 import { Permission, UserRole } from '../../../constants/permissions';
+import User from '../../../models/User';
 
 export async function GET() {
-  const auth = await requirePermission(Permission.MANAGE_USERS);
+  const auth = await requireAuth();
   if (!auth.authorized) {
     return auth.response;
   }
 
+  const role = auth.user.role?.toUpperCase();
+  const isAdmin = role === UserRole.ADMIN;
+  const isProfessor = role === UserRole.PROFESSOR;
+
+  if (!isAdmin && !isProfessor) {
+    return NextResponse.json({
+      success: false,
+      message: 'Forbidden',
+      data: null
+    }, { status: 403 });
+  }
+
   try {
     await connectDB();
-    const users = await UserService.getAllUsers();
+    
+    let users;
+    if (isAdmin) {
+      users = await UserService.getAllUsers();
+    } else {
+      // Professor can only view active students
+      users = await User.find({ role: UserRole.STUDENT, isActive: true }).sort({ name: 1 });
+    }
     
     // Sanitize user objects by removing password field before returning
     const sanitizedUsers = users.map(user => {

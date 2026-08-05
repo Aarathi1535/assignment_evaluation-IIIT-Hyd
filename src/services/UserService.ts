@@ -1,5 +1,5 @@
 import UserRepository from '../repositories/UserRepository';
-import User, { IUser } from '../models/User';
+import User, { IUser, UserRole } from '../models/User';
 import bcrypt from 'bcryptjs';
 import { writeAuditLog } from '../lib/audit';
 import mongoose from 'mongoose';
@@ -60,6 +60,28 @@ class UserService {
             return null;
         }
 
+        // Prevent self-lockout
+        if (context?.actingUserId && id === context.actingUserId) {
+            if (data.isActive === false) {
+                throw new Error("Self-deactivation is not allowed");
+            }
+            if (userBefore.role === UserRole.ADMIN && data.role !== undefined && data.role !== UserRole.ADMIN) {
+                throw new Error("Self-demotion from ADMIN is not allowed");
+            }
+        }
+
+        // Prevent deactivating or demoting the last active ADMIN
+        if (userBefore.role === UserRole.ADMIN) {
+            const isDeactivating = data.isActive === false;
+            const isDemoting = data.role !== undefined && data.role !== UserRole.ADMIN;
+            if (isDeactivating || isDemoting) {
+                const activeAdminCount = await User.countDocuments({ role: UserRole.ADMIN, isActive: true });
+                if (activeAdminCount <= 1) {
+                    throw new Error("Cannot deactivate or demote the last active ADMIN");
+                }
+            }
+        }
+
         const userData = { ...data };
 
         if (userData.email) {
@@ -76,41 +98,59 @@ class UserService {
             userData.password = await bcrypt.hash(userData.password, 10);
         }
 
-        const updatedUser = await UserRepository.updateUser(id, userData);
+        try {
+            const updatedUser = await UserRepository.updateUser(id, userData);
 
-        if (updatedUser && context?.actingUserId) {
-            const changedFields: string[] = [];
-            if (data.name !== undefined && data.name !== userBefore.name) {
-                changedFields.push('name');
-            }
-            if (data.email !== undefined && data.email.toLowerCase() !== userBefore.email) {
-                changedFields.push('email');
-            }
-            if (data.role !== undefined && data.role !== userBefore.role) {
-                changedFields.push('role');
-            }
-            if (data.password !== undefined) {
-                changedFields.push('password');
-            }
-            if (data.isActive !== undefined && data.isActive !== userBefore.isActive) {
-                changedFields.push('isActive');
+            if (updatedUser && context?.actingUserId) {
+                const changedFields: string[] = [];
+                if (data.name !== undefined && data.name !== userBefore.name) {
+                    changedFields.push('name');
+                }
+                if (data.email !== undefined && data.email.toLowerCase() !== userBefore.email) {
+                    changedFields.push('email');
+                }
+                if (data.role !== undefined && data.role !== userBefore.role) {
+                    changedFields.push('role');
+                }
+                if (data.password !== undefined) {
+                    changedFields.push('password');
+                }
+                if (data.isActive !== undefined && data.isActive !== userBefore.isActive) {
+                    changedFields.push('isActive');
+                }
+
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'USER_UPDATED',
+                    outcome: 'SUCCESS',
+                    entityId: updatedUser._id as mongoose.Types.ObjectId,
+                    entityType: 'User',
+                    details: {
+                        email: updatedUser.email,
+                        role: updatedUser.role,
+                        changedFields
+                    },
+                    ipAddress: context.ipAddress
+                });
             }
 
-            await writeAuditLog({
-                user: context.actingUserId,
-                action: 'USER_UPDATED',
-                entityId: updatedUser._id as mongoose.Types.ObjectId,
-                entityType: 'User',
-                details: {
-                    email: updatedUser.email,
-                    role: updatedUser.role,
-                    changedFields
-                },
-                ipAddress: context.ipAddress
-            });
+            return updatedUser;
+        } catch (error) {
+            if (context?.actingUserId) {
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'USER_UPDATED',
+                    outcome: 'FAILURE',
+                    entityId: new mongoose.Types.ObjectId(id),
+                    entityType: 'User',
+                    details: {
+                        error: error instanceof Error ? error.message : 'Unknown error'
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+            throw error;
         }
-
-        return updatedUser;
     }
 
     async deactivateUser(id: string, context?: AuditContext): Promise<IUser | null> {
@@ -119,24 +159,55 @@ class UserService {
             return null;
         }
 
-        const deactivatedUser = await UserRepository.deactivateUser(id);
-
-        if (deactivatedUser && context?.actingUserId) {
-            await writeAuditLog({
-                user: context.actingUserId,
-                action: 'USER_DEACTIVATED',
-                entityId: deactivatedUser._id as mongoose.Types.ObjectId,
-                entityType: 'User',
-                details: {
-                    email: deactivatedUser.email,
-                    role: deactivatedUser.role,
-                    changedFields: ['isActive']
-                },
-                ipAddress: context.ipAddress
-            });
+        // Prevent self-lockout
+        if (context?.actingUserId && id === context.actingUserId) {
+            throw new Error("Self-deactivation is not allowed");
         }
 
-        return deactivatedUser;
+        // Prevent deactivating the last active ADMIN
+        if (userBefore.role === UserRole.ADMIN) {
+            const activeAdminCount = await User.countDocuments({ role: UserRole.ADMIN, isActive: true });
+            if (activeAdminCount <= 1) {
+                throw new Error("Cannot deactivate or demote the last active ADMIN");
+            }
+        }
+
+        try {
+            const deactivatedUser = await UserRepository.deactivateUser(id);
+
+            if (deactivatedUser && context?.actingUserId) {
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'USER_DEACTIVATED',
+                    outcome: 'SUCCESS',
+                    entityId: deactivatedUser._id as mongoose.Types.ObjectId,
+                    entityType: 'User',
+                    details: {
+                        email: deactivatedUser.email,
+                        role: deactivatedUser.role,
+                        changedFields: ['isActive']
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+
+            return deactivatedUser;
+        } catch (error) {
+            if (context?.actingUserId) {
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'USER_DEACTIVATED',
+                    outcome: 'FAILURE',
+                    entityId: new mongoose.Types.ObjectId(id),
+                    entityType: 'User',
+                    details: {
+                        error: error instanceof Error ? error.message : 'Unknown error'
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+            throw error;
+        }
     }
 }
 

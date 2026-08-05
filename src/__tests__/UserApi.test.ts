@@ -43,7 +43,7 @@ describe('User Management API Tests (AE-030)', () => {
 
     it('should return 403 Forbidden for STUDENT GET /api/users (lacks MANAGE_USERS)', async () => {
       mockSessionUser = {
-        id: 'student-id',
+        id: '000000000000000000000002',
         email: 'student@university.edu',
         name: 'Student User',
         role: 'STUDENT',
@@ -57,7 +57,7 @@ describe('User Management API Tests (AE-030)', () => {
 
     it('should return 403 Forbidden for PROFESSOR POST /api/users (lacks MANAGE_USERS)', async () => {
       mockSessionUser = {
-        id: 'prof-id',
+        id: '000000000000000000000003',
         email: 'prof@university.edu',
         name: 'Professor User',
         role: 'PROFESSOR',
@@ -73,7 +73,7 @@ describe('User Management API Tests (AE-030)', () => {
 
     it('should return 403 Forbidden for TA PUT /api/users/some-id (lacks MANAGE_USERS)', async () => {
       mockSessionUser = {
-        id: 'ta-id',
+        id: '000000000000000000000004',
         email: 'ta@university.edu',
         name: 'TA User',
         role: 'TA',
@@ -91,7 +91,7 @@ describe('User Management API Tests (AE-030)', () => {
   describe('Admin Operations (Authorized)', () => {
     beforeEach(() => {
       mockSessionUser = {
-        id: 'admin-id',
+        id: '000000000000000000000001',
         email: 'admin@university.edu',
         name: 'Admin User',
         role: 'ADMIN',
@@ -292,6 +292,98 @@ describe('User Management API Tests (AE-030)', () => {
       const resBody = await res.json();
       expect(resBody.success).toBe(false);
       expect(resBody.message).toBe('User not found');
+    });
+
+    it('should prevent self-deactivation (self-lockout)', async () => {
+      const adminId = '000000000000000000000001';
+      // Seed admin user
+      const admin = new User({
+        _id: adminId,
+        name: 'Admin User',
+        email: 'admin@university.edu',
+        password: await bcrypt.hash('password123', 10),
+        role: UserRole.ADMIN,
+        isActive: true,
+      });
+      await admin.save();
+
+      const req = new Request(`http://localhost:3000/api/users/${adminId}`, {
+        method: 'PATCH',
+      });
+
+      const res = await userDetailPATCH(req as any, { params: Promise.resolve({ id: adminId }) });
+      expect(res.status).toBe(400);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(false);
+      expect(resBody.message).toContain('Self-deactivation is not allowed');
+    });
+
+    it('should prevent self-demotion from ADMIN', async () => {
+      const adminId = '000000000000000000000001';
+      // Seed admin user
+      const admin = new User({
+        _id: adminId,
+        name: 'Admin User',
+        email: 'admin@university.edu',
+        password: await bcrypt.hash('password123', 10),
+        role: UserRole.ADMIN,
+        isActive: true,
+      });
+      await admin.save();
+
+      const req = new Request(`http://localhost:3000/api/users/${adminId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ role: UserRole.STUDENT }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const res = await userDetailPUT(req as any, { params: Promise.resolve({ id: adminId }) });
+      expect(res.status).toBe(400);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(false);
+      expect(resBody.message).toContain('Self-demotion from ADMIN is not allowed');
+    });
+
+    it('should prevent deactivating the last active ADMIN', async () => {
+      // Seed active admin A
+      const adminAId = '000000000000000000000001';
+      const adminA = new User({
+        _id: adminAId,
+        name: 'Admin A',
+        email: 'adminA@university.edu',
+        password: await bcrypt.hash('password123', 10),
+        role: UserRole.ADMIN,
+        isActive: true,
+      });
+      await adminA.save();
+
+      // Create another admin user but deactivated
+      const adminB = new User({
+        name: 'Admin B',
+        email: 'adminB@university.edu',
+        password: 'password123',
+        role: UserRole.ADMIN,
+        isActive: false
+      });
+      await adminB.save();
+
+      // Attempt to deactivate active admin A (acting user is Admin C, who is not in DB)
+      mockSessionUser = {
+        id: '000000000000000000000009',
+        email: 'adminC@university.edu',
+        name: 'Admin C',
+        role: 'ADMIN',
+      };
+
+      const req = new Request(`http://localhost:3000/api/users/${adminAId}`, {
+        method: 'PATCH',
+      });
+
+      const res = await userDetailPATCH(req as any, { params: Promise.resolve({ id: adminAId }) });
+      expect(res.status).toBe(400);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(false);
+      expect(resBody.message).toContain('Cannot deactivate or demote the last active ADMIN');
     });
   });
 });

@@ -68,7 +68,7 @@ export async function PUT(
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-    if (message === 'Email already exists') {
+    if (message === 'Email already exists' || message.includes('not allowed') || message.includes('last active ADMIN')) {
       return NextResponse.json({
         success: false,
         message,
@@ -120,6 +120,13 @@ export async function PATCH(
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    if (message.includes('not allowed') || message.includes('last active ADMIN')) {
+      return NextResponse.json({
+        success: false,
+        message,
+        data: null
+      }, { status: 400 });
+    }
     return NextResponse.json({
       success: false,
       message,

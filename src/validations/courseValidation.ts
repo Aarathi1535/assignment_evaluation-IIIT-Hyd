@@ -11,7 +11,6 @@ export const createCourseSchema = z.object({
   courseName: z.string().trim().min(3, { message: 'Course name must be at least 3 characters long' }),
   semester: z.string().min(1, { message: 'Semester is required' }),
   academicYear: z.string().min(1, { message: 'Academic year is required' }),
-  professor: objectIdSchema,
   teachingAssistants: z.array(objectIdSchema).optional(),
 });
 

@@ -5,6 +5,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { FormInput } from '@/components/ui/FormInput';
 import { FormSelect } from '@/components/ui/FormSelect';
 import { SearchableSelect } from '@/components/ui/SearchableSelect';
@@ -20,7 +21,6 @@ const formSchema = z.object({
   courseName: z.string().trim().min(3, { message: 'Course name must be at least 3 characters long' }),
   semester: z.string().min(1, { message: 'Semester is required' }),
   academicYear: z.string().min(1, { message: 'Academic year is required' }),
-  professor: z.string().regex(/^[0-9a-fA-F]{24}$/, { message: 'Professor is required' }),
   teachingAssistants: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/)).optional(),
 });
 
@@ -36,10 +36,6 @@ const semesterOptions = [
   { value: '6', label: 'Semester 6' },
   { value: '7', label: 'Semester 7' },
   { value: '8', label: 'Semester 8' },
-];
-
-const professorOptions = [
-  { value: '60d5ec49315e2c56a84976fa', label: 'Aarathisree (Professor)' }
 ];
 
 const taOptions = [
@@ -58,6 +54,7 @@ const academicYearOptions = [
 export default function EditCoursePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { data: session } = useSession();
   const [fetching, setFetching] = useState(true);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -76,7 +73,6 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
       courseName: '',
       semester: '',
       academicYear: '',
-      professor: '',
       teachingAssistants: [],
     },
   });
@@ -93,15 +89,13 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
             courseName: course.courseName || '',
             semester: course.semester !== undefined ? String(course.semester) : '',
             academicYear: course.academicYear || '',
-            professor: course.professor || '',
             teachingAssistants: course.teachingAssistants || [],
           });
         } else {
           setErrorMsg(data.message || 'Failed to load course details.');
         }
-      } catch (err) {
-        console.error('Error fetching course:', err);
-        setErrorMsg('An error occurred while loading course details.');
+      } catch {
+        setErrorMsg('Error fetching course details.');
       } finally {
         setFetching(false);
       }
@@ -119,7 +113,6 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
       courseName: values.courseName,
       semester: values.semester,
       academicYear: values.academicYear,
-      professor: values.professor,
       teachingAssistants: values.teachingAssistants || [],
     };
 
@@ -140,9 +133,6 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
 
       setSuccessMsg('Course updated successfully!');
       
-      setTimeout(() => {
-        router.push('/professor/courses');
-      }, 1500);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.';
       setErrorMsg(message);
@@ -163,17 +153,17 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 py-6 px-4 sm:px-6 lg:px-8 font-sans">
+    <div className="min-h-screen bg-slate-50 py-6 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto space-y-5">
         
         {/* Back Button & Header */}
         <div className="flex flex-col gap-1.5">
           <button
-            onClick={() => router.push('/professor/courses')}
+            onClick={() => router.push('/professor')}
             className="flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-900 transition-all w-fit cursor-pointer"
           >
             <ArrowLeft className="h-4 w-4" />
-            <span>Back to Courses</span>
+            <span>Back to Dashboard</span>
           </button>
           
           <div className="flex items-center gap-3 mt-2">
@@ -182,21 +172,21 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
             </div>
             <PageHeader
               title="Edit Course"
-              description="Modify configuration and teaching assistants for this course."
+              description="Update your course details."
             />
           </div>
         </div>
 
         {/* Alerts */}
         {successMsg && (
-          <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-brand p-3.5 text-emerald-800 text-sm font-semibold animate-pulse-slow">
+          <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-brand p-3.5 text-emerald-800 text-sm font-semibold">
             <CheckCircle2 className="h-5 w-5 shrink-0" />
             <span>{successMsg}</span>
           </div>
         )}
 
         {errorMsg && (
-          <div className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-brand p-3.5 text-rose-800 text-sm font-semibold animate-pulse-slow">
+          <div className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-brand p-3.5 text-rose-800 text-sm font-semibold">
             <AlertCircle className="h-5 w-5 shrink-0" />
             <span>{errorMsg}</span>
           </div>
@@ -244,20 +234,12 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
               />
 
               <div className="md:col-span-2">
-                <Controller
-                  name="professor"
-                  control={control}
-                  render={({ field }) => (
-                    <SearchableSelect
-                      label="Professor"
-                      options={professorOptions}
-                      value={field.value}
-                      onChange={field.onChange}
-                      error={errors.professor?.message}
-                      placeholder="Search/Select Professor"
-                    />
-                  )}
-                />
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                  Professor
+                </label>
+                <div className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-brand text-slate-600 text-sm font-medium">
+                  {session?.user?.name || 'Loading...'}
+                </div>
               </div>
 
               <div className="md:col-span-2">
@@ -287,7 +269,7 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => router.push('/professor/courses')}
+                onClick={() => router.push('/professor')}
               >
                 Cancel
               </Button>
@@ -297,7 +279,7 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
                 variant="primary"
                 isLoading={loading}
               >
-                Save Changes
+                Save Course
               </Button>
             </div>
           </form>

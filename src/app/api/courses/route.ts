@@ -13,7 +13,7 @@ export async function GET() {
 
   try {
     await connectDB();
-    const courses = await CourseService.getAllCourses();
+    const courses = await CourseService.getAllCourses(auth.user.id, auth.user.role);
     return NextResponse.json({
       success: true,
       message: 'Courses retrieved successfully',
@@ -60,7 +60,8 @@ export async function POST(req: NextRequest) {
 
     const courseData = {
       ...validationResult.data,
-      semester: parseInt(validationResult.data.semester, 10)
+      semester: parseInt(validationResult.data.semester, 10),
+      professor: auth.user.id
     };
 
     const context = {

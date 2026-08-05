@@ -5,6 +5,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { FormInput } from '@/components/ui/FormInput';
 import { FormSelect } from '@/components/ui/FormSelect';
 import { SearchableSelect } from '@/components/ui/SearchableSelect';
@@ -19,7 +20,6 @@ const formSchema = z.object({
   courseName: z.string().trim().min(3, { message: 'Course name must be at least 3 characters long' }),
   semester: z.string().min(1, { message: 'Semester is required' }),
   academicYear: z.string().min(1, { message: 'Academic year is required' }),
-  professor: z.string().regex(/^[0-9a-fA-F]{24}$/, { message: 'Professor is required' }),
   teachingAssistants: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/)).optional(),
 });
 
@@ -37,10 +37,6 @@ const semesterOptions = [
   { value: '8', label: 'Semester 8' },
 ];
 
-const professorOptions = [
-  { value: '60d5ec49315e2c56a84976fa', label: 'Aarathisree (Professor)' }
-];
-
 const taOptions = [
   { value: '60d5ec49315e2c56a84976fb', label: 'TA 1' },
   { value: '60d5ec49315e2c56a84976fc', label: 'TA 2' },
@@ -56,6 +52,7 @@ const academicYearOptions = [
 
 export default function CreateCoursePage() {
   const router = useRouter();
+  const { data: session } = useSession();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -73,7 +70,6 @@ export default function CreateCoursePage() {
       courseName: '',
       semester: '',
       academicYear: '',
-      professor: '',
       teachingAssistants: [],
     },
   });
@@ -88,7 +84,6 @@ export default function CreateCoursePage() {
       courseName: values.courseName,
       semester: values.semester,
       academicYear: values.academicYear,
-      professor: values.professor,
       teachingAssistants: values.teachingAssistants || [],
     };
 
@@ -199,20 +194,12 @@ export default function CreateCoursePage() {
               />
 
               <div className="md:col-span-2">
-                <Controller
-                  name="professor"
-                  control={control}
-                  render={({ field }) => (
-                    <SearchableSelect
-                      label="Professor"
-                      options={professorOptions}
-                      value={field.value}
-                      onChange={field.onChange}
-                      error={errors.professor?.message}
-                      placeholder="Search/Select Professor"
-                    />
-                  )}
-                />
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                  Professor
+                </label>
+                <div className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-brand text-slate-600 text-sm font-medium">
+                  {session?.user?.name || 'Loading...'}
+                </div>
               </div>
 
               <div className="md:col-span-2">

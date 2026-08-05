@@ -13,7 +13,7 @@ export async function GET() {
 
   try {
     await connectDB();
-    const exams = await ExamService.getAllExams();
+    const exams = await ExamService.getAllExams(auth.user.id, auth.user.role);
     return NextResponse.json({
       success: true,
       message: 'Exams retrieved successfully',
@@ -60,7 +60,8 @@ export async function POST(req: NextRequest) {
 
     const examData = {
       ...validationResult.data,
-      examDate: new Date(validationResult.data.examDate)
+      examDate: new Date(validationResult.data.examDate),
+      createdBy: auth.user.id
     };
 
     const context = {

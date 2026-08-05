@@ -119,7 +119,7 @@ describe('Smoke Tests', () => {
 
     it('should return 200 OK for STUDENT GET requests', async () => {
       mockSessionUser = {
-        id: 'student-id',
+        id: '000000000000000000000002',
         email: 'student@university.edu',
         name: 'Student User',
         role: 'STUDENT',
@@ -133,7 +133,7 @@ describe('Smoke Tests', () => {
 
     it('should return 403 Forbidden for STUDENT POST requests', async () => {
       mockSessionUser = {
-        id: 'student-id',
+        id: '000000000000000000000002',
         email: 'student@university.edu',
         name: 'Student User',
         role: 'STUDENT',
@@ -149,7 +149,7 @@ describe('Smoke Tests', () => {
 
     it('should return 200 OK for TA GET requests', async () => {
       mockSessionUser = {
-        id: 'ta-id',
+        id: '000000000000000000000004',
         email: 'ta@university.edu',
         name: 'TA User',
         role: 'TA',
@@ -163,7 +163,7 @@ describe('Smoke Tests', () => {
 
     it('should return 403 Forbidden for TA POST requests', async () => {
       mockSessionUser = {
-        id: 'ta-id',
+        id: '000000000000000000000004',
         email: 'ta@university.edu',
         name: 'TA User',
         role: 'TA',
@@ -179,7 +179,7 @@ describe('Smoke Tests', () => {
 
     it('should return 200 for PROFESSOR GET requests', async () => {
       mockSessionUser = {
-        id: 'prof-id',
+        id: '000000000000000000000003',
         email: 'prof@university.edu',
         name: 'Prof User',
         role: 'PROFESSOR',
@@ -193,7 +193,7 @@ describe('Smoke Tests', () => {
 
     it('should return 400 validation error (instead of 403) for PROFESSOR POST requests with empty body', async () => {
       mockSessionUser = {
-        id: 'prof-id',
+        id: '000000000000000000000003',
         email: 'prof@university.edu',
         name: 'Prof User',
         role: 'PROFESSOR',
