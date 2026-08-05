@@ -2,9 +2,11 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import User, { IUser, UserRole } from '../models/User';
 import { RegisterInput } from '../validations/authValidation';
+import { writeAuditLog } from '../lib/audit';
+import mongoose from 'mongoose';
 
 class AuthService {
-    async register(data: RegisterInput): Promise<Omit<IUser, 'password'>> {
+    async register(data: RegisterInput, ipAddress?: string): Promise<Omit<IUser, 'password'>> {
         const { email, password, name, role } = data;
 
         const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -19,6 +21,20 @@ class AuthService {
             email,
             password: hashedPassword,
             role: role as UserRole
+        });
+
+        // Write Audit Log
+        await writeAuditLog({
+            user: user._id as mongoose.Types.ObjectId,
+            action: 'USER_REGISTERED',
+            entityId: user._id as mongoose.Types.ObjectId,
+            entityType: 'User',
+            details: {
+                name: user.name,
+                email: user.email,
+                role: user.role
+            },
+            ipAddress
         });
 
         const userObj = user.toObject();

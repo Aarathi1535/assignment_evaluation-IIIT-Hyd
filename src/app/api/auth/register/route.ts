@@ -32,7 +32,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const user = await AuthService.register(validationResult.data);
+    const ipAddress = (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined;
+    const user = await AuthService.register(validationResult.data, ipAddress);
 
     return NextResponse.json(
       {

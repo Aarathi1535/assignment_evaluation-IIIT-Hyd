@@ -72,7 +72,11 @@ export async function POST(req: NextRequest) {
       role: validationResult.data.role as UserRole
     };
 
-    const newUser = await UserService.createUser(userData);
+    const context = {
+      actingUserId: auth.user.id,
+      ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
+    };
+    const newUser = await UserService.createUser(userData, context);
     const sanitizedUser = newUser.toObject();
     delete sanitizedUser.password;
 

@@ -45,7 +45,11 @@ export async function PUT(
       role: validationResult.data.role ? (validationResult.data.role as UserRole) : undefined
     };
 
-    const updatedUser = await UserService.updateUser(id, userData);
+    const context = {
+      actingUserId: auth.user.id,
+      ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
+    };
+    const updatedUser = await UserService.updateUser(id, userData, context);
     if (!updatedUser) {
       return NextResponse.json({
         success: false,
@@ -93,7 +97,11 @@ export async function PATCH(
 
   try {
     await connectDB();
-    const deactivatedUser = await UserService.deactivateUser(id);
+    const context = {
+      actingUserId: auth.user.id,
+      ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
+    };
+    const deactivatedUser = await UserService.deactivateUser(id, context);
     if (!deactivatedUser) {
       return NextResponse.json({
         success: false,

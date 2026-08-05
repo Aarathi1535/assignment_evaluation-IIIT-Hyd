@@ -116,7 +116,12 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        await UserService.createUser(userData);
+        const context = {
+          actingUserId: auth.user.id,
+          ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
+          action: 'USER_IMPORTED',
+        };
+        await UserService.createUser(userData, context);
         imported++;
       } catch (error: unknown) {
         failed++;
