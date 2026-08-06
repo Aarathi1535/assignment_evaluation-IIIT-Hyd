@@ -8,11 +8,25 @@ import crypto from 'crypto';
 
 export interface AuditContext {
     actingUserId?: string;
+    actingUserRole?: string;
     ipAddress?: string;
 }
 
 class ExamService {
     async createExam(data: Partial<IExam>, context?: AuditContext): Promise<IExam> {
+        if (data.course && context?.actingUserId) {
+            const CourseRepository = (await import('../repositories/CourseRepository')).default;
+            const course = await CourseRepository.getCourseById(
+                data.course.toString(),
+                context.actingUserId,
+                context.actingUserRole
+            );
+            if (!course) {
+                const error = new Error('Course not found');
+                error.statusCode = 404;
+                throw error;
+            }
+        }
         try {
             // Force status to DRAFT on exam creation
             data.status = ExamStatus.DRAFT;
@@ -151,6 +165,21 @@ class ExamService {
                 }
             }
             return null;
+        }
+
+        // Validate course if moving the exam onto another course
+        if (data.course) {
+            const CourseRepository = (await import('../repositories/CourseRepository')).default;
+            const course = await CourseRepository.getCourseById(
+                data.course.toString(),
+                actingUserId,
+                actingUserRole
+            );
+            if (!course) {
+                const error = new Error('Course not found');
+                error.statusCode = 404;
+                throw error;
+            }
         }
 
         // Prevent ownership changes through update APIs
@@ -358,34 +387,32 @@ class ExamService {
 
             for (const sid of uniqueStudentIds) {
                 if (!enrolledStudentIds.has(sid)) {
-                    const anonymousId = await generateAnonId();
-                    const mapping = new StudentMapping({
-                        exam: new mongoose.Types.ObjectId(examId),
-                        student: new mongoose.Types.ObjectId(sid),
-                        anonymousId,
-                        isVerified: false
-                    });
-                    await mapping.save();
-                    createdMappings.push(mapping);
+                    try {
+                        const anonymousId = await generateAnonId();
+                        const mapping = new StudentMapping({
+                            exam: new mongoose.Types.ObjectId(examId),
+                            student: new mongoose.Types.ObjectId(sid),
+                            anonymousId,
+                            isVerified: false
+                        });
+                        await mapping.save();
+                        createdMappings.push(mapping);
+                    } catch (err) {
+                        if (err && err.code === 11000) {
+                            // Ignore duplicate mappings for concurrent requests
+                        } else {
+                            throw err;
+                        }
+                    }
                 }
             }
 
-            // Store enrolled student roster directly on the Exam document as well
-            const currentEnrolled = exam.enrolledStudents || [];
-            const enrolledSet = new Set(currentEnrolled.map(id => id.toString()));
-            const newEnrolled = [...currentEnrolled];
-            let examDocUpdated = false;
-            for (const sid of uniqueStudentIds) {
-                if (!enrolledSet.has(sid)) {
-                    newEnrolled.push(new mongoose.Types.ObjectId(sid));
-                    examDocUpdated = true;
-                }
-            }
-
-            if (examDocUpdated) {
-                exam.enrolledStudents = newEnrolled;
-                await exam.save();
-            }
+            // Store enrolled student roster directly on the Exam document as well atomically
+            await Exam.findOneAndUpdate(
+                { _id: examId, isActive: true },
+                { $addToSet: { enrolledStudents: { $each: uniqueStudentIds.map(sid => new mongoose.Types.ObjectId(sid)) } } },
+                { new: true }
+            );
 
             if (context?.actingUserId) {
                 await writeAuditLog({

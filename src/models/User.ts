@@ -44,11 +44,13 @@ const UserSchema = new Schema<IUser>(
         },
         resetPasswordToken: {
             type: String,
-            default: null
+            default: null,
+            select: false
         },
         resetPasswordExpires: {
             type: Date,
-            default: null
+            default: null,
+            select: false
         }
     },
     {
