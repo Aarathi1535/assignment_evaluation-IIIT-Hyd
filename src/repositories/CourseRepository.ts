@@ -11,10 +11,33 @@ class CourseRepository {
         return await Course.find({ ...filter, isActive: true }).sort({ createdAt: -1 });
     }
 
-    async getCourseById(id: string, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
+    private buildCourseQuery(id: string, actingUserId?: string, actingUserRole?: string): QueryFilter<ICourse> | null {
+        if (!actingUserId || !actingUserRole) {
+            return null;
+        }
         const query: QueryFilter<ICourse> = { _id: id, isActive: true };
-        if (actingUserRole === 'PROFESSOR' && actingUserId) {
+        if (actingUserRole === 'ADMIN') {
+            return query;
+        }
+        if (actingUserRole === 'PROFESSOR') {
             query.professor = new mongoose.Types.ObjectId(actingUserId);
+            return query;
+        }
+        if (actingUserRole === 'STUDENT') {
+            query.enrolledStudents = new mongoose.Types.ObjectId(actingUserId);
+            return query;
+        }
+        if (actingUserRole === 'TA') {
+            query.teachingAssistants = new mongoose.Types.ObjectId(actingUserId);
+            return query;
+        }
+        return null;
+    }
+
+    async getCourseById(id: string, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
+        const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
         }
         return await Course.findOne(query).populate('enrolledStudents', 'name email role isActive');
     }
@@ -23,11 +46,10 @@ class CourseRepository {
         return await Course.findOne({ courseCode, isActive: true });
     }
 
-
     async updateCourse(id: string, data: Partial<ICourse>, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
-        const query: QueryFilter<ICourse> = { _id: id, isActive: true };
-        if (actingUserRole === 'PROFESSOR' && actingUserId) {
-            query.professor = new mongoose.Types.ObjectId(actingUserId);
+        const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
         }
         return await Course.findOneAndUpdate(
             query,
@@ -37,9 +59,9 @@ class CourseRepository {
     }
 
     async deleteCourse(id: string, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
-        const query: QueryFilter<ICourse> = { _id: id, isActive: true };
-        if (actingUserRole === 'PROFESSOR' && actingUserId) {
-            query.professor = new mongoose.Types.ObjectId(actingUserId);
+        const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
         }
         return await Course.findOneAndUpdate(
             query,

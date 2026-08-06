@@ -631,6 +631,32 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       );
       expect(res.status).toBe(404);
     });
+
+    it("should return 404 when Professor A tries to create an exam on Professor B's course", async () => {
+      const req = new Request('http://localhost:3000/api/exams', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'Exam on B Course',
+          course: courseBId.toString(),
+          examDate: '2026-10-15T09:00:00.000Z',
+          totalMarks: 100,
+          numberOfQuestions: 10
+        }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await examsPOST(req as any);
+      expect(res.status).toBe(404);
+    });
+
+    it("should return 404 when Professor A tries to move an existing exam onto Professor B's course", async () => {
+      const req = new Request(`http://localhost:3000/api/exams/${testExamId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ course: courseBId.toString() }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await examDetailPUT(req as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(res.status).toBe(404);
+    });
   });
 
   describe('Student Draft Visibility & Course Deletion Guard & Exam Transitions', () => {
@@ -1253,6 +1279,70 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       req = new Request(`http://localhost:3000/api/exams/${invalidId}/students`);
       res = await examStudentsGET(req as any, { params: Promise.resolve({ id: invalidId }) });
       expect(res.status).toBe(400);
+    });
+  });
+
+  describe('Harden authorization scoping tests', () => {
+    it('Student GET non-enrolled course -> 404', async () => {
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const res = await courseDetailGET(
+        new Request('http://localhost:3000/api/courses/' + testCourseId),
+        { params: Promise.resolve({ id: testCourseId.toString() }) }
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it('Student GET non-enrolled exam -> 404', async () => {
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const res = await examDetailGET(
+        new Request('http://localhost:3000/api/exams/' + testExamId),
+        { params: Promise.resolve({ id: testExamId.toString() }) }
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it('TA GET unrelated course -> 404', async () => {
+      const taId = new mongoose.Types.ObjectId('000000000000000000000010');
+      mockSessionUser = {
+        id: taId.toString(),
+        email: 'ta@university.edu',
+        name: 'TA User',
+        role: UserRole.TA,
+      };
+
+      const res = await courseDetailGET(
+        new Request('http://localhost:3000/api/courses/' + testCourseId),
+        { params: Promise.resolve({ id: testCourseId.toString() }) }
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it('TA GET unrelated draft exam -> 404', async () => {
+      const taId = new mongoose.Types.ObjectId('000000000000000000000010');
+      mockSessionUser = {
+        id: taId.toString(),
+        email: 'ta@university.edu',
+        name: 'TA User',
+        role: UserRole.TA,
+      };
+
+      const res = await examDetailGET(
+        new Request('http://localhost:3000/api/exams/' + testExamId),
+        { params: Promise.resolve({ id: testExamId.toString() }) }
+      );
+      expect(res.status).toBe(404);
     });
   });
 });
