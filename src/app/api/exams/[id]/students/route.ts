@@ -23,8 +23,8 @@ export async function GET(
   try {
     await connectDB();
 
-    const exam = await ExamService.getExamById(id);
-    if (!exam) {
+    const roster = await ExamService.getEnrolledStudents(id, auth.user.id, auth.user.role);
+    if (!roster) {
       return NextResponse.json({
         success: false,
         message: 'Exam not found',
@@ -32,12 +32,17 @@ export async function GET(
       }, { status: 404 });
     }
 
-    const roster = await ExamService.getEnrolledStudents(id);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const formattedRoster = roster.map((m: any) => ({
+      id: m.student?._id?.toString() || m.student?.id?.toString() || '',
+      name: m.student?.name || '',
+      email: m.student?.email || ''
+    }));
 
     return NextResponse.json({
       success: true,
       message: 'Exam student roster retrieved successfully',
-      data: roster
+      data: formattedRoster
     }, { status: 200 });
 
   } catch (error: unknown) {
@@ -49,3 +54,4 @@ export async function GET(
     }, { status: 500 });
   }
 }
+

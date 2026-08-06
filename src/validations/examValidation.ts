@@ -33,3 +33,6 @@ export function isValidTransition(current: ExamStatus, next: ExamStatus): boolea
     if (current === next) return true;
     return VALID_TRANSITIONS[current]?.includes(next) || false;
 }
+
+export { enrollStudentsSchema } from './courseValidation';
+

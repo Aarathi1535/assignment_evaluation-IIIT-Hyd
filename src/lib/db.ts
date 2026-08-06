@@ -1,7 +1,5 @@
 import mongoose from 'mongoose';
 
-import { env } from '@/config/env';
-const MONGODB_URI = env.MONGODB_URI;
 interface MongooseCache {
   conn: typeof mongoose | null;
   promise: Promise<typeof mongoose> | null;
@@ -28,6 +26,11 @@ export async function connectDB() {
     const opts = {
       bufferCommands: false,
     };
+
+    const MONGODB_URI = process.env.MONGODB_URI;
+    if (!MONGODB_URI) {
+      throw new Error('MONGODB_URI is not defined in process.env');
+    }
 
     mongooseCache.promise = mongoose.connect(MONGODB_URI, opts).then((mongooseInstance) => {
       return mongooseInstance;

@@ -3,6 +3,7 @@ import { connectDB } from '../../../../../lib/db';
 import CourseService from '../../../../../services/CourseService';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
+import { enrollStudentsSchema } from '../../../../../validations/courseValidation';
 
 export async function POST(
   req: NextRequest,
@@ -34,17 +35,19 @@ export async function POST(
       }, { status: 400 });
     }
 
-    const { studentIds } = body;
-    if (!studentIds || !Array.isArray(studentIds)) {
+    const validationResult = enrollStudentsSchema.safeParse(body);
+    if (!validationResult.success) {
       return NextResponse.json({
         success: false,
-        message: 'studentIds is required and must be an array',
-        data: null
+        message: 'Validation failed',
+        data: validationResult.error.format()
       }, { status: 400 });
     }
 
+    const { studentIds } = validationResult.data;
+
     try {
-      const course = await CourseService.enrollStudents(id, studentIds, {
+      const course = await CourseService.enrollStudents(id, studentIds, auth.user.id, auth.user.role, {
         actingUserId: auth.user.id,
         ipAddress: req.headers.get('x-forwarded-for') || undefined
       });
@@ -81,3 +84,4 @@ export async function POST(
     }, { status: 500 });
   }
 }
+

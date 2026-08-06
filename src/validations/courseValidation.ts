@@ -15,3 +15,12 @@ export const createCourseSchema = z.object({
 });
 
 export const updateCourseSchema = createCourseSchema.partial();
+
+export const enrollStudentsSchema = z.object({
+  studentIds: z.array(objectIdSchema)
+    .min(1, { message: 'Student list cannot be empty' })
+    .refine((items) => new Set(items).size === items.length, {
+      message: 'Duplicate student IDs are not allowed in the request',
+    }),
+});
+

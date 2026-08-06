@@ -1,5 +1,5 @@
 import ExamRepository from '../repositories/ExamRepository';
-import { IExam, ExamStatus } from '../models/Exam';
+import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose from 'mongoose';
 import { writeAuditLog } from '../lib/audit';
 import StudentMapping, { IStudentMapping } from '../models/StudentMapping';
@@ -57,7 +57,7 @@ class ExamService {
     }
 
     async getAllExams(actingUserId?: string, actingUserRole?: string): Promise<IExam[]> {
-        const filter: mongoose.FilterQuery<IExam> = {};
+        const filter: mongoose.QueryFilter<IExam> = {};
         if (actingUserRole === 'PROFESSOR' && actingUserId) {
             filter.createdBy = new mongoose.Types.ObjectId(actingUserId);
         } else if (actingUserRole === 'STUDENT' && actingUserId) {
@@ -288,68 +288,168 @@ class ExamService {
         }
     }
 
-    async enrollStudents(examId: string, studentIds: string[], context?: AuditContext): Promise<IStudentMapping[] | null> {
-        const exam = await ExamRepository.getExamById(examId);
-        if (!exam) {
+    async enrollStudents(
+        examId: string,
+        studentIds: string[],
+        actingUserId: string,
+        actingUserRole: string,
+        context?: AuditContext
+    ): Promise<IStudentMapping[] | null> {
+        try {
+            if (!mongoose.Types.ObjectId.isValid(examId)) {
+                throw new Error("Invalid Exam ID format");
+            }
+
+            const exam = await ExamRepository.getExamById(examId, actingUserId, actingUserRole);
+            if (!exam) {
+                const existsGlobally = await Exam.exists({ _id: examId, isActive: true });
+                if (existsGlobally) {
+                    if (context?.actingUserId) {
+                        await writeAuditLog({
+                            user: context.actingUserId,
+                            action: 'STUDENTS_ENROLLED_TO_EXAM',
+                            outcome: 'FAILURE',
+                            entityId: new mongoose.Types.ObjectId(examId),
+                            entityType: 'Exam',
+                            details: { reason: 'Ownership check failed', studentIds },
+                            ipAddress: context.ipAddress
+                        });
+                    }
+                }
+                return null;
+            }
+
+            // Validate studentIds exist, are active, and have STUDENT role
+            const foundUsers = await User.find({ _id: { $in: studentIds } });
+            const foundUsersMap = new Map(foundUsers.map(u => [u._id.toString(), u]));
+
+            for (const sid of studentIds) {
+                if (!mongoose.Types.ObjectId.isValid(sid)) {
+                    throw new Error(`Invalid student ID format: ${sid}`);
+                }
+                const user = foundUsersMap.get(sid);
+                if (!user) {
+                    throw new Error(`Nonexistent user: ${sid}`);
+                }
+                if (user.role !== UserRole.STUDENT) {
+                    throw new Error(`Non-STUDENT user: ${user.name}`);
+                }
+                if (!user.isActive) {
+                    throw new Error(`Inactive user: ${user.name}`);
+                }
+            }
+
+            const uniqueStudentIds = Array.from(new Set(studentIds));
+
+            // Find existing mappings for this exam
+            const existingMappings = await StudentMapping.find({ exam: examId, student: { $in: uniqueStudentIds } });
+            const enrolledStudentIds = new Set(existingMappings.map(m => m.student.toString()));
+
+            const createdMappings: IStudentMapping[] = [];
+
+            // Helper to generate a unique anonymousId for the exam
+            const generateAnonId = async (): Promise<string> => {
+                while (true) {
+                    const anonId = `ANON-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+                    const exists = await StudentMapping.findOne({ exam: examId, anonymousId: anonId });
+                    if (!exists) return anonId;
+                }
+            };
+
+            for (const sid of uniqueStudentIds) {
+                if (!enrolledStudentIds.has(sid)) {
+                    const anonymousId = await generateAnonId();
+                    const mapping = new StudentMapping({
+                        exam: new mongoose.Types.ObjectId(examId),
+                        student: new mongoose.Types.ObjectId(sid),
+                        anonymousId,
+                        isVerified: false
+                    });
+                    await mapping.save();
+                    createdMappings.push(mapping);
+                }
+            }
+
+            // Store enrolled student roster directly on the Exam document as well
+            const currentEnrolled = exam.enrolledStudents || [];
+            const enrolledSet = new Set(currentEnrolled.map(id => id.toString()));
+            const newEnrolled = [...currentEnrolled];
+            let examDocUpdated = false;
+            for (const sid of uniqueStudentIds) {
+                if (!enrolledSet.has(sid)) {
+                    newEnrolled.push(new mongoose.Types.ObjectId(sid));
+                    examDocUpdated = true;
+                }
+            }
+
+            if (examDocUpdated) {
+                exam.enrolledStudents = newEnrolled;
+                await exam.save();
+            }
+
+            if (context?.actingUserId) {
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'STUDENTS_ENROLLED_TO_EXAM',
+                    outcome: 'SUCCESS',
+                    entityId: exam._id as mongoose.Types.ObjectId,
+                    entityType: 'Exam',
+                    details: {
+                        title: exam.title,
+                        course: exam.course,
+                        enrolledStudentCount: uniqueStudentIds.length,
+                        studentIds: uniqueStudentIds
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+
+            return await StudentMapping.find({ exam: examId }).populate('student', 'name email role isActive');
+        } catch (error) {
+            if (context?.actingUserId) {
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'STUDENTS_ENROLLED_TO_EXAM',
+                    outcome: 'FAILURE',
+                    entityId: mongoose.Types.ObjectId.isValid(examId) ? new mongoose.Types.ObjectId(examId) : undefined,
+                    entityType: 'Exam',
+                    details: {
+                        studentIds,
+                        error: error instanceof Error ? error.message : 'Unknown error'
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+            throw error;
+        }
+    }
+
+    async getEnrolledStudents(
+        examId: string,
+        actingUserId: string,
+        actingUserRole: string
+    ): Promise<IStudentMapping[] | null> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
             return null;
         }
 
-        // Validate studentIds exist and have STUDENT role
-        const students = await User.find({ _id: { $in: studentIds }, role: UserRole.STUDENT, isActive: true });
-        if (students.length !== studentIds.length) {
-            throw new Error("One or more user IDs do not exist or are not active students");
-        }
-
-        // Find existing mappings for this exam
-        const existingMappings = await StudentMapping.find({ exam: examId, student: { $in: studentIds } });
-        const enrolledStudentIds = new Set(existingMappings.map(m => m.student.toString()));
-
-        const createdMappings: IStudentMapping[] = [];
-
-        // Helper to generate a unique anonymousId for the exam
-        const generateAnonId = async (): Promise<string> => {
-            while (true) {
-                const anonId = `ANON-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-                const exists = await StudentMapping.findOne({ exam: examId, anonymousId: anonId });
-                if (!exists) return anonId;
-            }
-        };
-
-        for (const sid of studentIds) {
-            if (!enrolledStudentIds.has(sid)) {
-                const anonymousId = await generateAnonId();
-                const mapping = new StudentMapping({
-                    exam: new mongoose.Types.ObjectId(examId),
-                    student: new mongoose.Types.ObjectId(sid),
-                    anonymousId,
-                    isVerified: false
+        const exam = await ExamRepository.getExamById(examId, actingUserId, actingUserRole);
+        if (!exam) {
+            const existsGlobally = await Exam.exists({ _id: examId, isActive: true });
+            if (existsGlobally) {
+                await writeAuditLog({
+                    user: actingUserId,
+                    action: 'EXAM_ROSTER_ACCESS_DENIED',
+                    outcome: 'FAILURE',
+                    entityId: new mongoose.Types.ObjectId(examId),
+                    entityType: 'Exam',
+                    details: { reason: 'Ownership check failed' }
                 });
-                await mapping.save();
-                createdMappings.push(mapping);
             }
+            return null;
         }
 
-        if (createdMappings.length > 0 && context?.actingUserId) {
-            await writeAuditLog({
-                user: context.actingUserId,
-                action: 'EXAM_ENROLLED',
-                entityId: exam._id as mongoose.Types.ObjectId,
-                entityType: 'Exam',
-                details: {
-                    title: exam.title,
-                    course: exam.course,
-                    enrolledStudentCount: createdMappings.length,
-                    studentIds: createdMappings.map(m => m.student.toString())
-                },
-                ipAddress: context.ipAddress
-            });
-        }
-
-        return await StudentMapping.find({ exam: examId }).populate('student', 'name email role');
-    }
-
-    async getEnrolledStudents(examId: string): Promise<IStudentMapping[]> {
-        return await StudentMapping.find({ exam: examId }).populate('student', 'name email role');
+        return await StudentMapping.find({ exam: examId }).populate('student', 'name email role isActive');
     }
 }
 

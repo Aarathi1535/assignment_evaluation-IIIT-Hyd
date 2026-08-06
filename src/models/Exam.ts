@@ -18,6 +18,7 @@ export interface IExam extends Document {
     totalMarks: number;
     status: ExamStatus;
     numberOfQuestions: number;
+    enrolledStudents?: mongoose.Types.ObjectId[];
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -61,6 +62,12 @@ const ExamSchema = new Schema<IExam>(
             type: Number,
             required: true
         },
+        enrolledStudents: [
+            {
+                type: Schema.Types.ObjectId,
+                ref: 'User'
+            }
+        ],
         isActive: {
             type: Boolean,
             default: true

@@ -1,5 +1,5 @@
 import Exam, { IExam } from '../models/Exam';
-import mongoose, { FilterQuery } from 'mongoose';
+import mongoose, { QueryFilter } from 'mongoose';
 
 class ExamRepository {
     async createExam(data: Partial<IExam>): Promise<IExam> {
@@ -7,12 +7,12 @@ class ExamRepository {
         return await exam.save();
     }
 
-    async getAllExams(filter: FilterQuery<IExam> = {}): Promise<IExam[]> {
+    async getAllExams(filter: QueryFilter<IExam> = {}): Promise<IExam[]> {
         return await Exam.find({ ...filter, isActive: true }).sort({ createdAt: -1 });
     }
 
     async getExamById(id: string, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
-        const query: FilterQuery<IExam> = { _id: id, isActive: true };
+        const query: QueryFilter<IExam> = { _id: id, isActive: true };
         if (actingUserRole === 'PROFESSOR' && actingUserId) {
             query.createdBy = new mongoose.Types.ObjectId(actingUserId);
         }
@@ -20,7 +20,7 @@ class ExamRepository {
     }
 
     async updateExam(id: string, data: Partial<IExam>, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
-        const query: FilterQuery<IExam> = { _id: id, isActive: true };
+        const query: QueryFilter<IExam> = { _id: id, isActive: true };
         if (actingUserRole === 'PROFESSOR' && actingUserId) {
             query.createdBy = new mongoose.Types.ObjectId(actingUserId);
         }
@@ -32,7 +32,7 @@ class ExamRepository {
     }
 
     async deleteExam(id: string, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
-        const query: FilterQuery<IExam> = { _id: id, isActive: true };
+        const query: QueryFilter<IExam> = { _id: id, isActive: true };
         if (actingUserRole === 'PROFESSOR' && actingUserId) {
             query.createdBy = new mongoose.Types.ObjectId(actingUserId);
         }

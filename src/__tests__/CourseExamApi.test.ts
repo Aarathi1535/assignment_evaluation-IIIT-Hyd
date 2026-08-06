@@ -450,7 +450,7 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(dbCourse!.enrolledStudents?.map(id => id.toString())).toContain(testStudentId1);
 
       // Check audit log
-      const logs = await AuditLog.find({ entityId: testCourseId, action: 'COURSE_ENROLLED' });
+      const logs = await AuditLog.find({ entityId: testCourseId, action: 'STUDENTS_ENROLLED_TO_COURSE' });
       expect(logs.length).toBe(1);
       expect((logs[0].details as any).enrolledStudentCount).toBe(2);
     });
@@ -470,7 +470,7 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(mappings[0].anonymousId).toMatch(/^ANON-[0-9A-F]{6}$/);
 
       // Check audit log
-      const logs = await AuditLog.find({ entityId: testExamId, action: 'EXAM_ENROLLED' });
+      const logs = await AuditLog.find({ entityId: testExamId, action: 'STUDENTS_ENROLLED_TO_EXAM' });
       expect(logs.length).toBe(1);
     });
 
@@ -523,9 +523,9 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       const resBody = await res.json();
       expect(resBody.success).toBe(true);
       expect(resBody.data.length).toBe(1);
-      expect(resBody.data[0].anonymousId).toBe('ANON-TEST99');
-      expect(resBody.data[0].student.name).toBe('Student One');
-      expect(resBody.data[0].student.email).toBe('student1@university.edu');
+      expect(resBody.data[0].id).toBe(testStudentId1);
+      expect(resBody.data[0].name).toBe('Student One');
+      expect(resBody.data[0].email).toBe('student1@university.edu');
     });
   });
 
@@ -741,6 +741,270 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
 
       const resValid = await examDetailPUT(reqValid as any, { params: Promise.resolve({ id: testExamId.toString() }) });
       expect(resValid.status).toBe(200);
+    });
+  });
+
+  describe('Student Enrollment Tests (AE-036)', () => {
+    beforeEach(() => {
+      // Log in as Professor by default
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+    });
+
+    it('should successfully enroll students to course and exam', async () => {
+      // 1. Course Enrollment
+      const payload = {
+        studentIds: [testStudentId1, testStudentId2]
+      };
+      const reqCourse = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const resCourse = await courseEnrollPOST(reqCourse as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourse.status).toBe(200);
+      const bodyCourse = await resCourse.json();
+      expect(bodyCourse.success).toBe(true);
+
+      const dbCourse = await Course.findById(testCourseId);
+      expect(dbCourse!.enrolledStudents!.map(id => id.toString())).toContain(testStudentId1);
+      expect(dbCourse!.enrolledStudents!.map(id => id.toString())).toContain(testStudentId2);
+
+      // Verify audit log
+      const auditCourse = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_COURSE', outcome: 'SUCCESS' });
+      expect(auditCourse.length).toBe(1);
+      expect(auditCourse[0].entityId!.toString()).toBe(testCourseId.toString());
+
+      // 2. Exam Enrollment
+      const reqExam = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const resExam = await examEnrollPOST(reqExam as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resExam.status).toBe(200);
+      const bodyExam = await resExam.json();
+      expect(bodyExam.success).toBe(true);
+
+      const dbExam = await Exam.findById(testExamId);
+      expect(dbExam!.enrolledStudents!.map(id => id.toString())).toContain(testStudentId1);
+      expect(dbExam!.enrolledStudents!.map(id => id.toString())).toContain(testStudentId2);
+
+      // Verify student mapping created
+      const mappings = await StudentMapping.find({ exam: testExamId });
+      expect(mappings.length).toBe(2);
+
+      // Verify audit log
+      const auditExam = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_EXAM', outcome: 'SUCCESS' });
+      expect(auditExam.length).toBe(1);
+      expect(auditExam[0].entityId!.toString()).toBe(testExamId.toString());
+
+      // 3. Exam Students GET
+      const reqStudents = new Request(`http://localhost:3000/api/exams/${testExamId}/students`, {
+        method: 'GET'
+      });
+
+      const resStudents = await examStudentsGET(reqStudents as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resStudents.status).toBe(200);
+      const bodyStudents = await resStudents.json();
+      expect(bodyStudents.success).toBe(true);
+      expect(bodyStudents.data.length).toBe(2);
+      expect(bodyStudents.data[0]).toHaveProperty('id');
+      expect(bodyStudents.data[0]).toHaveProperty('name');
+      expect(bodyStudents.data[0]).toHaveProperty('email');
+      expect(bodyStudents.data[0]).not.toHaveProperty('role'); // make sure only id, name, email are returned
+    });
+
+    it('should reject duplicate student IDs in payload', async () => {
+      const payload = {
+        studentIds: [testStudentId1, testStudentId1]
+      };
+      
+      const reqCourse = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resCourse = await courseEnrollPOST(reqCourse as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourse.status).toBe(400);
+
+      const reqExam = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resExam = await examEnrollPOST(reqExam as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resExam.status).toBe(400);
+    });
+
+    it('should reject invalid student ID formats', async () => {
+      const payload = {
+        studentIds: ['invalid-id-format']
+      };
+
+      const reqCourse = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resCourse = await courseEnrollPOST(reqCourse as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourse.status).toBe(400);
+    });
+
+    it('should reject inactive student enrollment', async () => {
+      // Make student2 inactive
+      await User.findByIdAndUpdate(testStudentId2, { isActive: false });
+
+      const payload = {
+        studentIds: [testStudentId1, testStudentId2]
+      };
+
+      const reqCourse = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resCourse = await courseEnrollPOST(reqCourse as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourse.status).toBe(400);
+
+      // Verify audit log failure
+      const auditCourse = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_COURSE', outcome: 'FAILURE' });
+      expect(auditCourse.length).toBe(1);
+
+      const reqExam = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resExam = await examEnrollPOST(reqExam as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resExam.status).toBe(400);
+
+      // Verify audit log failure
+      const auditExam = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_EXAM', outcome: 'FAILURE' });
+      expect(auditExam.length).toBe(1);
+    });
+
+    it('should prevent cross-professor access (404) for course/exam enrollment and roster retrieval', async () => {
+      // Authenticate as another professor
+      const otherProfId = new mongoose.Types.ObjectId('000000000000000000000099');
+      mockSessionUser = {
+        id: otherProfId.toString(),
+        email: 'otherprof@university.edu',
+        name: 'Other Professor',
+        role: UserRole.PROFESSOR,
+      };
+
+      const payload = {
+        studentIds: [testStudentId1]
+      };
+
+      // 1. Course Enroll
+      const reqCourse = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resCourse = await courseEnrollPOST(reqCourse as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourse.status).toBe(404);
+
+      // Verify audit log failure
+      const auditCourse = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_COURSE', outcome: 'FAILURE' });
+      expect(auditCourse.length).toBe(1);
+      expect(auditCourse[0].details).toMatchObject({ reason: 'Ownership check failed' });
+
+      // 2. Exam Enroll
+      const reqExam = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resExam = await examEnrollPOST(reqExam as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resExam.status).toBe(404);
+
+      // Verify audit log failure
+      const auditExam = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_EXAM', outcome: 'FAILURE' });
+      expect(auditExam.length).toBe(1);
+      expect(auditExam[0].details).toMatchObject({ reason: 'Ownership check failed' });
+
+      // 3. Exam Students GET
+      const reqStudents = new Request(`http://localhost:3000/api/exams/${testExamId}/students`, {
+        method: 'GET'
+      });
+      const resStudents = await examStudentsGET(reqStudents as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resStudents.status).toBe(404);
+    });
+
+    it('should enforce RBAC checks: Students and TAs must get 403 Forbidden', async () => {
+      // 1. Authenticate as student
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const payload = {
+        studentIds: [testStudentId2]
+      };
+
+      const reqCourseS = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resCourseS = await courseEnrollPOST(reqCourseS as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourseS.status).toBe(403);
+
+      const reqExamS = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resExamS = await examEnrollPOST(reqExamS as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resExamS.status).toBe(403);
+
+      const reqStudentsS = new Request(`http://localhost:3000/api/exams/${testExamId}/students`, {
+        method: 'GET'
+      });
+      const resStudentsS = await examStudentsGET(reqStudentsS as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resStudentsS.status).toBe(403);
+
+      // 2. Authenticate as TA
+      const taId = new mongoose.Types.ObjectId('000000000000000000000010');
+      mockSessionUser = {
+        id: taId.toString(),
+        email: 'ta@university.edu',
+        name: 'TA User',
+        role: UserRole.TA,
+      };
+
+      const reqCourseT = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resCourseT = await courseEnrollPOST(reqCourseT as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(resCourseT.status).toBe(403);
+
+      const reqExamT = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const resExamT = await examEnrollPOST(reqExamT as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resExamT.status).toBe(403);
+
+      const reqStudentsT = new Request(`http://localhost:3000/api/exams/${testExamId}/students`, {
+        method: 'GET'
+      });
+      const resStudentsT = await examStudentsGET(reqStudentsT as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(resStudentsT.status).toBe(403);
     });
   });
 });

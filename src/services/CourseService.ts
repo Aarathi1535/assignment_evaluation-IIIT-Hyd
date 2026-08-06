@@ -56,7 +56,7 @@ class CourseService {
     }
 
     async getAllCourses(actingUserId?: string, actingUserRole?: string): Promise<ICourse[]> {
-        const filter: mongoose.FilterQuery<ICourse> = {};
+        const filter: mongoose.QueryFilter<ICourse> = {};
         if (actingUserRole === 'PROFESSOR' && actingUserId) {
             filter.professor = new mongoose.Types.ObjectId(actingUserId);
         } else if (actingUserRole === 'STUDENT' && actingUserId) {
@@ -251,51 +251,110 @@ class CourseService {
         });
     }
 
-    async enrollStudents(courseId: string, studentIds: string[], context?: AuditContext): Promise<ICourse | null> {
-        const course = await CourseRepository.getCourseById(courseId);
-        if (!course) {
-            return null;
-        }
-
-        // Validate studentIds exist and have STUDENT role
-        const students = await User.find({ _id: { $in: studentIds }, role: UserRole.STUDENT, isActive: true });
-        if (students.length !== studentIds.length) {
-            throw new Error("One or more user IDs do not exist or are not active students");
-        }
-
-        // Avoid duplicate enrollments
-        const currentEnrolled = course.enrolledStudents || [];
-        const enrolledSet = new Set(currentEnrolled.map(id => id.toString()));
-        const newEnrolled = [...currentEnrolled];
-        let hasNew = false;
-        for (const sid of studentIds) {
-            if (!enrolledSet.has(sid)) {
-                newEnrolled.push(new mongoose.Types.ObjectId(sid));
-                hasNew = true;
+    async enrollStudents(
+        courseId: string,
+        studentIds: string[],
+        actingUserId: string,
+        actingUserRole: string,
+        context?: AuditContext
+    ): Promise<ICourse | null> {
+        try {
+            if (!mongoose.Types.ObjectId.isValid(courseId)) {
+                throw new Error("Invalid Course ID format");
             }
-        }
 
-        if (hasNew) {
-            course.enrolledStudents = newEnrolled;
-            await course.save();
+            const course = await CourseRepository.getCourseById(courseId, actingUserId, actingUserRole);
+            if (!course) {
+                const existsGlobally = await Course.exists({ _id: courseId, isActive: true });
+                if (existsGlobally) {
+                    if (context?.actingUserId) {
+                        await writeAuditLog({
+                            user: context.actingUserId,
+                            action: 'STUDENTS_ENROLLED_TO_COURSE',
+                            outcome: 'FAILURE',
+                            entityId: new mongoose.Types.ObjectId(courseId),
+                            entityType: 'Course',
+                            details: { reason: 'Ownership check failed', studentIds },
+                            ipAddress: context.ipAddress
+                        });
+                    }
+                }
+                return null;
+            }
+
+            // Validate studentIds exist, are active, and have STUDENT role
+            const foundUsers = await User.find({ _id: { $in: studentIds } });
+            const foundUsersMap = new Map(foundUsers.map(u => [u._id.toString(), u]));
+
+            for (const sid of studentIds) {
+                if (!mongoose.Types.ObjectId.isValid(sid)) {
+                    throw new Error(`Invalid student ID format: ${sid}`);
+                }
+                const user = foundUsersMap.get(sid);
+                if (!user) {
+                    throw new Error(`Nonexistent user: ${sid}`);
+                }
+                if (user.role !== UserRole.STUDENT) {
+                    throw new Error(`Non-STUDENT user: ${user.name}`);
+                }
+                if (!user.isActive) {
+                    throw new Error(`Inactive user: ${user.name}`);
+                }
+            }
+
+            const uniqueStudentIds = Array.from(new Set(studentIds));
+
+            // Avoid duplicate enrollments
+            const currentEnrolled = course.enrolledStudents || [];
+            const enrolledSet = new Set(currentEnrolled.map(id => id.toString()));
+            const newEnrolled = [...currentEnrolled];
+            let hasNew = false;
+            for (const sid of uniqueStudentIds) {
+                if (!enrolledSet.has(sid)) {
+                    newEnrolled.push(new mongoose.Types.ObjectId(sid));
+                    hasNew = true;
+                }
+            }
+
+            if (hasNew) {
+                course.enrolledStudents = newEnrolled;
+                await course.save();
+            }
 
             if (context?.actingUserId) {
                 await writeAuditLog({
                     user: context.actingUserId,
-                    action: 'COURSE_ENROLLED',
+                    action: 'STUDENTS_ENROLLED_TO_COURSE',
+                    outcome: 'SUCCESS',
                     entityId: course._id as mongoose.Types.ObjectId,
                     entityType: 'Course',
                     details: {
                         courseCode: course.courseCode,
-                        enrolledStudentCount: studentIds.length,
-                        studentIds
+                        enrolledStudentCount: uniqueStudentIds.length,
+                        studentIds: uniqueStudentIds
                     },
                     ipAddress: context.ipAddress
                 });
             }
-        }
 
-        return course;
+            return course;
+        } catch (error) {
+            if (context?.actingUserId) {
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action: 'STUDENTS_ENROLLED_TO_COURSE',
+                    outcome: 'FAILURE',
+                    entityId: mongoose.Types.ObjectId.isValid(courseId) ? new mongoose.Types.ObjectId(courseId) : undefined,
+                    entityType: 'Course',
+                    details: {
+                        studentIds,
+                        error: error instanceof Error ? error.message : 'Unknown error'
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+            throw error;
+        }
     }
 }
 
