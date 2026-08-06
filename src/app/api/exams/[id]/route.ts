@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import mongoose from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import ExamService from '../../../../services/ExamService';
 import { updateExamSchema } from '../../../../validations/examValidation';
@@ -15,6 +16,14 @@ export async function PUT(
   }
 
   const { id } = await context.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return NextResponse.json({
+      success: false,
+      message: 'Invalid ID format',
+      data: null
+    }, { status: 400 });
+  }
 
   try {
     await connectDB();
@@ -92,6 +101,14 @@ export async function DELETE(
 
   const { id } = await context.params;
 
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return NextResponse.json({
+      success: false,
+      message: 'Invalid ID format',
+      data: null
+    }, { status: 400 });
+  }
+
   try {
     await connectDB();
 
@@ -135,6 +152,14 @@ export async function GET(
   }
 
   const { id } = await context.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return NextResponse.json({
+      success: false,
+      message: 'Invalid ID format',
+      data: null
+    }, { status: 400 });
+  }
 
   try {
     await connectDB();

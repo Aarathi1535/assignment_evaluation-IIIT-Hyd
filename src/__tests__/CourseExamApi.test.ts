@@ -325,7 +325,6 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       const payload = {
         title: 'Final Exam',
         course: testCourseId.toString(),
-        createdBy: professorId.toString(),
         examDate: '2026-12-15T09:00:00.000Z',
         totalMarks: 100,
         numberOfQuestions: 20
@@ -356,7 +355,6 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       const payload = {
         title: 'Invalid Exam',
         course: testCourseId.toString(),
-        createdBy: professorId.toString(),
         examDate: '2026-12-15T09:00:00.000Z',
         totalMarks: 100
       };
@@ -1005,6 +1003,256 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       });
       const resStudentsT = await examStudentsGET(reqStudentsT as any, { params: Promise.resolve({ id: testExamId.toString() }) });
       expect(resStudentsT.status).toBe(403);
+    });
+  });
+
+  describe('Validation and Edge Cases (AE-037)', () => {
+    beforeEach(() => {
+      // Set to Professor
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+    });
+
+    it('should reject invalid course creation payloads', async () => {
+      // Missing courseCode
+      const payload1 = {
+        courseName: 'Test Course Name',
+        semester: '1',
+        academicYear: '2026-2027',
+      };
+      let req = new Request('http://localhost:3000/api/courses', {
+        method: 'POST',
+        body: JSON.stringify(payload1),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      let res = await coursesPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Invalid semester format (non-integer/negative)
+      const payload2 = {
+        courseCode: 'CS102',
+        courseName: 'Test Course Name',
+        semester: '-3',
+        academicYear: '2026-2027',
+      };
+      req = new Request('http://localhost:3000/api/courses', {
+        method: 'POST',
+        body: JSON.stringify(payload2),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await coursesPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Invalid academic year format
+      const payload3 = {
+        courseCode: 'CS102',
+        courseName: 'Test Course Name',
+        semester: '1',
+        academicYear: '2026/2027',
+      };
+      req = new Request('http://localhost:3000/api/courses', {
+        method: 'POST',
+        body: JSON.stringify(payload3),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await coursesPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Duplicate TAs
+      const payload4 = {
+        courseCode: 'CS102',
+        courseName: 'Test Course Name',
+        semester: '1',
+        academicYear: '2026-2027',
+        teachingAssistants: ['000000000000000000000010', '000000000000000000000010'],
+      };
+      req = new Request('http://localhost:3000/api/courses', {
+        method: 'POST',
+        body: JSON.stringify(payload4),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await coursesPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Extra unknown fields (strict check)
+      const payload5 = {
+        courseCode: 'CS102',
+        courseName: 'Test Course Name',
+        semester: '1',
+        academicYear: '2026-2027',
+        unknownExtraField: 'someValue',
+      };
+      req = new Request('http://localhost:3000/api/courses', {
+        method: 'POST',
+        body: JSON.stringify(payload5),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await coursesPOST(req as any);
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject invalid course update payloads', async () => {
+      // Extra unknown fields (strict check)
+      const payload = {
+        extraField: 'notAllowed',
+      };
+      const req = new Request(`http://localhost:3000/api/courses/${testCourseId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await courseDetailPUT(req as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject invalid exam creation payloads', async () => {
+      // Invalid date format
+      const payload1 = {
+        title: 'Midterm Exam Title',
+        course: testCourseId.toString(),
+        examDate: 'not-a-date',
+        totalMarks: 100,
+        numberOfQuestions: 10,
+      };
+      let req = new Request('http://localhost:3000/api/exams', {
+        method: 'POST',
+        body: JSON.stringify(payload1),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      let res = await examsPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Negative marks
+      const payload2 = {
+        title: 'Midterm Exam Title',
+        course: testCourseId.toString(),
+        examDate: '2026-08-10',
+        totalMarks: -5,
+        numberOfQuestions: 10,
+      };
+      req = new Request('http://localhost:3000/api/exams', {
+        method: 'POST',
+        body: JSON.stringify(payload2),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await examsPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Float number of questions
+      const payload3 = {
+        title: 'Midterm Exam Title',
+        course: testCourseId.toString(),
+        examDate: '2026-08-10',
+        totalMarks: 100,
+        numberOfQuestions: 10.5,
+      };
+      req = new Request('http://localhost:3000/api/exams', {
+        method: 'POST',
+        body: JSON.stringify(payload3),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await examsPOST(req as any);
+      expect(res.status).toBe(400);
+
+      // Extra unknown fields
+      const payload4 = {
+        title: 'Midterm Exam Title',
+        course: testCourseId.toString(),
+        examDate: '2026-08-10',
+        totalMarks: 100,
+        numberOfQuestions: 10,
+        someExtraParam: true,
+      };
+      req = new Request('http://localhost:3000/api/exams', {
+        method: 'POST',
+        body: JSON.stringify(payload4),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await examsPOST(req as any);
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject invalid exam update payloads', async () => {
+      // Extra unknown fields
+      const payload = {
+        extraParam: 'val',
+      };
+      const req = new Request(`http://localhost:3000/api/exams/${testExamId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await examDetailPUT(req as any, { params: Promise.resolve({ id: testExamId.toString() }) });
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject invalid ObjectIds in URL paths with 400', async () => {
+      const invalidId = 'invalid-id-123';
+
+      // Course GET
+      let req = new Request(`http://localhost:3000/api/courses/${invalidId}`);
+      let res = await courseDetailGET(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Course PUT
+      req = new Request(`http://localhost:3000/api/courses/${invalidId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ courseName: 'New Name' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await courseDetailPUT(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Course DELETE
+      req = new Request(`http://localhost:3000/api/courses/${invalidId}`, { method: 'DELETE' });
+      res = await courseDetailDELETE(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Course Enroll
+      req = new Request(`http://localhost:3000/api/courses/${invalidId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify({ studentIds: [] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await courseEnrollPOST(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Exam GET
+      req = new Request(`http://localhost:3000/api/exams/${invalidId}`);
+      res = await examDetailGET(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Exam PUT
+      req = new Request(`http://localhost:3000/api/exams/${invalidId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: 'New Exam Title' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await examDetailPUT(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Exam DELETE
+      req = new Request(`http://localhost:3000/api/exams/${invalidId}`, { method: 'DELETE' });
+      res = await examDetailDELETE(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Exam Enroll
+      req = new Request(`http://localhost:3000/api/exams/${invalidId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify({ studentIds: [] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      res = await examEnrollPOST(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
+
+      // Exam Students
+      req = new Request(`http://localhost:3000/api/exams/${invalidId}/students`);
+      res = await examStudentsGET(req as any, { params: Promise.resolve({ id: invalidId }) });
+      expect(res.status).toBe(400);
     });
   });
 });

@@ -7,13 +7,25 @@ const objectIdSchema = z.string().regex(objectIdRegex, {
 });
 
 export const createExamSchema = z.object({
-  title: z.string().trim().min(3, { message: 'Title must be at least 3 characters long' }),
+  title: z.string()
+    .trim()
+    .min(3, { message: 'Title must be at least 3 characters long' })
+    .max(100, { message: 'Title cannot exceed 100 characters' }),
   course: objectIdSchema,
-  examDate: z.string().min(1, { message: 'Exam date is required' }),
-  totalMarks: z.number().min(0, { message: 'Total marks must be non-negative' }),
+  examDate: z.string()
+    .min(1, { message: 'Exam date is required' })
+    .refine((val) => !isNaN(Date.parse(val)), {
+      message: 'Invalid date format',
+    }),
+  totalMarks: z.number()
+    .min(0, { message: 'Total marks must be non-negative' })
+    .max(1000, { message: 'Total marks cannot exceed 1000' }),
   status: z.enum(['DRAFT', 'SCHEDULED', 'SCANNING', 'EVALUATING', 'REVIEW_PENDING', 'PUBLISHED', 'ARCHIVED']).optional(),
-  numberOfQuestions: z.number().min(1, { message: 'Number of questions must be at least 1' }),
-});
+  numberOfQuestions: z.number()
+    .int({ message: 'Number of questions must be an integer' })
+    .min(1, { message: 'Number of questions must be at least 1' })
+    .max(100, { message: 'Number of questions cannot exceed 100' }),
+}).strict();
 
 export const updateExamSchema = createExamSchema.partial();
 
