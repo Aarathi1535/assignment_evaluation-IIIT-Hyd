@@ -1396,4 +1396,70 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(res.status).toBe(404);
     });
   });
+
+  describe('AE-040 Restricting enrolledStudents Roster from Students', () => {
+    beforeEach(async () => {
+      // Enroll a student in the test course
+      await Course.findByIdAndUpdate(testCourseId, {
+        $push: { enrolledStudents: new mongoose.Types.ObjectId(testStudentId1) }
+      });
+    });
+
+    it('should allow Professor to receive the full enrolledStudents roster when reading course details', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Retrieve course detail
+      const resDetail = await courseDetailGET(
+        new Request(`http://localhost:3000/api/courses/${testCourseId}`),
+        { params: Promise.resolve({ id: testCourseId.toString() }) }
+      );
+      expect(resDetail.status).toBe(200);
+      const bodyDetail = await resDetail.json();
+      expect(bodyDetail.success).toBe(true);
+      expect(bodyDetail.data.enrolledStudents).toBeDefined();
+      expect(bodyDetail.data.enrolledStudents.length).toBe(1);
+      expect(bodyDetail.data.enrolledStudents[0]._id).toBe(testStudentId1);
+
+      // Retrieve all courses
+      const resAll = await coursesGET();
+      expect(resAll.status).toBe(200);
+      const bodyAll = await resAll.json();
+      expect(bodyAll.success).toBe(true);
+      const matched = bodyAll.data.find((c: any) => c._id === testCourseId.toString());
+      expect(matched.enrolledStudents).toBeDefined();
+    });
+
+    it('should project away/remove enrolledStudents field when the acting user is a STUDENT', async () => {
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      // Retrieve course detail as student
+      const resDetail = await courseDetailGET(
+        new Request(`http://localhost:3000/api/courses/${testCourseId}`),
+        { params: Promise.resolve({ id: testCourseId.toString() }) }
+      );
+      expect(resDetail.status).toBe(200);
+      const bodyDetail = await resDetail.json();
+      expect(bodyDetail.success).toBe(true);
+      // The enrolledStudents field should be undefined or not present
+      expect(bodyDetail.data.enrolledStudents).toBeUndefined();
+
+      // Retrieve all courses as student
+      const resAll = await coursesGET();
+      expect(resAll.status).toBe(200);
+      const bodyAll = await resAll.json();
+      expect(bodyAll.success).toBe(true);
+      const matched = bodyAll.data.find((c: any) => c._id === testCourseId.toString());
+      expect(matched.enrolledStudents).toBeUndefined();
+    });
+  });
 });

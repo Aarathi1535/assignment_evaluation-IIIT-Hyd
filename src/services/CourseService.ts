@@ -58,14 +58,16 @@ class CourseService {
 
     async getAllCourses(actingUserId?: string, actingUserRole?: string): Promise<ICourse[]> {
         const filter: mongoose.QueryFilter<ICourse> = {};
+        let projection: Record<string, number> | undefined = undefined;
         if (actingUserRole === 'PROFESSOR' && actingUserId) {
             filter.professor = new mongoose.Types.ObjectId(actingUserId);
         } else if (actingUserRole === 'STUDENT' && actingUserId) {
             filter.enrolledStudents = new mongoose.Types.ObjectId(actingUserId);
+            projection = { enrolledStudents: 0 };
         } else if (actingUserRole === 'TA' && actingUserId) {
             filter.teachingAssistants = new mongoose.Types.ObjectId(actingUserId);
         }
-        return await CourseRepository.getAllCourses(filter);
+        return await CourseRepository.getAllCourses(filter, projection);
     }
 
     async getCourseById(id: string, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {

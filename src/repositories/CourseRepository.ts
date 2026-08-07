@@ -7,8 +7,8 @@ class CourseRepository {
         return await course.save();
     }
 
-    async getAllCourses(filter: QueryFilter<ICourse> = {}): Promise<ICourse[]> {
-        return await Course.find({ ...filter, isActive: true }).sort({ createdAt: -1 });
+    async getAllCourses(filter: QueryFilter<ICourse> = {}, projection?: Record<string, number>): Promise<ICourse[]> {
+        return await Course.find({ ...filter, isActive: true }, projection).sort({ createdAt: -1 });
     }
 
     private buildCourseQuery(id: string, actingUserId?: string, actingUserRole?: string): QueryFilter<ICourse> | null {
@@ -38,6 +38,9 @@ class CourseRepository {
         const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
         if (!query) {
             return null;
+        }
+        if (actingUserRole === 'STUDENT') {
+            return await Course.findOne(query).select('-enrolledStudents');
         }
         return await Course.findOne(query).populate('enrolledStudents', 'name email role isActive');
     }
