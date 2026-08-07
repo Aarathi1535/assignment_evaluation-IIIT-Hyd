@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Rubric, { IRubric } from '../models/Rubric';
+import Grade from '../models/Grade';
 import ExamRepository from './ExamRepository';
 import { HttpError } from '../lib/errors';
 
@@ -35,7 +36,6 @@ class RubricRepository {
     }
 
     async isRubricLocked(id: string): Promise<boolean> {
-        const Grade = mongoose.models.Grade || await import('../models/Grade').then(m => m.default);
         const gradeExists = await Grade.exists({ rubric: new mongoose.Types.ObjectId(id) });
         return !!gradeExists;
     }
