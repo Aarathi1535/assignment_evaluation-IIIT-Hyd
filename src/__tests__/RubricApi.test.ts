@@ -678,5 +678,92 @@ describe('Rubric API & RBAC Tests (AE-038)', () => {
       // Cleanup
       await Grade.deleteMany({});
     });
+
+    it('should atomically increment version on successful updates', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Retrieve current rubric version
+      const resGet1 = await rubricDetailGET(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+      const bodyGet1 = await resGet1.json();
+      const currentVersion = bodyGet1.data.version;
+      expect(currentVersion).toBeDefined();
+
+      // Successful update
+      const resUpdate = await rubricDetailPUT(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          questions: [
+            {
+              questionNumber: 1,
+              maxMarks: 10,
+              criteria: [{ criterionName: 'Logic updated', points: 10 }]
+            }
+          ]
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      }), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+
+      expect(resUpdate.status).toBe(200);
+      const bodyUpdate = await resUpdate.json();
+      expect(bodyUpdate.data.version).toBe(currentVersion + 1);
+
+      // Verify persistence via GET
+      const resGet2 = await rubricDetailGET(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+      const bodyGet2 = await resGet2.json();
+      expect(bodyGet2.data.version).toBe(currentVersion + 1);
+    });
+
+    it('should not increment version on failed updates', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Retrieve current version
+      const resGet1 = await rubricDetailGET(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+      const bodyGet1 = await resGet1.json();
+      const versionBefore = bodyGet1.data.version;
+
+      // Failed update due to validation error (sum of criteria exceeds max marks)
+      const resFailed = await rubricDetailPUT(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          questions: [
+            {
+              questionNumber: 1,
+              maxMarks: 10,
+              criteria: [{ criterionName: 'Logic failed', points: 15 }] // 15 > 10
+            }
+          ]
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      }), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+
+      expect(resFailed.status).toBe(400);
+
+      // Retrieve version again to make sure it was not incremented
+      const resGet2 = await rubricDetailGET(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+      const bodyGet2 = await resGet2.json();
+      expect(bodyGet2.data.version).toBe(versionBefore);
+    });
   });
 });

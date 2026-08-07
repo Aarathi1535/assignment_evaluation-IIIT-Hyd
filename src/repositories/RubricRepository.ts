@@ -64,7 +64,10 @@ class RubricRepository {
 
         return await Rubric.findOneAndUpdate(
             { _id: id, isActive: true },
-            data,
+            {
+                $set: data,
+                $inc: { version: 1 }
+            },
             { new: true, runValidators: true }
         );
     }
