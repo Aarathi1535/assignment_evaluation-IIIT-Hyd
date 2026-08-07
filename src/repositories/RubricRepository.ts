@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Rubric, { IRubric } from '../models/Rubric';
 import ExamRepository from './ExamRepository';
 
@@ -32,6 +33,12 @@ class RubricRepository {
         return await Rubric.findOne({ exam: examId, isActive: true });
     }
 
+    async isRubricLocked(id: string): Promise<boolean> {
+        const Grade = mongoose.models.Grade || await import('../models/Grade').then(m => m.default);
+        const gradeExists = await Grade.exists({ rubric: new mongoose.Types.ObjectId(id) });
+        return !!gradeExists;
+    }
+
     async updateRubric(id: string, data: Partial<IRubric>, actingUserId?: string, actingUserRole?: string): Promise<IRubric | null> {
         if (!actingUserId || !actingUserRole) {
             return null;
@@ -49,6 +56,10 @@ class RubricRepository {
         const exam = await ExamRepository.getExamById(rubric.exam.toString(), actingUserId, actingUserRole);
         if (!exam) {
             return null;
+        }
+
+        if (await this.isRubricLocked(id)) {
+            throw new Error('Cannot update rubric: grading has already started for this exam');
         }
 
         return await Rubric.findOneAndUpdate(

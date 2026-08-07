@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Course from '../models/Course';
 import Exam from '../models/Exam';
 import Rubric from '../models/Rubric';
+import Grade from '../models/Grade';
 import { UserRole } from '../constants/permissions';
 
 let mockSessionUser: any = null;
@@ -513,6 +514,135 @@ describe('Rubric API & RBAC Tests (AE-038)', () => {
         params: Promise.resolve({ id: seededRubricId })
       });
       expect(res.status).toBe(200);
+    });
+
+    it('should attach rubric to exam and default to version 1 on creation', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'professor@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Create a new exam
+      const newExam = new Exam({
+        title: 'New Exam for Rubric Attachment',
+        course: testCourseId,
+        createdBy: professorId,
+        examDate: new Date('2026-12-15T09:00:00.000Z'),
+        totalMarks: 100,
+        numberOfQuestions: 2,
+        status: 'DRAFT',
+        isActive: true
+      });
+      const savedExam = await newExam.save();
+
+      const res = await rubricsPOST(new Request('http://localhost:3000/api/rubrics', {
+        method: 'POST',
+        body: JSON.stringify({
+          exam: savedExam._id.toString(),
+          questions: [
+            {
+              questionNumber: 1,
+              maxMarks: 50,
+              criteria: [{ criterionName: 'Logic', points: 50 }]
+            }
+          ]
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.version).toBe(1);
+
+      // Verify that the Exam now references this rubric
+      const updatedExam = await Exam.findById(savedExam._id);
+      expect(updatedExam?.rubric?.toString()).toBe(body.data._id);
+    });
+
+    it('should prevent updating a locked rubric once grading has started', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'professor@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Create a dummy Grade referencing the seeded rubric
+      const grade = new Grade({
+        answerScript: new mongoose.Types.ObjectId(),
+        rubric: new mongoose.Types.ObjectId(seededRubricId),
+        gradedBy: professorId,
+        marksAwarded: [{ criterionName: 'Logic', score: 8 }],
+        totalScore: 8,
+        isFinal: false
+      });
+      await grade.save();
+
+      // Attempt to update the rubric
+      const res = await rubricDetailPUT(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          questions: [
+            {
+              questionNumber: 1,
+              maxMarks: 5,
+              criteria: [{ criterionName: 'Logic updated', points: 5 }]
+            }
+          ]
+        }),
+        headers: { 'Content-Type': 'application/json' }
+      }), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.success).toBe(false);
+      expect(body.message).toContain('grading has already started');
+
+      // Cleanup
+      await Grade.deleteMany({});
+    });
+
+    it('should return isLocked: true in GET responses if grading has started', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'professor@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Create a dummy Grade referencing the seeded rubric
+      const grade = new Grade({
+        answerScript: new mongoose.Types.ObjectId(),
+        rubric: new mongoose.Types.ObjectId(seededRubricId),
+        gradedBy: professorId,
+        marksAwarded: [{ criterionName: 'Logic', score: 8 }],
+        totalScore: 8,
+        isFinal: false
+      });
+      await grade.save();
+
+      // GET by ID
+      const resId = await rubricDetailGET(new Request(`http://localhost:3000/api/rubrics/${seededRubricId}`), {
+        params: Promise.resolve({ id: seededRubricId })
+      });
+      expect(resId.status).toBe(200);
+      const bodyId = await resId.json();
+      expect(bodyId.data.isLocked).toBe(true);
+
+      // GET by Exam ID query param
+      const getRubricsQuery = (await import('../app/api/rubrics/route')).GET;
+      const resQuery = await getRubricsQuery(new Request(`http://localhost:3000/api/rubrics?exam=${testExamId.toString()}`) as any);
+      expect(resQuery.status).toBe(200);
+      const bodyQuery = await resQuery.json();
+      expect(bodyQuery.data.isLocked).toBe(true);
+
+      // Cleanup
+      await Grade.deleteMany({});
     });
   });
 });

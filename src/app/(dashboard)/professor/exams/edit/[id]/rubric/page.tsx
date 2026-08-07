@@ -38,6 +38,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -62,6 +63,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
         if (rubricData.success && rubricData.data) {
           setRubricId(rubricData.data._id);
           setQuestions(rubricData.data.questions || []);
+          setIsLocked(rubricData.data.isLocked || false);
         } else {
           // Initialize with one empty question if no rubric exists yet
           setQuestions([
@@ -259,6 +261,13 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
         </div>
 
         {/* Global Alerts */}
+        {isLocked && (
+          <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-brand p-3.5 text-amber-800 text-sm font-semibold shadow-2xs">
+            <AlertCircle className="h-5 w-5 shrink-0 text-amber-600" />
+            <span>This rubric is locked because grading has already started for this exam. It is displayed in read-only mode.</span>
+          </div>
+        )}
+
         {successMsg && (
           <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-brand p-3.5 text-emerald-800 text-sm font-semibold shadow-2xs">
             <CheckCircle2 className="h-5 w-5 shrink-0" />
@@ -302,6 +311,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                       <input
                         type="number"
                         min="1"
+                        disabled={isLocked}
                         value={q.questionNumber || ''}
                         onChange={(e) => handleQuestionChange(qIndex, 'questionNumber', Number(e.target.value))}
                         className="w-16 px-2 py-1 rounded border border-slate-300 text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-primary/20 text-center"
@@ -314,6 +324,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                         type="number"
                         min="0.5"
                         step="any"
+                        disabled={isLocked}
                         value={q.maxMarks || ''}
                         onChange={(e) => handleQuestionChange(qIndex, 'maxMarks', Number(e.target.value))}
                         className="w-20 px-2 py-1 rounded border border-slate-300 text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-primary/20 text-center"
@@ -332,7 +343,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                       Sum of Points: {pointsSum} / {q.maxMarks || 0}
                     </span>
 
-                    {questions.length > 1 && (
+                    {!isLocked && questions.length > 1 && (
                       <button
                         type="button"
                         onClick={() => handleRemoveQuestion(qIndex)}
@@ -352,14 +363,16 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                       <FileText className="h-4 w-4 text-slate-400" />
                       <span>Grading Criteria (Sub-parts)</span>
                     </h4>
-                    <button
-                      type="button"
-                      onClick={() => handleAddCriterion(qIndex)}
-                      className="inline-flex items-center gap-1 text-xs font-bold text-brand-primary hover:text-brand-primary/95 transition-all cursor-pointer"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span>Add Sub-part</span>
-                    </button>
+                    {!isLocked && (
+                      <button
+                        type="button"
+                        onClick={() => handleAddCriterion(qIndex)}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-brand-primary hover:text-brand-primary/95 transition-all cursor-pointer"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        <span>Add Sub-part</span>
+                      </button>
+                    )}
                   </div>
 
                   {q.criteria.length === 0 ? (
@@ -374,6 +387,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                             <input
                               type="text"
                               placeholder="e.g. Logic / Correctness"
+                              disabled={isLocked}
                               value={c.criterionName}
                               onChange={(e) => handleCriterionChange(qIndex, cIndex, 'criterionName', e.target.value)}
                               className="w-full px-3 py-1.5 rounded border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 text-sm font-semibold"
@@ -384,6 +398,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                             <input
                               type="text"
                               placeholder="Description / details (optional)"
+                              disabled={isLocked}
                               value={c.description}
                               onChange={(e) => handleCriterionChange(qIndex, cIndex, 'description', e.target.value)}
                               className="w-full px-3 py-1.5 rounded border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 text-sm font-medium"
@@ -396,6 +411,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                               min="0.5"
                               step="any"
                               placeholder="Points"
+                              disabled={isLocked}
                               value={c.points || ''}
                               onChange={(e) => handleCriterionChange(qIndex, cIndex, 'points', Number(e.target.value))}
                               className="w-full px-3 py-1.5 rounded border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 text-sm font-bold text-center"
@@ -404,7 +420,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
                           </div>
 
                           <div className="md:col-span-1 flex justify-end md:justify-center">
-                            {q.criteria.length > 1 && (
+                            {!isLocked && q.criteria.length > 1 && (
                               <button
                                 type="button"
                                 onClick={() => handleRemoveCriterion(qIndex, cIndex)}
@@ -442,28 +458,30 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => handleAddQuestion()}
-              className="flex-1 sm:flex-initial"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Add Question</span>
-            </Button>
+          {!isLocked && (
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => handleAddQuestion()}
+                className="flex-1 sm:flex-initial"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Add Question</span>
+              </Button>
 
-            <Button
-              type="button"
-              variant="primary"
-              isLoading={saving}
-              onClick={handleSave}
-              className="flex-1 sm:flex-initial"
-            >
-              <Save className="h-4 w-4" />
-              <span>Save Rubric</span>
-            </Button>
-          </div>
+              <Button
+                type="button"
+                variant="primary"
+                isLoading={saving}
+                onClick={handleSave}
+                className="flex-1 sm:flex-initial"
+              >
+                <Save className="h-4 w-4" />
+                <span>Save Rubric</span>
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </DashboardLayout>

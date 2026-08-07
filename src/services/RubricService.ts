@@ -49,6 +49,10 @@ class RubricService {
         try {
             const newRubric = await RubricRepository.createRubric(data);
 
+            // Attach rubric to corresponding Exam
+            const Exam = mongoose.models.Exam || await import('../models/Exam').then(m => m.default);
+            await Exam.findByIdAndUpdate(newRubric.exam, { rubric: newRubric._id });
+
             await writeAuditLog({
                 user: context.actingUserId,
                 action: 'RUBRIC_CREATED',
@@ -91,6 +95,10 @@ class RubricService {
         return await RubricRepository.getRubricByExamId(examId, actingUserId, actingUserRole);
     }
 
+    async isRubricLocked(id: string): Promise<boolean> {
+        return await RubricRepository.isRubricLocked(id);
+    }
+
     async updateRubric(
         id: string,
         data: Partial<IRubric>,
@@ -112,6 +120,11 @@ class RubricService {
         delete data.exam;
         // Do not allow changing creator
         delete data.createdBy;
+
+        const isLocked = await RubricRepository.isRubricLocked(id);
+        if (isLocked) {
+            throw new HttpError('Cannot update rubric: grading has already started for this exam', 400);
+        }
 
         try {
             const updatedRubric = await RubricRepository.updateRubric(id, data, actingUserId, actingUserRole);

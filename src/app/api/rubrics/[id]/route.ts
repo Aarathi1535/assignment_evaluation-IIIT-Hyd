@@ -38,10 +38,14 @@ export async function GET(
       }, { status: 404 });
     }
 
+    const isLocked = await RubricService.isRubricLocked(rubric._id.toString());
     return NextResponse.json({
       success: true,
       message: 'Rubric retrieved successfully',
-      data: rubric
+      data: {
+        ...rubric.toObject(),
+        isLocked
+      }
     }, { status: 200 });
 
   } catch (error: unknown) {
