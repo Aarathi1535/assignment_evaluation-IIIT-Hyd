@@ -5,6 +5,7 @@ import { createUserSchema } from '../../../validations/userValidation';
 import { requirePermission, requireAuth } from '../../../lib/apiAuth';
 import { Permission, UserRole } from '../../../constants/permissions';
 import User from '../../../models/User';
+import { HttpError } from '../../../lib/errors';
 
 export async function GET() {
   const auth = await requireAuth();
@@ -107,12 +108,19 @@ export async function POST(req: NextRequest) {
     }, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    if (error instanceof HttpError) {
+      return NextResponse.json({
+        success: false,
+        message,
+        data: null
+      }, { status: error.statusCode });
+    }
     if (message === 'Email already exists') {
       return NextResponse.json({
         success: false,
         message,
         data: null
-      }, { status: 400 });
+      }, { status: 409 });
     }
 
     return NextResponse.json({

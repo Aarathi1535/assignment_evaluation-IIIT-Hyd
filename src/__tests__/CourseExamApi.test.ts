@@ -255,6 +255,34 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(logs.length).toBe(1);
     });
 
+    it('should return 409 when creating a course with a duplicate courseCode', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: UserRole.PROFESSOR,
+      };
+
+      const payload = {
+        courseCode: 'CS101', // already seeded in beforeEach
+        courseName: 'Another CS',
+        semester: '2',
+        academicYear: '2026-2027',
+      };
+
+      const req = new Request('http://localhost:3000/api/courses', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const res = await coursesPOST(req as any);
+      expect(res.status).toBe(409);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(false);
+      expect(resBody.message).toBe('Course code already exists');
+    });
+
     it('should retrieve a single course by ID', async () => {
       const res = await courseDetailGET(new Request(`http://localhost:3000/api/courses/${testCourseId}`), { params: Promise.resolve({ id: testCourseId.toString() }) });
       expect(res.status).toBe(200);

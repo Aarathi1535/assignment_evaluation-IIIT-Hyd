@@ -4,6 +4,7 @@ import User, { IUser, UserRole } from '../models/User';
 import { RegisterInput } from '../validations/authValidation';
 import { writeAuditLog } from '../lib/audit';
 import mongoose from 'mongoose';
+import { HttpError, isDuplicateKeyError } from '../lib/errors';
 
 class AuthService {
     async register(data: RegisterInput, ipAddress?: string): Promise<Omit<IUser, 'password'>> {
@@ -11,37 +12,44 @@ class AuthService {
 
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
-            throw new Error("Email already registered");
+            throw new HttpError("Email already registered", 409);
         }
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        const user = await User.create({
-            name,
-            email,
-            password: hashedPassword,
-            role: role as UserRole
-        });
+        try {
+            const user = await User.create({
+                name,
+                email,
+                password: hashedPassword,
+                role: role as UserRole
+            });
 
-        // Write Audit Log
-        await writeAuditLog({
-            user: user._id as mongoose.Types.ObjectId,
-            action: 'USER_REGISTERED',
-            entityId: user._id as mongoose.Types.ObjectId,
-            entityType: 'User',
-            details: {
-                name: user.name,
-                email: user.email,
-                role: user.role
-            },
-            ipAddress
-        });
+            // Write Audit Log
+            await writeAuditLog({
+                user: user._id as mongoose.Types.ObjectId,
+                action: 'USER_REGISTERED',
+                entityId: user._id as mongoose.Types.ObjectId,
+                entityType: 'User',
+                details: {
+                    name: user.name,
+                    email: user.email,
+                    role: user.role
+                },
+                ipAddress
+            });
 
-        const userObj = user.toObject();
-        const userWithoutPassword = { ...userObj } as Partial<IUser>;
-        delete userWithoutPassword.password;
+            const userObj = user.toObject();
+            const userWithoutPassword = { ...userObj } as Partial<IUser>;
+            delete userWithoutPassword.password;
 
-        return userWithoutPassword as Omit<IUser, 'password'>;
+            return userWithoutPassword as Omit<IUser, 'password'>;
+        } catch (error) {
+            if (isDuplicateKeyError(error)) {
+                throw new HttpError("Email already registered", 409);
+            }
+            throw error;
+        }
     }
 
     async generateResetToken(email: string): Promise<string | null> {

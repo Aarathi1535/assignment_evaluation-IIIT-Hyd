@@ -3,6 +3,7 @@ import User, { IUser, UserRole } from '../models/User';
 import bcrypt from 'bcryptjs';
 import { writeAuditLog } from '../lib/audit';
 import mongoose from 'mongoose';
+import { HttpError, isDuplicateKeyError } from '../lib/errors';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -13,37 +14,58 @@ export interface AuditContext {
 class UserService {
     async createUser(data: Partial<IUser>, context?: AuditContext): Promise<IUser> {
         if (!data.email) {
-            throw new Error("Email is required");
+            throw new HttpError("Email is required", 400);
         }
         
         const existingUser = await User.findOne({ email: data.email.toLowerCase() });
         if (existingUser) {
-            throw new Error("Email already exists");
+            throw new HttpError("Email already exists", 409);
         }
 
-        const userData = { ...data };
-        if (userData.password) {
-            userData.password = await bcrypt.hash(userData.password, 10);
+        try {
+            const userData = { ...data };
+            if (userData.password) {
+                userData.password = await bcrypt.hash(userData.password, 10);
+            }
+
+            const newUser = await UserRepository.createUser(userData);
+
+            if (context?.actingUserId) {
+                const action = context.action || 'USER_CREATED';
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action,
+                    entityId: newUser._id as mongoose.Types.ObjectId,
+                    entityType: 'User',
+                    details: {
+                        email: newUser.email,
+                        role: newUser.role
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+
+            return newUser;
+        } catch (error) {
+            if (context?.actingUserId) {
+                const action = context.action || 'USER_CREATED';
+                await writeAuditLog({
+                    user: context.actingUserId,
+                    action,
+                    outcome: 'FAILURE',
+                    entityType: 'User',
+                    details: {
+                        email: data.email,
+                        error: error instanceof Error ? error.message : 'Unknown error'
+                    },
+                    ipAddress: context.ipAddress
+                });
+            }
+            if (isDuplicateKeyError(error)) {
+                throw new HttpError('Email already exists', 409);
+            }
+            throw error;
         }
-
-        const newUser = await UserRepository.createUser(userData);
-
-        if (context?.actingUserId) {
-            const action = context.action || 'USER_CREATED';
-            await writeAuditLog({
-                user: context.actingUserId,
-                action,
-                entityId: newUser._id as mongoose.Types.ObjectId,
-                entityType: 'User',
-                details: {
-                    email: newUser.email,
-                    role: newUser.role
-                },
-                ipAddress: context.ipAddress
-            });
-        }
-
-        return newUser;
     }
 
     async getAllUsers(): Promise<IUser[]> {
@@ -90,7 +112,7 @@ class UserService {
                 _id: { $ne: id } 
             });
             if (existingUser) {
-                throw new Error("Email already exists");
+                throw new HttpError("Email already exists", 409);
             }
         }
 
@@ -148,6 +170,9 @@ class UserService {
                     },
                     ipAddress: context.ipAddress
                 });
+            }
+            if (isDuplicateKeyError(error)) {
+                throw new HttpError('Email already exists', 409);
             }
             throw error;
         }

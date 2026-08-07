@@ -1,5 +1,6 @@
 import AuditLog from '../models/AuditLog';
 import mongoose from 'mongoose';
+import { isDuplicateKeyError } from './errors';
 
 export interface AuditLogParams {
     user: string | mongoose.Types.ObjectId;
@@ -36,13 +37,30 @@ export async function writeAuditLog(params: AuditLogParams): Promise<void> {
             // Omit the audit log entry if actor ID is invalid or unavailable
             return;
         }
+
+        // Sanitize details by replacing raw database error info with a user-friendly message
+        let sanitizedDetails = params.details;
+        if (sanitizedDetails && typeof sanitizedDetails === 'object') {
+            const detailsObj = { ...sanitizedDetails };
+            let modified = false;
+            for (const key of Object.keys(detailsObj)) {
+                if (isDuplicateKeyError(detailsObj[key])) {
+                    detailsObj[key] = 'Conflict: Duplicate key error';
+                    modified = true;
+                }
+            }
+            if (modified) {
+                sanitizedDetails = detailsObj;
+            }
+        }
+
         await AuditLog.create({
             user: userId,
             action: params.action,
             outcome: params.outcome,
             entityId: params.entityId,
             entityType: params.entityType,
-            details: params.details,
+            details: sanitizedDetails,
             ipAddress: params.ipAddress
         });
     } catch (error) {

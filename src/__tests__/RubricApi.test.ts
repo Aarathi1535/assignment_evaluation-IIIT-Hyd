@@ -206,6 +206,40 @@ describe('Rubric API & RBAC Tests (AE-038)', () => {
       expect(resBody.data.questions[0].criteria.length).toBe(2);
     });
 
+    it('should return 409 when creating a duplicate rubric for the same exam', async () => {
+      // First creation
+      const payload = {
+        exam: testExamId.toString(),
+        questions: [
+          {
+            questionNumber: 1,
+            maxMarks: 10,
+            criteria: [{ criterionName: 'Logic', points: 10 }]
+          }
+        ]
+      };
+
+      const req1 = new Request('http://localhost:3000/api/rubrics', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res1 = await rubricsPOST(req1 as any);
+      expect(res1.status).toBe(201);
+
+      // Attempt second creation for the same exam
+      const req2 = new Request('http://localhost:3000/api/rubrics', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res2 = await rubricsPOST(req2 as any);
+      expect(res2.status).toBe(409);
+      const resBody = await res2.json();
+      expect(resBody.success).toBe(false);
+      expect(resBody.message).toBe('Rubric already exists for this exam');
+    });
+
     it('should return 400 validation failure for missing required fields', async () => {
       const req = new Request('http://localhost:3000/api/rubrics', {
         method: 'POST',

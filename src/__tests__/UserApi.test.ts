@@ -209,7 +209,7 @@ describe('User Management API Tests (AE-030)', () => {
       });
 
       const res = await usersPOST(req as any);
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(409);
       const resBody = await res.json();
       expect(resBody.success).toBe(false);
       expect(resBody.message).toBe('Email already exists');

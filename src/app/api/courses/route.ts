@@ -4,6 +4,7 @@ import CourseService from '../../../services/CourseService';
 import { createCourseSchema } from '../../../validations/courseValidation';
 import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
+import { HttpError } from '../../../lib/errors';
 
 export async function GET() {
   const auth = await requirePermission(Permission.VIEW_COURSES);
@@ -81,12 +82,19 @@ export async function POST(req: NextRequest) {
     }, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    if (error instanceof HttpError) {
+      return NextResponse.json({
+        success: false,
+        message,
+        data: null
+      }, { status: error.statusCode });
+    }
     if (message === 'Course code already exists') {
       return NextResponse.json({
         success: false,
         message,
         data: null
-      }, { status: 400 });
+      }, { status: 409 });
     }
 
     return NextResponse.json({

@@ -3,7 +3,7 @@ import ExamRepository from '../repositories/ExamRepository';
 import { IRubric } from '../models/Rubric';
 import mongoose from 'mongoose';
 import { writeAuditLog } from '../lib/audit';
-import { HttpError } from '../lib/errors';
+import { HttpError, isDuplicateKeyError } from '../lib/errors';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -43,7 +43,7 @@ class RubricService {
             context.actingUserRole
         );
         if (existingRubric) {
-            throw new HttpError('Rubric already exists for this exam', 400);
+            throw new HttpError('Rubric already exists for this exam', 409);
         }
 
         try {
@@ -79,6 +79,9 @@ class RubricService {
                 },
                 ipAddress: context.ipAddress
             });
+            if (isDuplicateKeyError(error)) {
+                throw new HttpError('Rubric already exists for this exam', 409);
+            }
             throw error;
         }
     }

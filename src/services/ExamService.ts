@@ -5,7 +5,7 @@ import { writeAuditLog } from '../lib/audit';
 import StudentMapping, { IStudentMapping } from '../models/StudentMapping';
 import User, { UserRole } from '../models/User';
 import crypto from 'crypto';
-import { HttpError } from '../lib/errors';
+import { HttpError, isDuplicateKeyError } from '../lib/errors';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -64,6 +64,9 @@ class ExamService {
                     },
                     ipAddress: context.ipAddress
                 });
+            }
+            if (isDuplicateKeyError(error)) {
+                throw new HttpError('Exam already exists', 409);
             }
             throw error;
         }

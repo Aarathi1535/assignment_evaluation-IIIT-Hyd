@@ -301,4 +301,28 @@ describe('Audit Logging Utility & Service Tests (AE-033)', () => {
             expect(logs[0].outcome).toBe('SUCCESS');
         });
     });
+
+    describe('Sanitizing MongoDB duplicate-key errors in Audit Logs', () => {
+        it('should sanitize raw E11000 duplicate key error text from details object', async () => {
+            const targetId = new mongoose.Types.ObjectId();
+            const rawErrorMsg = 'E11000 duplicate key error collection: test.users index: email_1 dup key: { email: "dup@university.edu" }';
+            
+            await writeAuditLog({
+                user: actingUserId,
+                action: 'TEST_CONFLICT_ACTION',
+                entityId: targetId,
+                entityType: 'User',
+                details: {
+                    email: 'dup@university.edu',
+                    error: rawErrorMsg
+                },
+                ipAddress: '127.0.0.1'
+            });
+
+            const logs = await AuditLog.find({ user: actingUserId, action: 'TEST_CONFLICT_ACTION' });
+            expect(logs.length).toBe(1);
+            expect(logs[0].details?.error).toBe('Conflict: Duplicate key error');
+            expect(logs[0].details?.email).toBe('dup@university.edu');
+        });
+    });
 });
