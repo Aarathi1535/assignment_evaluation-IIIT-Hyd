@@ -286,6 +286,32 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect((logs[0].details as any).changedFields).toContain('courseName');
     });
 
+    it('should return 409 when updating a course to a duplicate courseCode', async () => {
+      // Seed another course
+      const otherCourse = new Course({
+        courseCode: 'CS103',
+        courseName: 'Other Course',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: professorId,
+        isActive: true
+      });
+      await otherCourse.save();
+
+      const req = new Request(`http://localhost:3000/api/courses/${testCourseId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ courseCode: 'CS103' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const res = await courseDetailPUT(req as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(res.status).toBe(409);
+
+      const body = await res.json();
+      expect(body.success).toBe(false);
+      expect(body.message).toBe('Course code already exists');
+    });
+
     it('should delete a course and write COURSE_DELETED audit log', async () => {
       // Deactivate the active exam first to satisfy referential integrity check
       await Exam.findByIdAndUpdate(testExamId, { isActive: false });
@@ -492,6 +518,31 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
 
       const mappings = await StudentMapping.find({ exam: testExamId });
       expect(mappings.length).toBe(2); // Should only be 2, not 3
+
+      const dbExam = await Exam.findById(testExamId);
+      expect(dbExam!.enrolledStudents!.length).toBe(2); // Verify no duplicates in the array
+    });
+
+    it('should prevent duplicate course enrollments', async () => {
+      // First enrollment
+      const req1 = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify({ studentIds: [testStudentId1] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      await courseEnrollPOST(req1 as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+
+      // Second enrollment with duplicate student ID
+      const req2 = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify({ studentIds: [testStudentId1, testStudentId2] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await courseEnrollPOST(req2 as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(res.status).toBe(200);
+
+      const dbCourse = await Course.findById(testCourseId);
+      expect(dbCourse!.enrolledStudents!.length).toBe(2); // Verify no duplicates in the array
     });
 
     it('should reject enrollment if any user ID does not exist or is not a student', async () => {

@@ -5,6 +5,7 @@ import { writeAuditLog } from '../lib/audit';
 import StudentMapping, { IStudentMapping } from '../models/StudentMapping';
 import User, { UserRole } from '../models/User';
 import crypto from 'crypto';
+import { HttpError } from '../lib/errors';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -22,9 +23,7 @@ class ExamService {
                 context.actingUserRole
             );
             if (!course) {
-                const error = new Error('Course not found');
-                error.statusCode = 404;
-                throw error;
+                throw new HttpError('Course not found', 404);
             }
         }
         try {
@@ -176,9 +175,7 @@ class ExamService {
                 actingUserRole
             );
             if (!course) {
-                const error = new Error('Course not found');
-                error.statusCode = 404;
-                throw error;
+                throw new HttpError('Course not found', 404);
             }
         }
 
@@ -397,8 +394,13 @@ class ExamService {
                         });
                         await mapping.save();
                         createdMappings.push(mapping);
-                    } catch (err) {
-                        if (err && err.code === 11000) {
+                    } catch (err: unknown) {
+                        if (
+                            err &&
+                            typeof err === 'object' &&
+                            'code' in err &&
+                            (err as { code: unknown }).code === 11000
+                        ) {
                             // Ignore duplicate mappings for concurrent requests
                         } else {
                             throw err;

@@ -11,17 +11,21 @@ describe('Rubric Model Tests', () => {
 
         const rubricData = {
             exam: examId,
-            title: 'Midterm 1 Rubric',
-            description: 'Grading rubric for Midterm 1',
-            criteria: [
+            questions: [
                 {
-                    criterionName: 'Correctness',
-                    description: 'Is the solution logically correct?',
-                    maxMarks: 10
-                },
-                {
-                    criterionName: 'Formatting',
-                    maxMarks: 5
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        {
+                            criterionName: 'Correctness',
+                            description: 'Is the solution logically correct?',
+                            points: 7
+                        },
+                        {
+                            criterionName: 'Formatting',
+                            points: 3
+                        }
+                    ]
                 }
             ],
             createdBy: userId
@@ -30,17 +34,23 @@ describe('Rubric Model Tests', () => {
         const rubric = new Rubric(rubricData);
         await expect(rubric.validate()).resolves.toBeUndefined();
         expect(rubric.isActive).toBe(true);
+        expect(rubric.version).toBe(1);
     });
 
     it('should fail validation if exam is missing', async () => {
         const userId = new mongoose.Types.ObjectId();
 
         const rubricData = {
-            title: 'Midterm 1 Rubric',
-            criteria: [
+            questions: [
                 {
-                    criterionName: 'Correctness',
-                    maxMarks: 10
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        {
+                            criterionName: 'Correctness',
+                            points: 10
+                        }
+                    ]
                 }
             ],
             createdBy: userId
@@ -57,42 +67,21 @@ describe('Rubric Model Tests', () => {
         expect(error.errors.exam).toBeDefined();
     });
 
-    it('should fail validation if title is missing', async () => {
-        const examId = new mongoose.Types.ObjectId();
-        const userId = new mongoose.Types.ObjectId();
-
-        const rubricData = {
-            exam: examId,
-            criteria: [
-                {
-                    criterionName: 'Correctness',
-                    maxMarks: 10
-                }
-            ],
-            createdBy: userId
-        };
-
-        const rubric = new Rubric(rubricData);
-        let error: any;
-        try {
-            await rubric.validate();
-        } catch (err) {
-            error = err;
-        }
-        expect(error).toBeDefined();
-        expect(error.errors.title).toBeDefined();
-    });
-
     it('should fail validation if createdBy is missing', async () => {
         const examId = new mongoose.Types.ObjectId();
 
         const rubricData = {
             exam: examId,
-            title: 'Midterm 1 Rubric',
-            criteria: [
+            questions: [
                 {
-                    criterionName: 'Correctness',
-                    maxMarks: 10
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        {
+                            criterionName: 'Correctness',
+                            points: 10
+                        }
+                    ]
                 }
             ]
         };
@@ -114,37 +103,15 @@ describe('Rubric Model Tests', () => {
 
         const rubricData = {
             exam: examId,
-            title: 'Midterm 1 Rubric',
-            criteria: [
+            questions: [
                 {
-                    maxMarks: 10
-                } as any
-            ],
-            createdBy: userId
-        };
-
-        const rubric = new Rubric(rubricData);
-        let error: any;
-        try {
-            await rubric.validate();
-        } catch (err) {
-            error = err;
-        }
-        expect(error).toBeDefined();
-        expect(error.errors['criteria.0.criterionName']).toBeDefined();
-    });
-
-    it('should fail validation if a criterion has negative maxMarks', async () => {
-        const examId = new mongoose.Types.ObjectId();
-        const userId = new mongoose.Types.ObjectId();
-
-        const rubricData = {
-            exam: examId,
-            title: 'Midterm 1 Rubric',
-            criteria: [
-                {
-                    criterionName: 'Correctness',
-                    maxMarks: -1
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        {
+                            points: 10
+                        } as any
+                    ]
                 }
             ],
             createdBy: userId
@@ -158,7 +125,39 @@ describe('Rubric Model Tests', () => {
             error = err;
         }
         expect(error).toBeDefined();
-        expect(error.errors['criteria.0.maxMarks']).toBeDefined();
+        expect(error.errors['questions.0.criteria.0.criterionName']).toBeDefined();
+    });
+
+    it('should fail validation if a criterion has negative points', async () => {
+        const examId = new mongoose.Types.ObjectId();
+        const userId = new mongoose.Types.ObjectId();
+
+        const rubricData = {
+            exam: examId,
+            questions: [
+                {
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        {
+                            criterionName: 'Correctness',
+                            points: -5
+                        }
+                    ]
+                }
+            ],
+            createdBy: userId
+        };
+
+        const rubric = new Rubric(rubricData);
+        let error: any;
+        try {
+            await rubric.validate();
+        } catch (err) {
+            error = err;
+        }
+        expect(error).toBeDefined();
+        expect(error.errors['questions.0.criteria.0.points']).toBeDefined();
     });
 
     it('should save a valid Rubric document to the database and generate timestamps', async () => {
@@ -167,13 +166,16 @@ describe('Rubric Model Tests', () => {
 
         const rubricData = {
             exam: examId,
-            title: 'Midterm 1 Rubric Test Save',
-            description: 'Grading rubric test save description',
-            criteria: [
+            questions: [
                 {
-                    criterionName: 'Correctness',
-                    description: 'Is the solution logically correct?',
-                    maxMarks: 10
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        {
+                            criterionName: 'Correctness',
+                            points: 10
+                        }
+                    ]
                 }
             ],
             createdBy: userId

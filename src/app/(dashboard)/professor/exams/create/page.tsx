@@ -139,7 +139,6 @@ export default function CreateExamPage() {
     const payload = {
       title: values.title,
       course: values.course,
-      createdBy: session.user.id,
       examDate: new Date(values.examDate).toISOString(),
       totalMarks: Number(values.totalMarks),
       numberOfQuestions: Number(values.numberOfQuestions),

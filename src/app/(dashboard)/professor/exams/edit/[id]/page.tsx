@@ -272,14 +272,26 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
             <span>Back to Exams</span>
           </button>
           
-          <div className="flex items-center gap-3 mt-2">
-            <div className="p-2.5 bg-brand-primary/10 rounded text-brand-primary flex items-center justify-center">
-              <FileText className="h-5 w-5" />
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-brand-primary/10 rounded text-brand-primary flex items-center justify-center">
+                <FileText className="h-5 w-5" />
+              </div>
+              <PageHeader
+                title="Edit Exam"
+                description="Modify configuration and scheduling for this exam."
+              />
             </div>
-            <PageHeader
-              title="Edit Exam"
-              description="Modify configuration and scheduling for this exam."
-            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/professor/exams/edit/${id}/rubric`)}
+              className="h-10 text-slate-700 font-semibold border-slate-300 shadow-2xs hover:bg-slate-50 cursor-pointer self-start sm:self-center shrink-0"
+            >
+              <FileText className="h-4.5 w-4.5 text-brand-primary mr-1" />
+              <span>Configure Rubric</span>
+            </Button>
           </div>
         </div>
 

@@ -3,6 +3,7 @@ import Course, { ICourse } from '../models/Course';
 import User, { UserRole } from '../models/User';
 import { writeAuditLog } from '../lib/audit';
 import mongoose from 'mongoose';
+import { HttpError } from '../lib/errors';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -157,7 +158,7 @@ class CourseService {
             }
 
             return updatedCourse;
-        } catch (error) {
+        } catch (error: unknown) {
             if (context?.actingUserId) {
                 await writeAuditLog({
                     user: context.actingUserId,
@@ -170,6 +171,14 @@ class CourseService {
                     },
                     ipAddress: context.ipAddress
                 });
+            }
+            if (
+                error &&
+                typeof error === 'object' &&
+                'code' in error &&
+                (error as { code: unknown }).code === 11000
+            ) {
+                throw new HttpError('Course code already exists', 409);
             }
             throw error;
         }
@@ -304,21 +313,14 @@ class CourseService {
 
             const uniqueStudentIds = Array.from(new Set(studentIds));
 
-            // Avoid duplicate enrollments
-            const currentEnrolled = course.enrolledStudents || [];
-            const enrolledSet = new Set(currentEnrolled.map(id => id.toString()));
-            const newEnrolled = [...currentEnrolled];
-            let hasNew = false;
-            for (const sid of uniqueStudentIds) {
-                if (!enrolledSet.has(sid)) {
-                    newEnrolled.push(new mongoose.Types.ObjectId(sid));
-                    hasNew = true;
-                }
-            }
+            const updatedCourse = await Course.findOneAndUpdate(
+                { _id: courseId, isActive: true },
+                { $addToSet: { enrolledStudents: { $each: uniqueStudentIds.map(id => new mongoose.Types.ObjectId(id)) } } },
+                { new: true }
+            ).populate('enrolledStudents', 'name email role isActive');
 
-            if (hasNew) {
-                course.enrolledStudents = newEnrolled;
-                await course.save();
+            if (!updatedCourse) {
+                return null;
             }
 
             if (context?.actingUserId) {
@@ -326,10 +328,10 @@ class CourseService {
                     user: context.actingUserId,
                     action: 'STUDENTS_ENROLLED_TO_COURSE',
                     outcome: 'SUCCESS',
-                    entityId: course._id as mongoose.Types.ObjectId,
+                    entityId: updatedCourse._id as mongoose.Types.ObjectId,
                     entityType: 'Course',
                     details: {
-                        courseCode: course.courseCode,
+                        courseCode: updatedCourse.courseCode,
                         enrolledStudentCount: uniqueStudentIds.length,
                         studentIds: uniqueStudentIds
                     },
@@ -337,7 +339,7 @@ class CourseService {
                 });
             }
 
-            return course;
+            return updatedCourse;
         } catch (error) {
             if (context?.actingUserId) {
                 await writeAuditLog({

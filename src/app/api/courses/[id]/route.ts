@@ -5,6 +5,7 @@ import CourseService from '../../../../services/CourseService';
 import { updateCourseSchema } from '../../../../validations/courseValidation';
 import { requirePermission } from '../../../../lib/apiAuth';
 import { Permission } from '../../../../constants/permissions';
+import { HttpError } from '../../../../lib/errors';
 
 export async function PUT(
   req: NextRequest,
@@ -75,6 +76,13 @@ export async function PUT(
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    if (error instanceof HttpError) {
+      return NextResponse.json({
+        success: false,
+        message,
+        data: null
+      }, { status: error.statusCode });
+    }
     if (message.includes('not allowed') || message.includes('Cannot delete') || message.includes('active exams')) {
       return NextResponse.json({
         success: false,

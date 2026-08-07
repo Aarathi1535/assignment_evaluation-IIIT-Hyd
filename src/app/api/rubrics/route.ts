@@ -1,25 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
+import mongoose from 'mongoose';
 import { connectDB } from '../../../lib/db';
-import ExamService from '../../../services/ExamService';
-import { createExamSchema } from '../../../validations/examValidation';
+import RubricService from '../../../services/RubricService';
+import { createRubricSchema } from '../../../validations/rubricValidation';
 import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
+import { IRubric } from '../../../models/Rubric';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const auth = await requirePermission(Permission.VIEW_COURSES);
   if (!auth.authorized) {
     return auth.response;
   }
 
+  const { searchParams } = new URL(req.url);
+  const examId = searchParams.get('exam');
+
+  if (!examId) {
+    return NextResponse.json({
+      success: false,
+      message: 'Exam ID is required',
+      data: null
+    }, { status: 400 });
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(examId)) {
+    return NextResponse.json({
+      success: false,
+      message: 'Invalid Exam ID format',
+      data: null
+    }, { status: 400 });
+  }
+
   try {
     await connectDB();
-    const exams = await ExamService.getAllExams(auth.user.id, auth.user.role);
+    const rubric = await RubricService.getRubricByExamId(examId, auth.user.id, auth.user.role);
+    if (!rubric) {
+      return NextResponse.json({
+        success: true,
+        message: 'No rubric found for this exam',
+        data: null
+      }, { status: 200 });
+    }
+
     return NextResponse.json({
       success: true,
-      message: 'Exams retrieved successfully',
-      data: exams
+      message: 'Rubric retrieved successfully',
+      data: rubric
     }, { status: 200 });
+
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
@@ -32,7 +62,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requirePermission(Permission.CREATE_EXAM);
+  const auth = await requirePermission(Permission.CREATE_RUBRIC);
   if (!auth.authorized) {
     return auth.response;
   }
@@ -51,7 +81,7 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const validationResult = createExamSchema.safeParse(body);
+    const validationResult = createRubricSchema.safeParse(body);
     if (!validationResult.success) {
       return NextResponse.json({
         success: false,
@@ -60,9 +90,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const examData = {
+    const rubricData = {
       ...validationResult.data,
-      examDate: new Date(validationResult.data.examDate),
       createdBy: auth.user.id
     };
 
@@ -72,16 +101,17 @@ export async function POST(req: NextRequest) {
       ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined
     };
 
-    const newExam = await ExamService.createExam(examData as unknown as Partial<import('@/models/Exam').IExam>, context);
+    const newRubric = await RubricService.createRubric(rubricData as unknown as Partial<IRubric>, context);
 
     return NextResponse.json({
       success: true,
-      message: 'Exam created successfully',
-      data: newExam
+      message: 'Rubric created successfully',
+      data: newRubric
     }, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
+    
     return NextResponse.json({
       success: false,
       message,

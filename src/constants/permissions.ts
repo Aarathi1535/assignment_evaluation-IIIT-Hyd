@@ -20,6 +20,8 @@ export enum Permission {
     CREATE_EXAM = 'CREATE_EXAM',
     EDIT_EXAM = 'EDIT_EXAM',
     DELETE_EXAM = 'DELETE_EXAM',
+    CREATE_RUBRIC = 'CREATE_RUBRIC',
+    EDIT_RUBRIC = 'EDIT_RUBRIC',
 
     // Grading & Submissions
     VIEW_ALL_SUBMISSIONS = 'VIEW_ALL_SUBMISSIONS',
@@ -45,6 +47,8 @@ export const RolePermissions: Record<UserRole, Permission[]> = {
         Permission.CREATE_EXAM,
         Permission.EDIT_EXAM,
         Permission.DELETE_EXAM,
+        Permission.CREATE_RUBRIC,
+        Permission.EDIT_RUBRIC,
         Permission.VIEW_ALL_SUBMISSIONS,
         Permission.ALLOCATE_SCRIPTS,
         Permission.SAVE_MARKS_FEEDBACK,

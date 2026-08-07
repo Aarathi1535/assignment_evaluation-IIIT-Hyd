@@ -3,16 +3,21 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 export interface ICriterion {
     criterionName: string;
     description?: string;
+    points: number;
+}
+
+export interface IQuestion {
+    questionNumber: number;
     maxMarks: number;
+    criteria: ICriterion[];
 }
 
 export interface IRubric extends Document {
     exam: mongoose.Types.ObjectId;
-    title: string;
-    description?: string;
-    criteria: ICriterion[];
+    questions: IQuestion[];
     createdBy: mongoose.Types.ObjectId;
     isActive: boolean;
+    version: number;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -28,11 +33,29 @@ const CriterionSchema = new Schema<ICriterion>(
             type: String,
             trim: true
         },
-        maxMarks: {
+        points: {
             type: Number,
             required: true,
             min: 0
         }
+    },
+    {
+        _id: false
+    }
+);
+
+const QuestionSchema = new Schema<IQuestion>(
+    {
+        questionNumber: {
+            type: Number,
+            required: true
+        },
+        maxMarks: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        criteria: [CriterionSchema]
     },
     {
         _id: false
@@ -47,16 +70,7 @@ const RubricSchema = new Schema<IRubric>(
             required: true,
             index: true
         },
-        title: {
-            type: String,
-            required: true,
-            trim: true
-        },
-        description: {
-            type: String,
-            trim: true
-        },
-        criteria: [CriterionSchema],
+        questions: [QuestionSchema],
         createdBy: {
             type: Schema.Types.ObjectId,
             ref: 'User',
@@ -65,6 +79,10 @@ const RubricSchema = new Schema<IRubric>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        version: {
+            type: Number,
+            default: 1
         }
     },
     {

@@ -273,7 +273,7 @@ describe('Smoke Tests', () => {
       expect(data.success).toBe(true);
 
       // Verify in the database that the token and expiry are set
-      const user = await User.findOne({ email: 'reset-test@university.edu' });
+      const user = await User.findOne({ email: 'reset-test@university.edu' }).select('+resetPasswordToken +resetPasswordExpires');
       expect(user).not.toBeNull();
       expect(user?.resetPasswordToken).toBeDefined();
       expect(user?.resetPasswordToken).not.toBeNull();
@@ -325,7 +325,7 @@ describe('Smoke Tests', () => {
       expect(data.message).toContain('reset successfully');
 
       // Verify user record in database: token and expiry cleared, password changed
-      const user = await User.findOne({ email });
+      const user = await User.findOne({ email }).select('+resetPasswordToken +resetPasswordExpires');
       expect(user?.resetPasswordToken).toBeNull();
       expect(user?.resetPasswordExpires).toBeNull();
 

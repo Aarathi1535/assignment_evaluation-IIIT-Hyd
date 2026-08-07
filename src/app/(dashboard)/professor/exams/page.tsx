@@ -277,6 +277,12 @@ export default function ProfessorExamsPage() {
                             <span>Edit</span>
                           </Button>
                         </Link>
+                        <Link href={`/professor/exams/edit/${exam._id}/rubric`} className="flex-1">
+                          <Button variant="outline" size="sm" className="w-full h-9">
+                            <FileText className="h-4 w-4 mr-1.5" />
+                            <span>Rubric</span>
+                          </Button>
+                        </Link>
                         <Button
                           variant="destructive"
                           size="sm"
