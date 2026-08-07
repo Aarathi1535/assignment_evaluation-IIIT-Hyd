@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Rubric, { IRubric } from '../models/Rubric';
 import ExamRepository from './ExamRepository';
+import { HttpError } from '../lib/errors';
 
 class RubricRepository {
     async createRubric(data: Partial<IRubric>): Promise<IRubric> {
@@ -13,13 +14,13 @@ class RubricRepository {
         if (!rubric) {
             return null;
         }
-        
+
         // Ownership / Authorization check via associated Exam
         const exam = await ExamRepository.getExamById(rubric.exam.toString(), actingUserId, actingUserRole);
         if (!exam) {
             return null;
         }
-        
+
         return rubric;
     }
 
@@ -59,7 +60,7 @@ class RubricRepository {
         }
 
         if (await this.isRubricLocked(id)) {
-            throw new Error('Cannot update rubric: grading has already started for this exam');
+            throw new HttpError('Cannot update rubric: grading has already started for this exam', 400);
         }
 
         return await Rubric.findOneAndUpdate(
