@@ -21,15 +21,41 @@ export const authOptions: AuthOptions = {
 
         const user = await User.findOne({ email: credentials.email.toLowerCase() });
 
-        if (!user || !user.isActive) {
+        if (!user) {
+          throw new Error('No user found with this email');
+        }
+
+        if (!user.isActive) {
+          const { writeAuditLog } = await import('./audit');
+          await writeAuditLog({
+            user: user._id,
+            action: 'LOGIN_FAILURE',
+            outcome: 'FAILURE',
+            details: { email: credentials.email.toLowerCase(), reason: 'User is inactive' }
+          });
           throw new Error('No user found with this email');
         }
 
         const isPasswordCorrect = await bcrypt.compare(credentials.password, user.password);
 
         if (!isPasswordCorrect) {
+          const { writeAuditLog } = await import('./audit');
+          await writeAuditLog({
+            user: user._id,
+            action: 'LOGIN_FAILURE',
+            outcome: 'FAILURE',
+            details: { email: credentials.email.toLowerCase(), reason: 'Incorrect password' }
+          });
           throw new Error('Incorrect password');
         }
+
+        const { writeAuditLog } = await import('./audit');
+        await writeAuditLog({
+          user: user._id,
+          action: 'LOGIN_SUCCESS',
+          outcome: 'SUCCESS',
+          details: { email: user.email }
+        });
 
         return {
           id: user._id.toString(),
@@ -44,7 +70,7 @@ export const authOptions: AuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as any).role;
+        token.role = (user as import('next-auth').User).role;
       }
       return token;
     },
@@ -52,9 +78,9 @@ export const authOptions: AuthOptions = {
       if (token) {
         session.user = {
           ...session.user,
-          id: token.id,
-          role: token.role,
-        } as any;
+          id: token.id as string,
+          role: token.role as string,
+        } as import('next-auth').Session['user'];
       }
       return session;
     }
@@ -65,6 +91,18 @@ export const authOptions: AuthOptions = {
   session: {
     strategy: 'jwt',
     maxAge: 30 * 24 * 60 * 60, // 30 days
+  },
+  events: {
+    async signOut({ token }) {
+      if (token && token.id) {
+        const { writeAuditLog } = await import('./audit');
+        await writeAuditLog({
+          user: token.id as string,
+          action: 'LOGOUT',
+          outcome: 'SUCCESS'
+        });
+      }
+    }
   },
   secret: process.env.NEXTAUTH_SECRET,
 };

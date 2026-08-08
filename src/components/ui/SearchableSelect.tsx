@@ -47,7 +47,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
 
   return (
     <div ref={containerRef} className="space-y-1.5 w-full relative">
-      <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+      <label className="text-sm font-bold text-slate-850">
         {label}
       </label>
       
@@ -57,26 +57,26 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           setIsOpen(!isOpen);
           setSearch('');
         }}
-        className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all cursor-pointer ${
+        className={`w-full flex items-center justify-between px-4 py-2 rounded-brand border border-slate-300 bg-white text-slate-900 text-left focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary transition-all cursor-pointer ${
           error ? 'border-rose-500 focus:ring-rose-500/20 focus:border-rose-500' : ''
         }`}
       >
-        <span className={selectedOption ? 'text-slate-900 dark:text-white font-medium' : 'text-slate-400'}>
+        <span className={selectedOption ? 'text-slate-900 font-semibold' : 'text-slate-500'}>
           {selectedOption ? selectedOption.label : placeholder}
         </span>
-        <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 w-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg max-h-60 overflow-hidden flex flex-col">
-          <div className="flex items-center px-3 py-2 border-b border-slate-100 dark:border-slate-750 bg-slate-50/50 dark:bg-slate-800">
-            <Search className="h-4 w-4 text-slate-400 mr-2 shrink-0" />
+        <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-brand-lg shadow-lg max-h-60 overflow-hidden flex flex-col">
+          <div className="flex items-center px-3 py-1.5 border-b border-slate-100 bg-slate-50">
+            <Search className="h-4 w-4 text-slate-500 mr-2 shrink-0" />
             <input
               type="text"
               placeholder="Search..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-transparent text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
+              className="w-full bg-transparent text-sm text-slate-900 placeholder-slate-500 focus:outline-none"
             />
           </div>
           <div className="overflow-y-auto py-1">
@@ -89,21 +89,21 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                     onChange(opt.value);
                     setIsOpen(false);
                   }}
-                  className="w-full flex items-center justify-between px-4 py-2 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-950 dark:text-white cursor-pointer"
+                  className="w-full flex items-center justify-between px-4 py-2 text-sm text-left hover:bg-slate-50 text-slate-900 cursor-pointer"
                 >
-                  <span>{opt.label}</span>
-                  {value === opt.value && <Check className="h-4 w-4 text-indigo-500" />}
+                  <span className="font-medium text-slate-800">{opt.label}</span>
+                  {value === opt.value && <Check className="h-4 w-4 text-brand-primary" />}
                 </button>
               ))
             ) : (
-              <p className="px-4 py-2 text-xs text-slate-400 dark:text-slate-500">No options found</p>
+              <p className="px-4 py-2 text-xs text-slate-500">No options found</p>
             )}
           </div>
         </div>
       )}
 
       {error && (
-        <p className="text-xs font-medium text-rose-500 dark:text-rose-400">
+        <p className="text-xs font-semibold text-rose-600">
           {error}
         </p>
       )}

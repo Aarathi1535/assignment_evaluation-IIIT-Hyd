@@ -8,7 +8,9 @@ import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { FormInput } from '@/components/ui/FormInput';
-import { KeyRound, Mail, Loader2, AlertCircle } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/Card';
+import { KeyRound, AlertCircle } from 'lucide-react';
 
 const loginSchema = z.object({
   email: z.string().trim().email({ message: 'Invalid email address' }),
@@ -46,87 +48,91 @@ export default function LoginPage() {
       });
 
       if (res?.error) {
-        setError(res.error || 'Invalid credentials');
+        setError('Invalid email or password.');
         setIsLoading(false);
       } else {
         router.push('/');
         router.refresh();
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred. Please try again.');
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8 bg-white dark:bg-slate-900 p-8 rounded-2xl border border-slate-100 dark:border-slate-800/80 shadow-md">
-        <div className="text-center">
-          <div className="mx-auto h-12 w-12 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 py-10 px-4 sm:px-6 lg:px-8">
+      <Card className="max-w-md w-full">
+        <CardHeader className="text-center">
+          <div className="mx-auto h-12 w-12 rounded-brand flex items-center justify-center bg-brand-primary/10 text-brand-primary">
             <KeyRound className="h-6 w-6" />
           </div>
-          <h2 className="mt-6 text-3xl font-extrabold text-slate-900 dark:text-white">
+          <CardTitle className="mt-4 text-3xl font-black text-slate-900 tracking-tight">
             Welcome back
-          </h2>
-          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+          </CardTitle>
+          <CardDescription className="mt-1 text-sm text-slate-600 font-medium">
             Sign in to your account to continue
-          </p>
-        </div>
+          </CardDescription>
+        </CardHeader>
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit(onSubmit)}>
-          {error && (
-            <div className="flex items-center gap-2 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-sm">
-              <AlertCircle className="h-5 w-5 shrink-0" />
-              <span>{error}</span>
+        <CardContent>
+          <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
+            {error && (
+              <div className="flex items-center gap-2.5 p-3.5 rounded bg-rose-50 border border-rose-200 text-rose-700 text-sm font-semibold">
+                <AlertCircle className="h-5 w-5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <FormInput
+                label="Email Address"
+                type="email"
+                placeholder="name@university.edu"
+                error={errors.email?.message}
+                {...register('email')}
+              />
+
+              <div className="space-y-1">
+                <FormInput
+                  label="Password"
+                  type="password"
+                  placeholder="••••••••"
+                  error={errors.password?.message}
+                  {...register('password')}
+                />
+                <div className="flex justify-end">
+                  <Link
+                    href="/forgot-password"
+                    className="text-xs font-semibold text-brand-primary hover:text-brand-primary/80 transition-colors"
+                  >
+                    Forgot Password?
+                  </Link>
+                </div>
+              </div>
             </div>
-          )}
 
-          <div className="space-y-4">
-            <FormInput
-              label="Email Address"
-              type="email"
-              placeholder="name@university.edu"
-              error={errors.email?.message}
-              {...register('email')}
-            />
-
-            <FormInput
-              label="Password"
-              type="password"
-              placeholder="••••••••"
-              error={errors.password?.message}
-              {...register('password')}
-            />
-          </div>
-
-          <div>
-            <button
+            <Button
               type="submit"
-              disabled={isLoading}
-              className="w-full flex justify-center items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-indigo-500/10 disabled:opacity-50 disabled:hover:scale-100 disabled:shadow-none cursor-pointer"
+              variant="primary"
+              isLoading={isLoading}
+              className="w-full mt-6"
             >
-              {isLoading ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  <span>Signing in...</span>
-                </>
-              ) : (
-                <span>Sign In</span>
-              )}
-            </button>
-          </div>
-        </form>
+              Sign In
+            </Button>
+          </form>
+        </CardContent>
 
-        <div className="text-center text-sm text-slate-500 dark:text-slate-400 mt-6 border-t border-slate-100 dark:border-slate-800/80 pt-6">
-          Don't have an account?{' '}
+        <CardFooter className="text-center text-sm text-slate-600 mt-6">
+          Don&apos;t have an account?{' '}
           <Link
             href="/register"
-            className="font-medium text-indigo-600 hover:text-indigo-500 transition-colors"
+            className="font-bold text-brand-primary hover:text-brand-primary/80 transition-colors"
           >
             Create an account
           </Link>
-        </div>
-      </div>
+        </CardFooter>
+      </Card>
     </div>
   );
 }

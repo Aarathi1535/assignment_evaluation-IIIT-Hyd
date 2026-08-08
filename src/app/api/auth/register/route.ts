@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import AuthService from '@/services/AuthService';
 import { registerSchema } from '@/validations/authValidation';
+import { HttpError } from '@/lib/errors';
 
 export async function POST(req: NextRequest) {
   try {
@@ -32,7 +33,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const user = await AuthService.register(validationResult.data);
+    const ipAddress = (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined;
+    const user = await AuthService.register(validationResult.data, ipAddress);
 
     return NextResponse.json(
       {
@@ -42,14 +44,14 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    if (error.message === 'Email already registered') {
+  } catch (error: unknown) {
+    if (error instanceof HttpError) {
       return NextResponse.json(
         {
           success: false,
-          message: 'Email already registered'
+          message: error.message
         },
-        { status: 409 }
+        { status: error.statusCode }
       );
     }
 

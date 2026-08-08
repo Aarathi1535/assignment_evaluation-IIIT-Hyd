@@ -1,127 +1,253 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { BookOpen, FileText, Users, Clock, Plus, FolderOpen } from 'lucide-react';
+import { DashboardLayout } from '@/components/ui/DashboardLayout';
+import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { Card } from '@/components/ui/Card';
+
+interface CourseItem {
+  _id: string;
+  courseCode: string;
+  courseName: string;
+  createdAt: string;
+}
+
+interface ExamItem {
+  _id: string;
+  title: string;
+  course: string;
+  examDate: string;
+  createdAt: string;
+  status: string;
+}
 
 export default function ProfessorDashboardPage() {
+  const [courses, setCourses] = useState<CourseItem[]>([]);
+  const [exams, setExams] = useState<ExamItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadDashboardData() {
+      try {
+        const [coursesRes, examsRes] = await Promise.all([
+          fetch('/api/courses'),
+          fetch('/api/exams')
+        ]);
+        const coursesData = await coursesRes.json();
+        const examsData = await examsRes.json();
+
+        if (coursesData.success && Array.isArray(coursesData.data)) {
+          setCourses(coursesData.data);
+        }
+        if (examsData.success && Array.isArray(examsData.data)) {
+          setExams(examsData.data);
+        }
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadDashboardData();
+  }, []);
+
+  const courseMap = React.useMemo(() => {
+    return new Map(courses.map(c => [c._id, c]));
+  }, [courses]);
+
+  // Sort by createdAt descending
+  const recentCourses = [...courses]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 3);
+
+  const recentExams = [...exams]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 3);
+
   const stats = [
     {
       title: 'Total Courses',
-      value: '0',
+      value: String(courses.length),
       icon: BookOpen,
-      color: 'from-blue-500/10 to-indigo-500/10 text-blue-600 dark:text-blue-400',
-      borderColor: 'border-blue-100 dark:border-blue-900/50',
-      iconBg: 'bg-blue-500/20',
+      color: 'text-blue-600',
+      borderColor: 'border-slate-200',
+      iconBg: 'bg-blue-50 text-blue-600',
     },
     {
       title: 'Total Exams',
-      value: '0',
+      value: String(exams.length),
       icon: FileText,
-      color: 'from-purple-500/10 to-pink-500/10 text-purple-600 dark:text-purple-400',
-      borderColor: 'border-purple-100 dark:border-purple-900/50',
-      iconBg: 'bg-purple-500/20',
+      color: 'text-purple-600',
+      borderColor: 'border-slate-200',
+      iconBg: 'bg-purple-50 text-purple-600',
     },
     {
       title: 'Students',
-      value: '0',
+      value: '0', // Optional placeholder or mocked
       icon: Users,
-      color: 'from-emerald-500/10 to-teal-500/10 text-emerald-600 dark:text-emerald-400',
-      borderColor: 'border-emerald-100 dark:border-emerald-900/50',
-      iconBg: 'bg-emerald-500/20',
+      color: 'text-emerald-600',
+      borderColor: 'border-slate-200',
+      iconBg: 'bg-emerald-50 text-emerald-600',
     },
     {
       title: 'Pending Evaluations',
-      value: '0',
+      value: '0', // Optional placeholder or mocked
       icon: Clock,
-      color: 'from-amber-500/10 to-orange-500/10 text-amber-600 dark:text-amber-400',
-      borderColor: 'border-amber-100 dark:border-amber-900/50',
-      iconBg: 'bg-amber-500/20',
+      color: 'text-amber-600',
+      borderColor: 'border-slate-200',
+      iconBg: 'bg-amber-50 text-amber-600',
     },
   ];
 
+  const quickActions = (
+    <>
+      <Link href="/professor/courses/create">
+        <Button variant="primary" size="md">
+          <Plus className="h-4 w-4" />
+          <span>Create Course</span>
+        </Button>
+      </Link>
+      <Link href="/professor/exams/create">
+        <Button variant="secondary" size="md">
+          <Plus className="h-4 w-4" />
+          <span>Create Exam</span>
+        </Button>
+      </Link>
+    </>
+  );
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 font-sans">
+        <div className="text-center space-y-3">
+          <LoadingSpinner size="lg" />
+          <p className="text-sm font-semibold text-slate-500">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50/50 dark:bg-slate-900/50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto space-y-8">
+    <DashboardLayout
+      title="Professor Dashboard"
+      description="Overview of your active courses, upcoming exams, and pending grading assessments."
+      stats={stats}
+      quickActions={quickActions}
+    >
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 font-sans">
         
-        {/* Header */}
-        <div className="flex flex-col gap-2 md:flex-row md:justify-between md:items-center">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">
-              Professor Dashboard
-            </h1>
-            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-              Overview of your active courses, upcoming exams, and pending grading assessments.
-            </p>
+        {/* Recent Courses */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-slate-900">Recent Courses</h2>
+            {courses.length > 0 && (
+              <Link href="/professor/courses" className="text-sm font-bold text-brand-primary hover:underline">
+                View All
+              </Link>
+            )}
           </div>
-        </div>
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {stats.map((stat, idx) => {
-            const Icon = stat.icon;
-            return (
-              <div
-                key={idx}
-                className={`relative overflow-hidden rounded-2xl border ${stat.borderColor} bg-gradient-to-br ${stat.color} p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium opacity-80 uppercase tracking-wider">{stat.title}</p>
-                    <p className="text-3xl font-bold tracking-tight">{stat.value}</p>
+          
+          {recentCourses.length === 0 ? (
+            <EmptyState
+              title="No courses created yet"
+              description="Get started by creating your first course."
+              icon={FolderOpen}
+              action={
+                <Link href="/professor/courses/create">
+                  <Button variant="primary" size="sm">
+                    <Plus className="h-4 w-4 mr-1.5" />
+                    <span>Create Course</span>
+                  </Button>
+                </Link>
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {recentCourses.map((c) => (
+                <Card key={c._id} className="hover:shadow-xs transition-shadow duration-200 border border-slate-200">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <p className="text-xs font-extrabold text-brand-primary tracking-wider uppercase">{c.courseCode}</p>
+                      <h3 className="text-base font-bold text-slate-900">{c.courseName}</h3>
+                    </div>
+                    <Link href={`/professor/courses/edit/${c._id}`}>
+                      <Button variant="outline" size="sm">
+                        Edit
+                      </Button>
+                    </Link>
                   </div>
-                  <div className={`p-3 rounded-xl ${stat.iconBg}`}>
-                    <Icon className="h-6 w-6" />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Quick Actions */}
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700/80 p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Quick Actions</h2>
-          <div className="flex flex-wrap gap-4">
-            <Link href="/professor/courses/create" className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-indigo-500/10 cursor-pointer">
-              <Plus className="h-5 w-5" />
-              <span>Create Course</span>
-            </Link>
-            <button className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-sm transition-all hover:scale-[1.02] hover:shadow-emerald-500/10 cursor-pointer">
-              <Plus className="h-5 w-5" />
-              <span>Create Exam</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Empty Sections Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Recent Courses */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Recent Courses</h2>
-            </div>
-            <div className="border-2 border-dashed border-slate-200 dark:border-slate-700/80 rounded-2xl p-8 text-center bg-white/50 dark:bg-slate-800/30">
-              <FolderOpen className="mx-auto h-12 w-12 text-slate-400 dark:text-slate-600 mb-3" />
-              <p className="text-base font-semibold text-slate-900 dark:text-white">No courses created yet</p>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Get started by creating your first course.</p>
-            </div>
+        {/* Recent Exams */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-slate-900">Recent Exams</h2>
+            {exams.length > 0 && (
+              <Link href="/professor/exams" className="text-sm font-bold text-brand-primary hover:underline">
+                View All
+              </Link>
+            )}
           </div>
 
-          {/* Recent Exams */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Recent Exams</h2>
+          {recentExams.length === 0 ? (
+            <EmptyState
+              title="No exams created yet"
+              description="Design your first assignment or exam once you have a course."
+              icon={FileText}
+              action={
+                <Link href="/professor/exams/create">
+                  <Button variant="secondary" size="sm">
+                    <Plus className="h-4 w-4 mr-1.5" />
+                    <span>Create Exam</span>
+                  </Button>
+                </Link>
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {recentExams.map((e) => {
+                const courseInfo = courseMap.get(e.course);
+                const courseLabel = courseInfo ? courseInfo.courseCode : 'Unknown Course';
+
+                return (
+                  <Card key={e._id} className="hover:shadow-xs transition-shadow duration-200 border border-slate-200">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xs font-extrabold px-1.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 uppercase">
+                            {courseLabel}
+                          </span>
+                          <span className="text-3xs font-extrabold text-slate-500 uppercase tracking-widest">
+                            {e.status}
+                          </span>
+                        </div>
+                        <h3 className="text-base font-bold text-slate-900">{e.title}</h3>
+                        <p className="text-xs text-slate-500 font-medium">
+                          {new Date(e.examDate).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+                        </p>
+                      </div>
+                      <Link href={`/professor/exams/edit/${e._id}`}>
+                        <Button variant="outline" size="sm">
+                          Edit
+                        </Button>
+                      </Link>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
-            <div className="border-2 border-dashed border-slate-200 dark:border-slate-700/80 rounded-2xl p-8 text-center bg-white/50 dark:bg-slate-800/30">
-              <FileText className="mx-auto h-12 w-12 text-slate-400 dark:text-slate-600 mb-3" />
-              <p className="text-base font-semibold text-slate-900 dark:text-white">No exams created yet</p>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Design your first assignment or exam once you have a course.</p>
-            </div>
-          </div>
+          )}
         </div>
 
       </div>
-    </div>
+    </DashboardLayout>
   );
 }

@@ -2,26 +2,41 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../lib/db';
 import CourseService from '../../../services/CourseService';
 import { createCourseSchema } from '../../../validations/courseValidation';
+import { requirePermission } from '../../../lib/apiAuth';
+import { Permission } from '../../../constants/permissions';
+import { HttpError } from '../../../lib/errors';
 
 export async function GET() {
+  const auth = await requirePermission(Permission.VIEW_COURSES);
+  if (!auth.authorized) {
+    return auth.response;
+  }
+
   try {
     await connectDB();
-    const courses = await CourseService.getAllCourses();
+    const courses = await CourseService.getAllCourses(auth.user.id, auth.user.role);
     return NextResponse.json({
       success: true,
       message: 'Courses retrieved successfully',
       data: courses
     }, { status: 200 });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
-      message: error.message || 'An unexpected error occurred',
+      message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requirePermission(Permission.CREATE_COURSE);
+  if (!auth.authorized) {
+    return auth.response;
+  }
+
   try {
     await connectDB();
 
@@ -45,35 +60,34 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Convert semester from string to number since ICourse expects a number,
-    // and map other fields if TypeScript type casting is required.
     const courseData = {
       ...validationResult.data,
-      semester: parseInt(validationResult.data.semester, 10)
+      semester: parseInt(validationResult.data.semester, 10),
+      professor: auth.user.id
     };
 
-    // Cast the object to any to bypass Mongoose's strict ObjectId vs string TS checks if any,
-    // or pass it directly.
-    const newCourse = await CourseService.createCourse(courseData as any);
+    const context = {
+      actingUserId: auth.user.id,
+      ipAddress: (req as NextRequest & { ip?: string }).ip || req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined
+    };
+
+    const newCourse = await CourseService.createCourse(
+      courseData as unknown as Partial<import('@/models/Course').ICourse>,
+      context
+    );
 
     return NextResponse.json({
       success: true,
       message: 'Course created successfully',
       data: newCourse
     }, { status: 201 });
-  } catch (error: any) {
-    if (error.message === 'Course code already exists') {
-      return NextResponse.json({
-        success: false,
-        message: error.message,
-        data: null
-      }, { status: 400 });
-    }
-
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
-      message: error.message || 'An unexpected error occurred',
+      message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }

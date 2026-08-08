@@ -1,4 +1,5 @@
 import Course, { ICourse } from '../models/Course';
+import mongoose, { QueryFilter } from 'mongoose';
 
 class CourseRepository {
     async createCourse(data: Partial<ICourse>): Promise<ICourse> {
@@ -6,34 +7,72 @@ class CourseRepository {
         return await course.save();
     }
 
-    async getAllCourses(): Promise<ICourse[]> {
-        return await Course.find({ isActive: true }).sort({ createdAt: -1 });
+    async getAllCourses(filter: QueryFilter<ICourse> = {}, projection?: Record<string, number>): Promise<ICourse[]> {
+        return await Course.find({ ...filter, isActive: true }, projection).sort({ createdAt: -1 });
     }
 
-    async getCourseById(id: string): Promise<ICourse | null> {
-        return await Course.findOne({ _id: id, isActive: true });
+    private buildCourseQuery(id: string, actingUserId?: string, actingUserRole?: string): QueryFilter<ICourse> | null {
+        if (!actingUserId || !actingUserRole) {
+            return null;
+        }
+        const query: QueryFilter<ICourse> = { _id: id, isActive: true };
+        if (actingUserRole === 'ADMIN') {
+            return query;
+        }
+        if (actingUserRole === 'PROFESSOR') {
+            query.professor = new mongoose.Types.ObjectId(actingUserId);
+            return query;
+        }
+        if (actingUserRole === 'STUDENT') {
+            query.enrolledStudents = new mongoose.Types.ObjectId(actingUserId);
+            return query;
+        }
+        if (actingUserRole === 'TA') {
+            query.teachingAssistants = new mongoose.Types.ObjectId(actingUserId);
+            return query;
+        }
+        return null;
+    }
+
+    async getCourseById(id: string, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
+        const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
+        }
+        if (actingUserRole === 'STUDENT') {
+            return await Course.findOne(query).select('-enrolledStudents');
+        }
+        return await Course.findOne(query).populate('enrolledStudents', 'name email role isActive');
     }
 
     async getCourseByCode(courseCode: string): Promise<ICourse | null> {
         return await Course.findOne({ courseCode, isActive: true });
     }
 
-
-    async updateCourse(id: string, data: Partial<ICourse>): Promise<ICourse | null> {
+    async updateCourse(id: string, data: Partial<ICourse>, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
+        const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
+        }
         return await Course.findOneAndUpdate(
-            { _id: id, isActive: true },
+            query,
             data,
             { new: true }
         );
     }
 
-    async deleteCourse(id: string): Promise<ICourse | null> {
+    async deleteCourse(id: string, actingUserId?: string, actingUserRole?: string): Promise<ICourse | null> {
+        const query = this.buildCourseQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
+        }
         return await Course.findOneAndUpdate(
-            { _id: id, isActive: true },
+            query,
             { isActive: false },
             { new: true }
         );
     }
 }
 
-export default new CourseRepository();
+const courseRepository = new CourseRepository();
+export default courseRepository;

@@ -1,4 +1,5 @@
 import React, { SelectHTMLAttributes } from 'react';
+import { FormField } from './FormField';
 
 interface FormSelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label: string;
@@ -9,29 +10,21 @@ interface FormSelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 export const FormSelect = React.forwardRef<HTMLSelectElement, FormSelectProps>(
   ({ label, error, options, className = '', ...props }, ref) => {
     return (
-      <div className="space-y-1.5 w-full">
-        <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-          {label}
-        </label>
+      <FormField label={label} error={error}>
         <select
           ref={ref}
-          className={`w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all ${
+          className={`w-full px-4 py-2 rounded-brand border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary transition-all ${
             error ? 'border-rose-500 focus:ring-rose-500/20 focus:border-rose-500' : ''
           } ${className}`}
           {...props}
         >
           {options.map((opt) => (
-            <option key={opt.value} value={opt.value}>
+            <option key={opt.value} value={opt.value} className="text-slate-900 bg-white">
               {opt.label}
             </option>
           ))}
         </select>
-        {error && (
-          <p className="text-xs font-medium text-rose-500 dark:text-rose-400">
-            {error}
-          </p>
-        )}
-      </div>
+      </FormField>
     );
   }
 );
