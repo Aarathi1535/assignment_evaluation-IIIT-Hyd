@@ -43,3 +43,8 @@ next-env.d.ts
 
 # Local development scratch files
 scratch/
+
+next_extracted/
+
+*.tgz
+*.temp
