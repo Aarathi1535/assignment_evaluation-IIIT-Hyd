@@ -30,3 +30,9 @@ jobs:
 
       - name: Run tests
         run: npx vitest run
+        
+      - name: Run lint
+        run: npm run lint
+
+      - name: Type check
+        run: npx tsc --noEmit
