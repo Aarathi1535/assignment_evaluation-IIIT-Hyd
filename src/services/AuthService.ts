@@ -79,10 +79,10 @@ class AuthService {
 
     async resetPassword(token: string, newPassword: string): Promise<boolean> {
         if (!token) {
-            throw new Error('Token is required');
+            throw new HttpError('Token is required', 400);
         }
         if (!newPassword || newPassword.length < 8) {
-            throw new Error('Password must be at least 8 characters long');
+            throw new HttpError('Password must be at least 8 characters long', 400);
         }
 
         const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
@@ -91,7 +91,7 @@ class AuthService {
         }).select('+resetPasswordToken +resetPasswordExpires');
 
         if (!user) {
-            throw new Error('Invalid or expired token');
+            throw new HttpError('Invalid or expired token', 400);
         }
 
         if (!user.resetPasswordExpires || user.resetPasswordExpires.getTime() < Date.now()) {

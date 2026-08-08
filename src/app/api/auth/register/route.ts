@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import AuthService from '@/services/AuthService';
 import { registerSchema } from '@/validations/authValidation';
+import { HttpError } from '@/lib/errors';
 
 export async function POST(req: NextRequest) {
   try {
@@ -44,14 +45,13 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     );
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : '';
-    if (message === 'Email already registered') {
+    if (error instanceof HttpError) {
       return NextResponse.json(
         {
           success: false,
-          message: 'Email already registered'
+          message: error.message
         },
-        { status: 409 }
+        { status: error.statusCode }
       );
     }
 
