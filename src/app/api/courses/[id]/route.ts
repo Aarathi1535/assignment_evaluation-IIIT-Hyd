@@ -76,25 +76,12 @@ export async function PUT(
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-    if (error instanceof HttpError) {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: error.statusCode });
-    }
-    if (message.includes('not allowed') || message.includes('Cannot delete') || message.includes('active exams')) {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: 400 });
-    }
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }
 
@@ -142,18 +129,12 @@ export async function DELETE(
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-    if (message.includes('Cannot delete') || message.includes('active exams') || message.includes('not allowed')) {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: 400 });
-    }
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }
 
@@ -195,10 +176,11 @@ export async function GET(
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }

@@ -3,7 +3,7 @@ import Course, { ICourse } from '../models/Course';
 import User, { UserRole } from '../models/User';
 import { writeAuditLog } from '../lib/audit';
 import mongoose from 'mongoose';
-import { HttpError } from '../lib/errors';
+import { HttpError, isDuplicateKeyError } from '../lib/errors';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -16,7 +16,7 @@ class CourseService {
             if (data.courseCode) {
                 const existingCourse = await CourseRepository.getCourseByCode(data.courseCode);
                 if (existingCourse) {
-                    throw new Error("Course code already exists");
+                    throw new HttpError("Course code already exists", 409);
                 }
             }
             const newCourse = await CourseRepository.createCourse(data);
@@ -51,6 +51,9 @@ class CourseService {
                     },
                     ipAddress: context.ipAddress
                 });
+            }
+            if (isDuplicateKeyError(error)) {
+                throw new HttpError('Course code already exists', 409);
             }
             throw error;
         }
@@ -174,12 +177,7 @@ class CourseService {
                     ipAddress: context.ipAddress
                 });
             }
-            if (
-                error &&
-                typeof error === 'object' &&
-                'code' in error &&
-                (error as { code: unknown }).code === 11000
-            ) {
+            if (isDuplicateKeyError(error)) {
                 throw new HttpError('Course code already exists', 409);
             }
             throw error;
@@ -215,7 +213,7 @@ class CourseService {
         const Exam = mongoose.models.Exam || await import('../models/Exam').then(m => m.default);
         const activeExamsCount = await Exam.countDocuments({ course: id, isActive: true });
         if (activeExamsCount > 0) {
-            throw new Error("Cannot delete course: active exams still reference it");
+            throw new HttpError("Cannot delete course: active exams still reference it", 400);
         }
 
         try {
@@ -271,7 +269,7 @@ class CourseService {
     ): Promise<ICourse | null> {
         try {
             if (!mongoose.Types.ObjectId.isValid(courseId)) {
-                throw new Error("Invalid Course ID format");
+                throw new HttpError("Invalid Course ID format", 400);
             }
 
             const course = await CourseRepository.getCourseById(courseId, actingUserId, actingUserRole);
@@ -299,17 +297,17 @@ class CourseService {
 
             for (const sid of studentIds) {
                 if (!mongoose.Types.ObjectId.isValid(sid)) {
-                    throw new Error(`Invalid student ID format: ${sid}`);
+                    throw new HttpError(`Invalid student ID format: ${sid}`, 400);
                 }
                 const user = foundUsersMap.get(sid);
                 if (!user) {
-                    throw new Error(`Nonexistent user: ${sid}`);
+                    throw new HttpError(`Nonexistent user: ${sid}`, 400);
                 }
                 if (user.role !== UserRole.STUDENT) {
-                    throw new Error(`Non-STUDENT user: ${user.name}`);
+                    throw new HttpError(`Non-STUDENT user: ${user.name}`, 400);
                 }
                 if (!user.isActive) {
-                    throw new Error(`Inactive user: ${user.name}`);
+                    throw new HttpError(`Inactive user: ${user.name}`, 400);
                 }
             }
 

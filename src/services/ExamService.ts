@@ -189,7 +189,7 @@ class ExamService {
         if (data.status !== undefined && data.status !== examBefore.status) {
             const { isValidTransition } = await import('../validations/examValidation');
             if (!isValidTransition(examBefore.status, data.status as ExamStatus)) {
-                throw new Error(`Invalid status transition from ${examBefore.status} to ${data.status}`);
+                throw new HttpError(`Invalid status transition from ${examBefore.status} to ${data.status}`, 400);
             }
         }
 
@@ -326,7 +326,7 @@ class ExamService {
     ): Promise<IStudentMapping[] | null> {
         try {
             if (!mongoose.Types.ObjectId.isValid(examId)) {
-                throw new Error("Invalid Exam ID format");
+                throw new HttpError("Invalid Exam ID format", 400);
             }
 
             const exam = await ExamRepository.getExamById(examId, actingUserId, actingUserRole);
@@ -354,17 +354,17 @@ class ExamService {
 
             for (const sid of studentIds) {
                 if (!mongoose.Types.ObjectId.isValid(sid)) {
-                    throw new Error(`Invalid student ID format: ${sid}`);
+                    throw new HttpError(`Invalid student ID format: ${sid}`, 400);
                 }
                 const user = foundUsersMap.get(sid);
                 if (!user) {
-                    throw new Error(`Nonexistent user: ${sid}`);
+                    throw new HttpError(`Nonexistent user: ${sid}`, 400);
                 }
                 if (user.role !== UserRole.STUDENT) {
-                    throw new Error(`Non-STUDENT user: ${user.name}`);
+                    throw new HttpError(`Non-STUDENT user: ${user.name}`, 400);
                 }
                 if (!user.isActive) {
-                    throw new Error(`Inactive user: ${user.name}`);
+                    throw new HttpError(`Inactive user: ${user.name}`, 400);
                 }
             }
 

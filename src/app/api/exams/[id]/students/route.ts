@@ -4,6 +4,7 @@ import { connectDB } from '../../../../../lib/db';
 import ExamService from '../../../../../services/ExamService';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
+import { HttpError } from '../../../../../lib/errors';
 
 export async function GET(
   req: NextRequest,
@@ -56,11 +57,12 @@ export async function GET(
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }
 

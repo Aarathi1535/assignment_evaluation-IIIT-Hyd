@@ -50,11 +50,12 @@ export async function GET() {
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }
 
@@ -108,25 +109,11 @@ export async function POST(req: NextRequest) {
     }, { status: 201 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-    if (error instanceof HttpError) {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: error.statusCode });
-    }
-    if (message === 'Email already exists') {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: 409 });
-    }
-
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }

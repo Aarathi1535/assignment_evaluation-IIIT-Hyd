@@ -85,10 +85,10 @@ class UserService {
         // Prevent self-lockout
         if (context?.actingUserId && id === context.actingUserId) {
             if (data.isActive === false) {
-                throw new Error("Self-deactivation is not allowed");
+                throw new HttpError("Self-deactivation is not allowed", 400);
             }
             if (userBefore.role === UserRole.ADMIN && data.role !== undefined && data.role !== UserRole.ADMIN) {
-                throw new Error("Self-demotion from ADMIN is not allowed");
+                throw new HttpError("Self-demotion from ADMIN is not allowed", 400);
             }
         }
 
@@ -99,7 +99,7 @@ class UserService {
             if (isDeactivating || isDemoting) {
                 const activeAdminCount = await User.countDocuments({ role: UserRole.ADMIN, isActive: true });
                 if (activeAdminCount <= 1) {
-                    throw new Error("Cannot deactivate or demote the last active ADMIN");
+                    throw new HttpError("Cannot deactivate or demote the last active ADMIN", 400);
                 }
             }
         }
@@ -186,14 +186,14 @@ class UserService {
 
         // Prevent self-lockout
         if (context?.actingUserId && id === context.actingUserId) {
-            throw new Error("Self-deactivation is not allowed");
+            throw new HttpError("Self-deactivation is not allowed", 400);
         }
 
         // Prevent deactivating the last active ADMIN
         if (userBefore.role === UserRole.ADMIN) {
             const activeAdminCount = await User.countDocuments({ role: UserRole.ADMIN, isActive: true });
             if (activeAdminCount <= 1) {
-                throw new Error("Cannot deactivate or demote the last active ADMIN");
+                throw new HttpError("Cannot deactivate or demote the last active ADMIN", 400);
             }
         }
 

@@ -5,6 +5,7 @@ import CourseService from '../../../../../services/CourseService';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { enrollStudentsSchema } from '../../../../../validations/courseValidation';
+import { HttpError } from '../../../../../lib/errors';
 
 export async function POST(
   req: NextRequest,
@@ -55,42 +56,33 @@ export async function POST(
 
     const { studentIds } = validationResult.data;
 
-    try {
-      const course = await CourseService.enrollStudents(id, studentIds, auth.user.id, auth.user.role, {
-        actingUserId: auth.user.id,
-        ipAddress: req.headers.get('x-forwarded-for') || undefined
-      });
+    const course = await CourseService.enrollStudents(id, studentIds, auth.user.id, auth.user.role, {
+      actingUserId: auth.user.id,
+      ipAddress: req.headers.get('x-forwarded-for') || undefined
+    });
 
-      if (!course) {
-        return NextResponse.json({
-          success: false,
-          message: 'Course not found',
-          data: null
-        }, { status: 404 });
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: 'Students enrolled to course successfully',
-        data: course
-      }, { status: 200 });
-
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'An error occurred during enrollment';
+    if (!course) {
       return NextResponse.json({
         success: false,
-        message,
+        message: 'Course not found',
         data: null
-      }, { status: 400 });
+      }, { status: 404 });
     }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Students enrolled to course successfully',
+      data: course
+    }, { status: 200 });
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json({
       success: false,
       message,
       data: null
-    }, { status: 500 });
+    }, { status });
   }
 }
 

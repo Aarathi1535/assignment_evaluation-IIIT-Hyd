@@ -1490,4 +1490,108 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(matched.enrolledStudents).toBeUndefined();
     });
   });
+
+  describe('HttpError Generalization & Status Code Preservation', () => {
+    it('CourseService.createCourse throws HttpError with 409 for duplicate courseCode', async () => {
+      const CourseService = (await import('../services/CourseService')).default;
+      const { HttpError } = await import('../lib/errors');
+      
+      try {
+        await CourseService.createCourse({
+          courseCode: 'CS101',
+          courseName: 'Duplicate Code Test',
+          semester: 1,
+          academicYear: '2026-2027',
+          professor: professorId
+        });
+        expect.unreachable('Should have thrown an HttpError');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.statusCode).toBe(409);
+        expect(err.message).toBe('Course code already exists');
+      }
+    });
+
+    it('CourseService.deleteCourse throws HttpError with 400 when active exams exist', async () => {
+      const CourseService = (await import('../services/CourseService')).default;
+      const { HttpError } = await import('../lib/errors');
+
+      try {
+        await CourseService.deleteCourse(testCourseId.toString(), professorId.toString(), 'PROFESSOR');
+        expect.unreachable('Should have thrown an HttpError');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toBe('Cannot delete course: active exams still reference it');
+      }
+    });
+
+    it('ExamService.updateExam throws HttpError with 400 for invalid status transition', async () => {
+      const ExamService = (await import('../services/ExamService')).default;
+      const { HttpError } = await import('../lib/errors');
+
+      try {
+        await ExamService.updateExam(
+          testExamId.toString(),
+          { status: 'PUBLISHED' as any },
+          professorId.toString(),
+          'PROFESSOR'
+        );
+        expect.unreachable('Should have thrown an HttpError');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toContain('Invalid status transition');
+      }
+    });
+
+    it('CourseService.enrollStudents throws HttpError with 400 for nonexistent student', async () => {
+      const CourseService = (await import('../services/CourseService')).default;
+      const { HttpError } = await import('../lib/errors');
+
+      const nonExistentStudentId = new mongoose.Types.ObjectId().toString();
+      try {
+        await CourseService.enrollStudents(
+          testCourseId.toString(),
+          [nonExistentStudentId],
+          professorId.toString(),
+          'PROFESSOR'
+        );
+        expect.unreachable('Should have thrown an HttpError');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toContain('Nonexistent user');
+      }
+    });
+
+    it('ExamService.enrollStudents throws HttpError with 400 for non-student role', async () => {
+      const ExamService = (await import('../services/ExamService')).default;
+      const { HttpError } = await import('../lib/errors');
+
+      const profUser = new User({
+        _id: professorId,
+        name: 'Professor Guy',
+        email: 'profguy@university.edu',
+        password: 'password123',
+        role: UserRole.PROFESSOR,
+        isActive: true
+      });
+      await profUser.save();
+
+      try {
+        await ExamService.enrollStudents(
+          testExamId.toString(),
+          [professorId.toString()],
+          professorId.toString(),
+          'PROFESSOR'
+        );
+        expect.unreachable('Should have thrown an HttpError');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toContain('Non-STUDENT user');
+      }
+    });
+  });
 });

@@ -77,20 +77,6 @@ export async function PUT(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
-    if (status === 404) {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: 404 });
-    }
-    if (message.includes('transition') || message.includes('not allowed')) {
-      return NextResponse.json({
-        success: false,
-        message,
-        data: null
-      }, { status: 400 });
-    }
     return NextResponse.json({
       success: false,
       message,

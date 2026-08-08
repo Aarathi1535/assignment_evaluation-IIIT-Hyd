@@ -385,5 +385,62 @@ describe('User Management API Tests (AE-030)', () => {
       expect(resBody.success).toBe(false);
       expect(resBody.message).toContain('Cannot deactivate or demote the last active ADMIN');
     });
+
+    it('should return 409 conflict when updating a user to an already existing email', async () => {
+      const user1 = new User({
+        name: 'User 1',
+        email: 'user1@university.edu',
+        password: await bcrypt.hash('password123', 10),
+        role: UserRole.STUDENT,
+        isActive: true,
+      });
+      await user1.save();
+
+      const user2 = new User({
+        name: 'User 2',
+        email: 'user2@university.edu',
+        password: await bcrypt.hash('password123', 10),
+        role: UserRole.STUDENT,
+        isActive: true,
+      });
+      await user2.save();
+
+      const req = new Request(`http://localhost:3000/api/users/${user2._id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ email: 'user1@university.edu' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const res = await userDetailPUT(req as any, { params: Promise.resolve({ id: user2._id.toString() }) });
+      expect(res.status).toBe(409);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(false);
+      expect(resBody.message).toBe('Email already exists');
+    });
+
+    it('should throw HttpError with 400 when self-deactivation is attempted on UserService.updateUser', async () => {
+      const adminId = '000000000000000000000001';
+      const admin = new User({
+        _id: adminId,
+        name: 'Admin User',
+        email: 'admin@university.edu',
+        password: await bcrypt.hash('password123', 10),
+        role: UserRole.ADMIN,
+        isActive: true,
+      });
+      await admin.save();
+
+      const UserService = (await import('../services/UserService')).default;
+      const { HttpError } = await import('../lib/errors');
+
+      try {
+        await UserService.updateUser(adminId, { isActive: false }, { actingUserId: adminId });
+        expect.unreachable('Should have thrown an HttpError');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toBe('Self-deactivation is not allowed');
+      }
+    });
   });
 });
