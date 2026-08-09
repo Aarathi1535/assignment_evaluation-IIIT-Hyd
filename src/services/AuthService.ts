@@ -95,7 +95,7 @@ class AuthService {
         }
 
         if (!user.resetPasswordExpires || user.resetPasswordExpires.getTime() < Date.now()) {
-            throw new Error('Invalid or expired token');
+            throw new HttpError('Invalid or expired token', 400);
         }
 
         try {
