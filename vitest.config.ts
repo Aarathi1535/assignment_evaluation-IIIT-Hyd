@@ -1,4 +1,4 @@
-import { defineConfig, configDefaults } from 'vitest/config';
+import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 export default defineConfig({
@@ -8,7 +8,6 @@ export default defineConfig({
     setupFiles: ['./src/__tests__/setup.ts'],
     hookTimeout: 30000,
     testTimeout: 30000,
-    exclude: [...configDefaults.exclude, 'next_extracted/**'],
   },
   resolve: {
     alias: {
