@@ -4,6 +4,10 @@ import BatchService, { UploadFileInput } from '../../../services/BatchService';
 import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
+import {
+    MAX_SINGLE_FILE_SIZE,
+    MAX_TOTAL_REQUEST_SIZE
+} from '../../../utils/fileValidation';
 
 export async function POST(req: NextRequest) {
     const auth = await requirePermission(Permission.CREATE_BATCH);
@@ -43,17 +47,36 @@ export async function POST(req: NextRequest) {
         // Collect all uploaded files from form data
         const files: UploadFileInput[] = [];
         const examId = (formData.get('examId') || formData.get('exam') || undefined) as string | undefined;
+        let runningTotalSize = 0;
 
         // Iterate over form data entries
         for (const [key, value] of formData.entries()) {
             if (value && typeof value === 'object' && 'arrayBuffer' in value && typeof value.arrayBuffer === 'function') {
                 const file = value as File;
+                const fileSize = file.size || 0;
+
+                if (fileSize > MAX_SINGLE_FILE_SIZE) {
+                    throw new HttpError(
+                        `File "${file.name || key}" size (${fileSize} bytes) exceeds maximum single-file size limit of ${MAX_SINGLE_FILE_SIZE} bytes (50 MB)`,
+                        413
+                    );
+                }
+
+                if (runningTotalSize + fileSize > MAX_TOTAL_REQUEST_SIZE) {
+                    throw new HttpError(
+                        `Total upload batch size (${runningTotalSize + fileSize} bytes) exceeds maximum allowed total request size limit of ${MAX_TOTAL_REQUEST_SIZE} bytes (200 MB)`,
+                        413
+                    );
+                }
+
+                runningTotalSize += fileSize;
+
                 const arrayBuffer = await file.arrayBuffer();
                 const buffer = Buffer.from(arrayBuffer);
                 files.push({
                     name: file.name || key,
                     buffer,
-                    size: file.size || buffer.length
+                    size: fileSize || buffer.length
                 });
             }
         }

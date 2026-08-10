@@ -311,7 +311,7 @@ describe('Batch Upload Pipeline API Tests (AE-042)', () => {
             expect(auditLog).not.toBeNull();
         });
 
-        it('should return 413 when single file size exceeds 50 MB', async () => {
+        it('should return 413 when single file size exceeds 50 MB in BatchService', async () => {
             const mockOversizedFile = {
                 name: 'huge_scan.pdf',
                 buffer: createValidPdfBuffer(1),
@@ -329,7 +329,30 @@ describe('Batch Upload Pipeline API Tests (AE-042)', () => {
             });
         });
 
-        it('should return 413 when total batch size exceeds 200 MB', async () => {
+        it('should reject oversized single file (> 50 MB) at route level before arrayBuffer() is called', async () => {
+            const file = toFile(createValidPdfBuffer(1), 'huge_scan.pdf', 'application/pdf');
+            Object.defineProperty(file, 'size', { value: 51 * 1024 * 1024 });
+            const arrayBufferSpy = vi.spyOn(file, 'arrayBuffer');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const mockReq = {
+                headers: {
+                    get: (h: string) => (h.toLowerCase() === 'content-type' ? 'multipart/form-data' : null)
+                },
+                formData: async () => formData
+            };
+
+            const res = await ingestPOST(mockReq as any);
+            expect(res.status).toBe(413);
+            const resBody = await res.json();
+            expect(resBody.success).toBe(false);
+            expect(resBody.message).toContain('exceeds maximum single-file size limit');
+            expect(arrayBufferSpy).not.toHaveBeenCalled();
+        });
+
+        it('should return 413 when total batch size exceeds 200 MB in BatchService', async () => {
             const files = [];
             for (let i = 0; i < 5; i++) {
                 files.push({
@@ -348,6 +371,45 @@ describe('Batch Upload Pipeline API Tests (AE-042)', () => {
                 statusCode: 413,
                 message: expect.stringContaining('Total batch size limit exceeded')
             });
+        });
+
+        it('should reject batch when cumulative file size exceeds 200 MB at route level before buffering exceeding file', async () => {
+            const file1 = toFile(createValidPdfBuffer(1), 'file1.pdf', 'application/pdf');
+            Object.defineProperty(file1, 'size', { value: 45 * 1024 * 1024 });
+
+            const file2 = toFile(createValidPdfBuffer(1), 'file2.pdf', 'application/pdf');
+            Object.defineProperty(file2, 'size', { value: 45 * 1024 * 1024 });
+
+            const file3 = toFile(createValidPdfBuffer(1), 'file3.pdf', 'application/pdf');
+            Object.defineProperty(file3, 'size', { value: 45 * 1024 * 1024 });
+
+            const file4 = toFile(createValidPdfBuffer(1), 'file4.pdf', 'application/pdf');
+            Object.defineProperty(file4, 'size', { value: 45 * 1024 * 1024 });
+
+            const file5 = toFile(createValidPdfBuffer(1), 'file5.pdf', 'application/pdf');
+            Object.defineProperty(file5, 'size', { value: 45 * 1024 * 1024 });
+            const file5ArrayBufferSpy = vi.spyOn(file5, 'arrayBuffer');
+
+            const formData = new FormData();
+            formData.append('file1', file1);
+            formData.append('file2', file2);
+            formData.append('file3', file3);
+            formData.append('file4', file4);
+            formData.append('file5', file5);
+
+            const mockReq = {
+                headers: {
+                    get: (h: string) => (h.toLowerCase() === 'content-type' ? 'multipart/form-data' : null)
+                },
+                formData: async () => formData
+            };
+
+            const res = await ingestPOST(mockReq as any);
+            expect(res.status).toBe(413);
+            const resBody = await res.json();
+            expect(resBody.success).toBe(false);
+            expect(resBody.message).toContain('exceeds maximum allowed total request size limit');
+            expect(file5ArrayBufferSpy).not.toHaveBeenCalled();
         });
 
         it('should return 413 when PDF page count exceeds 200 pages', async () => {
