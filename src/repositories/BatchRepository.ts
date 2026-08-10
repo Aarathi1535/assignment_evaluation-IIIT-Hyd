@@ -72,6 +72,23 @@ class BatchRepository {
         }
         return await IngestionJob.findOne({ batchId: batch.batchId });
     }
+
+    async updateIngestionJob(
+        batchId: string,
+        data: Partial<IIngestionJob>,
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<IIngestionJob | null> {
+        const batch = await this.getBatchById(batchId, actingUserId, actingUserRole);
+        if (!batch) {
+            return null;
+        }
+        return await IngestionJob.findOneAndUpdate(
+            { batchId: batch.batchId },
+            data,
+            { new: true, runValidators: true }
+        );
+    }
 }
 
 const batchRepository = new BatchRepository();

@@ -221,6 +221,73 @@ class BatchService {
     async getIngestionJobByBatchId(batchId: string, actingUserId?: string, actingUserRole?: string): Promise<IIngestionJob | null> {
         return await BatchRepository.getIngestionJobByBatchId(batchId, actingUserId, actingUserRole);
     }
+
+    async getIngestionStatus(id: string, actingUserId?: string, actingUserRole?: string): Promise<IIngestionJob> {
+        const job = await BatchRepository.getIngestionJobByBatchId(id, actingUserId, actingUserRole);
+        if (!job) {
+            throw new HttpError('Batch not found or access denied', 404);
+        }
+        return job;
+    }
+
+    async updateIngestionStatus(
+        batchId: string,
+        data: {
+            status?: IngestionStatus;
+            processedPages?: number;
+            failedPages?: number;
+            failureReason?: string;
+        },
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<IIngestionJob> {
+        const jobBefore = await BatchRepository.getIngestionJobByBatchId(batchId, actingUserId, actingUserRole);
+        if (!jobBefore) {
+            throw new HttpError('Batch not found or access denied', 404);
+        }
+
+        // Validate status transition
+        if (data.status !== undefined && data.status !== jobBefore.status) {
+            const { isValidIngestionTransition } = await import('../validations/ingestionValidation');
+            if (!isValidIngestionTransition(jobBefore.status, data.status)) {
+                throw new HttpError(`Invalid status transition from ${jobBefore.status} to ${data.status}`, 400);
+            }
+        }
+
+        const updateData: Partial<IIngestionJob> = { ...data };
+
+        // Record startedAt when transitioning to processing
+        if (data.status === IngestionStatus.PROCESSING && !jobBefore.startedAt) {
+            updateData.startedAt = new Date();
+        }
+
+        // Record completedAt when transitioning to done or failed
+        if ((data.status === IngestionStatus.DONE || data.status === IngestionStatus.FAILED) && !jobBefore.completedAt) {
+            updateData.completedAt = new Date();
+        }
+
+        // Sanitize failure reason
+        if (data.failureReason !== undefined) {
+            const { sanitizeFailureReason } = await import('../validations/ingestionValidation');
+            updateData.failureReason = sanitizeFailureReason(data.failureReason);
+        }
+
+        const updatedJob = await BatchRepository.updateIngestionJob(batchId, updateData, actingUserId, actingUserRole);
+        if (!updatedJob) {
+            throw new HttpError('Batch not found or access denied', 404);
+        }
+
+        if (data.status !== undefined) {
+            await BatchRepository.updateBatch(
+                batchId,
+                { status: data.status as unknown as BatchStatus },
+                actingUserId,
+                actingUserRole
+            );
+        }
+
+        return updatedJob;
+    }
 }
 
 const batchService = new BatchService();
