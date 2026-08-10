@@ -36,3 +36,10 @@ jobs:
 
       - name: Type check
         run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+        env:
+          MONGODB_URI: mongodb://localhost:27017/ci-test
+          NEXTAUTH_SECRET: ci-test-secret
+          NEXTAUTH_URL: http://localhost:3000
