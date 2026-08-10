@@ -1,5 +1,6 @@
 import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
+import ImmutableStorageService from './ImmutableStorageService';
 import { IBatch, IBatchFile, BatchStatus } from '../models/Batch';
 import { IIngestionJob, IngestionStatus } from '../models/IngestionJob';
 import mongoose from 'mongoose';
@@ -135,8 +136,20 @@ class BatchService {
 
                 // Generate server-side identifiers
                 const fileId = crypto.randomUUID();
-                const storageKey = `batches/${batchId}/${fileId}.${detected.extension}`;
+                const sequenceNumber = batchFiles.length + 1;
                 const originalFilename = sanitizeDisplayFilename(file.name);
+
+                // Write through immutable storage layer and generate HMAC seal
+                const stored = await ImmutableStorageService.storeOriginal({
+                    batchId,
+                    fileId,
+                    sequenceNumber,
+                    uploader: context.actingUserId,
+                    buffer: file.buffer,
+                    originalFilename,
+                    fileExtension: detected.extension,
+                    context
+                });
 
                 batchFiles.push({
                     fileId,
@@ -145,7 +158,11 @@ class BatchService {
                     mimeType: detected.mimeType,
                     size: fileSize,
                     pageCount,
-                    storageKey
+                    storageKey: stored.storageKey,
+                    hmac: stored.hmac,
+                    keyId: stored.keyId,
+                    sequenceNumber: stored.sequenceNumber,
+                    integrityMetadata: stored.integrityMetadata
                 });
             }
 
@@ -195,6 +212,9 @@ class BatchService {
 
             return { batch: newBatch, job: newJob };
         } catch (error) {
+            // Clean up any files stored on disk for this batch
+            await ImmutableStorageService.cleanupBatch(batchId).catch(() => {});
+
             // Audit log failure
             if (context?.actingUserId) {
                 await writeAuditLog({

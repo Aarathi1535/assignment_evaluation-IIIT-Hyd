@@ -7,6 +7,13 @@ export enum BatchStatus {
     FAILED = 'failed'
 }
 
+export interface IBindingMetadata {
+    batchId: string;
+    sequenceNumber: number;
+    uploader: string;
+    timestamp: number;
+}
+
 export interface IBatchFile {
     fileId: string;
     originalFilename: string;
@@ -15,6 +22,10 @@ export interface IBatchFile {
     size: number;
     pageCount: number;
     storageKey: string;
+    hmac?: string;
+    keyId?: string;
+    sequenceNumber?: number;
+    integrityMetadata?: IBindingMetadata;
 }
 
 export interface IBatch extends Document {
@@ -30,6 +41,31 @@ export interface IBatch extends Document {
     createdAt: Date;
     updatedAt: Date;
 }
+
+const BindingMetadataSchema = new Schema<IBindingMetadata>(
+    {
+        batchId: {
+            type: String,
+            required: true,
+            trim: true
+        },
+        sequenceNumber: {
+            type: Number,
+            required: true,
+            min: 1
+        },
+        uploader: {
+            type: String,
+            required: true,
+            trim: true
+        },
+        timestamp: {
+            type: Number,
+            required: true
+        }
+    },
+    { _id: false }
+);
 
 const BatchFileSchema = new Schema<IBatchFile>(
     {
@@ -67,6 +103,21 @@ const BatchFileSchema = new Schema<IBatchFile>(
             type: String,
             required: true,
             trim: true
+        },
+        hmac: {
+            type: String,
+            trim: true
+        },
+        keyId: {
+            type: String,
+            trim: true
+        },
+        sequenceNumber: {
+            type: Number,
+            min: 1
+        },
+        integrityMetadata: {
+            type: BindingMetadataSchema
         }
     },
     { _id: false }

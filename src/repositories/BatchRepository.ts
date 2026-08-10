@@ -1,4 +1,4 @@
-import Batch, { IBatch } from '../models/Batch';
+import Batch, { IBatch, IBatchFile } from '../models/Batch';
 import IngestionJob, { IIngestionJob } from '../models/IngestionJob';
 import mongoose, { QueryFilter } from 'mongoose';
 
@@ -88,6 +88,45 @@ class BatchRepository {
             data,
             { new: true, runValidators: true }
         );
+    }
+
+    async getBatchByStorageKey(
+        storageKey: string,
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<{ batch: IBatch; file: IBatchFile } | null> {
+        if (!actingUserId || !actingUserRole) {
+            return null;
+        }
+
+        const baseQuery: QueryFilter<IBatch> = {
+            'files.storageKey': storageKey,
+            isActive: true
+        };
+
+        if (actingUserRole === 'ADMIN') {
+            // Unrestricted for Admin
+        } else if (actingUserRole === 'PROFESSOR') {
+            if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
+                return null;
+            }
+            baseQuery.uploadedBy = new mongoose.Types.ObjectId(actingUserId);
+        } else {
+            // Deny-by-default for STUDENT, TA, or unknown roles
+            return null;
+        }
+
+        const batch = await Batch.findOne(baseQuery);
+        if (!batch) {
+            return null;
+        }
+
+        const file = batch.files.find(f => f.storageKey === storageKey);
+        if (!file) {
+            return null;
+        }
+
+        return { batch, file };
     }
 }
 
