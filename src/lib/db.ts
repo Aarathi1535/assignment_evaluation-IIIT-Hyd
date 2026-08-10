@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { initBackgroundWorker } from './workerInit';
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -39,6 +40,7 @@ export async function connectDB() {
 
   try {
     mongooseCache.conn = await mongooseCache.promise;
+    initBackgroundWorker();
   } catch (e) {
     mongooseCache.promise = null;
     throw e;

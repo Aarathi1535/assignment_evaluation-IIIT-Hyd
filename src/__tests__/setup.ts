@@ -15,6 +15,8 @@ beforeAll(async () => {
   // Set fallback env variables to satisfy Zod validation in env.ts
   process.env.NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET || 'test-secret-value-at-least-32-chars-long';
   process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+  process.env.ORIGINAL_STORAGE_HMAC_SECRET = process.env.ORIGINAL_STORAGE_HMAC_SECRET || 'test-storage-hmac-secret-at-least-32-chars';
+  process.env.ORIGINAL_STORAGE_KEY_ID = process.env.ORIGINAL_STORAGE_KEY_ID || 'v1';
 
   // Start in-memory MongoDB
   mongoServer = await MongoMemoryServer.create();

@@ -399,6 +399,34 @@ describe('Smoke Tests', () => {
       generateResetTokenSpy.mockRestore();
     });
 
+    it('should return 500 for unexpected reset-password errors', async () => {
+      const resetPasswordSpy = vi
+        .spyOn(AuthService, 'resetPassword')
+        .mockRejectedValueOnce(new Error('Database connection failed'));
+
+      const reqResetPassword = new Request(
+        'http://localhost:3000/api/auth/reset-password',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            token: 'valid-looking-token',
+            newPassword: 'new-secure-password'
+          }),
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+
+      const resResetPassword = await resetPasswordPOST(reqResetPassword as any);
+
+      expect(resResetPassword.status).toBe(500);
+
+      const data = await resResetPassword.json();
+      expect(data.success).toBe(false);
+      expect(data.message).toBe('Internal server error');
+
+      resetPasswordSpy.mockRestore();
+    });
+
     it('should reject password reset when reusing a token (single-use)', async () => {
       // Register user
       const email = 'reused-reset@university.edu';
