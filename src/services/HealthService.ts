@@ -12,7 +12,7 @@ class HealthService {
     if (mongoose.connection.readyState === 0) {
       try {
         await connectDB();
-      } catch (error) {
+      } catch {
         // Catch connection error so the response can report "unhealthy"/"disconnected" rather than throwing 500
       }
     }

@@ -3,9 +3,10 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 export interface IAuditLog extends Document {
     user: mongoose.Types.ObjectId;
     action: string;
+    outcome?: 'SUCCESS' | 'FAILURE';
     entityId?: mongoose.Types.ObjectId;
     entityType?: string;
-    details?: Record<string, any>;
+    details?: Record<string, unknown>;
     ipAddress?: string;
     createdAt: Date;
     updatedAt: Date;
@@ -23,6 +24,11 @@ const AuditLogSchema = new Schema<IAuditLog>(
             type: String,
             required: true,
             trim: true,
+            index: true
+        },
+        outcome: {
+            type: String,
+            enum: ['SUCCESS', 'FAILURE'],
             index: true
         },
         entityId: {

@@ -58,10 +58,10 @@ MongoDB (Mongoose)
 ## 📁 Project Structure
 
 ```
-├── middleware.ts            # Next.js authentication & RBAC middleware
 ├── package.json             # Node dependencies and scripts
 ├── tsconfig.json            # TypeScript configuration
 ├── src/
+│   ├── proxy.ts             # Next.js authentication & RBAC proxy
 │   ├── app/                 # Next.js App Router (pages, dashboards, API routes)
 │   │   ├── (auth)/          # Authentication pages (login, register)
 │   │   ├── (dashboard)/     # Dashboards (admin, professor, ta, student)

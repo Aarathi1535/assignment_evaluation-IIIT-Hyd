@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import mongoose from 'mongoose';
 
 import AnswerScript from '../models/AnswerScript';
@@ -11,6 +11,12 @@ import RegradeRequest from '../models/RegradeRequest';
 import AuditLog from '../models/AuditLog';
 
 describe('Manual Grading Domain Models Tests', () => {
+    beforeAll(async () => {
+        // Ensure index building finishes before running test assertions to prevent race conditions on unique indexes
+        await AnswerScript.init();
+        await Page.init();
+    });
+
 
     describe('AnswerScript Model', () => {
         it('should validate and save a valid AnswerScript', async () => {
