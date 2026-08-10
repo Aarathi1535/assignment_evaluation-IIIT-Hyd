@@ -449,6 +449,63 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             }
         });
 
+        it('should not start worker if connectDB fails during startup', async () => {
+            const originalEnv = process.env.NODE_ENV;
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            const originalInit = (global as any).isIngestionWorkerInitialized;
+
+            (global as any).isIngestionWorkerInitialized = false;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            (process.env as any).NODE_ENV = 'production';
+
+            const dbModule = await import('../lib/db');
+            const connectSpy = vi.spyOn(dbModule, 'connectDB').mockRejectedValueOnce(new Error('DB Connection Failed'));
+            const startSpy = vi.spyOn(defaultIngestionWorker, 'start');
+
+            try {
+                await expect(register()).rejects.toThrow('DB Connection Failed');
+                expect(connectSpy).toHaveBeenCalled();
+                expect(startSpy).not.toHaveBeenCalled();
+                expect((global as any).isIngestionWorkerInitialized).toBeFalsy();
+            } finally {
+                (global as any).isIngestionWorkerInitialized = originalInit;
+                (process.env as any).NODE_ENV = originalEnv;
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
+            }
+        });
+
+        it('should connect to database before starting worker during server startup', async () => {
+            const originalEnv = process.env.NODE_ENV;
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            const originalInit = (global as any).isIngestionWorkerInitialized;
+
+            (global as any).isIngestionWorkerInitialized = false;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            (process.env as any).NODE_ENV = 'production';
+
+            const callOrder: string[] = [];
+            const dbModule = await import('../lib/db');
+            const connectSpy = vi.spyOn(dbModule, 'connectDB').mockImplementation(async () => {
+                callOrder.push('connectDB');
+                return mongoose;
+            });
+            const startSpy = vi.spyOn(defaultIngestionWorker, 'start').mockImplementation(() => {
+                callOrder.push('workerStart');
+            });
+
+            try {
+                await register();
+                expect(connectSpy).toHaveBeenCalled();
+                expect(startSpy).toHaveBeenCalled();
+                expect(callOrder).toEqual(['connectDB', 'workerStart']);
+            } finally {
+                defaultIngestionWorker.stop();
+                (global as any).isIngestionWorkerInitialized = originalInit;
+                (process.env as any).NODE_ENV = originalEnv;
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
+            }
+        });
+
         it('should execute end-to-end background ingestion when started via instrumentation register()', async () => {
             const totalPages = 2;
             const { batchId } = await createTestBatchAndJob(totalPages);
