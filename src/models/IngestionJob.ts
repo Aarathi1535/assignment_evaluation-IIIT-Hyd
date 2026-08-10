@@ -18,6 +18,10 @@ export interface IIngestionJob extends Document {
     startedAt?: Date;
     completedAt?: Date;
     failureReason?: string;
+    attempts: number;
+    maxRetries: number;
+    heartbeatAt?: Date;
+    workerId?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -74,6 +78,25 @@ const IngestionJobSchema = new Schema<IIngestionJob>(
             type: Date
         },
         failureReason: {
+            type: String,
+            trim: true
+        },
+        attempts: {
+            type: Number,
+            required: true,
+            min: 0,
+            default: 0
+        },
+        maxRetries: {
+            type: Number,
+            required: true,
+            min: 1,
+            default: 3
+        },
+        heartbeatAt: {
+            type: Date
+        },
+        workerId: {
             type: String,
             trim: true
         }

@@ -1,5 +1,5 @@
 import Batch, { IBatch, IBatchFile } from '../models/Batch';
-import IngestionJob, { IIngestionJob } from '../models/IngestionJob';
+import IngestionJob, { IIngestionJob, IngestionStatus } from '../models/IngestionJob';
 import mongoose, { QueryFilter } from 'mongoose';
 
 class BatchRepository {
@@ -127,6 +127,69 @@ class BatchRepository {
         }
 
         return { batch, file };
+    }
+
+    /**
+     * Atomically claims one queued (or stale processing) ingestion job using MongoDB findOneAndUpdate.
+     * Prevents concurrent workers from claiming the same job.
+     */
+    async claimNextQueuedJob(
+        workerId: string,
+        staleTimeoutMs = 60000
+    ): Promise<IIngestionJob | null> {
+        const now = new Date();
+        const staleThreshold = new Date(now.getTime() - staleTimeoutMs);
+
+        const filter = {
+            $expr: { $lt: ['$attempts', '$maxRetries'] },
+            $or: [
+                { status: IngestionStatus.QUEUED },
+                {
+                    status: IngestionStatus.PROCESSING,
+                    $or: [
+                        { heartbeatAt: { $lt: staleThreshold } },
+                        { heartbeatAt: { $exists: false }, startedAt: { $lt: staleThreshold } }
+                    ]
+                }
+            ]
+        };
+
+        const update: Record<string, unknown> = {
+            $set: {
+                status: IngestionStatus.PROCESSING,
+                workerId,
+                heartbeatAt: now
+            },
+            $inc: { attempts: 1 }
+        };
+
+        const job = await IngestionJob.findOneAndUpdate(
+            filter,
+            update,
+            { new: true, sort: { createdAt: 1 } }
+        );
+
+        if (job && !job.startedAt) {
+            await IngestionJob.updateOne(
+                { _id: job._id, startedAt: { $exists: false } },
+                { $set: { startedAt: now } }
+            );
+            job.startedAt = now;
+        }
+
+        return job;
+    }
+
+    async updateHeartbeat(jobId: string | mongoose.Types.ObjectId, workerId: string): Promise<boolean> {
+        const res = await IngestionJob.updateOne(
+            { _id: jobId, workerId },
+            { $set: { heartbeatAt: new Date() } }
+        );
+        return res.modifiedCount > 0;
+    }
+
+    async getBatchByBatchIdInternal(batchId: string): Promise<IBatch | null> {
+        return await Batch.findOne({ batchId, isActive: true });
     }
 }
 
