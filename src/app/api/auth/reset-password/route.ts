@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import AuthService from '@/services/AuthService';
 import { z } from 'zod';
+import { HttpError } from '@/lib/errors';
 
 const resetPasswordSchema = z.object({
   token: z.string().min(1, { message: 'Token is required' }),
@@ -41,14 +42,18 @@ export async function POST(req: NextRequest) {
 
     try {
       await AuthService.resetPassword(token, newPassword);
-    } catch {
-      return NextResponse.json(
-        {
-          success: false,
-          message: 'Invalid or expired token'
-        },
-        { status: 400 }
-      );
+    } catch (err) {
+      if (err instanceof HttpError) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: err.message
+          },
+          { status: err.statusCode }
+        );
+      }
+
+      throw err;
     }
 
     return NextResponse.json(
