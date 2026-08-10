@@ -67,7 +67,9 @@ export function generateHmacSeal(
 
     // Update with file content
     hmacInstance.update(content);
-    // Update with binding metadata delimiter and canonical metadata string
+    // The delimiter between file content and canonical binding metadata is required to
+    // unambiguously separate the content bytes from the metadata portion of the HMAC input
+    // and prevent ambiguity in the serialized input.
     hmacInstance.update(Buffer.from('\x00--METADATA_BINDING--\x00', 'utf-8'));
     hmacInstance.update(Buffer.from(canonicalMeta, 'utf-8'));
 
