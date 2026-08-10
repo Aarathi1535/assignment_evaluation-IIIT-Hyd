@@ -9,12 +9,22 @@ const envSchema = z.object({
     ORIGINAL_STORAGE_PATH: z.string().optional()
 });
 
-const parsed = envSchema.safeParse(process.env);
+export function validateEnv() {
+    const parsed = envSchema.safeParse(process.env);
 
-if (!parsed.success) {
-    console.error('❌ Invalid environment variables:', parsed.error.format());
-    throw new Error('Invalid environment variables');
+    if (!parsed.success) {
+        console.error('❌ Invalid environment variables:', parsed.error.format());
+        throw new Error('Invalid environment variables');
+    }
+
+    return parsed.data;
 }
 
-export const env = parsed.data;
+export const env = new Proxy({} as z.infer<typeof envSchema>, {
+    get: (_target, prop: string) => {
+        const validated = validateEnv();
+        return validated[prop as keyof typeof validated];
+    }
+});
+
 export type Env = z.infer<typeof envSchema>;
