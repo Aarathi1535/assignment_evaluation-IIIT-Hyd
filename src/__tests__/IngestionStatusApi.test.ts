@@ -384,10 +384,10 @@ describe('Ingestion Status Tracking and Status API (AE-045)', () => {
             expect(resBody.message).toContain('Batch not found or access denied');
         });
 
-        it('should return 404 for STUDENT and TA callers accessing an existing batch', async () => {
+        it('should return 403 for STUDENT and TA callers lacking VIEW_BATCH permission', async () => {
             const { batchId } = await createTestBatchAndJob(professorId, IngestionStatus.QUEUED, 10);
 
-            // Student check
+            // Student check (no VIEW_BATCH permission -> 403)
             mockSessionUser = {
                 id: studentId,
                 email: 'student@university.edu',
@@ -396,9 +396,9 @@ describe('Ingestion Status Tracking and Status API (AE-045)', () => {
             };
             const studentReq = new Request(`http://localhost:3000/api/ingest/${batchId}`);
             const studentRes = await ingestStatusGET(studentReq as any, { params: Promise.resolve({ id: batchId }) });
-            expect(studentRes.status).toBe(404);
+            expect(studentRes.status).toBe(403);
 
-            // TA check
+            // TA check (no VIEW_BATCH permission -> 403)
             mockSessionUser = {
                 id: taId,
                 email: 'ta@university.edu',
@@ -407,7 +407,7 @@ describe('Ingestion Status Tracking and Status API (AE-045)', () => {
             };
             const taReq = new Request(`http://localhost:3000/api/ingest/${batchId}`);
             const taRes = await ingestStatusGET(taReq as any, { params: Promise.resolve({ id: batchId }) });
-            expect(taRes.status).toBe(404);
+            expect(taRes.status).toBe(403);
         });
 
         it('should return 404 for unknown/nonexistent batch ID', async () => {

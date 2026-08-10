@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../../lib/db';
 import BatchService from '../../../../services/BatchService';
-import { requireAuth } from '../../../../lib/apiAuth';
+import { requirePermission } from '../../../../lib/apiAuth';
+import { Permission } from '../../../../constants/permissions';
 import { HttpError } from '../../../../lib/errors';
 
 export async function GET(
     req: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
-    const auth = await requireAuth();
+    const auth = await requirePermission(Permission.VIEW_BATCH);
     if (!auth.authorized) {
         return auth.response;
     }
