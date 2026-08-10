@@ -1,6 +1,8 @@
 import ingestionWorker from '../services/IngestionWorker';
 
-let isWorkerInitialized = false;
+declare global {
+    var isIngestionWorkerInitialized: boolean | undefined;
+}
 
 /**
  * Initializes the background ingestion worker once during application startup.
@@ -11,8 +13,8 @@ export function initBackgroundWorker(): void {
         return;
     }
 
-    if (!isWorkerInitialized) {
-        isWorkerInitialized = true;
+    if (!global.isIngestionWorkerInitialized) {
+        global.isIngestionWorkerInitialized = true;
         ingestionWorker.start();
     }
 }

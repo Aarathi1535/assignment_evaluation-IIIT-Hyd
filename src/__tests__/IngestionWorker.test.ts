@@ -6,7 +6,8 @@ import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import BatchRepository from '../repositories/BatchRepository';
 import PageIngestionService from '../services/PageIngestionService';
-import { IngestionWorker } from '../services/IngestionWorker';
+import defaultIngestionWorker, { IngestionWorker } from '../services/IngestionWorker';
+import { initBackgroundWorker } from '../lib/workerInit';
 
 let mockSessionUser: any = null;
 
@@ -408,6 +409,37 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             expect(pageRecord).not.toBeNull();
             expect(pageRecord!.status).toBe('failed');
             expect(pageRecord!.failureReason).toContain('timed out');
+        });
+    });
+
+    describe('8. Server Lifecycle & Worker Startup Integration', () => {
+        it('should do nothing when NODE_ENV is test', () => {
+            const startSpy = vi.spyOn(defaultIngestionWorker, 'start');
+            initBackgroundWorker();
+            expect(startSpy).not.toHaveBeenCalled();
+        });
+
+        it('should start worker once and avoid duplicate intervals in dev/prod environment', () => {
+            const originalEnv = process.env.NODE_ENV;
+            const originalInit = (global as any).isIngestionWorkerInitialized;
+            (global as any).isIngestionWorkerInitialized = false;
+
+            try {
+                (process.env as any).NODE_ENV = 'development';
+                const startSpy = vi.spyOn(defaultIngestionWorker, 'start').mockImplementation(() => {});
+
+                // First call: starts worker
+                initBackgroundWorker();
+                expect(startSpy).toHaveBeenCalledTimes(1);
+                expect((global as any).isIngestionWorkerInitialized).toBe(true);
+
+                // Second call (e.g. Next.js HMR or multiple connectDB calls): does NOT start duplicate
+                initBackgroundWorker();
+                expect(startSpy).toHaveBeenCalledTimes(1);
+            } finally {
+                (process.env as any).NODE_ENV = originalEnv;
+                (global as any).isIngestionWorkerInitialized = originalInit;
+            }
         });
     });
 });
