@@ -32,6 +32,10 @@ export enum Permission {
     SAVE_MARKS_FEEDBACK = 'SAVE_MARKS_FEEDBACK',
     PUBLISH_GRADES = 'PUBLISH_GRADES',
 
+    // Batch & Ingestion management
+    CREATE_BATCH = 'CREATE_BATCH',
+    VIEW_BATCH = 'VIEW_BATCH',
+
     // View permissions
     VIEW_OWN_RESULTS = 'VIEW_OWN_RESULTS',
     REQUEST_REGRADE = 'REQUEST_REGRADE'
@@ -53,7 +57,9 @@ export const RolePermissions: Record<UserRole, Permission[]> = {
         Permission.ALLOCATE_SCRIPTS,
         Permission.SAVE_MARKS_FEEDBACK,
         Permission.PUBLISH_GRADES,
-        Permission.VIEW_COURSES
+        Permission.VIEW_COURSES,
+        Permission.CREATE_BATCH,
+        Permission.VIEW_BATCH
     ],
     [UserRole.TA]: [
         Permission.VIEW_COURSES,
