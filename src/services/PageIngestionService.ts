@@ -1,6 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import mongoose from 'mongoose';
 import IngestionPage, { PageProcessingStatus, IIngestionPage } from '../models/IngestionPage';
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
+import { IPageRenderer, DefaultPdfRenderer, RenderPageResult } from './PageRenderer';
+import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -11,8 +15,8 @@ export interface ProcessPageInput {
     fileType: string;
     fileBuffer?: Buffer;
     timeoutMs?: number;
-    simulateHungPage?: boolean;
-    simulatePageFailure?: boolean;
+    renderer?: IPageRenderer;
+    derivedStorage?: IDerivedStorageService;
 }
 
 export interface PageProcessResult {
@@ -25,23 +29,47 @@ export interface PageProcessResult {
 }
 
 export class PageIngestionService {
+    private renderer: IPageRenderer;
+    private derivedStorage: IDerivedStorageService;
     private defaultPageTimeoutMs = 5000;
+
+    constructor(renderer?: IPageRenderer, derivedStorage?: IDerivedStorageService) {
+        this.renderer = renderer || new DefaultPdfRenderer();
+        this.derivedStorage = derivedStorage || defaultDerivedStorageService;
+    }
+
+    setRenderer(renderer: IPageRenderer): void {
+        this.renderer = renderer;
+    }
+
+    getRenderer(): IPageRenderer {
+        return this.renderer;
+    }
+
+    setDerivedStorage(derivedStorage: IDerivedStorageService): void {
+        this.derivedStorage = derivedStorage;
+    }
+
+    getDerivedStorage(): IDerivedStorageService {
+        return this.derivedStorage;
+    }
 
     /**
      * Processes a single page of an uploaded original file with timeout, error sanitization,
-     * and idempotent reconciliation against existing IngestionPage records.
+     * normalized derived-asset persistence, and idempotent reconciliation.
      */
     async processPage(input: ProcessPageInput): Promise<PageProcessResult> {
         const {
             batchId,
             jobId,
             fileId,
-            storageKey,
+            storageKey: originalStorageKey,
             pageNumber,
             fileType,
+            fileBuffer,
             timeoutMs = this.defaultPageTimeoutMs,
-            simulateHungPage,
-            simulatePageFailure
+            renderer,
+            derivedStorage
         } = input;
 
         // Idempotency check: If this exact page was already successfully processed, reuse it
@@ -61,52 +89,116 @@ export class PageIngestionService {
             };
         }
 
+        const activeRenderer = renderer || this.renderer;
+        const activeDerivedStorage = derivedStorage || this.derivedStorage;
+
+        // Resolve file buffer from disk storage if not directly provided in input
+        let bufferToProcess = fileBuffer;
+        if (!bufferToProcess && originalStorageKey) {
+            try {
+                const storageRoot = process.env.ORIGINAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'originals');
+                const relativePath = originalStorageKey.replace(/^batches\//, '');
+                const diskPath = path.join(storageRoot, relativePath);
+                if (fs.existsSync(diskPath)) {
+                    bufferToProcess = await fs.promises.readFile(diskPath);
+                }
+            } catch {
+                // Disk read fallback - renderer will report missing buffer if needed
+            }
+        }
+
         try {
-            // Execute actual page processing with timeout protection
-            await this.executeWithTimeout(
+            // Execute actual page processing with timeout protection via injected renderer
+            const renderResult: RenderPageResult = await this.executeWithTimeout(
                 async () => {
-                    if (simulateHungPage) {
-                        // Simulate an unresolving/hung worker task
-                        await new Promise((resolve) => setTimeout(resolve, timeoutMs + 2000));
-                    }
-
-                    if (simulatePageFailure) {
-                        throw new Error(`Corrupted page data on page ${pageNumber}\n at PageRenderer.render (/app/renderer.ts:40)`);
-                    }
-
-                    // Perform lightweight internal page extraction / inspection
-                    return {
+                    return await activeRenderer.renderPage({
+                        batchId,
+                        fileId,
                         pageNumber,
                         fileType,
-                        extractedAt: new Date().toISOString()
-                    };
+                        storageKey: originalStorageKey,
+                        fileBuffer: bufferToProcess
+                    });
                 },
                 timeoutMs,
                 `Page ${pageNumber} processing timed out after ${timeoutMs}ms`
             );
 
-            // Persist or update page record as PROCESSED
+            if (!renderResult.success) {
+                const rawReason = renderResult.failureReason || `Rendering failed on page ${pageNumber}`;
+                const sanitizedReason = sanitizeFailureReason(rawReason);
+
+                const pageRecord = await IngestionPage.findOneAndUpdate(
+                    { batchId, fileId, pageNumber },
+                    {
+                        batchId,
+                        job: jobId,
+                        fileId,
+                        storageKey: originalStorageKey,
+                        pageNumber,
+                        status: PageProcessingStatus.FAILED,
+                        processedAt: new Date(),
+                        failureReason: sanitizedReason,
+                        metadata: { fileType, pageNumber, ...renderResult.metadata }
+                    },
+                    { upsert: true, returnDocument: 'after', runValidators: true }
+                );
+
+                return {
+                    success: false,
+                    pageNumber,
+                    fileId,
+                    failureReason: sanitizedReason,
+                    pageRecord: pageRecord || undefined
+                };
+            }
+
+            // If image is present on render result, store as mutable derived asset
+            let pageStorageKey = originalStorageKey;
+            if (renderResult.image && renderResult.image.buffer) {
+                const storedDerived = await activeDerivedStorage.storeDerivedPage({
+                    batchId,
+                    fileId,
+                    pageNumber,
+                    buffer: renderResult.image.buffer,
+                    format: renderResult.image.format
+                });
+                pageStorageKey = storedDerived.storageKey;
+            }
+
+            // Persist or update page record as PROCESSED pointing to derived storageKey
             const pageRecord = await IngestionPage.findOneAndUpdate(
                 { batchId, fileId, pageNumber },
                 {
                     batchId,
                     job: jobId,
                     fileId,
-                    storageKey,
+                    storageKey: pageStorageKey,
                     pageNumber,
                     status: PageProcessingStatus.PROCESSED,
                     processedAt: new Date(),
                     failureReason: undefined,
-                    metadata: { fileType, pageNumber }
+                    metadata: {
+                        fileType,
+                        pageNumber,
+                        originalStorageKey,
+                        derivedStorageKey: pageStorageKey,
+                        width: renderResult.image?.width,
+                        height: renderResult.image?.height,
+                        dpi: renderResult.image?.dpi,
+                        format: renderResult.image?.format,
+                        sizeBytes: renderResult.image?.sizeBytes,
+                        ...renderResult.metadata
+                    }
                 },
-                { upsert: true, new: true, runValidators: true }
+                { upsert: true, returnDocument: 'after', runValidators: true }
             );
 
             return {
                 success: true,
                 pageNumber,
                 fileId,
-                pageRecord
+                pageRecord: pageRecord || undefined
             };
         } catch (error) {
             const rawMessage = error instanceof Error ? error.message : 'Unknown page processing error';
@@ -118,14 +210,14 @@ export class PageIngestionService {
                     batchId,
                     job: jobId,
                     fileId,
-                    storageKey,
+                    storageKey: originalStorageKey,
                     pageNumber,
                     status: PageProcessingStatus.FAILED,
                     processedAt: new Date(),
                     failureReason: sanitizedReason,
                     metadata: { fileType, pageNumber }
                 },
-                { upsert: true, new: true, runValidators: true }
+                { upsert: true, returnDocument: 'after', runValidators: true }
             );
 
             return {
@@ -133,7 +225,7 @@ export class PageIngestionService {
                 pageNumber,
                 fileId,
                 failureReason: sanitizedReason,
-                pageRecord
+                pageRecord: pageRecord || undefined
             };
         }
     }

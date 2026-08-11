@@ -1,11 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import BatchRepository from '../repositories/BatchRepository';
-import PageIngestionService from '../services/PageIngestionService';
+import defaultPageIngestionService, { PageIngestionService } from '../services/PageIngestionService';
+import { IPageRenderer } from '../services/PageRenderer';
 import defaultIngestionWorker, { IngestionWorker } from '../services/IngestionWorker';
 import { initBackgroundWorker } from '../lib/workerInit';
 
@@ -48,7 +51,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
         pdfStr += `] /Count ${pageCount} >>\nendobj\n`;
 
         for (let i = 1; i <= pageCount; i++) {
-            pdfStr += `${i + 2} 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n`;
+            pdfStr += `${i + 2} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n`;
         }
         pdfStr += `xref\n0 ${pageCount + 3}\ntrailer\n<< /Size ${pageCount + 3} /Root 1 0 R >>\nstartxref\n500\n%%EOF`;
         return Buffer.from(pdfStr, 'utf-8');
@@ -62,6 +65,13 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
         const batchId = crypto.randomUUID();
         const fileId = crypto.randomUUID();
 
+        // Write real valid PDF fixture to disk storage so real DefaultPdfRenderer can read and render it
+        const pdfBuffer = createValidPdfBuffer(totalPages);
+        const storageRoot = process.env.ORIGINAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'originals');
+        const batchDir = path.join(storageRoot, batchId);
+        await fs.promises.mkdir(batchDir, { recursive: true });
+        await fs.promises.writeFile(path.join(batchDir, `${fileId}.pdf`), pdfBuffer);
+
         const batch = await BatchRepository.createBatch({
             batchId,
             uploadedBy: new mongoose.Types.ObjectId(professorId),
@@ -71,14 +81,14 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
                     originalFilename: 'exam_paper.pdf',
                     fileType: 'pdf',
                     mimeType: 'application/pdf',
-                    size: 1024,
+                    size: pdfBuffer.length,
                     pageCount: totalPages,
                     storageKey: `batches/${batchId}/${fileId}.pdf`,
                     sequenceNumber: 1
                 }
             ],
             totalFiles: 1,
-            totalSize: 1024,
+            totalSize: pdfBuffer.length,
             totalPageCount: totalPages,
             status: BatchStatus.QUEUED,
             isActive: true
@@ -214,7 +224,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             const { batchId } = await createTestBatchAndJob(3);
             const worker = new IngestionWorker({ workerId: 'worker-main' });
 
-            const processPageSpy = vi.spyOn(PageIngestionService, 'processPage');
+            const processPageSpy = vi.spyOn(defaultPageIngestionService, 'processPage');
 
             const result = await worker.processNextJob();
 
@@ -260,10 +270,13 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
     describe('4. Failure Handling, Retries & Max Retry Limit', () => {
         it('should return to queued state on transient failure when attempts < maxRetries', async () => {
             const { batchId } = await createTestBatchAndJob(2, 3);
-            const worker = new IngestionWorker({ workerId: 'worker-retry' });
+            const failingRenderer: IPageRenderer = {
+                renderPage: vi.fn().mockRejectedValue(new Error('Corrupted page data on page 1\n at InternalParser.parse (/app/parser.ts:20)'))
+            };
+            const pageService = new PageIngestionService(failingRenderer);
+            const worker = new IngestionWorker({ workerId: 'worker-retry', pageIngestionService: pageService });
 
-            // Simulate page failure on page 2
-            const result = await worker.processNextJob({ simulatePageFailure: true });
+            const result = await worker.processNextJob();
 
             expect(result.processed).toBe(true);
             expect(result.status).toBe('queued'); // re-queued for retry
@@ -273,7 +286,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             expect(jobInDb!.attempts).toBe(1);
             expect(jobInDb!.failureReason).toContain('Corrupted page data');
             // Cleaned/sanitized failureReason without stack trace
-            expect(jobInDb!.failureReason).not.toContain('at PageRenderer.render');
+            expect(jobInDb!.failureReason).not.toContain('at InternalParser');
 
             const batchInDb = await Batch.findOne({ batchId });
             expect(batchInDb!.status).toBe('queued');
@@ -281,14 +294,18 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
 
         it('should mark job/batch as permanently failed when maximum retry count is reached', async () => {
             const { batchId } = await createTestBatchAndJob(2, 2);
-            const worker = new IngestionWorker({ workerId: 'worker-max-retry' });
+            const failingRenderer: IPageRenderer = {
+                renderPage: vi.fn().mockRejectedValue(new Error('Corrupted page data'))
+            };
+            const pageService = new PageIngestionService(failingRenderer);
+            const worker = new IngestionWorker({ workerId: 'worker-max-retry', pageIngestionService: pageService });
 
             // Attempt 1: transient failure -> queued
-            const attempt1 = await worker.processNextJob({ simulatePageFailure: true });
+            const attempt1 = await worker.processNextJob();
             expect(attempt1.status).toBe('queued');
 
             // Attempt 2: max retries reached -> failed
-            const attempt2 = await worker.processNextJob({ simulatePageFailure: true });
+            const attempt2 = await worker.processNextJob();
             expect(attempt2.status).toBe('failed');
             expect(attempt2.failedPages).toBeGreaterThan(0);
 
@@ -303,12 +320,16 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
 
         it('should sanitize raw error stack traces in failed state', async () => {
             await createTestBatchAndJob(1, 1);
-            const worker = new IngestionWorker();
+            const failingRenderer: IPageRenderer = {
+                renderPage: vi.fn().mockRejectedValue(new Error('Corrupted page data on page 1\n at PdfEngine.renderPage (/engine/pdf.ts:40)\n at async processTicksAndRejections'))
+            };
+            const pageService = new PageIngestionService(failingRenderer);
+            const worker = new IngestionWorker({ pageIngestionService: pageService });
 
-            const result = await worker.processNextJob({ simulatePageFailure: true });
+            const result = await worker.processNextJob();
             expect(result.status).toBe('failed');
             expect(result.failureReason).toBe('Corrupted page data on page 1');
-            expect(result.failureReason).not.toContain('at PageRenderer');
+            expect(result.failureReason).not.toContain('at PdfEngine');
         });
     });
 
@@ -394,10 +415,13 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
     describe('7. Per-Page Timeout Protection', () => {
         it('should timeout an individual hung page without blocking the worker permanently', async () => {
             const { batchId } = await createTestBatchAndJob(1, 1);
-            const worker = new IngestionWorker();
+            const hungRenderer: IPageRenderer = {
+                renderPage: vi.fn().mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 5000)))
+            };
+            const pageService = new PageIngestionService(hungRenderer);
+            const worker = new IngestionWorker({ pageIngestionService: pageService });
 
             const result = await worker.processNextJob({
-                simulateHungPage: true,
                 pageTimeoutMs: 50 // small timeout for test speed
             });
 
@@ -440,6 +464,113 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
                 (process.env as any).NODE_ENV = originalEnv;
                 (global as any).isIngestionWorkerInitialized = originalInit;
             }
+        });
+    });
+
+    describe('9. Authoritative Renderer Page-Count Reconciliation (AE-046 Step 5)', () => {
+        it('should process a single-page PDF where pre-flight estimate and renderer count agree', async () => {
+            const { batchId } = await createTestBatchAndJob(1);
+            const worker = new IngestionWorker();
+
+            const result = await worker.processNextJob();
+
+            expect(result.processed).toBe(true);
+            expect(result.status).toBe('done');
+            expect(result.processedPages).toBe(1);
+
+            const jobInDb = await IngestionJob.findOne({ batchId });
+            expect(jobInDb!.totalPages).toBe(1);
+            expect(jobInDb!.processedPages).toBe(1);
+            expect(jobInDb!.status).toBe('done');
+        });
+
+        it('should reconcile and adjust totalPages when pre-flight regex overestimated page count', async () => {
+            // Pre-flight estimated 5 pages, but disk PDF actually contains only 2 pages
+            const { batch, job, batchId, fileId } = await createTestBatchAndJob(2);
+
+            // Force simulated overestimate on batch and job records
+            job.totalPages = 5;
+            await job.save();
+
+            batch.totalPageCount = 5;
+            batch.files[0].pageCount = 5;
+            await batch.save();
+
+            const worker = new IngestionWorker();
+            const result = await worker.processNextJob();
+
+            expect(result.processed).toBe(true);
+            expect(result.status).toBe('done');
+            expect(result.processedPages).toBe(2);
+
+            // Verifies job totalPages was reconciled down to 2
+            const reconciledJob = await IngestionJob.findOne({ batchId });
+            expect(reconciledJob!.totalPages).toBe(2);
+            expect(reconciledJob!.processedPages).toBe(2);
+            expect(reconciledJob!.status).toBe('done');
+
+            // Verifies batch totalPageCount was reconciled down to 2
+            const reconciledBatch = await Batch.findOne({ batchId });
+            expect(reconciledBatch!.totalPageCount).toBe(2);
+            expect(reconciledBatch!.files[0].pageCount).toBe(2);
+            expect(reconciledBatch!.status).toBe('done');
+
+            // Verifies exactly 2 IngestionPage records were processed
+            const pages = await IngestionPage.find({ batchId, fileId });
+            expect(pages.length).toBe(2);
+            expect(pages.every((p) => p.status === 'processed')).toBe(true);
+        });
+
+        it('should reconcile and adjust totalPages when pre-flight regex underestimated page count', async () => {
+            // Pre-flight estimated 1 page, but disk PDF actually contains 3 pages
+            const { batch, job, batchId, fileId } = await createTestBatchAndJob(3);
+
+            // Force simulated underestimate on batch and job records
+            job.totalPages = 1;
+            await job.save();
+
+            batch.totalPageCount = 1;
+            batch.files[0].pageCount = 1;
+            await batch.save();
+
+            const worker = new IngestionWorker();
+            const result = await worker.processNextJob();
+
+            expect(result.processed).toBe(true);
+            expect(result.status).toBe('done');
+            expect(result.processedPages).toBe(3);
+
+            // Verifies job totalPages was reconciled up to 3
+            const reconciledJob = await IngestionJob.findOne({ batchId });
+            expect(reconciledJob!.totalPages).toBe(3);
+            expect(reconciledJob!.processedPages).toBe(3);
+            expect(reconciledJob!.status).toBe('done');
+
+            // Verifies exactly 3 IngestionPage records were processed
+            const pages = await IngestionPage.find({ batchId, fileId });
+            expect(pages.length).toBe(3);
+            expect(pages.every((p) => p.status === 'processed')).toBe(true);
+        });
+
+        it('should handle authoritative page count discovery failure cleanly', async () => {
+            const { batchId } = await createTestBatchAndJob(1, 1);
+
+            const failingRenderer: IPageRenderer = {
+                getPageCount: vi.fn().mockRejectedValue(new Error('Corrupted trailer dictionary\n at PdfStream.read (/pdf/stream.ts:12)')),
+                renderPage: vi.fn().mockResolvedValue({ success: true, pageNumber: 1 })
+            };
+            const pageService = new PageIngestionService(failingRenderer);
+            const worker = new IngestionWorker({ pageIngestionService: pageService });
+
+            const result = await worker.processNextJob();
+
+            expect(result.status).toBe('failed');
+            expect(result.failureReason).toBe('Corrupted trailer dictionary');
+            expect(result.failureReason).not.toContain('at PdfStream');
+
+            const jobInDb = await IngestionJob.findOne({ batchId });
+            expect(jobInDb!.status).toBe('failed');
+            expect(jobInDb!.failureReason).toBe('Corrupted trailer dictionary');
         });
     });
 });
