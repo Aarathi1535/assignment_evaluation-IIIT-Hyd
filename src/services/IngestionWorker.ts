@@ -137,6 +137,9 @@ export class IngestionWorker {
                         return await this.handleEarlyFailure(job, sanitizedReason);
                     }
                 }
+            } else {
+                // Standalone image inputs have an authoritative page count of exactly 1
+                authoritativeCount = 1;
             }
 
             file.pageCount = authoritativeCount;
@@ -157,8 +160,10 @@ export class IngestionWorker {
 
         let lastFailureReason: string | undefined;
 
-        // Step 3: Iterate over authoritative page count for every file
-        for (const file of batch.files) {
+        // Step 3: Iterate over authoritative page count for every file in canonical fileIndex order
+        const sortedFiles = [...batch.files].sort((a, b) => a.fileIndex - b.fileIndex);
+
+        for (const file of sortedFiles) {
             const pageCount = file.pageCount || 1;
             const fileBuffer = fileBuffers.get(file.fileId);
 
@@ -170,6 +175,7 @@ export class IngestionWorker {
                     batchId: job.batchId,
                     jobId: job._id,
                     fileId: file.fileId,
+                    fileIndex: file.fileIndex,
                     storageKey: file.storageKey,
                     pageNumber: pageNum,
                     fileType: file.fileType,

@@ -254,6 +254,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -293,6 +294,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -305,6 +307,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -315,7 +318,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result2.isDuplicateOrAlreadyProcessed).toBe(true);
 
             // Check database: exactly 1 IngestionPage document exists
-            const pages = await IngestionPage.find({ batchId, fileId, pageNumber: 1 });
+            const pages = await IngestionPage.find({ batchId, fileIndex: 0, pageNumber: 1 });
             expect(pages.length).toBe(1);
             expect(pages[0].storageKey).toBe(`batches/${batchId}/derived/${fileId}/1/page.png`);
         });
@@ -343,6 +346,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -369,6 +373,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -377,7 +382,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
 
             expect(result.success).toBe(false);
 
-            const pageInDb = await IngestionPage.findOne({ batchId, fileId, pageNumber: 1 });
+            const pageInDb = await IngestionPage.findOne({ batchId, fileIndex: 0, pageNumber: 1 });
             expect(pageInDb).not.toBeNull();
             expect(pageInDb!.status).toBe(PageProcessingStatus.FAILED);
             // On failure, storageKey retains the original input reference rather than a fake derived asset
@@ -411,6 +416,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf'
@@ -453,6 +459,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 2,
                 fileType: 'pdf'
@@ -488,6 +495,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -513,6 +521,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 3,
                 fileType: 'pdf'
@@ -523,7 +532,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result.failureReason).not.toContain('at PdfjsParser');
             expect(result.failureReason).not.toContain('/internal/pdfjs');
 
-            const pageInDb = await IngestionPage.findOne({ batchId, fileId, pageNumber: 3 });
+            const pageInDb = await IngestionPage.findOne({ batchId, fileIndex: 0, pageNumber: 3 });
             expect(pageInDb).not.toBeNull();
             expect(pageInDb!.status).toBe(PageProcessingStatus.FAILED);
             expect(pageInDb!.failureReason).toBe('Failed to parse PDF stream on page 3');
@@ -544,6 +553,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 4,
                 fileType: 'pdf'
@@ -553,7 +563,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result.failureReason).toBe('Invalid font descriptor on page 4');
             expect(result.failureReason).not.toContain('at FontTable');
 
-            const pageInDb = await IngestionPage.findOne({ batchId, fileId, pageNumber: 4 });
+            const pageInDb = await IngestionPage.findOne({ batchId, fileIndex: 0, pageNumber: 4 });
             expect(pageInDb!.status).toBe(PageProcessingStatus.FAILED);
             expect(pageInDb!.failureReason).toBe('Invalid font descriptor on page 4');
         });
@@ -573,6 +583,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 5,
                 fileType: 'pdf',
@@ -582,7 +593,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result.success).toBe(false);
             expect(result.failureReason).toContain('Page 5 processing timed out after 50ms');
 
-            const pageInDb = await IngestionPage.findOne({ batchId, fileId, pageNumber: 5 });
+            const pageInDb = await IngestionPage.findOne({ batchId, fileIndex: 0, pageNumber: 5 });
             expect(pageInDb!.status).toBe(PageProcessingStatus.FAILED);
             expect(pageInDb!.failureReason).toContain('timed out after 50ms');
         });
@@ -595,6 +606,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 job: jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey: `batches/${batchId}/derived/${fileId}/1/page.png`,
                 pageNumber: 1,
                 status: PageProcessingStatus.PROCESSED,
@@ -611,6 +623,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId,
                 jobId,
                 fileId,
+                fileIndex: 0,
                 storageKey,
                 pageNumber: 1,
                 fileType: 'pdf'
@@ -620,7 +633,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result.isDuplicateOrAlreadyProcessed).toBe(true);
             expect(renderer.renderPage).not.toHaveBeenCalled();
 
-            const pagesInDb = await IngestionPage.find({ batchId, fileId, pageNumber: 1 });
+            const pagesInDb = await IngestionPage.find({ batchId, fileIndex: 0, pageNumber: 1 });
             expect(pagesInDb.length).toBe(1);
         });
     });
@@ -637,6 +650,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId: testBatchId,
                 jobId,
                 fileId: testFileId,
+                fileIndex: 0,
                 storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -650,7 +664,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result.pageRecord!.height).toBe(1650);
 
             // Verify thumbnail exists in DB
-            const pageInDb = await IngestionPage.findOne({ batchId: testBatchId, fileId: testFileId, pageNumber: 1 });
+            const pageInDb = await IngestionPage.findOne({ batchId: testBatchId, fileIndex: 0, pageNumber: 1 });
             expect(pageInDb!.thumbnailKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/thumb.jpg`);
             expect(pageInDb!.width).toBe(1275);
             expect(pageInDb!.height).toBe(1650);
@@ -674,6 +688,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId: testBatchId,
                 jobId,
                 fileId: testFileId,
+                fileIndex: 0,
                 storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -686,7 +701,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(result.pageRecord!.thumbnailKey).toBeNull();
             expect(result.pageRecord!.storageKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/page.png`);
 
-            const pageInDb = await IngestionPage.findOne({ batchId: testBatchId, fileId: testFileId, pageNumber: 1 });
+            const pageInDb = await IngestionPage.findOne({ batchId: testBatchId, fileIndex: 0, pageNumber: 1 });
             expect(pageInDb!.status).toBe(PageProcessingStatus.PROCESSED);
             expect(pageInDb!.thumbnailKey).toBeNull();
         });
@@ -708,6 +723,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId: testBatchId,
                 jobId,
                 fileId: testFileId,
+                fileIndex: 0,
                 storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
                 pageNumber: 1,
                 fileType: 'pdf',
@@ -724,6 +740,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId: testBatchId,
                 jobId,
                 fileId: testFileId,
+                fileIndex: 0,
                 storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
                 pageNumber: 1,
                 fileType: 'pdf'
@@ -733,7 +750,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(retryResult.isDuplicateOrAlreadyProcessed).toBe(true);
 
             // Thumbnail must now be reconciled in DB!
-            const reconciledPage = await IngestionPage.findOne({ batchId: testBatchId, fileId: testFileId, pageNumber: 1 });
+            const reconciledPage = await IngestionPage.findOne({ batchId: testBatchId, fileIndex: 0, pageNumber: 1 });
             expect(reconciledPage!.status).toBe(PageProcessingStatus.PROCESSED);
             expect(reconciledPage!.thumbnailKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/thumb.jpg`);
         });
@@ -746,6 +763,7 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                 batchId: testBatchId,
                 job: jobId,
                 fileId: testFileId,
+                fileIndex: 0,
                 storageKey: `batches/${testBatchId}/derived/${testFileId}/1/page.png`,
                 pageNumber: 1,
                 status: PageProcessingStatus.PROCESSED,

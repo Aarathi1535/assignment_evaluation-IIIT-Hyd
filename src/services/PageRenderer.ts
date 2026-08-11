@@ -1,5 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { createCanvas } from '@napi-rs/canvas';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 /**
  * Canonical Page Image Format supported for normalized ingestion assets.
@@ -269,3 +269,138 @@ export class DefaultPdfRenderer implements IPageRenderer {
         }
     }
 }
+
+/**
+ * Canonical Image renderer and normalizer implementation using @napi-rs/canvas.
+ * Decodes standalone images (JPEG, PNG, WebP, TIFF, GIF), enforces maxLongEdge
+ * and maxPixels safety limits, normalizes into the canonical RenderedPageImage contract
+ * with lossless PNG output by default (or configured format), and guarantees single-page semantics (pageNumber = 1).
+ */
+export class DefaultImageRenderer implements IPageRenderer {
+    private config: PageRenderingConfig;
+
+    constructor(config: Partial<PageRenderingConfig> = {}) {
+        this.config = { ...DEFAULT_PAGE_RENDERING_CONFIG, ...config };
+    }
+
+    /**
+     * Authoritative page count discovery for standalone images is always exactly 1.
+     */
+    async getPageCount(_fileBuffer?: Buffer): Promise<number> {
+        void _fileBuffer;
+        return 1;
+    }
+
+    /**
+     * Normalizes a standalone image into a canonical RenderedPageImage with enforced safety limits.
+     */
+    async renderPage(input: RenderPageInput): Promise<RenderPageResult> {
+        const { pageNumber, fileBuffer, fileType, config } = input;
+
+        if (pageNumber !== 1) {
+            return {
+                success: false,
+                pageNumber,
+                failureReason: `Requested page ${pageNumber} is out of bounds for standalone image (standalone image has exactly 1 page)`
+            };
+        }
+
+        if (!fileBuffer || fileBuffer.length === 0) {
+            return {
+                success: false,
+                pageNumber,
+                failureReason: 'Cannot render image: image buffer is missing or empty'
+            };
+        }
+
+        try {
+            const img = await loadImage(fileBuffer);
+            const naturalWidth = img.width;
+            const naturalHeight = img.height;
+
+            if (naturalWidth <= 0 || naturalHeight <= 0) {
+                return {
+                    success: false,
+                    pageNumber,
+                    failureReason: 'Cannot render image: invalid image dimensions'
+                };
+            }
+
+            const activeConfig: PageRenderingConfig = {
+                targetDpi: config?.targetDpi ?? this.config.targetDpi,
+                maxLongEdge: config?.maxLongEdge ?? this.config.maxLongEdge,
+                maxPixels: config?.maxPixels ?? this.config.maxPixels,
+                outputFormat: config?.outputFormat ?? this.config.outputFormat
+            };
+
+            // Enforce maxLongEdge and maxPixels safety constraints preserving aspect ratio
+            const maxDim = Math.max(naturalWidth, naturalHeight);
+            const longEdgeScale = maxDim > activeConfig.maxLongEdge ? activeConfig.maxLongEdge / maxDim : 1.0;
+            const totalPixels = naturalWidth * naturalHeight;
+            const maxPixelsScale =
+                totalPixels > activeConfig.maxPixels ? Math.sqrt(activeConfig.maxPixels / totalPixels) : 1.0;
+            const scale = Math.min(1.0, longEdgeScale, maxPixelsScale);
+
+            const width = Math.max(1, Math.round(naturalWidth * scale));
+            const height = Math.max(1, Math.round(naturalHeight * scale));
+            const effectiveDpi = activeConfig.targetDpi;
+
+            const canvas = createCanvas(width, height);
+            const ctx = canvas.getContext('2d');
+
+            // White matte background if converting to JPEG
+            if (activeConfig.outputFormat === 'jpeg') {
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, width, height);
+            }
+
+            ctx.drawImage(img, 0, 0, width, height);
+
+            const format = activeConfig.outputFormat;
+            let imageBuffer: Buffer;
+            if (format === 'jpeg') {
+                imageBuffer = canvas.toBuffer('image/jpeg');
+            } else if (format === 'webp') {
+                imageBuffer = canvas.toBuffer('image/webp');
+            } else {
+                imageBuffer = canvas.toBuffer('image/png');
+            }
+
+            const renderedImage: RenderedPageImage = {
+                buffer: imageBuffer,
+                format,
+                width,
+                height,
+                dpi: effectiveDpi,
+                pageNumber: 1,
+                sizeBytes: imageBuffer.length
+            };
+
+            return {
+                success: true,
+                pageNumber: 1,
+                image: renderedImage,
+                metadata: {
+                    fileType: fileType || 'image',
+                    pageNumber: 1,
+                    totalPages: 1,
+                    width,
+                    height,
+                    dpi: effectiveDpi,
+                    format,
+                    renderedAt: new Date().toISOString(),
+                    sizeBytes: imageBuffer.length
+                }
+            };
+        } catch (error) {
+            const rawMessage = error instanceof Error ? error.message : 'Image rendering failed';
+            return {
+                success: false,
+                pageNumber: 1,
+                failureReason: rawMessage
+            };
+        }
+    }
+}
+
+export const defaultImageRenderer = new DefaultImageRenderer();

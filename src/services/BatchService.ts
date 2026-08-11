@@ -136,7 +136,8 @@ class BatchService {
 
                 // Generate server-side identifiers
                 const fileId = crypto.randomUUID();
-                const sequenceNumber = batchFiles.length + 1;
+                const fileIndex = batchFiles.length;
+                const sequenceNumber = fileIndex + 1;
                 const originalFilename = sanitizeDisplayFilename(file.name);
 
                 // Write through immutable storage layer and generate HMAC seal
@@ -153,6 +154,7 @@ class BatchService {
 
                 batchFiles.push({
                     fileId,
+                    fileIndex,
                     originalFilename,
                     fileType: detected.category,
                     mimeType: detected.mimeType,
@@ -213,7 +215,7 @@ class BatchService {
             return { batch: newBatch, job: newJob };
         } catch (error) {
             // Clean up any files stored on disk for this batch
-            await ImmutableStorageService.cleanupBatch(batchId).catch(() => {});
+            await ImmutableStorageService.cleanupBatch(batchId).catch(() => { });
 
             // Audit log failure
             if (context?.actingUserId) {

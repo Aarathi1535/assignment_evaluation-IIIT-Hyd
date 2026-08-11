@@ -79,6 +79,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             files: [
                 {
                     fileId,
+                    fileIndex: 0,
                     originalFilename: 'exam_paper.pdf',
                     fileType: 'pdf',
                     mimeType: 'application/pdf',
@@ -392,6 +393,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
                 batchId,
                 job: job._id,
                 fileId,
+                fileIndex: 0,
                 storageKey: batch.files[0].storageKey,
                 pageNumber: 1,
                 status: PageProcessingStatus.PROCESSED,

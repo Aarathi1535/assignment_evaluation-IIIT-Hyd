@@ -3,7 +3,7 @@ import path from 'path';
 import mongoose from 'mongoose';
 import IngestionPage, { PageProcessingStatus, IIngestionPage } from '../models/IngestionPage';
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
-import { IPageRenderer, DefaultPdfRenderer, RenderPageResult } from './PageRenderer';
+import { IPageRenderer, DefaultPdfRenderer, DefaultImageRenderer, RenderPageResult } from './PageRenderer';
 import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
 import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
 
@@ -11,6 +11,7 @@ export interface ProcessPageInput {
     batchId: string;
     jobId: mongoose.Types.ObjectId;
     fileId: string;
+    fileIndex: number;
     storageKey: string;
     pageNumber: number;
     fileType: string;
@@ -32,6 +33,7 @@ export interface PageProcessResult {
 
 export class PageIngestionService {
     private renderer: IPageRenderer;
+    private imageRenderer: IPageRenderer;
     private derivedStorage: IDerivedStorageService;
     private thumbnailGenerator: IThumbnailGenerator;
     private defaultPageTimeoutMs = 5000;
@@ -39,9 +41,11 @@ export class PageIngestionService {
     constructor(
         renderer?: IPageRenderer,
         derivedStorage?: IDerivedStorageService,
-        thumbnailGenerator?: IThumbnailGenerator
+        thumbnailGenerator?: IThumbnailGenerator,
+        imageRenderer?: IPageRenderer
     ) {
         this.renderer = renderer || new DefaultPdfRenderer();
+        this.imageRenderer = imageRenderer || new DefaultImageRenderer();
         this.derivedStorage = derivedStorage || defaultDerivedStorageService;
         this.thumbnailGenerator = thumbnailGenerator || defaultThumbnailGenerator;
     }
@@ -52,6 +56,14 @@ export class PageIngestionService {
 
     getRenderer(): IPageRenderer {
         return this.renderer;
+    }
+
+    setImageRenderer(imageRenderer: IPageRenderer): void {
+        this.imageRenderer = imageRenderer;
+    }
+
+    getImageRenderer(): IPageRenderer {
+        return this.imageRenderer;
     }
 
     setDerivedStorage(derivedStorage: IDerivedStorageService): void {
@@ -79,6 +91,7 @@ export class PageIngestionService {
             batchId,
             jobId,
             fileId,
+            fileIndex,
             storageKey: originalStorageKey,
             pageNumber,
             fileType,
@@ -89,14 +102,22 @@ export class PageIngestionService {
             thumbnailGenerator
         } = input;
 
-        const activeRenderer = renderer || this.renderer;
+        const isImage =
+            fileType === 'image' ||
+            fileType === 'jpg' ||
+            fileType === 'jpeg' ||
+            fileType === 'png' ||
+            fileType === 'webp' ||
+            fileType?.startsWith('image/');
+        const defaultRenderer = isImage ? this.imageRenderer : this.renderer;
+        const activeRenderer = renderer || defaultRenderer;
         const activeDerivedStorage = derivedStorage || this.derivedStorage;
         const activeThumbnailGenerator = thumbnailGenerator || this.thumbnailGenerator;
 
         // Idempotency check: If this exact page was already successfully processed, reuse it
         const existingPage = await IngestionPage.findOne({
             batchId,
-            fileId,
+            fileIndex,
             pageNumber
         });
 
@@ -183,18 +204,19 @@ export class PageIngestionService {
                 const sanitizedReason = sanitizeFailureReason(rawReason);
 
                 const pageRecord = await IngestionPage.findOneAndUpdate(
-                    { batchId, fileId, pageNumber },
+                    { batchId, fileIndex, pageNumber },
                     {
                         batchId,
                         job: jobId,
                         fileId,
+                        fileIndex,
                         storageKey: originalStorageKey,
                         thumbnailKey: null,
                         pageNumber,
                         status: PageProcessingStatus.FAILED,
                         processedAt: new Date(),
                         failureReason: sanitizedReason,
-                        metadata: { fileType, pageNumber, ...renderResult.metadata }
+                        metadata: { fileType, fileIndex, pageNumber, ...renderResult.metadata }
                     },
                     { upsert: true, returnDocument: 'after', runValidators: true }
                 );
@@ -249,11 +271,12 @@ export class PageIngestionService {
 
             // Persist or update page record as PROCESSED pointing to derived storageKey and thumbnailKey
             const pageRecord = await IngestionPage.findOneAndUpdate(
-                { batchId, fileId, pageNumber },
+                { batchId, fileIndex, pageNumber },
                 {
                     batchId,
                     job: jobId,
                     fileId,
+                    fileIndex,
                     storageKey: pageStorageKey,
                     thumbnailKey: thumbnailKey,
                     width: pageWidth,
@@ -264,6 +287,7 @@ export class PageIngestionService {
                     failureReason: undefined,
                     metadata: {
                         fileType,
+                        fileIndex,
                         pageNumber,
                         originalStorageKey,
                         derivedStorageKey: pageStorageKey,
@@ -290,18 +314,19 @@ export class PageIngestionService {
             const sanitizedReason = sanitizeFailureReason(rawMessage);
 
             const pageRecord = await IngestionPage.findOneAndUpdate(
-                { batchId, fileId, pageNumber },
+                { batchId, fileIndex, pageNumber },
                 {
                     batchId,
                     job: jobId,
                     fileId,
+                    fileIndex,
                     storageKey: originalStorageKey,
                     thumbnailKey: null,
                     pageNumber,
                     status: PageProcessingStatus.FAILED,
                     processedAt: new Date(),
                     failureReason: sanitizedReason,
-                    metadata: { fileType, pageNumber }
+                    metadata: { fileType, fileIndex, pageNumber }
                 },
                 { upsert: true, returnDocument: 'after', runValidators: true }
             );
