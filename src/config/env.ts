@@ -20,11 +20,4 @@ export function validateEnv() {
     return parsed.data;
 }
 
-export const env = new Proxy({} as z.infer<typeof envSchema>, {
-    get: (_target, prop: string) => {
-        const validated = validateEnv();
-        return validated[prop as keyof typeof validated];
-    }
-});
-
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema>;
