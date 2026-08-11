@@ -8,6 +8,7 @@ import BatchRepository from '../repositories/BatchRepository';
 import PageIngestionService from '../services/PageIngestionService';
 import defaultIngestionWorker, { IngestionWorker } from '../services/IngestionWorker';
 import { initBackgroundWorker } from '../lib/workerInit';
+import { register } from '../instrumentation';
 
 let mockSessionUser: any = null;
 
@@ -27,6 +28,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
     const professorId = new mongoose.Types.ObjectId().toString();
 
     beforeEach(async () => {
+        (process.env as any).NODE_ENV = 'test';
         ingestPOST = (await import('../app/api/ingest/route')).POST;
         mockSessionUser = {
             id: professorId,
@@ -37,6 +39,9 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
     });
 
     afterEach(async () => {
+        defaultIngestionWorker.stop();
+        (global as any).isIngestionWorkerInitialized = false;
+        (process.env as any).NODE_ENV = 'test';
         vi.restoreAllMocks();
     });
 
@@ -414,6 +419,8 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
 
     describe('8. Server Lifecycle & Worker Startup Integration', () => {
         it('should do nothing when NODE_ENV is test', () => {
+            (process.env as any).NODE_ENV = 'test';
+            (global as any).isIngestionWorkerInitialized = false;
             const startSpy = vi.spyOn(defaultIngestionWorker, 'start');
             initBackgroundWorker();
             expect(startSpy).not.toHaveBeenCalled();
@@ -439,6 +446,121 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             } finally {
                 (process.env as any).NODE_ENV = originalEnv;
                 (global as any).isIngestionWorkerInitialized = originalInit;
+            }
+        });
+
+        it('should not start worker if connectDB fails during startup', async () => {
+            const originalEnv = process.env.NODE_ENV;
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            const originalInit = (global as any).isIngestionWorkerInitialized;
+
+            (global as any).isIngestionWorkerInitialized = false;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            (process.env as any).NODE_ENV = 'production';
+
+            const dbModule = await import('../lib/db');
+            const connectSpy = vi.spyOn(dbModule, 'connectDB').mockRejectedValueOnce(new Error('DB Connection Failed'));
+            const startSpy = vi.spyOn(defaultIngestionWorker, 'start');
+
+            try {
+                await expect(register()).rejects.toThrow('DB Connection Failed');
+                expect(connectSpy).toHaveBeenCalled();
+                expect(startSpy).not.toHaveBeenCalled();
+                expect((global as any).isIngestionWorkerInitialized).toBeFalsy();
+            } finally {
+                (global as any).isIngestionWorkerInitialized = originalInit;
+                (process.env as any).NODE_ENV = originalEnv;
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
+            }
+        });
+
+        it('should connect to database before starting worker during server startup', async () => {
+            const originalEnv = process.env.NODE_ENV;
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            const originalInit = (global as any).isIngestionWorkerInitialized;
+
+            (global as any).isIngestionWorkerInitialized = false;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            (process.env as any).NODE_ENV = 'production';
+
+            const callOrder: string[] = [];
+            const dbModule = await import('../lib/db');
+            const connectSpy = vi.spyOn(dbModule, 'connectDB').mockImplementation(async () => {
+                callOrder.push('connectDB');
+                return mongoose;
+            });
+            const startSpy = vi.spyOn(defaultIngestionWorker, 'start').mockImplementation(() => {
+                callOrder.push('workerStart');
+            });
+
+            try {
+                await register();
+                expect(connectSpy).toHaveBeenCalled();
+                expect(startSpy).toHaveBeenCalled();
+                expect(callOrder).toEqual(['connectDB', 'workerStart']);
+            } finally {
+                defaultIngestionWorker.stop();
+                (global as any).isIngestionWorkerInitialized = originalInit;
+                (process.env as any).NODE_ENV = originalEnv;
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
+            }
+        });
+
+        it('should execute end-to-end background ingestion when started via instrumentation register()', async () => {
+            const totalPages = 2;
+            const { batchId } = await createTestBatchAndJob(totalPages);
+
+            const originalEnv = process.env.NODE_ENV;
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            const originalInit = (global as any).isIngestionWorkerInitialized;
+
+            (global as any).isIngestionWorkerInitialized = false;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            (process.env as any).NODE_ENV = 'production';
+
+            try {
+                // Invoke actual register() without mocking ingestionWorker.start() or manually calling processNextJob()
+                await register();
+
+                expect((global as any).isIngestionWorkerInitialized).toBe(true);
+
+                // Poll the persisted ingestion job until it reaches a terminal state
+                const startTime = Date.now();
+                const timeoutMs = 15000;
+                let finalJob: any = null;
+
+                while (Date.now() - startTime < timeoutMs) {
+                    const jobInDb = await IngestionJob.findOne({ batchId });
+                    if (jobInDb && (jobInDb.status === IngestionStatus.DONE || jobInDb.status === IngestionStatus.FAILED)) {
+                        finalJob = jobInDb;
+                        break;
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 200));
+                }
+
+                // Assert job transitioned through and reached done state
+                expect(finalJob).not.toBeNull();
+                expect(finalJob.status).toBe(IngestionStatus.DONE);
+                expect(finalJob.attempts).toBeGreaterThanOrEqual(1);
+                expect(finalJob.processedPages).toBe(totalPages);
+                expect(finalJob.failedPages).toBe(0);
+                expect(finalJob.completedAt).toBeDefined();
+
+                // Assert batch reached done state
+                const batchInDb = await Batch.findOne({ batchId });
+                expect(batchInDb).not.toBeNull();
+                expect(batchInDb!.status).toBe(BatchStatus.DONE);
+
+                // Assert corresponding pages are persisted
+                const pages = await IngestionPage.find({ batchId });
+                expect(pages.length).toBe(totalPages);
+                expect(pages.every((p) => p.status === PageProcessingStatus.PROCESSED)).toBe(true);
+            } finally {
+                // Cleanly stop worker and timers so it does not leak into other tests
+                defaultIngestionWorker.stop();
+                (global as any).isIngestionWorkerInitialized = originalInit;
+                (process.env as any).NODE_ENV = originalEnv;
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
             }
         });
     });
