@@ -18,6 +18,8 @@ export interface StoredDerivedPageResult {
 export interface IDerivedStorageService {
     storeDerivedPage(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult>;
     getDerivedPageKey(batchId: string, fileId: string, pageNumber: number, format?: string): string;
+    storeDerivedThumbnail(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult>;
+    getDerivedThumbnailKey(batchId: string, fileId: string, pageNumber: number, format?: string): string;
     readDerivedPage?(storageKey: string): Promise<Buffer>;
 }
 
@@ -35,7 +37,15 @@ export class DerivedStorageService implements IDerivedStorageService {
     }
 
     /**
-     * Resolves the full disk path for a derived page key.
+     * Deterministic storage key for a derived thumbnail:
+     * batches/{batchId}/derived/{fileId}/{pageNumber}/thumb.{format}
+     */
+    getDerivedThumbnailKey(batchId: string, fileId: string, pageNumber: number, format = 'jpg'): string {
+        return `batches/${batchId}/derived/${fileId}/${pageNumber}/thumb.${format}`;
+    }
+
+    /**
+     * Resolves the full disk path for a derived asset key.
      */
     getDerivedDiskPath(storageKey: string): string {
         const storageRoot = this.getStorageRoot();
@@ -64,7 +74,27 @@ export class DerivedStorageService implements IDerivedStorageService {
     }
 
     /**
-     * Reads a stored derived page image from disk.
+     * Stores a derived thumbnail mutably on disk with deterministic keying:
+     * batches/{batchId}/derived/{fileId}/{pageNumber}/thumb.{format}
+     */
+    async storeDerivedThumbnail(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult> {
+        const { batchId, fileId, pageNumber, buffer, format = 'jpg' } = input;
+        const storageKey = this.getDerivedThumbnailKey(batchId, fileId, pageNumber, format);
+        const filePath = this.getDerivedDiskPath(storageKey);
+        const dir = path.dirname(filePath);
+
+        await fs.promises.mkdir(dir, { recursive: true });
+        await fs.promises.writeFile(filePath, buffer);
+
+        return {
+            storageKey,
+            storagePath: filePath,
+            size: buffer.length
+        };
+    }
+
+    /**
+     * Reads a stored derived page image or thumbnail from disk.
      */
     async readDerivedPage(storageKey: string): Promise<Buffer> {
         const filePath = this.getDerivedDiskPath(storageKey);

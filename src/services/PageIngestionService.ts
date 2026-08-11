@@ -5,6 +5,7 @@ import IngestionPage, { PageProcessingStatus, IIngestionPage } from '../models/I
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
 import { IPageRenderer, DefaultPdfRenderer, RenderPageResult } from './PageRenderer';
 import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
+import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -17,6 +18,7 @@ export interface ProcessPageInput {
     timeoutMs?: number;
     renderer?: IPageRenderer;
     derivedStorage?: IDerivedStorageService;
+    thumbnailGenerator?: IThumbnailGenerator;
 }
 
 export interface PageProcessResult {
@@ -31,11 +33,17 @@ export interface PageProcessResult {
 export class PageIngestionService {
     private renderer: IPageRenderer;
     private derivedStorage: IDerivedStorageService;
+    private thumbnailGenerator: IThumbnailGenerator;
     private defaultPageTimeoutMs = 5000;
 
-    constructor(renderer?: IPageRenderer, derivedStorage?: IDerivedStorageService) {
+    constructor(
+        renderer?: IPageRenderer,
+        derivedStorage?: IDerivedStorageService,
+        thumbnailGenerator?: IThumbnailGenerator
+    ) {
         this.renderer = renderer || new DefaultPdfRenderer();
         this.derivedStorage = derivedStorage || defaultDerivedStorageService;
+        this.thumbnailGenerator = thumbnailGenerator || defaultThumbnailGenerator;
     }
 
     setRenderer(renderer: IPageRenderer): void {
@@ -54,9 +62,17 @@ export class PageIngestionService {
         return this.derivedStorage;
     }
 
+    setThumbnailGenerator(thumbnailGenerator: IThumbnailGenerator): void {
+        this.thumbnailGenerator = thumbnailGenerator;
+    }
+
+    getThumbnailGenerator(): IThumbnailGenerator {
+        return this.thumbnailGenerator;
+    }
+
     /**
      * Processes a single page of an uploaded original file with timeout, error sanitization,
-     * normalized derived-asset persistence, and idempotent reconciliation.
+     * normalized derived-asset persistence, thumbnail generation, and idempotent reconciliation.
      */
     async processPage(input: ProcessPageInput): Promise<PageProcessResult> {
         const {
@@ -69,8 +85,13 @@ export class PageIngestionService {
             fileBuffer,
             timeoutMs = this.defaultPageTimeoutMs,
             renderer,
-            derivedStorage
+            derivedStorage,
+            thumbnailGenerator
         } = input;
+
+        const activeRenderer = renderer || this.renderer;
+        const activeDerivedStorage = derivedStorage || this.derivedStorage;
+        const activeThumbnailGenerator = thumbnailGenerator || this.thumbnailGenerator;
 
         // Idempotency check: If this exact page was already successfully processed, reuse it
         const existingPage = await IngestionPage.findOne({
@@ -80,6 +101,42 @@ export class PageIngestionService {
         });
 
         if (existingPage && existingPage.status === PageProcessingStatus.PROCESSED) {
+            // Reconcile missing thumbnail on retry if page is already PROCESSED but thumbnailKey is missing
+            if (!existingPage.thumbnailKey && activeDerivedStorage.readDerivedPage) {
+                try {
+                    let pageImageBuffer = fileBuffer;
+                    if (!pageImageBuffer && existingPage.storageKey) {
+                        try {
+                            pageImageBuffer = await activeDerivedStorage.readDerivedPage(existingPage.storageKey);
+                        } catch {
+                            // Fallback if derived file missing
+                        }
+                    }
+
+                    if (pageImageBuffer) {
+                        const thumb = await activeThumbnailGenerator.generateThumbnail(
+                            pageImageBuffer,
+                            existingPage.width,
+                            existingPage.height
+                        );
+                        const storedThumb = await activeDerivedStorage.storeDerivedThumbnail({
+                            batchId,
+                            fileId,
+                            pageNumber,
+                            buffer: thumb.buffer,
+                            format: 'jpg'
+                        });
+                        existingPage.thumbnailKey = storedThumb.storageKey;
+                        if (existingPage.metadata) {
+                            existingPage.metadata.thumbnailKey = storedThumb.storageKey;
+                        }
+                        await existingPage.save();
+                    }
+                } catch {
+                    // Thumbnail reconciliation failure does not affect PROCESSED page status
+                }
+            }
+
             return {
                 success: true,
                 pageNumber,
@@ -88,9 +145,6 @@ export class PageIngestionService {
                 pageRecord: existingPage
             };
         }
-
-        const activeRenderer = renderer || this.renderer;
-        const activeDerivedStorage = derivedStorage || this.derivedStorage;
 
         // Resolve file buffer from disk storage if not directly provided in input
         let bufferToProcess = fileBuffer;
@@ -135,6 +189,7 @@ export class PageIngestionService {
                         job: jobId,
                         fileId,
                         storageKey: originalStorageKey,
+                        thumbnailKey: null,
                         pageNumber,
                         status: PageProcessingStatus.FAILED,
                         processedAt: new Date(),
@@ -155,6 +210,9 @@ export class PageIngestionService {
 
             // If image is present on render result, store as mutable derived asset
             let pageStorageKey = originalStorageKey;
+            const pageWidth = renderResult.image?.width;
+            const pageHeight = renderResult.image?.height;
+
             if (renderResult.image && renderResult.image.buffer) {
                 const storedDerived = await activeDerivedStorage.storeDerivedPage({
                     batchId,
@@ -166,7 +224,30 @@ export class PageIngestionService {
                 pageStorageKey = storedDerived.storageKey;
             }
 
-            // Persist or update page record as PROCESSED pointing to derived storageKey
+            // AE-047: Generate and store deterministic thumbnail (Failure independent)
+            let thumbnailKey: string | null = null;
+            if (renderResult.image && renderResult.image.buffer) {
+                try {
+                    const thumb = await activeThumbnailGenerator.generateThumbnail(
+                        renderResult.image.buffer,
+                        pageWidth,
+                        pageHeight
+                    );
+                    const storedThumb = await activeDerivedStorage.storeDerivedThumbnail({
+                        batchId,
+                        fileId,
+                        pageNumber,
+                        buffer: thumb.buffer,
+                        format: 'jpg'
+                    });
+                    thumbnailKey = storedThumb.storageKey;
+                } catch {
+                    // Thumbnail failure independence: page image succeeds and page remains PROCESSED
+                    thumbnailKey = null;
+                }
+            }
+
+            // Persist or update page record as PROCESSED pointing to derived storageKey and thumbnailKey
             const pageRecord = await IngestionPage.findOneAndUpdate(
                 { batchId, fileId, pageNumber },
                 {
@@ -174,6 +255,9 @@ export class PageIngestionService {
                     job: jobId,
                     fileId,
                     storageKey: pageStorageKey,
+                    thumbnailKey: thumbnailKey,
+                    width: pageWidth,
+                    height: pageHeight,
                     pageNumber,
                     status: PageProcessingStatus.PROCESSED,
                     processedAt: new Date(),
@@ -183,8 +267,9 @@ export class PageIngestionService {
                         pageNumber,
                         originalStorageKey,
                         derivedStorageKey: pageStorageKey,
-                        width: renderResult.image?.width,
-                        height: renderResult.image?.height,
+                        thumbnailKey,
+                        width: pageWidth,
+                        height: pageHeight,
                         dpi: renderResult.image?.dpi,
                         format: renderResult.image?.format,
                         sizeBytes: renderResult.image?.sizeBytes,
@@ -211,6 +296,7 @@ export class PageIngestionService {
                     job: jobId,
                     fileId,
                     storageKey: originalStorageKey,
+                    thumbnailKey: null,
                     pageNumber,
                     status: PageProcessingStatus.FAILED,
                     processedAt: new Date(),

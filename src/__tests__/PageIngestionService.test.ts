@@ -327,7 +327,13 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
                     storagePath: '/mock/path/page.png',
                     size: 1024
                 }),
-                getDerivedPageKey: vi.fn().mockReturnValue(`batches/${batchId}/derived/${fileId}/1/page.png`)
+                getDerivedPageKey: vi.fn().mockReturnValue(`batches/${batchId}/derived/${fileId}/1/page.png`),
+                storeDerivedThumbnail: vi.fn().mockResolvedValue({
+                    storageKey: `batches/${batchId}/derived/${fileId}/1/thumb.jpg`,
+                    storagePath: '/mock/path/thumb.jpg',
+                    size: 512
+                }),
+                getDerivedThumbnailKey: vi.fn().mockReturnValue(`batches/${batchId}/derived/${fileId}/1/thumb.jpg`)
             };
 
             const service = new PageIngestionService(undefined, mockStorage);
@@ -618,4 +624,136 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             expect(pagesInDb.length).toBe(1);
         });
     });
+
+    describe('8. Thumbnail Generation & Failure Independence (AE-047)', () => {
+        it('should generate and persist thumbnailKey, width, and height on successful page processing', async () => {
+            const pdfBuffer = createCustomPdfBuffer(612, 792, 1);
+            const service = new PageIngestionService();
+
+            const testBatchId = crypto.randomUUID();
+            const testFileId = crypto.randomUUID();
+
+            const result = await service.processPage({
+                batchId: testBatchId,
+                jobId,
+                fileId: testFileId,
+                storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
+                pageNumber: 1,
+                fileType: 'pdf',
+                fileBuffer: pdfBuffer
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.pageRecord).toBeDefined();
+            expect(result.pageRecord!.thumbnailKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/thumb.jpg`);
+            expect(result.pageRecord!.width).toBe(1275);
+            expect(result.pageRecord!.height).toBe(1650);
+
+            // Verify thumbnail exists in DB
+            const pageInDb = await IngestionPage.findOne({ batchId: testBatchId, fileId: testFileId, pageNumber: 1 });
+            expect(pageInDb!.thumbnailKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/thumb.jpg`);
+            expect(pageInDb!.width).toBe(1275);
+            expect(pageInDb!.height).toBe(1650);
+            expect(pageInDb!.status).toBe(PageProcessingStatus.PROCESSED);
+        });
+
+        it('should expose thumbnailKey as null when thumbnail generation fails, leaving page PROCESSED', async () => {
+            const pdfBuffer = createCustomPdfBuffer(612, 792, 1);
+            const service = new PageIngestionService();
+
+            // Mock thumbnail generator to fail
+            const failingThumbGen = {
+                generateThumbnail: vi.fn().mockRejectedValue(new Error('Out of memory in thumbnail worker'))
+            };
+            service.setThumbnailGenerator(failingThumbGen);
+
+            const testBatchId = crypto.randomUUID();
+            const testFileId = crypto.randomUUID();
+
+            const result = await service.processPage({
+                batchId: testBatchId,
+                jobId,
+                fileId: testFileId,
+                storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
+                pageNumber: 1,
+                fileType: 'pdf',
+                fileBuffer: pdfBuffer
+            });
+
+            // Page must remain PROCESSED
+            expect(result.success).toBe(true);
+            expect(result.pageRecord!.status).toBe(PageProcessingStatus.PROCESSED);
+            expect(result.pageRecord!.thumbnailKey).toBeNull();
+            expect(result.pageRecord!.storageKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/page.png`);
+
+            const pageInDb = await IngestionPage.findOne({ batchId: testBatchId, fileId: testFileId, pageNumber: 1 });
+            expect(pageInDb!.status).toBe(PageProcessingStatus.PROCESSED);
+            expect(pageInDb!.thumbnailKey).toBeNull();
+        });
+
+        it('should reconcile missing thumbnail on retry of an already PROCESSED page', async () => {
+            const testBatchId = crypto.randomUUID();
+            const testFileId = crypto.randomUUID();
+            const pdfBuffer = createCustomPdfBuffer(612, 792, 1);
+
+            const service = new PageIngestionService();
+
+            // 1. Process with failing thumbnail generator
+            const failingThumbGen = {
+                generateThumbnail: vi.fn().mockRejectedValue(new Error('Temporary thumbnail failure'))
+            };
+            service.setThumbnailGenerator(failingThumbGen);
+
+            const initialResult = await service.processPage({
+                batchId: testBatchId,
+                jobId,
+                fileId: testFileId,
+                storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
+                pageNumber: 1,
+                fileType: 'pdf',
+                fileBuffer: pdfBuffer
+            });
+
+            expect(initialResult.success).toBe(true);
+            expect(initialResult.pageRecord!.thumbnailKey).toBeNull();
+
+            // 2. Retry with default (working) thumbnail generator
+            service.setThumbnailGenerator(new (await import('../services/ThumbnailGenerator')).DefaultThumbnailGenerator());
+
+            const retryResult = await service.processPage({
+                batchId: testBatchId,
+                jobId,
+                fileId: testFileId,
+                storageKey: `batches/${testBatchId}/${testFileId}.pdf`,
+                pageNumber: 1,
+                fileType: 'pdf'
+            });
+
+            expect(retryResult.success).toBe(true);
+            expect(retryResult.isDuplicateOrAlreadyProcessed).toBe(true);
+
+            // Thumbnail must now be reconciled in DB!
+            const reconciledPage = await IngestionPage.findOne({ batchId: testBatchId, fileId: testFileId, pageNumber: 1 });
+            expect(reconciledPage!.status).toBe(PageProcessingStatus.PROCESSED);
+            expect(reconciledPage!.thumbnailKey).toBe(`batches/${testBatchId}/derived/${testFileId}/1/thumb.jpg`);
+        });
+
+        it('should report thumbnailKey as null for existing legacy Page documents without thumbnail', async () => {
+            const testBatchId = crypto.randomUUID();
+            const testFileId = crypto.randomUUID();
+
+            const legacyPage = await IngestionPage.create({
+                batchId: testBatchId,
+                job: jobId,
+                fileId: testFileId,
+                storageKey: `batches/${testBatchId}/derived/${testFileId}/1/page.png`,
+                pageNumber: 1,
+                status: PageProcessingStatus.PROCESSED,
+                processedAt: new Date()
+            });
+
+            expect(legacyPage.thumbnailKey).toBeNull();
+        });
+    });
 });
+

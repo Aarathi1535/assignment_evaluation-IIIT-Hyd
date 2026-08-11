@@ -40,6 +40,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
     });
 
     afterEach(async () => {
+        defaultIngestionWorker.stop();
         vi.restoreAllMocks();
     });
 
@@ -461,6 +462,7 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
                 initBackgroundWorker();
                 expect(startSpy).toHaveBeenCalledTimes(1);
             } finally {
+                defaultIngestionWorker.stop();
                 (process.env as any).NODE_ENV = originalEnv;
                 (global as any).isIngestionWorkerInitialized = originalInit;
             }

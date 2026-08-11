@@ -11,6 +11,9 @@ export interface IIngestionPage extends Document {
     job: mongoose.Types.ObjectId;
     fileId: string;
     storageKey: string;
+    thumbnailKey?: string | null;
+    width?: number;
+    height?: number;
     pageNumber: number;
     status: PageProcessingStatus;
     processedAt?: Date;
@@ -43,6 +46,19 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
             type: String,
             required: true,
             trim: true
+        },
+        thumbnailKey: {
+            type: String,
+            default: null,
+            trim: true
+        },
+        width: {
+            type: Number,
+            min: 1
+        },
+        height: {
+            type: Number,
+            min: 1
         },
         pageNumber: {
             type: Number,
