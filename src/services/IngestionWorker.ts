@@ -6,6 +6,7 @@ import { IngestionStatus, IIngestionJob } from '../models/IngestionJob';
 import Batch, { BatchStatus } from '../models/Batch';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import defaultPageIngestionService, { PageIngestionService } from './PageIngestionService';
+import defaultStudentRosterMappingService, { StudentRosterMappingService } from './StudentRosterMappingService';
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
 import { writeAuditLog } from '../lib/audit';
 
@@ -26,17 +27,20 @@ export class IngestionWorker {
     private isRunning: boolean = false;
     private intervalHandle?: NodeJS.Timeout;
     private pageIngestionService: PageIngestionService;
+    private studentRosterMappingService: StudentRosterMappingService;
 
     constructor(options?: {
         workerId?: string;
         pollIntervalMs?: number;
         staleTimeoutMs?: number;
         pageIngestionService?: PageIngestionService;
+        studentRosterMappingService?: StudentRosterMappingService;
     }) {
         this.workerId = options?.workerId || `worker-${crypto.randomUUID()}`;
         this.pollIntervalMs = options?.pollIntervalMs || 2000;
         this.staleTimeoutMs = options?.staleTimeoutMs || 60000;
         this.pageIngestionService = options?.pageIngestionService || defaultPageIngestionService;
+        this.studentRosterMappingService = options?.studentRosterMappingService || defaultStudentRosterMappingService;
     }
 
     /**
@@ -214,6 +218,14 @@ export class IngestionWorker {
                 { batchId: job.batchId },
                 { $set: { status: BatchStatus.DONE } }
             );
+
+            if (batch.exam) {
+                try {
+                    await this.studentRosterMappingService.assembleAndMapAnswerScripts(job.batchId);
+                } catch (mappingErr) {
+                    console.error(`[IngestionWorker ${this.workerId}] Error assembling answer scripts for batch ${job.batchId}:`, mappingErr);
+                }
+            }
 
             if (job.uploadedBy) {
                 await writeAuditLog({
