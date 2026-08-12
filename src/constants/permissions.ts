@@ -78,3 +78,18 @@ export const RolePermissions: Record<UserRole, Permission[]> = {
 export function hasPermission(role: UserRole, permission: Permission): boolean {
     return RolePermissions[role]?.includes(permission) || false;
 }
+
+/**
+ * System Worker Principal representation for internal background processing
+ * (e.g. IngestionWorker executing asynchronous StudentRosterMapping).
+ * This principal is restricted to internal background tasks and is never exposed
+ * to public authentication or user session generation.
+ */
+export const SYSTEM_PRINCIPAL_ID = 'SYSTEM_WORKER_PRINCIPAL';
+export const SYSTEM_ROLE = 'SYSTEM';
+
+export const SYSTEM_AUDIT_CONTEXT = {
+    actingUserId: SYSTEM_PRINCIPAL_ID,
+    actingUserRole: SYSTEM_ROLE
+} as const;
+

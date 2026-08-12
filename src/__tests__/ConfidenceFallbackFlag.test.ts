@@ -142,7 +142,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 }
             ]);
 
-            const scripts = await service.assembleAndMapAnswerScripts(batchId);
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             expect(scripts.length).toBe(1);
             const script = scripts[0];
@@ -197,7 +200,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 }
             ]);
 
-            const scripts = await service.assembleAndMapAnswerScripts(batchId);
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             expect(scripts.length).toBe(1);
             const script = scripts[0];
@@ -250,7 +256,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 }
             ]);
 
-            const scripts = await service.assembleAndMapAnswerScripts(batchId);
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             expect(scripts.length).toBe(1);
             const script = scripts[0];
@@ -304,7 +313,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 }
             ]);
 
-            const scripts = await service.assembleAndMapAnswerScripts(batchId);
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             expect(scripts.length).toBe(1);
             const script = scripts[0];
@@ -383,7 +395,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 }
             ]);
 
-            const scripts = await service.assembleAndMapAnswerScripts(duplicateBatchId);
+            const scripts = await service.assembleAndMapAnswerScripts(duplicateBatchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             expect(scripts.length).toBe(1);
             const duplicateScript = scripts[0];
@@ -429,7 +444,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 { batchId, job: defaultJobId, fileId: 'f2', fileIndex: 2, pageNumber: 1, storageKey: `batches/${batchId}/pages/2_1.png`, isCoverPage: true, decodeOutcome: 'found', candidateStudentId: 'UNKNOWN-ID', status: PageProcessingStatus.PROCESSED }
             ]);
 
-            const scripts = await service.assembleAndMapAnswerScripts(batchId);
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             expect(scripts.length).toBe(3);
 
@@ -488,7 +506,10 @@ describe('AE-053 — Confidence + Fallback Flag', () => {
                 isCoverPage: false
             });
 
-            await service.assembleAndMapAnswerScripts(batchId);
+            await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
 
             // IngestionPages must not have been modified, corrupted, or deleted
             const page1After = await IngestionPage.findById(page1._id);

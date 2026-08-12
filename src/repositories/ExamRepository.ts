@@ -1,5 +1,6 @@
 import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose, { QueryFilter } from 'mongoose';
+import { SYSTEM_ROLE } from '../constants/permissions';
 
 class ExamRepository {
     async createExam(data: Partial<IExam>): Promise<IExam> {
@@ -18,11 +19,14 @@ class ExamRepository {
 
         const query: QueryFilter<IExam> = { _id: id, isActive: true };
 
-        if (actingUserRole === 'ADMIN') {
+        if (actingUserRole === 'ADMIN' || actingUserRole === SYSTEM_ROLE) {
             return query;
         }
 
         if (actingUserRole === 'PROFESSOR') {
+            if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
+                return null;
+            }
             query.createdBy = new mongoose.Types.ObjectId(actingUserId);
             return query;
         }

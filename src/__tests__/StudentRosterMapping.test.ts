@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import AnswerScript from '../models/AnswerScript';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
@@ -9,9 +9,11 @@ import Course from '../models/Course';
 import StudentMapping from '../models/StudentMapping';
 import User, { UserRole } from '../models/User';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
+import ExamRepository from '../repositories/ExamRepository';
 import { StudentRosterMappingService } from '../services/StudentRosterMappingService';
 import { IngestionWorker } from '../services/IngestionWorker';
 import { HttpError } from '../lib/errors';
+import { SYSTEM_PRINCIPAL_ID, SYSTEM_ROLE, SYSTEM_AUDIT_CONTEXT } from '../constants/permissions';
 
 describe('AE-051 — Map Decoded ID → Roster Student', () => {
     let service: StudentRosterMappingService;
@@ -707,11 +709,13 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
         });
     });
 
-    describe('6. OWNER SCOPING: Deny-by-Default Authorization Enforcement', () => {
-        it('allows authorized professor to assemble scripts and denies unauthorized professor with 404', async () => {
-            const batchId = `batch-scoping-${Date.now()}`;
+    describe('6. OWNER SCOPING & AUTHORIZATION: Scoped Access Enforcement', () => {
+        let scopingBatchId: string;
+
+        beforeEach(async () => {
+            scopingBatchId = `batch-scoping-${Date.now()}-${Math.random()}`;
             await Batch.create({
-                batchId,
+                batchId: scopingBatchId,
                 uploadedBy: profUser._id,
                 exam: exam._id,
                 files: [
@@ -723,7 +727,7 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
                         mimeType: 'application/pdf',
                         size: 1000,
                         pageCount: 1,
-                        storageKey: `batches/${batchId}/0/scope.pdf`
+                        storageKey: `batches/${scopingBatchId}/0/scope.pdf`
                     }
                 ],
                 totalFiles: 1,
@@ -733,7 +737,7 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
             });
 
             await IngestionPage.create({
-                batchId,
+                batchId: scopingBatchId,
                 job: defaultJobId,
                 fileId: 'f-scope',
                 fileIndex: 0,
@@ -742,32 +746,107 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
                 candidateStudentId: enrolledStudent1._id.toString(),
                 decodeOutcome: 'found',
                 status: PageProcessingStatus.PROCESSED,
-                storageKey: `batches/${batchId}/derived/0/1/page.png`
+                storageKey: `batches/${scopingBatchId}/derived/0/1/page.png`
             });
+        });
 
-            // Unauthorized professor attempt
+        it('A. Missing authorization context: rejects safely with 401 without performing unscoped lookup', async () => {
+            const examFindOneSpy = vi.spyOn(Exam, 'findOne');
+
+            // 1. Missing context (undefined)
             await expect(
-                service.assembleAndMapAnswerScripts(batchId, {
+                service.assembleAndMapAnswerScripts(scopingBatchId)
+            ).rejects.toThrow('Authorization context required');
+
+            // 2. Empty context object
+            await expect(
+                service.assembleAndMapAnswerScripts(scopingBatchId, {} as any)
+            ).rejects.toThrow('Authorization context required');
+
+            // Assert that Exam.findOne was never called in an unscoped manner
+            expect(examFindOneSpy).not.toHaveBeenCalled();
+            examFindOneSpy.mockRestore();
+        });
+
+        it('B. Partial context: rejects when actingUserId or actingUserRole is missing or blank', async () => {
+            // actingUserId without actingUserRole
+            await expect(
+                service.assembleAndMapAnswerScripts(scopingBatchId, {
+                    actingUserId: profUser._id.toString()
+                } as any)
+            ).rejects.toThrow('Authorization context required');
+
+            // actingUserRole without actingUserId
+            await expect(
+                service.assembleAndMapAnswerScripts(scopingBatchId, {
+                    actingUserRole: 'PROFESSOR'
+                } as any)
+            ).rejects.toThrow('Authorization context required');
+
+            // Empty string values
+            await expect(
+                service.assembleAndMapAnswerScripts(scopingBatchId, {
+                    actingUserId: '   ',
+                    actingUserRole: 'PROFESSOR'
+                })
+            ).rejects.toThrow('Authorization context required');
+
+            await expect(
+                service.assembleAndMapAnswerScripts(scopingBatchId, {
+                    actingUserId: profUser._id.toString(),
+                    actingUserRole: '   '
+                })
+            ).rejects.toThrow('Authorization context required');
+        });
+
+        it('C. SYSTEM worker context: background assembly succeeds through repository authorization path', async () => {
+            const getExamByIdSpy = vi.spyOn(ExamRepository, 'getExamById');
+
+            const scripts = await service.assembleAndMapAnswerScripts(
+                scopingBatchId,
+                SYSTEM_AUDIT_CONTEXT
+            );
+
+            expect(scripts.length).toBe(1);
+            expect(scripts[0].student?.toString()).toBe(enrolledStudent1._id.toString());
+            expect(scripts[0].exam.toString()).toBe(exam._id.toString());
+            expect(scripts[0].needsManualId).toBe(false);
+
+            // Verified it went through ExamRepository.getExamById
+            expect(getExamByIdSpy).toHaveBeenCalledWith(
+                exam._id.toString(),
+                SYSTEM_PRINCIPAL_ID,
+                SYSTEM_ROLE
+            );
+
+            getExamByIdSpy.mockRestore();
+        });
+
+        it('D. Owner professor context: authorized professor succeeds', async () => {
+            const scripts = await service.assembleAndMapAnswerScripts(scopingBatchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+            expect(scripts.length).toBe(1);
+            expect(scripts[0].student?.toString()).toBe(enrolledStudent1._id.toString());
+        });
+
+        it('E. Wrong professor: denied with 404', async () => {
+            await expect(
+                service.assembleAndMapAnswerScripts(scopingBatchId, {
                     actingUserId: otherProfUser._id.toString(),
                     actingUserRole: 'PROFESSOR'
                 })
             ).rejects.toThrow(HttpError);
 
             try {
-                await service.assembleAndMapAnswerScripts(batchId, {
+                await service.assembleAndMapAnswerScripts(scopingBatchId, {
                     actingUserId: otherProfUser._id.toString(),
                     actingUserRole: 'PROFESSOR'
                 });
             } catch (err: any) {
                 expect(err.statusCode).toBe(404);
             }
-
-            // Authorized professor succeeds
-            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
-                actingUserId: profUser._id.toString(),
-                actingUserRole: 'PROFESSOR'
-            });
-            expect(scripts.length).toBe(1);
         });
     });
 

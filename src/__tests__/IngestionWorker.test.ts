@@ -6,10 +6,14 @@ import mongoose from 'mongoose';
 import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
+import AnswerScript from '../models/AnswerScript';
+import Exam, { ExamStatus } from '../models/Exam';
 import BatchRepository from '../repositories/BatchRepository';
 import defaultPageIngestionService, { PageIngestionService } from '../services/PageIngestionService';
 import { IPageRenderer } from '../services/PageRenderer';
 import defaultIngestionWorker, { IngestionWorker } from '../services/IngestionWorker';
+import defaultStudentRosterMappingService from '../services/StudentRosterMappingService';
+import { SYSTEM_PRINCIPAL_ID, SYSTEM_ROLE } from '../constants/permissions';
 import { initBackgroundWorker } from '../lib/workerInit';
 import { register } from '../instrumentation';
 
@@ -698,4 +702,52 @@ describe('Ingestion Background Worker & Recovery (AE-044)', () => {
             expect(jobInDb!.failureReason).toBe('Corrupted trailer dictionary');
         });
     });
+
+    describe('10. Automated AnswerScript Assembly via SYSTEM Principal', () => {
+        it('automatically invokes StudentRosterMappingService with SYSTEM_AUDIT_CONTEXT when batch has associated exam and reaches DONE', async () => {
+            const testExam = await Exam.create({
+                title: 'Ingestion Worker Exam',
+                course: new mongoose.Types.ObjectId(),
+                createdBy: new mongoose.Types.ObjectId(professorId),
+                examDate: new Date(),
+                totalMarks: 100,
+                numberOfQuestions: 5,
+                status: ExamStatus.PUBLISHED,
+                enrolledStudents: [],
+                isActive: true
+            });
+
+            const { batch, batchId } = await createTestBatchAndJob(1);
+            batch.exam = testExam._id as mongoose.Types.ObjectId;
+            await batch.save();
+
+            const assembleSpy = vi.spyOn(defaultStudentRosterMappingService, 'assembleAndMapAnswerScripts');
+
+            const worker = new IngestionWorker({
+                studentRosterMappingService: defaultStudentRosterMappingService
+            });
+
+            const result = await worker.processNextJob();
+
+            expect(result.processed).toBe(true);
+            expect(result.status).toBe(IngestionStatus.DONE);
+
+            // Verify StudentRosterMappingService was invoked with the batchId and explicit SYSTEM_AUDIT_CONTEXT
+            expect(assembleSpy).toHaveBeenCalledWith(batchId, {
+                actingUserId: SYSTEM_PRINCIPAL_ID,
+                actingUserRole: SYSTEM_ROLE
+            });
+
+            // Verify AnswerScript was created and persisted in DB with exam association
+            const createdScripts = await AnswerScript.find({ batchId });
+            expect(createdScripts.length).toBe(1);
+            expect(createdScripts[0].exam.toString()).toBe(testExam._id.toString());
+            expect(createdScripts[0].batchId).toBe(batchId);
+            expect(createdScripts[0].needsManualId).toBe(true); // Unidentified since no cover sheet matched
+            expect(createdScripts[0].isActive).toBe(true);
+
+            assembleSpy.mockRestore();
+        });
+    });
 });
+

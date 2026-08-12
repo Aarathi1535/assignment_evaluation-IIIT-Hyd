@@ -9,6 +9,7 @@ import defaultPageIngestionService, { PageIngestionService } from './PageIngesti
 import defaultStudentRosterMappingService, { StudentRosterMappingService } from './StudentRosterMappingService';
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
 import { writeAuditLog } from '../lib/audit';
+import { SYSTEM_AUDIT_CONTEXT } from '../constants/permissions';
 
 export interface ProcessJobResult {
     processed: boolean;
@@ -221,7 +222,7 @@ export class IngestionWorker {
 
             if (batch.exam) {
                 try {
-                    await this.studentRosterMappingService.assembleAndMapAnswerScripts(job.batchId);
+                    await this.studentRosterMappingService.assembleAndMapAnswerScripts(job.batchId, SYSTEM_AUDIT_CONTEXT);
                 } catch (mappingErr) {
                     console.error(`[IngestionWorker ${this.workerId}] Error assembling answer scripts for batch ${job.batchId}:`, mappingErr);
                 }

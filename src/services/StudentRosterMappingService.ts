@@ -2,7 +2,6 @@
 import mongoose from 'mongoose';
 import AnswerScript, { IAnswerScript, ManualIdReason } from '../models/AnswerScript';
 import IngestionPage from '../models/IngestionPage';
-import Exam from '../models/Exam';
 import Course from '../models/Course';
 import StudentMapping from '../models/StudentMapping';
 import User, { IUser } from '../models/User';
@@ -46,23 +45,18 @@ export class StudentRosterMappingService {
         context?: AuditContext
     ): Promise<IAnswerScript[]> {
         // Step 1: Owner scoping & authorization verification
-        let batch;
-        if (context?.actingUserId || context?.actingUserRole) {
-            batch = await BatchRepository.getBatchById(
-                batchId,
-                context.actingUserId,
-                context.actingUserRole
-            );
-            if (!batch) {
-                // Deny-by-default: unauthorized resources are indistinguishable from missing resources (404)
-                throw new HttpError('Batch not found', 404);
-            }
-        } else {
-            // Internal / background worker invocation
-            batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
-            if (!batch) {
-                throw new HttpError('Batch not found', 404);
-            }
+        if (!context?.actingUserId?.trim() || !context?.actingUserRole?.trim()) {
+            throw new HttpError('Authorization context required', 401);
+        }
+
+        const batch = await BatchRepository.getBatchById(
+            batchId,
+            context.actingUserId,
+            context.actingUserRole
+        );
+        if (!batch) {
+            // Deny-by-default: unauthorized resources are indistinguishable from missing resources (404)
+            throw new HttpError('Batch not found', 404);
         }
 
         if (!batch.exam) {
@@ -71,21 +65,13 @@ export class StudentRosterMappingService {
         }
 
         // Verify exam association and owner scoping
-        let exam;
-        if (context?.actingUserId || context?.actingUserRole) {
-            exam = await ExamRepository.getExamById(
-                batch.exam.toString(),
-                context.actingUserId,
-                context.actingUserRole
-            );
-            if (!exam) {
-                throw new HttpError('Exam not found', 404);
-            }
-        } else {
-            exam = await Exam.findOne({ _id: batch.exam, isActive: true });
-            if (!exam) {
-                throw new HttpError('Exam not found', 404);
-            }
+        const exam = await ExamRepository.getExamById(
+            batch.exam.toString(),
+            context.actingUserId,
+            context.actingUserRole
+        );
+        if (!exam) {
+            throw new HttpError('Exam not found', 404);
         }
 
         // Step 2: Fetch IngestionPages sorted canonically by (fileIndex ASC, pageNumber ASC)

@@ -362,7 +362,10 @@ describe('AE-052 — Generate Printable QR Cover Sheets', () => {
             });
 
             const mappingService = new StudentRosterMappingService();
-            const scripts = await mappingService.assembleAndMapAnswerScripts(batchId);
+            const scripts = await mappingService.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: UserRole.PROFESSOR
+            });
 
             expect(scripts.length).toBe(1);
             expect(scripts[0].student?.toString()).toBe(student1._id.toString());
