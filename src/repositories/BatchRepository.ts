@@ -1,6 +1,7 @@
 import Batch, { IBatch, IBatchFile } from '../models/Batch';
 import IngestionJob, { IIngestionJob, IngestionStatus } from '../models/IngestionJob';
 import mongoose, { QueryFilter } from 'mongoose';
+import { SYSTEM_ROLE } from '../constants/permissions';
 
 class BatchRepository {
     async createBatch(data: Partial<IBatch>): Promise<IBatch> {
@@ -28,7 +29,7 @@ class BatchRepository {
             isActive: true
         };
 
-        if (actingUserRole === 'ADMIN') {
+        if (actingUserRole === 'ADMIN' || actingUserRole === SYSTEM_ROLE) {
             return baseQuery;
         }
 

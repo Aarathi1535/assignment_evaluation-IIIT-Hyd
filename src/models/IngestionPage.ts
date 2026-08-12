@@ -6,6 +6,8 @@ export enum PageProcessingStatus {
     FAILED = 'failed'
 }
 
+export type DecodeOutcome = 'found' | 'not_found' | 'multiple';
+
 export interface IIngestionPage extends Document {
     batchId: string;
     job: mongoose.Types.ObjectId;
@@ -20,6 +22,9 @@ export interface IIngestionPage extends Document {
     processedAt?: Date;
     failureReason?: string;
     metadata?: Record<string, unknown>;
+    isCoverPage?: boolean;
+    candidateStudentId?: string | null;
+    decodeOutcome?: DecodeOutcome | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -84,6 +89,22 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
         failureReason: {
             type: String,
             trim: true
+        },
+        isCoverPage: {
+            type: Boolean,
+            default: false,
+            index: true
+        },
+        candidateStudentId: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true
+        },
+        decodeOutcome: {
+            type: String,
+            enum: ['found', 'not_found', 'multiple', null],
+            default: null
         },
         metadata: {
             type: Schema.Types.Mixed
