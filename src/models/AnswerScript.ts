@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
+export enum ManualIdReason {
+    NO_CODE_FOUND = 'NO_CODE_FOUND',
+    MULTIPLE_CODES = 'MULTIPLE_CODES',
+    NOT_IN_ROSTER = 'NOT_IN_ROSTER',
+    DUPLICATE_STUDENT = 'DUPLICATE_STUDENT'
+}
+
 export interface IAnswerScript extends Document {
     exam: mongoose.Types.ObjectId;
     student?: mongoose.Types.ObjectId | null;
@@ -13,7 +20,7 @@ export interface IAnswerScript extends Document {
     candidateStudentId?: string | null;
     decodeOutcome?: string | null;
     needsManualId?: boolean;
-    manualIdReason?: string | null;
+    manualIdReason?: ManualIdReason | string | null;
     metadata?: Record<string, unknown>;
     isActive: boolean;
     createdAt: Date;
@@ -80,6 +87,7 @@ const AnswerScriptSchema = new Schema<IAnswerScript>(
         },
         manualIdReason: {
             type: String,
+            enum: [...Object.values(ManualIdReason), null],
             default: null
         },
         metadata: {

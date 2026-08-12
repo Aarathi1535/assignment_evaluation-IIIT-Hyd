@@ -505,7 +505,8 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
             expect(scripts.length).toBe(1);
             expect(scripts[0].student).toBeNull();
             expect(scripts[0].candidateStudentId).toBe('NON_EXISTENT_STU_9999');
-            expect(scripts[0].needsManualId).toBe(false);
+            expect(scripts[0].needsManualId).toBe(true);
+            expect(scripts[0].manualIdReason).toBe('NOT_IN_ROSTER');
         });
 
         it('persists AnswerScript with student: null when user exists but is NOT enrolled in the exam', async () => {
@@ -553,6 +554,8 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
             expect(scripts.length).toBe(1);
             expect(scripts[0].student).toBeNull();
             expect(scripts[0].candidateStudentId).toBe(unenrolledStudent._id.toString());
+            expect(scripts[0].needsManualId).toBe(true);
+            expect(scripts[0].manualIdReason).toBe('NOT_IN_ROSTER');
         });
     });
 
@@ -632,7 +635,7 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
             expect(newScript.student).toBeNull();
             expect(newScript.candidateStudentId).toBe(enrolledStudent1._id.toString());
             expect(newScript.needsManualId).toBe(true);
-            expect(newScript.manualIdReason).toBe('duplicate_student');
+            expect(newScript.manualIdReason).toBe('DUPLICATE_STUDENT');
 
             // Original script must remain untouched
             const originalInDb = await AnswerScript.findById(existingScript._id);

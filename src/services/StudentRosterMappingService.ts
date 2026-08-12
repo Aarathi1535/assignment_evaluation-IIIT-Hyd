@@ -1,6 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import mongoose from 'mongoose';
-import AnswerScript, { IAnswerScript } from '../models/AnswerScript';
-import IngestionPage, { IIngestionPage } from '../models/IngestionPage';
+import AnswerScript, { IAnswerScript, ManualIdReason } from '../models/AnswerScript';
+import IngestionPage from '../models/IngestionPage';
 import Exam from '../models/Exam';
 import Course from '../models/Course';
 import StudentMapping from '../models/StudentMapping';
@@ -21,16 +22,24 @@ export interface AnswerScriptGroup {
     startPageNumber: number;
     endPageNumber: number;
     pageCount: number;
-    candidateStudentId?: string | null;
-    decodeOutcome?: string | null;
+    candidateStudentId: string | null;
+    decodeOutcome: string | null;
     coverStorageKey?: string;
-    pages: IIngestionPage[];
+    pages: any[];
 }
 
 export class StudentRosterMappingService {
     /**
-     * Assembles AnswerScript groups from IngestionPage records of a batch and resolves
-     * candidate student identifiers against the associated exam's enrolled roster.
+     * Assembles AnswerScripts from IngestionPages and performs automated student identification
+     * mapping according to AE-051 and AE-053 specifications.
+     * 
+     * Core Rule:
+     * Every assembled answer script MUST be persisted. Identification failure or ambiguity
+     * must NEVER cause AnswerScript creation to fail or discard the script.
+     * 
+     * Required processing order:
+     * IngestionPage records -> assemble AnswerScript -> attempt automatic identification ->
+     * either identified student OR needsManualId=true with explicit manualIdReason.
      */
     async assembleAndMapAnswerScripts(
         batchId: string,
@@ -93,6 +102,7 @@ export class StudentRosterMappingService {
         // - First detected cover (isCoverPage === true) starts a script
         // - Pages from cover N through the page immediately before cover N+1 belong to that script
         // - Next detected cover starts the next script
+        // - Guaranteed persistence fallback: if no cover flag exists, group from page 1
         const groups: AnswerScriptGroup[] = [];
         let currentGroup: AnswerScriptGroup | null = null;
 
@@ -107,8 +117,8 @@ export class StudentRosterMappingService {
                     startPageNumber: page.pageNumber,
                     endPageNumber: page.pageNumber,
                     pageCount: 1,
-                    candidateStudentId: page.candidateStudentId,
-                    decodeOutcome: page.decodeOutcome,
+                    candidateStudentId: page.candidateStudentId || null,
+                    decodeOutcome: page.decodeOutcome || null,
                     coverStorageKey: page.storageKey,
                     pages: [page]
                 };
@@ -178,7 +188,7 @@ export class StudentRosterMappingService {
         }
 
         const results: IAnswerScript[] = [];
-        const filesByFileIndex = new Map(batch.files.map(f => [f.fileIndex, f]));
+        const filesByFileIndex = new Map(batch.files.map((f: any) => [f.fileIndex, f]));
 
         // Step 5: Process each group, resolve student, detect duplicates, and upsert AnswerScript
         for (const group of groups) {
@@ -208,12 +218,28 @@ export class StudentRosterMappingService {
                 }
             }
 
-            // Ensure matched user is verified to be enrolled in the exam
+            // Step 5.1: Determine AE-053 identification state
             let resolvedStudentId: mongoose.Types.ObjectId | null = null;
-            let isDuplicateStudentConflict = false;
+            let needsManualId = false;
+            let manualIdReason: ManualIdReason | null = null;
 
-            if (matchedUser && enrolledUserIds.has(matchedUser._id.toString())) {
-                // Check if another AnswerScript for (exam, student) already exists from a different source group
+            if (group.decodeOutcome === 'multiple') {
+                // Outcome C: MULTIPLE_CODES
+                needsManualId = true;
+                manualIdReason = ManualIdReason.MULTIPLE_CODES;
+                resolvedStudentId = null;
+            } else if (!group.candidateStudentId || group.decodeOutcome === 'not_found') {
+                // Outcome B: NO_CODE_FOUND
+                needsManualId = true;
+                manualIdReason = ManualIdReason.NO_CODE_FOUND;
+                resolvedStudentId = null;
+            } else if (!matchedUser || !enrolledUserIds.has(matchedUser._id.toString())) {
+                // Outcome D: NOT_IN_ROSTER
+                needsManualId = true;
+                manualIdReason = ManualIdReason.NOT_IN_ROSTER;
+                resolvedStudentId = null;
+            } else {
+                // Check if another identified AnswerScript for (exam, student) already exists
                 const existingScript = await AnswerScript.findOne({
                     exam: exam._id,
                     student: matchedUser._id,
@@ -226,12 +252,15 @@ export class StudentRosterMappingService {
                         existingScript.fileIndex !== group.fileIndex ||
                         existingScript.startPageNumber !== group.startPageNumber)
                 ) {
-                    // Duplicate student conflict detected!
-                    // Do NOT overwrite existing script, do NOT bypass unique constraint, leave student null
-                    isDuplicateStudentConflict = true;
+                    // Outcome E: DUPLICATE_STUDENT
+                    needsManualId = true;
+                    manualIdReason = ManualIdReason.DUPLICATE_STUDENT;
                     resolvedStudentId = null;
                 } else {
+                    // Outcome A: SUCCESSFULLY_IDENTIFIED
                     resolvedStudentId = matchedUser._id as mongoose.Types.ObjectId;
+                    needsManualId = false;
+                    manualIdReason = null;
                 }
             }
 
@@ -240,35 +269,73 @@ export class StudentRosterMappingService {
             const scriptFilename = sourceFile?.originalFilename || `script_${group.fileIndex}_${group.startPageNumber}.pdf`;
 
             // Step 6: Idempotent upsert enforcing (batchId, fileIndex, startPageNumber) source identity
-            const answerScript = await AnswerScript.findOneAndUpdate(
-                {
-                    batchId,
-                    fileIndex: group.fileIndex,
-                    startPageNumber: group.startPageNumber
-                },
-                {
-                    $set: {
-                        exam: exam._id,
-                        student: resolvedStudentId,
-                        filePath: scriptFilePath,
-                        filename: scriptFilename,
+            try {
+                const answerScript = await AnswerScript.findOneAndUpdate(
+                    {
                         batchId,
                         fileIndex: group.fileIndex,
-                        startPageNumber: group.startPageNumber,
-                        endPageNumber: group.endPageNumber,
-                        pageCount: group.pageCount,
-                        candidateStudentId: group.candidateStudentId || null,
-                        decodeOutcome: group.decodeOutcome || null,
-                        needsManualId: isDuplicateStudentConflict ? true : false,
-                        manualIdReason: isDuplicateStudentConflict ? 'duplicate_student' : null,
-                        isActive: true
-                    }
-                },
-                { upsert: true, returnDocument: 'after', runValidators: true }
-            );
+                        startPageNumber: group.startPageNumber
+                    },
+                    {
+                        $set: {
+                            exam: exam._id,
+                            student: resolvedStudentId,
+                            filePath: scriptFilePath,
+                            filename: scriptFilename,
+                            batchId,
+                            fileIndex: group.fileIndex,
+                            startPageNumber: group.startPageNumber,
+                            endPageNumber: group.endPageNumber,
+                            pageCount: group.pageCount,
+                            candidateStudentId: group.candidateStudentId || null,
+                            decodeOutcome: group.decodeOutcome || null,
+                            needsManualId,
+                            manualIdReason,
+                            isActive: true
+                        }
+                    },
+                    { upsert: true, returnDocument: 'after', runValidators: true }
+                );
 
-            if (answerScript) {
-                results.push(answerScript);
+                if (answerScript) {
+                    results.push(answerScript);
+                }
+            } catch (upsertErr: any) {
+                // Safe race-condition fallback for (exam, student) duplicate key error
+                if (upsertErr.code === 11000 && resolvedStudentId) {
+                    const fallbackScript = await AnswerScript.findOneAndUpdate(
+                        {
+                            batchId,
+                            fileIndex: group.fileIndex,
+                            startPageNumber: group.startPageNumber
+                        },
+                        {
+                            $set: {
+                                exam: exam._id,
+                                student: null,
+                                filePath: scriptFilePath,
+                                filename: scriptFilename,
+                                batchId,
+                                fileIndex: group.fileIndex,
+                                startPageNumber: group.startPageNumber,
+                                endPageNumber: group.endPageNumber,
+                                pageCount: group.pageCount,
+                                candidateStudentId: group.candidateStudentId || null,
+                                decodeOutcome: group.decodeOutcome || null,
+                                needsManualId: true,
+                                manualIdReason: ManualIdReason.DUPLICATE_STUDENT,
+                                isActive: true
+                            }
+                        },
+                        { upsert: true, returnDocument: 'after', runValidators: true }
+                    );
+
+                    if (fallbackScript) {
+                        results.push(fallbackScript);
+                    }
+                } else {
+                    throw upsertErr;
+                }
             }
         }
 
