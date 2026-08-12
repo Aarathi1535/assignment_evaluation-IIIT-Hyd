@@ -110,13 +110,29 @@ export class CoverSheetDetector implements ICoverSheetDetector {
             const uniqueCodes = Array.from(detectedCodes);
 
             if (uniqueCodes.length === 1) {
+                const rawCode = uniqueCodes[0];
+                let parsedExamId: string | undefined;
+                let parsedStudentId: string | undefined;
+
+                if (rawCode.includes(':')) {
+                    const parts = rawCode.split(':');
+                    if (parts.length === 2 && parts[0] && parts[1]) {
+                        parsedExamId = parts[0];
+                        parsedStudentId = parts[1];
+                    }
+                }
+
                 return {
                     isCoverPage: true,
                     decodeOutcome: 'found',
-                    candidateStudentId: uniqueCodes[0],
+                    candidateStudentId: rawCode,
                     metadata: {
                         detectedCount: 1,
-                        code: uniqueCodes[0]
+                        code: rawCode,
+                        rawPayload: rawCode,
+                        ...(parsedExamId && parsedStudentId
+                            ? { examId: parsedExamId, studentId: parsedStudentId }
+                            : {})
                     }
                 };
             } else if (uniqueCodes.length > 1) {

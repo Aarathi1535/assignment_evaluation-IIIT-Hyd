@@ -183,9 +183,17 @@ export class StudentRosterMappingService {
         // Step 5: Process each group, resolve student, detect duplicates, and upsert AnswerScript
         for (const group of groups) {
             let matchedUser: IUser | null = null;
-            const candidateRaw = group.candidateStudentId?.trim();
+            let candidateRaw = group.candidateStudentId?.trim();
 
             if (candidateRaw) {
+                // Support AE-052 deterministic payload: examId:studentId
+                if (candidateRaw.includes(':')) {
+                    const parts = candidateRaw.split(':');
+                    if (parts.length === 2 && parts[1]) {
+                        candidateRaw = parts[1].trim();
+                    }
+                }
+
                 // Try matching by ObjectId
                 if (mongoose.Types.ObjectId.isValid(candidateRaw) && userByIdMap.has(candidateRaw)) {
                     matchedUser = userByIdMap.get(candidateRaw) || null;
