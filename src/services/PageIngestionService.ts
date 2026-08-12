@@ -6,6 +6,7 @@ import { sanitizeFailureReason } from '../validations/ingestionValidation';
 import { IPageRenderer, DefaultPdfRenderer, DefaultImageRenderer, RenderPageResult } from './PageRenderer';
 import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
 import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
+import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDetector';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -20,6 +21,7 @@ export interface ProcessPageInput {
     renderer?: IPageRenderer;
     derivedStorage?: IDerivedStorageService;
     thumbnailGenerator?: IThumbnailGenerator;
+    coverSheetDetector?: ICoverSheetDetector;
 }
 
 export interface PageProcessResult {
@@ -36,18 +38,21 @@ export class PageIngestionService {
     private imageRenderer: IPageRenderer;
     private derivedStorage: IDerivedStorageService;
     private thumbnailGenerator: IThumbnailGenerator;
+    private coverSheetDetector: ICoverSheetDetector;
     private defaultPageTimeoutMs = 5000;
 
     constructor(
         renderer?: IPageRenderer,
         derivedStorage?: IDerivedStorageService,
         thumbnailGenerator?: IThumbnailGenerator,
-        imageRenderer?: IPageRenderer
+        imageRenderer?: IPageRenderer,
+        coverSheetDetector?: ICoverSheetDetector
     ) {
         this.renderer = renderer || new DefaultPdfRenderer();
         this.imageRenderer = imageRenderer || new DefaultImageRenderer();
         this.derivedStorage = derivedStorage || defaultDerivedStorageService;
         this.thumbnailGenerator = thumbnailGenerator || defaultThumbnailGenerator;
+        this.coverSheetDetector = coverSheetDetector || defaultCoverSheetDetector;
     }
 
     setRenderer(renderer: IPageRenderer): void {
@@ -82,9 +87,17 @@ export class PageIngestionService {
         return this.thumbnailGenerator;
     }
 
+    setCoverSheetDetector(coverSheetDetector: ICoverSheetDetector): void {
+        this.coverSheetDetector = coverSheetDetector;
+    }
+
+    getCoverSheetDetector(): ICoverSheetDetector {
+        return this.coverSheetDetector;
+    }
+
     /**
      * Processes a single page of an uploaded original file with timeout, error sanitization,
-     * normalized derived-asset persistence, thumbnail generation, and idempotent reconciliation.
+     * normalized derived-asset persistence, thumbnail generation, cover sheet detection, and idempotent reconciliation.
      */
     async processPage(input: ProcessPageInput): Promise<PageProcessResult> {
         const {
@@ -99,7 +112,8 @@ export class PageIngestionService {
             timeoutMs = this.defaultPageTimeoutMs,
             renderer,
             derivedStorage,
-            thumbnailGenerator
+            thumbnailGenerator,
+            coverSheetDetector
         } = input;
 
         const isImage =
@@ -113,6 +127,7 @@ export class PageIngestionService {
         const activeRenderer = renderer || defaultRenderer;
         const activeDerivedStorage = derivedStorage || this.derivedStorage;
         const activeThumbnailGenerator = thumbnailGenerator || this.thumbnailGenerator;
+        const activeCoverSheetDetector = coverSheetDetector || this.coverSheetDetector;
 
         // Idempotency check: If this exact page was already successfully processed, reuse it
         const existingPage = await IngestionPage.findOne({
@@ -202,6 +217,7 @@ export class PageIngestionService {
             if (!renderResult.success) {
                 const rawReason = renderResult.failureReason || `Rendering failed on page ${pageNumber}`;
                 const sanitizedReason = sanitizeFailureReason(rawReason);
+                const isCoverPage = pageNumber === 1;
 
                 const pageRecord = await IngestionPage.findOneAndUpdate(
                     { batchId, fileIndex, pageNumber },
@@ -216,7 +232,17 @@ export class PageIngestionService {
                         status: PageProcessingStatus.FAILED,
                         processedAt: new Date(),
                         failureReason: sanitizedReason,
-                        metadata: { fileType, fileIndex, pageNumber, ...renderResult.metadata }
+                        isCoverPage,
+                        candidateStudentId: null,
+                        decodeOutcome: isCoverPage ? 'not_found' : null,
+                        metadata: {
+                            fileType,
+                            fileIndex,
+                            pageNumber,
+                            isCoverPage,
+                            decodeOutcome: isCoverPage ? 'not_found' : null,
+                            ...renderResult.metadata
+                        }
                     },
                     { upsert: true, returnDocument: 'after', runValidators: true }
                 );
@@ -269,7 +295,26 @@ export class PageIngestionService {
                 }
             }
 
-            // Persist or update page record as PROCESSED pointing to derived storageKey and thumbnailKey
+            // AE-050: Cover-Sheet QR/Barcode Detection (Only on pageNumber === 1 from canonical normalized image)
+            const isCoverPage = pageNumber === 1;
+            let candidateStudentId: string | null = null;
+            let decodeOutcome: 'found' | 'not_found' | 'multiple' | null = null;
+
+            if (isCoverPage && renderResult.image && renderResult.image.buffer) {
+                try {
+                    const detectionResult = await activeCoverSheetDetector.detectCoverSheet(
+                        renderResult.image.buffer,
+                        pageNumber
+                    );
+                    candidateStudentId = detectionResult.candidateStudentId || null;
+                    decodeOutcome = detectionResult.decodeOutcome || 'not_found';
+                } catch {
+                    candidateStudentId = null;
+                    decodeOutcome = 'not_found';
+                }
+            }
+
+            // Persist or update page record as PROCESSED pointing to derived storageKey, thumbnailKey, and detection metadata
             const pageRecord = await IngestionPage.findOneAndUpdate(
                 { batchId, fileIndex, pageNumber },
                 {
@@ -285,6 +330,9 @@ export class PageIngestionService {
                     status: PageProcessingStatus.PROCESSED,
                     processedAt: new Date(),
                     failureReason: undefined,
+                    isCoverPage,
+                    candidateStudentId,
+                    decodeOutcome,
                     metadata: {
                         fileType,
                         fileIndex,
@@ -297,6 +345,9 @@ export class PageIngestionService {
                         dpi: renderResult.image?.dpi,
                         format: renderResult.image?.format,
                         sizeBytes: renderResult.image?.sizeBytes,
+                        isCoverPage,
+                        candidateStudentId,
+                        decodeOutcome,
                         ...renderResult.metadata
                     }
                 },
@@ -312,6 +363,7 @@ export class PageIngestionService {
         } catch (error) {
             const rawMessage = error instanceof Error ? error.message : 'Unknown page processing error';
             const sanitizedReason = sanitizeFailureReason(rawMessage);
+            const isCoverPage = pageNumber === 1;
 
             const pageRecord = await IngestionPage.findOneAndUpdate(
                 { batchId, fileIndex, pageNumber },
@@ -326,7 +378,16 @@ export class PageIngestionService {
                     status: PageProcessingStatus.FAILED,
                     processedAt: new Date(),
                     failureReason: sanitizedReason,
-                    metadata: { fileType, fileIndex, pageNumber }
+                    isCoverPage,
+                    candidateStudentId: null,
+                    decodeOutcome: isCoverPage ? 'not_found' : null,
+                    metadata: {
+                        fileType,
+                        fileIndex,
+                        pageNumber,
+                        isCoverPage,
+                        decodeOutcome: isCoverPage ? 'not_found' : null
+                    }
                 },
                 { upsert: true, returnDocument: 'after', runValidators: true }
             );
