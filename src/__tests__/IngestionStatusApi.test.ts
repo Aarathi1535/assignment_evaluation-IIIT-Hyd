@@ -45,6 +45,7 @@ describe('Ingestion Status Tracking and Status API (AE-045)', () => {
             files: [
                 {
                     fileId: crypto.randomUUID(),
+                    fileIndex: 0,
                     originalFilename: 'exam1.pdf',
                     fileType: 'pdf',
                     mimeType: 'application/pdf',

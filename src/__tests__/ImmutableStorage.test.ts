@@ -418,6 +418,7 @@ describe('Immutable Original Storage & HMAC Tamper Evidence (AE-043)', () => {
                 files: [
                     {
                         fileId,
+                        fileIndex: 0,
                         originalFilename: 'student_answer.pdf',
                         fileType: 'pdf',
                         mimeType: 'application/pdf',

@@ -16,6 +16,7 @@ export interface IBindingMetadata {
 
 export interface IBatchFile {
     fileId: string;
+    fileIndex: number;
     originalFilename: string;
     fileType: string;
     mimeType: string;
@@ -73,6 +74,11 @@ const BatchFileSchema = new Schema<IBatchFile>(
             type: String,
             required: true,
             trim: true
+        },
+        fileIndex: {
+            type: Number,
+            required: true,
+            min: 0
         },
         originalFilename: {
             type: String,

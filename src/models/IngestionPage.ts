@@ -10,7 +10,11 @@ export interface IIngestionPage extends Document {
     batchId: string;
     job: mongoose.Types.ObjectId;
     fileId: string;
+    fileIndex: number;
     storageKey: string;
+    thumbnailKey?: string | null;
+    width?: number;
+    height?: number;
     pageNumber: number;
     status: PageProcessingStatus;
     processedAt?: Date;
@@ -39,10 +43,28 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
             required: true,
             trim: true
         },
+        fileIndex: {
+            type: Number,
+            required: true,
+            min: 0
+        },
         storageKey: {
             type: String,
             required: true,
             trim: true
+        },
+        thumbnailKey: {
+            type: String,
+            default: null,
+            trim: true
+        },
+        width: {
+            type: Number,
+            min: 1
+        },
+        height: {
+            type: Number,
+            min: 1
         },
         pageNumber: {
             type: Number,
@@ -72,8 +94,8 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
     }
 );
 
-// Enforce deterministic uniqueness per (batchId, fileId, pageNumber)
-IngestionPageSchema.index({ batchId: 1, fileId: 1, pageNumber: 1 }, { unique: true });
+// Enforce deterministic uniqueness per (batchId, fileIndex, pageNumber)
+IngestionPageSchema.index({ batchId: 1, fileIndex: 1, pageNumber: 1 }, { unique: true });
 
 const IngestionPage: Model<IIngestionPage> =
     mongoose.models.IngestionPage || mongoose.model<IIngestionPage>('IngestionPage', IngestionPageSchema);
