@@ -51,6 +51,3 @@ next_extracted/
 
 *.tgz
 *.temp
-
-# Runtime / Test storage
-data/
