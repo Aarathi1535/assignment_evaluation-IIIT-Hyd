@@ -12,6 +12,7 @@ import {
     getHmacSecret,
     serializeBindingMetadata
 } from '../utils/hmacStorage';
+import { register } from '../instrumentation';
 
 describe('Immutable Original Storage & HMAC Tamper Evidence (AE-043)', () => {
     const testStorageDir = path.join(process.cwd(), 'data', 'test_originals');
@@ -52,6 +53,32 @@ describe('Immutable Original Storage & HMAC Tamper Evidence (AE-043)', () => {
             expect(() => getHmacSecret()).toThrow(
                 'ORIGINAL_STORAGE_HMAC_SECRET is missing or not configured'
             );
+        });
+
+        it('should fail startup via instrumentation register() when ORIGINAL_STORAGE_HMAC_SECRET is missing', async () => {
+            const currentSecret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+
+            try {
+                await expect(register()).rejects.toThrow('Invalid environment variables');
+            } finally {
+                process.env.ORIGINAL_STORAGE_HMAC_SECRET = currentSecret;
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
+            }
+        });
+
+        it('should succeed startup via instrumentation register() with valid configuration', async () => {
+            const originalRuntime = process.env.NEXT_RUNTIME;
+            (process.env as any).NEXT_RUNTIME = 'nodejs';
+            process.env.ORIGINAL_STORAGE_HMAC_SECRET = 'test-secret-value-at-least-32-chars-long';
+
+            try {
+                await expect(register()).resolves.not.toThrow();
+            } finally {
+                (process.env as any).NEXT_RUNTIME = originalRuntime;
+            }
         });
 
         it('should load HMAC secret and key ID from environment configuration', () => {

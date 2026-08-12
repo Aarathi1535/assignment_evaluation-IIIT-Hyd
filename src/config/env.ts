@@ -9,12 +9,15 @@ const envSchema = z.object({
     ORIGINAL_STORAGE_PATH: z.string().optional()
 });
 
-const parsed = envSchema.safeParse(process.env);
+export function validateEnv() {
+    const parsed = envSchema.safeParse(process.env);
 
-if (!parsed.success) {
-    console.error('❌ Invalid environment variables:', parsed.error.format());
-    throw new Error('Invalid environment variables');
+    if (!parsed.success) {
+        console.error('❌ Invalid environment variables:', parsed.error.format());
+        throw new Error('Invalid environment variables');
+    }
+
+    return parsed.data;
 }
 
-export const env = parsed.data;
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema>;
