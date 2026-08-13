@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import mongoose from 'mongoose';
-import AnswerScript, { IAnswerScript, ManualIdReason } from '../models/AnswerScript';
+import AnswerScript, {
+    IAnswerScript,
+    ManualIdReason,
+    IdentificationSource,
+    IdentificationStatus
+} from '../models/AnswerScript';
 import IngestionPage from '../models/IngestionPage';
 import Course from '../models/Course';
 import StudentMapping from '../models/StudentMapping';
@@ -8,6 +13,8 @@ import User, { IUser } from '../models/User';
 import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
+import { normalizeRollNumber } from '../utils/studentMappingUtils';
+
 
 export interface AuditContext {
     actingUserId?: string;
@@ -164,11 +171,20 @@ export class StudentRosterMappingService {
         }
 
         const userByAnonIdMap = new Map<string, IUser>();
+        const userByRollNumberMap = new Map<string, IUser>();
         for (const mapping of studentMappings) {
-            if (mapping.anonymousId && mapping.student) {
+            if (mapping.student) {
                 const u = userByIdMap.get(mapping.student.toString());
                 if (u) {
-                    userByAnonIdMap.set(mapping.anonymousId.trim(), u);
+                    if (mapping.anonymousId) {
+                        userByAnonIdMap.set(mapping.anonymousId.trim(), u);
+                    }
+                    if (mapping.rollNumber) {
+                        const normalizedRoll = normalizeRollNumber(mapping.rollNumber);
+                        if (normalizedRoll) {
+                            userByRollNumberMap.set(normalizedRoll, u);
+                        }
+                    }
                 }
             }
         }
@@ -178,8 +194,12 @@ export class StudentRosterMappingService {
 
         // Step 5: Process each group, resolve student, detect duplicates, and upsert AnswerScript
         for (const group of groups) {
+            // Promote candidate from IngestionPage cover to AnswerScript
+            let candidateStudentId = group.candidateStudentId ? group.candidateStudentId.trim() : null;
+            let identificationSource = candidateStudentId ? IdentificationSource.QR : null;
+
             let matchedUser: IUser | null = null;
-            let candidateRaw = group.candidateStudentId?.trim();
+            let candidateRaw = candidateStudentId;
 
             if (candidateRaw) {
                 // Support AE-052 deterministic payload: examId:studentId
@@ -202,28 +222,39 @@ export class StudentRosterMappingService {
                 else if (userByAnonIdMap.has(candidateRaw)) {
                     matchedUser = userByAnonIdMap.get(candidateRaw) || null;
                 }
+                // Try matching by rollNumber
+                else {
+                    const normalized = normalizeRollNumber(candidateRaw);
+                    if (normalized && userByRollNumberMap.has(normalized)) {
+                        matchedUser = userByRollNumberMap.get(normalized) || null;
+                    }
+                }
             }
 
             // Step 5.1: Determine AE-053 identification state
             let resolvedStudentId: mongoose.Types.ObjectId | null = null;
             let needsManualId = false;
             let manualIdReason: ManualIdReason | null = null;
+            let identificationStatus: IdentificationStatus = IdentificationStatus.UNIDENTIFIED;
 
             if (group.decodeOutcome === 'multiple') {
                 // Outcome C: MULTIPLE_CODES
                 needsManualId = true;
                 manualIdReason = ManualIdReason.MULTIPLE_CODES;
                 resolvedStudentId = null;
-            } else if (!group.candidateStudentId || group.decodeOutcome === 'not_found') {
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
+            } else if (!candidateStudentId || group.decodeOutcome === 'not_found') {
                 // Outcome B: NO_CODE_FOUND
                 needsManualId = true;
                 manualIdReason = ManualIdReason.NO_CODE_FOUND;
                 resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
             } else if (!matchedUser || !enrolledUserIds.has(matchedUser._id.toString())) {
                 // Outcome D: NOT_IN_ROSTER
                 needsManualId = true;
                 manualIdReason = ManualIdReason.NOT_IN_ROSTER;
                 resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
             } else {
                 // Check if another identified AnswerScript for (exam, student) already exists
                 const existingScript = await AnswerScript.findOne({
@@ -242,11 +273,32 @@ export class StudentRosterMappingService {
                     needsManualId = true;
                     manualIdReason = ManualIdReason.DUPLICATE_STUDENT;
                     resolvedStudentId = null;
+                    identificationStatus = IdentificationStatus.UNIDENTIFIED;
                 } else {
                     // Outcome A: SUCCESSFULLY_IDENTIFIED
                     resolvedStudentId = matchedUser._id as mongoose.Types.ObjectId;
                     needsManualId = false;
                     manualIdReason = null;
+                    identificationStatus = IdentificationStatus.IDENTIFIED;
+                }
+            }
+
+            // Verify if the script is already identified (e.g. by an operator or previous scan).
+            // Automatic processing must not silently overwrite manual operator identifications.
+            const existingIdentifiedScript = await AnswerScript.findOne({
+                batchId,
+                fileIndex: group.fileIndex,
+                startPageNumber: group.startPageNumber
+            });
+
+            if (existingIdentifiedScript && existingIdentifiedScript.identificationStatus === IdentificationStatus.IDENTIFIED) {
+                resolvedStudentId = existingIdentifiedScript.student as mongoose.Types.ObjectId | null;
+                identificationStatus = existingIdentifiedScript.identificationStatus as IdentificationStatus;
+                identificationSource = existingIdentifiedScript.identificationSource as any;
+                needsManualId = existingIdentifiedScript.needsManualId || false;
+                manualIdReason = (existingIdentifiedScript.manualIdReason as ManualIdReason | null) || null;
+                if (!candidateStudentId) {
+                    candidateStudentId = existingIdentifiedScript.candidateStudentId || null;
                 }
             }
 
@@ -273,7 +325,9 @@ export class StudentRosterMappingService {
                             startPageNumber: group.startPageNumber,
                             endPageNumber: group.endPageNumber,
                             pageCount: group.pageCount,
-                            candidateStudentId: group.candidateStudentId || null,
+                            candidateStudentId,
+                            identificationSource,
+                            identificationStatus,
                             decodeOutcome: group.decodeOutcome || null,
                             needsManualId,
                             manualIdReason,
@@ -306,7 +360,9 @@ export class StudentRosterMappingService {
                                 startPageNumber: group.startPageNumber,
                                 endPageNumber: group.endPageNumber,
                                 pageCount: group.pageCount,
-                                candidateStudentId: group.candidateStudentId || null,
+                                candidateStudentId,
+                                identificationSource,
+                                identificationStatus: IdentificationStatus.UNIDENTIFIED,
                                 decodeOutcome: group.decodeOutcome || null,
                                 needsManualId: true,
                                 manualIdReason: ManualIdReason.DUPLICATE_STUDENT,
@@ -331,3 +387,4 @@ export class StudentRosterMappingService {
 
 export const defaultStudentRosterMappingService = new StudentRosterMappingService();
 export default defaultStudentRosterMappingService;
+

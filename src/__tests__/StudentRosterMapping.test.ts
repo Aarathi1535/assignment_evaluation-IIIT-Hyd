@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import AnswerScript from '../models/AnswerScript';
+import AnswerScript, { IdentificationSource, IdentificationStatus, ManualIdReason } from '../models/AnswerScript';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import Batch, { BatchStatus } from '../models/Batch';
 import Exam, { ExamStatus } from '../models/Exam';
@@ -952,6 +952,421 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
             expect(createdScripts.length).toBe(1);
             expect(createdScripts[0].student?.toString()).toBe(enrolledStudent1._id.toString());
             expect(createdScripts[0].exam.toString()).toBe(exam._id.toString());
+            expect(createdScripts[0].candidateStudentId).toBe(enrolledStudent1._id.toString());
+            expect(createdScripts[0].identificationSource).toBe(IdentificationSource.QR);
+            expect(createdScripts[0].identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
+        });
+    });
+
+    describe('9. GitHub Issue #39 — Script-Level Identification Contract', () => {
+        it('promotes QR candidate from IngestionPage to AnswerScript with identificationSource = "QR" and identificationStatus = "IDENTIFIED"', async () => {
+            const batchId = `batch-issue39-identified-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: exam._id,
+                files: [
+                    {
+                        fileId: 'file-qr',
+                        fileIndex: 0,
+                        originalFilename: 'exam_qr.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 4000,
+                        pageCount: 2,
+                        storageKey: `batches/${batchId}/0/exam_qr.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 4000,
+                totalPageCount: 2,
+                status: BatchStatus.PROCESSING
+            });
+
+            await IngestionPage.create([
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-qr',
+                    fileIndex: 0,
+                    pageNumber: 1,
+                    isCoverPage: true,
+                    candidateStudentId: enrolledStudent1._id.toString(),
+                    decodeOutcome: 'found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/1/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-qr',
+                    fileIndex: 0,
+                    pageNumber: 2,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/2/page.png`
+                }
+            ]);
+
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(scripts.length).toBe(1);
+            const script = scripts[0];
+            expect(script.candidateStudentId).toBe(enrolledStudent1._id.toString());
+            expect(script.identificationSource).toBe(IdentificationSource.QR);
+            expect(script.identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
+            expect(script.student?.toString()).toBe(enrolledStudent1._id.toString());
+            expect(script.needsManualId).toBe(false);
+            expect(script.manualIdReason).toBeNull();
+
+            // Verify persistence in DB
+            const persisted = await AnswerScript.findById(script._id);
+            expect(persisted).not.toBeNull();
+            expect(persisted?.candidateStudentId).toBe(enrolledStudent1._id.toString());
+            expect(persisted?.identificationSource).toBe('QR');
+            expect(persisted?.identificationStatus).toBe('IDENTIFIED');
+        });
+
+        it('persists unidentified AnswerScript when no QR candidate is available', async () => {
+            const batchId = `batch-issue39-no-candidate-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: exam._id,
+                files: [
+                    {
+                        fileId: 'file-nocode',
+                        fileIndex: 0,
+                        originalFilename: 'nocode.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 3000,
+                        pageCount: 2,
+                        storageKey: `batches/${batchId}/0/nocode.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 3000,
+                totalPageCount: 2,
+                status: BatchStatus.PROCESSING
+            });
+
+            await IngestionPage.create([
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-nocode',
+                    fileIndex: 0,
+                    pageNumber: 1,
+                    isCoverPage: true,
+                    candidateStudentId: null,
+                    decodeOutcome: 'not_found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/1/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-nocode',
+                    fileIndex: 0,
+                    pageNumber: 2,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/2/page.png`
+                }
+            ]);
+
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(scripts.length).toBe(1);
+            const script = scripts[0];
+            expect(script.candidateStudentId).toBeNull();
+            expect(script.identificationSource).toBeNull();
+            expect(script.identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
+            expect(script.student).toBeNull();
+            expect(script.needsManualId).toBe(true);
+            expect(script.manualIdReason).toBe(ManualIdReason.NO_CODE_FOUND);
+
+            // Verify persistence in DB
+            const persisted = await AnswerScript.findById(script._id);
+            expect(persisted).not.toBeNull();
+            expect(persisted?.candidateStudentId).toBeNull();
+            expect(persisted?.identificationSource).toBeNull();
+            expect(persisted?.identificationStatus).toBe('UNIDENTIFIED');
+        });
+
+        it('persists unidentified AnswerScript when multiple codes are detected', async () => {
+            const batchId = `batch-issue39-multiple-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: exam._id,
+                files: [
+                    {
+                        fileId: 'file-multi',
+                        fileIndex: 0,
+                        originalFilename: 'multi.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 3000,
+                        pageCount: 1,
+                        storageKey: `batches/${batchId}/0/multi.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 3000,
+                totalPageCount: 1,
+                status: BatchStatus.PROCESSING
+            });
+
+            await IngestionPage.create({
+                batchId,
+                job: defaultJobId,
+                fileId: 'file-multi',
+                fileIndex: 0,
+                pageNumber: 1,
+                isCoverPage: true,
+                candidateStudentId: null,
+                decodeOutcome: 'multiple',
+                status: PageProcessingStatus.PROCESSED,
+                storageKey: `batches/${batchId}/derived/1/page.png`
+            });
+
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(scripts.length).toBe(1);
+            const script = scripts[0];
+            expect(script.candidateStudentId).toBeNull();
+            expect(script.identificationSource).toBeNull();
+            expect(script.identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
+            expect(script.student).toBeNull();
+            expect(script.needsManualId).toBe(true);
+            expect(script.manualIdReason).toBe(ManualIdReason.MULTIPLE_CODES);
+        });
+
+        it('preserves candidateStudentId and identificationSource = "QR" when roster matching fails (NOT_IN_ROSTER)', async () => {
+            const batchId = `batch-issue39-notinroster-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: exam._id,
+                files: [
+                    {
+                        fileId: 'file-unregistered',
+                        fileIndex: 0,
+                        originalFilename: 'unregistered.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 2500,
+                        pageCount: 1,
+                        storageKey: `batches/${batchId}/0/unregistered.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 2500,
+                totalPageCount: 1,
+                status: BatchStatus.PROCESSING
+            });
+
+            const unregisteredCandidate = 'UNKNOWN_CANDIDATE_12345';
+            await IngestionPage.create({
+                batchId,
+                job: defaultJobId,
+                fileId: 'file-unregistered',
+                fileIndex: 0,
+                pageNumber: 1,
+                isCoverPage: true,
+                candidateStudentId: unregisteredCandidate,
+                decodeOutcome: 'found',
+                status: PageProcessingStatus.PROCESSED,
+                storageKey: `batches/${batchId}/derived/1/page.png`
+            });
+
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(scripts.length).toBe(1);
+            const script = scripts[0];
+            // candidate and source MUST be preserved
+            expect(script.candidateStudentId).toBe(unregisteredCandidate);
+            expect(script.identificationSource).toBe(IdentificationSource.QR);
+            expect(script.identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
+            expect(script.student).toBeNull();
+            expect(script.needsManualId).toBe(true);
+            expect(script.manualIdReason).toBe(ManualIdReason.NOT_IN_ROSTER);
+
+            // Verify in DB
+            const persisted = await AnswerScript.findById(script._id);
+            expect(persisted?.candidateStudentId).toBe(unregisteredCandidate);
+            expect(persisted?.identificationSource).toBe('QR');
+            expect(persisted?.identificationStatus).toBe('UNIDENTIFIED');
+            expect(persisted?.student).toBeNull();
+        });
+
+        it('preserves candidateStudentId and identificationSource = "QR" on duplicate conflict (DUPLICATE_STUDENT)', async () => {
+            // Pre-create existing AnswerScript for Alice
+            await AnswerScript.create({
+                exam: exam._id,
+                student: enrolledStudent1._id,
+                batchId: 'previous-batch',
+                fileIndex: 0,
+                startPageNumber: 1,
+                endPageNumber: 2,
+                pageCount: 2,
+                candidateStudentId: enrolledStudent1._id.toString(),
+                identificationSource: IdentificationSource.QR,
+                identificationStatus: IdentificationStatus.IDENTIFIED,
+                filePath: '/prev/path.pdf',
+                filename: 'alice_prev.pdf'
+            });
+
+            const batchId = `batch-issue39-duplicate-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: exam._id,
+                files: [
+                    {
+                        fileId: 'file-dup',
+                        fileIndex: 0,
+                        originalFilename: 'alice_second.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 2500,
+                        pageCount: 2,
+                        storageKey: `batches/${batchId}/0/alice_second.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 2500,
+                totalPageCount: 2,
+                status: BatchStatus.PROCESSING
+            });
+
+            await IngestionPage.create([
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-dup',
+                    fileIndex: 0,
+                    pageNumber: 1,
+                    isCoverPage: true,
+                    candidateStudentId: enrolledStudent1._id.toString(),
+                    decodeOutcome: 'found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/1/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-dup',
+                    fileIndex: 0,
+                    pageNumber: 2,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/2/page.png`
+                }
+            ]);
+
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(scripts.length).toBe(1);
+            const script = scripts[0];
+            // candidate and source preserved even though resolution became DUPLICATE_STUDENT
+            expect(script.candidateStudentId).toBe(enrolledStudent1._id.toString());
+            expect(script.identificationSource).toBe(IdentificationSource.QR);
+            expect(script.identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
+            expect(script.student).toBeNull();
+            expect(script.needsManualId).toBe(true);
+            expect(script.manualIdReason).toBe(ManualIdReason.DUPLICATE_STUDENT);
+        });
+
+        it('repeated assembly remains idempotent and preserves identification contract fields', async () => {
+            const batchId = `batch-issue39-idempotent-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: exam._id,
+                files: [
+                    {
+                        fileId: 'file-idemp',
+                        fileIndex: 0,
+                        originalFilename: 'exam_idemp.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 3500,
+                        pageCount: 2,
+                        storageKey: `batches/${batchId}/0/exam_idemp.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 3500,
+                totalPageCount: 2,
+                status: BatchStatus.PROCESSING
+            });
+
+            await IngestionPage.create([
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-idemp',
+                    fileIndex: 0,
+                    pageNumber: 1,
+                    isCoverPage: true,
+                    candidateStudentId: enrolledStudent2._id.toString(),
+                    decodeOutcome: 'found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/1/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-idemp',
+                    fileIndex: 0,
+                    pageNumber: 2,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/2/page.png`
+                }
+            ]);
+
+            // Run 1
+            const run1 = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            // Run 2
+            const run2 = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(run1.length).toBe(1);
+            expect(run2.length).toBe(1);
+            expect(run1[0]._id.toString()).toBe(run2[0]._id.toString());
+            expect(run2[0].candidateStudentId).toBe(enrolledStudent2._id.toString());
+            expect(run2[0].identificationSource).toBe(IdentificationSource.QR);
+            expect(run2[0].identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
+            expect(run2[0].student?.toString()).toBe(enrolledStudent2._id.toString());
+
+            const totalDocs = await AnswerScript.countDocuments({ batchId });
+            expect(totalDocs).toBe(1);
         });
     });
 });
+

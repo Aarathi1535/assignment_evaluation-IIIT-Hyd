@@ -54,11 +54,12 @@ export async function POST(
       }, { status: 400 });
     }
 
-    const { studentIds } = validationResult.data;
+    const { studentIds, rollNumbers } = validationResult.data;
 
     const roster = await ExamService.enrollStudents(id, studentIds, auth.user.id, auth.user.role, {
       actingUserId: auth.user.id,
-      ipAddress: req.headers.get('x-forwarded-for') || undefined
+      ipAddress: req.headers.get('x-forwarded-for') || undefined,
+      rollNumbers
     });
 
     if (!roster) {

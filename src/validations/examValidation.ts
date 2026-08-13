@@ -46,5 +46,13 @@ export function isValidTransition(current: ExamStatus, next: ExamStatus): boolea
     return VALID_TRANSITIONS[current]?.includes(next) || false;
 }
 
-export { enrollStudentsSchema } from './courseValidation';
+export const enrollStudentsSchema = z.object({
+  studentIds: z.array(objectIdSchema)
+    .min(1, { message: 'Student list cannot be empty' })
+    .refine((items) => new Set(items).size === items.length, {
+      message: 'Duplicate student IDs are not allowed in the request',
+    }),
+  rollNumbers: z.record(z.string(), z.string().nullable().optional()).optional(),
+}).strict();
+
 
