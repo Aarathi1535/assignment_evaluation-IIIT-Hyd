@@ -13,6 +13,8 @@ import User, { IUser } from '../models/User';
 import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
+import { normalizeRollNumber } from '../utils/studentMappingUtils';
+
 
 export interface AuditContext {
     actingUserId?: string;
@@ -169,11 +171,20 @@ export class StudentRosterMappingService {
         }
 
         const userByAnonIdMap = new Map<string, IUser>();
+        const userByRollNumberMap = new Map<string, IUser>();
         for (const mapping of studentMappings) {
-            if (mapping.anonymousId && mapping.student) {
+            if (mapping.student) {
                 const u = userByIdMap.get(mapping.student.toString());
                 if (u) {
-                    userByAnonIdMap.set(mapping.anonymousId.trim(), u);
+                    if (mapping.anonymousId) {
+                        userByAnonIdMap.set(mapping.anonymousId.trim(), u);
+                    }
+                    if (mapping.rollNumber) {
+                        const normalizedRoll = normalizeRollNumber(mapping.rollNumber);
+                        if (normalizedRoll) {
+                            userByRollNumberMap.set(normalizedRoll, u);
+                        }
+                    }
                 }
             }
         }
@@ -210,6 +221,13 @@ export class StudentRosterMappingService {
                 // Try matching by anonymousId
                 else if (userByAnonIdMap.has(candidateRaw)) {
                     matchedUser = userByAnonIdMap.get(candidateRaw) || null;
+                }
+                // Try matching by rollNumber
+                else {
+                    const normalized = normalizeRollNumber(candidateRaw);
+                    if (normalized && userByRollNumberMap.has(normalized)) {
+                        matchedUser = userByRollNumberMap.get(normalized) || null;
+                    }
                 }
             }
 

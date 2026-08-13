@@ -5,6 +5,7 @@ import ExamService from '../../../../../services/ExamService';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
+import { IUser } from '../../../../../models/User';
 
 export async function GET(
   req: NextRequest,
@@ -33,6 +34,33 @@ export async function GET(
   try {
     await connectDB();
 
+    const url = new URL(req.url);
+    const rollNumberQuery = url.searchParams.get('rollNumber');
+    if (rollNumberQuery !== null) {
+      const mapping = await ExamService.getStudentMappingByRollNumber(id, rollNumberQuery, auth.user.id, auth.user.role);
+      if (!mapping) {
+        return NextResponse.json({
+          success: false,
+          message: 'Student not found in exam roster with given roll number',
+          data: null
+        }, { status: 404 });
+      }
+
+      const studentUser = mapping.student as unknown as (IUser | null);
+      const formattedStudent = {
+        id: studentUser?._id?.toString() || '',
+        name: studentUser?.name || '',
+        email: studentUser?.email || '',
+        rollNumber: mapping.rollNumber || null
+      };
+
+      return NextResponse.json({
+        success: true,
+        message: 'Exam student retrieved successfully',
+        data: formattedStudent
+      }, { status: 200 });
+    }
+
     const roster = await ExamService.getEnrolledStudents(id, auth.user.id, auth.user.role);
     if (!roster) {
       return NextResponse.json({
@@ -42,12 +70,15 @@ export async function GET(
       }, { status: 404 });
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const formattedRoster = roster.map((m: any) => ({
-      id: m.student?._id?.toString() || m.student?.id?.toString() || '',
-      name: m.student?.name || '',
-      email: m.student?.email || ''
-    }));
+    const formattedRoster = roster.map((m) => {
+      const studentUser = m.student as unknown as (IUser | null);
+      return {
+        id: studentUser?._id?.toString() || '',
+        name: studentUser?.name || '',
+        email: studentUser?.email || '',
+        rollNumber: m.rollNumber || null
+      };
+    });
 
     return NextResponse.json({
       success: true,
