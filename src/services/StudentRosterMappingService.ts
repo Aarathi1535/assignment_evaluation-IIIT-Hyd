@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import mongoose from 'mongoose';
-import AnswerScript, { IAnswerScript, ManualIdReason } from '../models/AnswerScript';
+import AnswerScript, {
+    IAnswerScript,
+    ManualIdReason,
+    IdentificationSource,
+    IdentificationStatus
+} from '../models/AnswerScript';
 import IngestionPage from '../models/IngestionPage';
 import Course from '../models/Course';
 import StudentMapping from '../models/StudentMapping';
@@ -178,8 +183,12 @@ export class StudentRosterMappingService {
 
         // Step 5: Process each group, resolve student, detect duplicates, and upsert AnswerScript
         for (const group of groups) {
+            // Promote candidate from IngestionPage cover to AnswerScript
+            const candidateStudentId = group.candidateStudentId ? group.candidateStudentId.trim() : null;
+            const identificationSource = candidateStudentId ? IdentificationSource.QR : null;
+
             let matchedUser: IUser | null = null;
-            let candidateRaw = group.candidateStudentId?.trim();
+            let candidateRaw = candidateStudentId;
 
             if (candidateRaw) {
                 // Support AE-052 deterministic payload: examId:studentId
@@ -208,22 +217,26 @@ export class StudentRosterMappingService {
             let resolvedStudentId: mongoose.Types.ObjectId | null = null;
             let needsManualId = false;
             let manualIdReason: ManualIdReason | null = null;
+            let identificationStatus: IdentificationStatus = IdentificationStatus.UNIDENTIFIED;
 
             if (group.decodeOutcome === 'multiple') {
                 // Outcome C: MULTIPLE_CODES
                 needsManualId = true;
                 manualIdReason = ManualIdReason.MULTIPLE_CODES;
                 resolvedStudentId = null;
-            } else if (!group.candidateStudentId || group.decodeOutcome === 'not_found') {
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
+            } else if (!candidateStudentId || group.decodeOutcome === 'not_found') {
                 // Outcome B: NO_CODE_FOUND
                 needsManualId = true;
                 manualIdReason = ManualIdReason.NO_CODE_FOUND;
                 resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
             } else if (!matchedUser || !enrolledUserIds.has(matchedUser._id.toString())) {
                 // Outcome D: NOT_IN_ROSTER
                 needsManualId = true;
                 manualIdReason = ManualIdReason.NOT_IN_ROSTER;
                 resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
             } else {
                 // Check if another identified AnswerScript for (exam, student) already exists
                 const existingScript = await AnswerScript.findOne({
@@ -242,11 +255,13 @@ export class StudentRosterMappingService {
                     needsManualId = true;
                     manualIdReason = ManualIdReason.DUPLICATE_STUDENT;
                     resolvedStudentId = null;
+                    identificationStatus = IdentificationStatus.UNIDENTIFIED;
                 } else {
                     // Outcome A: SUCCESSFULLY_IDENTIFIED
                     resolvedStudentId = matchedUser._id as mongoose.Types.ObjectId;
                     needsManualId = false;
                     manualIdReason = null;
+                    identificationStatus = IdentificationStatus.IDENTIFIED;
                 }
             }
 
@@ -273,7 +288,9 @@ export class StudentRosterMappingService {
                             startPageNumber: group.startPageNumber,
                             endPageNumber: group.endPageNumber,
                             pageCount: group.pageCount,
-                            candidateStudentId: group.candidateStudentId || null,
+                            candidateStudentId,
+                            identificationSource,
+                            identificationStatus,
                             decodeOutcome: group.decodeOutcome || null,
                             needsManualId,
                             manualIdReason,
@@ -306,7 +323,9 @@ export class StudentRosterMappingService {
                                 startPageNumber: group.startPageNumber,
                                 endPageNumber: group.endPageNumber,
                                 pageCount: group.pageCount,
-                                candidateStudentId: group.candidateStudentId || null,
+                                candidateStudentId,
+                                identificationSource,
+                                identificationStatus: IdentificationStatus.UNIDENTIFIED,
                                 decodeOutcome: group.decodeOutcome || null,
                                 needsManualId: true,
                                 manualIdReason: ManualIdReason.DUPLICATE_STUDENT,
@@ -331,3 +350,4 @@ export class StudentRosterMappingService {
 
 export const defaultStudentRosterMappingService = new StudentRosterMappingService();
 export default defaultStudentRosterMappingService;
+

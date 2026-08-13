@@ -7,6 +7,17 @@ export enum ManualIdReason {
     DUPLICATE_STUDENT = 'DUPLICATE_STUDENT'
 }
 
+export enum IdentificationSource {
+    QR = 'QR',
+    OPERATOR = 'OPERATOR',
+    OCR = 'OCR'
+}
+
+export enum IdentificationStatus {
+    IDENTIFIED = 'IDENTIFIED',
+    UNIDENTIFIED = 'UNIDENTIFIED'
+}
+
 export interface IAnswerScript extends Document {
     exam: mongoose.Types.ObjectId;
     student?: mongoose.Types.ObjectId | null;
@@ -18,6 +29,8 @@ export interface IAnswerScript extends Document {
     endPageNumber?: number;
     pageCount?: number;
     candidateStudentId?: string | null;
+    identificationSource?: IdentificationSource | 'QR' | 'OPERATOR' | 'OCR' | null;
+    identificationStatus?: IdentificationStatus | 'IDENTIFIED' | 'UNIDENTIFIED' | null;
     decodeOutcome?: string | null;
     needsManualId?: boolean;
     manualIdReason?: ManualIdReason | string | null;
@@ -76,6 +89,16 @@ const AnswerScriptSchema = new Schema<IAnswerScript>(
             type: String,
             trim: true,
             default: null
+        },
+        identificationSource: {
+            type: String,
+            enum: [...Object.values(IdentificationSource), null],
+            default: null
+        },
+        identificationStatus: {
+            type: String,
+            enum: [...Object.values(IdentificationStatus), null],
+            default: IdentificationStatus.UNIDENTIFIED
         },
         decodeOutcome: {
             type: String,
