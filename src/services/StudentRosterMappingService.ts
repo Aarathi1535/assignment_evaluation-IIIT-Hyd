@@ -195,8 +195,8 @@ export class StudentRosterMappingService {
         // Step 5: Process each group, resolve student, detect duplicates, and upsert AnswerScript
         for (const group of groups) {
             // Promote candidate from IngestionPage cover to AnswerScript
-            const candidateStudentId = group.candidateStudentId ? group.candidateStudentId.trim() : null;
-            const identificationSource = candidateStudentId ? IdentificationSource.QR : null;
+            let candidateStudentId = group.candidateStudentId ? group.candidateStudentId.trim() : null;
+            let identificationSource = candidateStudentId ? IdentificationSource.QR : null;
 
             let matchedUser: IUser | null = null;
             let candidateRaw = candidateStudentId;
@@ -280,6 +280,25 @@ export class StudentRosterMappingService {
                     needsManualId = false;
                     manualIdReason = null;
                     identificationStatus = IdentificationStatus.IDENTIFIED;
+                }
+            }
+
+            // Verify if the script is already identified (e.g. by an operator or previous scan).
+            // Automatic processing must not silently overwrite manual operator identifications.
+            const existingIdentifiedScript = await AnswerScript.findOne({
+                batchId,
+                fileIndex: group.fileIndex,
+                startPageNumber: group.startPageNumber
+            });
+
+            if (existingIdentifiedScript && existingIdentifiedScript.identificationStatus === IdentificationStatus.IDENTIFIED) {
+                resolvedStudentId = existingIdentifiedScript.student as mongoose.Types.ObjectId | null;
+                identificationStatus = existingIdentifiedScript.identificationStatus as IdentificationStatus;
+                identificationSource = existingIdentifiedScript.identificationSource as any;
+                needsManualId = existingIdentifiedScript.needsManualId || false;
+                manualIdReason = (existingIdentifiedScript.manualIdReason as ManualIdReason | null) || null;
+                if (!candidateStudentId) {
+                    candidateStudentId = existingIdentifiedScript.candidateStudentId || null;
                 }
             }
 

@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import BatchRepository from '../repositories/BatchRepository';
 import BatchService from '../services/BatchService';
 import { isValidIngestionTransition, sanitizeFailureReason } from '../validations/ingestionValidation';
 import mongoose from 'mongoose';
+import defaultIngestionWorker from '../services/IngestionWorker';
 
 let mockSessionUser: any = null;
 
@@ -31,6 +32,11 @@ describe('Ingestion Status Tracking and Status API (AE-045)', () => {
 
     beforeAll(async () => {
         ingestStatusGET = (await import('../app/api/ingest/[id]/route')).GET;
+    });
+
+    beforeEach(() => {
+        defaultIngestionWorker.stop();
+        mockSessionUser = null;
     });
 
     async function createTestBatchAndJob(

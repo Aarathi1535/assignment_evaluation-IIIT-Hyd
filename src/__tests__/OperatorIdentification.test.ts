@@ -7,6 +7,9 @@ import Exam, { ExamStatus } from '../models/Exam';
 import Course from '../models/Course';
 import AnswerScript from '../models/AnswerScript';
 import IngestionPage from '../models/IngestionPage';
+import AuditLog from '../models/AuditLog';
+import Batch, { BatchStatus } from '../models/Batch';
+import defaultIngestionWorker from '../services/IngestionWorker';
 import { NextRequest } from 'next/server';
 import { POST as identifyRoute } from '../app/api/answerscripts/[id]/identify/route';
 import { GET as getStudentsRoute } from '../app/api/exams/[id]/students/route';
@@ -43,9 +46,11 @@ describe('GitHub Issue #41 — Operator-Based AnswerScript Identification', () =
         await Course.init();
         await AnswerScript.init();
         await IngestionPage.init();
+        await Batch.init();
     });
 
     beforeEach(async () => {
+        defaultIngestionWorker.stop();
         mockSessionUser = null;
 
         // Create professors
@@ -152,6 +157,50 @@ describe('GitHub Issue #41 — Operator-Based AnswerScript Identification', () =
             fileIndex: 0,
             pageNumber: 2,
             isCoverPage: false
+        });
+
+        // Create Batch document
+        await Batch.create({
+            batchId: 'batch-01',
+            exam: exam1._id,
+            uploadedBy: profOwner._id,
+            files: [
+                {
+                    fileIndex: 0,
+                    fileId: 'file-01',
+                    originalFilename: 'script-01.pdf',
+                    storageKey: 'key-01',
+                    pageCount: 3,
+                    size: 100,
+                    mimeType: 'application/pdf',
+                    fileType: 'pdf'
+                },
+                {
+                    fileIndex: 1,
+                    fileId: 'file-other',
+                    originalFilename: 'script-other.pdf',
+                    storageKey: 'key-other',
+                    pageCount: 3,
+                    size: 100,
+                    mimeType: 'application/pdf',
+                    fileType: 'pdf'
+                },
+                {
+                    fileIndex: 2,
+                    fileId: 'file-corr',
+                    originalFilename: 'corr.pdf',
+                    storageKey: 'key-corr',
+                    pageCount: 3,
+                    size: 100,
+                    mimeType: 'application/pdf',
+                    fileType: 'pdf'
+                }
+            ],
+            totalFiles: 3,
+            totalSize: 300,
+            totalPageCount: 9,
+            status: BatchStatus.PROCESSING,
+            isActive: true
         });
     });
 
@@ -357,6 +406,169 @@ describe('GitHub Issue #41 — Operator-Based AnswerScript Identification', () =
             const otherAfter = await AnswerScript.findById(otherScript._id);
             expect(otherAfter?.student?.toString()).toBe(studentInRoster._id.toString());
             expect(otherAfter?.identificationStatus).toBe('IDENTIFIED');
+        });
+    });
+
+    describe('5. Audited Correction & Automatic Overwrite Prevention (GitHub Issue #42)', () => {
+        let studentA: any;
+        let studentB: any;
+        let scriptForCorr: any;
+
+        beforeEach(async () => {
+            // Create additional student B
+            studentA = studentInRoster;
+            studentB = await User.create({
+                name: 'Student B',
+                email: `student-b-${Date.now()}@university.edu`,
+                password: 'password',
+                role: UserRole.STUDENT,
+                isActive: true
+            });
+
+            // Add student B to course and exam roster mappings
+            await Course.updateOne({ _id: course1._id }, { $addToSet: { enrolledStudents: studentB._id } });
+            await StudentMapping.create({
+                exam: exam1._id,
+                student: studentB._id,
+                anonymousId: 'ANON-ROSTER-B',
+                rollNumber: 'CS-ROLL-02'
+            });
+
+            // Create already identified script for Student A
+            scriptForCorr = await AnswerScript.create({
+                exam: exam1._id,
+                student: studentA._id,
+                filePath: '/uploads/batch-01/corr.pdf',
+                filename: 'corr.pdf',
+                batchId: 'batch-01',
+                fileIndex: 2,
+                startPageNumber: 7,
+                endPageNumber: 9,
+                pageCount: 3,
+                candidateStudentId: studentA._id.toString(),
+                identificationSource: 'QR',
+                identificationStatus: 'IDENTIFIED',
+                needsManualId: false,
+                isActive: true
+            });
+        });
+
+        it('creates a SUCCESS audit log on first manual identification', async () => {
+            mockSessionUser = { id: profOwner._id.toString(), email: profOwner.email, role: 'PROFESSOR' };
+
+            // Find count of audits before
+            const countBefore = await AuditLog.countDocuments({ action: 'ANSWERSCRIPT_IDENTIFIED' });
+
+            const req = new NextRequest(`http://localhost:3000/api/answerscripts/${scriptToIdentify._id}/identify`, {
+                method: 'POST',
+                body: JSON.stringify({ studentId: studentB._id.toString() })
+            });
+
+            const res = await identifyRoute(req, { params: Promise.resolve({ id: scriptToIdentify._id.toString() }) });
+            expect(res.status).toBe(200);
+
+            const countAfter = await AuditLog.countDocuments({ action: 'ANSWERSCRIPT_IDENTIFIED' });
+            expect(countAfter).toBe(countBefore + 1);
+
+            const audit = await AuditLog.findOne({ action: 'ANSWERSCRIPT_IDENTIFIED', entityId: scriptToIdentify._id });
+            expect(audit).not.toBeNull();
+            expect(audit?.outcome).toBe('SUCCESS');
+            expect(audit?.user.toString()).toBe(profOwner._id.toString());
+            expect(audit?.details?.previousStudentId).toBeNull();
+            expect(audit?.details?.newStudentId).toBe(studentB._id.toString());
+        });
+
+        it('allows human correction (A -> B), updates fields, and logs audit transition containing old & new students', async () => {
+            mockSessionUser = { id: profOwner._id.toString(), email: profOwner.email, role: 'PROFESSOR' };
+
+            const req = new NextRequest(`http://localhost:3000/api/answerscripts/${scriptForCorr._id}/identify`, {
+                method: 'POST',
+                body: JSON.stringify({ studentId: studentB._id.toString() })
+            });
+
+            const res = await identifyRoute(req, { params: Promise.resolve({ id: scriptForCorr._id.toString() }) });
+            expect(res.status).toBe(200);
+
+            // Verify script update
+            const updated = await AnswerScript.findById(scriptForCorr._id);
+            expect(updated?.student?.toString()).toBe(studentB._id.toString());
+            expect(updated?.candidateStudentId).toBe(studentB._id.toString());
+            expect(updated?.identificationSource).toBe('OPERATOR');
+            expect(updated?.identificationStatus).toBe('IDENTIFIED');
+
+            // Verify audit log tracks correction details
+            const audit = await AuditLog.findOne({
+                action: 'ANSWERSCRIPT_IDENTIFIED',
+                entityId: scriptForCorr._id,
+                'details.previousStudentId': studentA._id.toString(),
+                'details.newStudentId': studentB._id.toString()
+            });
+            expect(audit).not.toBeNull();
+            expect(audit?.user.toString()).toBe(profOwner._id.toString());
+        });
+
+        it('automatic assembly does never silently overwrite an already identified AnswerScript', async () => {
+            // Suppose scriptForCorr was identified by operator as Student A
+            // We run background assembly simulation where cover sheet QR scans to Student B
+            const defaultStudentRosterMappingService = (await import('../services/StudentRosterMappingService')).default;
+
+            // Create associated IngestionPages for corr script to simulate scanner background ingestion
+            await IngestionPage.create({
+                batchId: 'batch-01',
+                job: new mongoose.Types.ObjectId(),
+                fileId: 'file-corr',
+                storageKey: 'key-corr-cover',
+                fileIndex: 2,
+                pageNumber: 7,
+                isCoverPage: true,
+                candidateStudentId: studentB._id.toString(),
+                decodeOutcome: 'found'
+            });
+
+            await IngestionPage.create({
+                batchId: 'batch-01',
+                job: new mongoose.Types.ObjectId(),
+                fileId: 'file-corr',
+                storageKey: 'key-corr-content',
+                fileIndex: 2,
+                pageNumber: 8,
+                isCoverPage: false
+            });
+
+            const results = await defaultStudentRosterMappingService.assembleAndMapAnswerScripts(
+                'batch-01',
+                { actingUserId: profOwner._id.toString(), actingUserRole: 'PROFESSOR' }
+            );
+
+            expect(results.length).toBe(2); // scriptToIdentify (fileIndex 0) and scriptForCorr (fileIndex 2)
+
+            // Verify student remains Student A (original assignment preserved, B not silently overwritten)
+            const scriptInDb = await AnswerScript.findById(scriptForCorr._id);
+            expect(scriptInDb?.student?.toString()).toBe(studentA._id.toString());
+            // Candidate student ID from scan is preserved for review/history
+            expect(scriptInDb?.candidateStudentId).toBe(studentB._id.toString());
+        });
+
+        it('failed correction leaves the target script and ingestion pages completely unchanged without a successful audit log', async () => {
+            mockSessionUser = { id: profOwner._id.toString(), email: profOwner.email, role: 'PROFESSOR' };
+
+            const req = new NextRequest(`http://localhost:3000/api/answerscripts/${scriptForCorr._id}/identify`, {
+                method: 'POST',
+                body: JSON.stringify({ studentId: 'invalid-id' })
+            });
+
+            const countBefore = await AuditLog.countDocuments({ action: 'ANSWERSCRIPT_IDENTIFIED', outcome: 'SUCCESS' });
+
+            const res = await identifyRoute(req, { params: Promise.resolve({ id: scriptForCorr._id.toString() }) });
+            expect(res.status).toBe(400);
+
+            // Script should be unchanged
+            const scriptAfter = await AnswerScript.findById(scriptForCorr._id);
+            expect(scriptAfter?.student?.toString()).toBe(studentA._id.toString());
+
+            // No new success audit log
+            const countAfter = await AuditLog.countDocuments({ action: 'ANSWERSCRIPT_IDENTIFIED', outcome: 'SUCCESS' });
+            expect(countAfter).toBe(countBefore);
         });
     });
 });

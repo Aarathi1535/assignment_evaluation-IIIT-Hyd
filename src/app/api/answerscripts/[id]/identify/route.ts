@@ -8,6 +8,7 @@ import ExamRepository from '../../../../../repositories/ExamRepository';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { HttpError, isDuplicateKeyError } from '../../../../../lib/errors';
+import { writeAuditLog } from '../../../../../lib/audit';
 
 export async function POST(
   req: NextRequest,
@@ -123,6 +124,8 @@ export async function POST(
       }, { status: 409 });
     }
 
+    const previousStudentId = script.student ? script.student.toString() : null;
+
     // 6. Perform atomic update
     try {
       const updated = await AnswerScript.findOneAndUpdate(
@@ -139,6 +142,23 @@ export async function POST(
         },
         { new: true, runValidators: true }
       );
+
+      // Record successful manual identification in the audit log
+      await writeAuditLog({
+        user: auth.user.id,
+        action: 'ANSWERSCRIPT_IDENTIFIED',
+        outcome: 'SUCCESS',
+        entityId: script._id,
+        entityType: 'AnswerScript',
+        details: {
+          examId: script.exam.toString(),
+          previousStudentId,
+          newStudentId: studentId.toString(),
+          identificationSource: 'OPERATOR',
+          reason: 'Manual identification correction/override'
+        },
+        ipAddress: req.headers.get('x-forwarded-for') || undefined
+      });
 
       return NextResponse.json({
         success: true,
