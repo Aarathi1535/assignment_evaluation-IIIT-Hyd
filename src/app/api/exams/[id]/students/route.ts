@@ -35,6 +35,25 @@ export async function GET(
     await connectDB();
 
     const url = new URL(req.url);
+    const searchQuery = url.searchParams.get('query') || url.searchParams.get('q');
+    if (searchQuery !== null) {
+      const results = await ExamService.searchExamRoster(id, searchQuery, auth.user.id, auth.user.role);
+      const formatted = results.map((m) => {
+        const studentUser = m.student as unknown as (IUser | null);
+        return {
+          id: studentUser?._id?.toString() || '',
+          name: studentUser?.name || '',
+          email: studentUser?.email || '',
+          rollNumber: m.rollNumber || null
+        };
+      });
+      return NextResponse.json({
+        success: true,
+        message: 'Exam students retrieved successfully',
+        data: formatted
+      }, { status: 200 });
+    }
+
     const rollNumberQuery = url.searchParams.get('rollNumber');
     if (rollNumberQuery !== null) {
       const mapping = await ExamService.getStudentMappingByRollNumber(id, rollNumberQuery, auth.user.id, auth.user.role);

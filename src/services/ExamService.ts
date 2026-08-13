@@ -3,7 +3,7 @@ import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose from 'mongoose';
 import { writeAuditLog } from '../lib/audit';
 import StudentMapping, { IStudentMapping } from '../models/StudentMapping';
-import User, { UserRole } from '../models/User';
+import User, { UserRole, IUser } from '../models/User';
 import crypto from 'crypto';
 import { HttpError, isDuplicateKeyError } from '../lib/errors';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
@@ -539,6 +539,68 @@ class ExamService {
             exam: exam._id,
             rollNumber: normalized
         }).populate('student', 'name email role isActive');
+    }
+
+    /**
+     * Exam-scoped roster lookup supporting lookup by rollNumber, name, or email.
+     * Enforces existing owner-scoped exam access pattern.
+     */
+    async searchExamRoster(
+        examId: string,
+        query: string,
+        actingUserId: string,
+        actingUserRole: string
+    ): Promise<IStudentMapping[]> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            return [];
+        }
+
+        const exam = await ExamRepository.getExamById(examId, actingUserId, actingUserRole);
+        if (!exam) {
+            const existsGlobally = await Exam.exists({ _id: examId, isActive: true });
+            if (existsGlobally) {
+                await writeAuditLog({
+                    user: actingUserId,
+                    action: 'EXAM_ROSTER_ACCESS_DENIED',
+                    outcome: 'FAILURE',
+                    entityId: new mongoose.Types.ObjectId(examId),
+                    entityType: 'Exam',
+                    details: { reason: 'Ownership check failed for roster search', query }
+                });
+            }
+            return [];
+        }
+
+        const trimmedQuery = query.trim();
+        if (!trimmedQuery) {
+            return [];
+        }
+
+        // 1. Try resolving mapping by normalized rollNumber
+        const normalizedRoll = normalizeRollNumber(trimmedQuery);
+        if (normalizedRoll) {
+            const byRoll = await StudentMapping.find({
+                exam: exam._id,
+                rollNumber: normalizedRoll
+            }).populate('student', 'name email role isActive');
+            if (byRoll.length > 0) {
+                return byRoll;
+            }
+        }
+
+        // 2. Fetch all mappings for the exam to perform name or email lookup
+        const allMappings = await StudentMapping.find({ exam: exam._id }).populate('student', 'name email role isActive');
+        
+        // Filter mappings where student's name or email contains the query case-insensitively
+        const queryLower = trimmedQuery.toLowerCase();
+        return allMappings.filter(m => {
+            const studentUser = m.student as unknown as (IUser | null);
+            if (!studentUser) return false;
+            
+            const nameMatch = studentUser.name?.toLowerCase().includes(queryLower);
+            const emailMatch = studentUser.email?.toLowerCase().includes(queryLower);
+            return nameMatch || emailMatch;
+        });
     }
 }
 
