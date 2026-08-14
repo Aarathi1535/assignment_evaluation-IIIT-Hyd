@@ -14,7 +14,10 @@ import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
+import { SplittingStrategyType } from '../models/Exam';
+import { PageSplittingStrategy } from './splitting/PageSplittingStrategy';
 import { CoverBoundarySplittingStrategy } from './splitting/CoverBoundarySplittingStrategy';
+import { FixedPageSplittingStrategy } from './splitting/FixedPageSplittingStrategy';
 
 
 export interface AuditContext {
@@ -92,8 +95,25 @@ export class StudentRosterMappingService {
             return [];
         }
 
-        // Step 3: Cover-Sheet Grouping Rule
-        const strategy = new CoverBoundarySplittingStrategy();
+        // Clear all existing page -> AnswerScript links for this batch to ensure idempotency
+        await IngestionPage.updateMany(
+            { batchId },
+            { $set: { answerScript: null } }
+        );
+
+        // Step 3: Page Splitting Strategy Execution
+        const strategyType = exam.splittingStrategy || SplittingStrategyType.COVER_PAGE;
+        let strategy: PageSplittingStrategy;
+        if (strategyType === SplittingStrategyType.FIXED_PAGE) {
+            const n = exam.fixedPageCount;
+            if (n === undefined || n === null || n <= 0 || !Number.isInteger(n)) {
+                throw new HttpError('Invalid fixed page count configuration for exam', 400);
+            }
+            strategy = new FixedPageSplittingStrategy(n);
+        } else {
+            strategy = new CoverBoundarySplittingStrategy();
+        }
+
         const ranges = strategy.split(pages);
 
         const groups: AnswerScriptGroup[] = ranges.map(range => {
@@ -287,9 +307,19 @@ export class StudentRosterMappingService {
                 }
             }
 
+            // Enforce incomplete script rule for fixed-page splitting
+            if (strategyType === SplittingStrategyType.FIXED_PAGE && group.pageCount < exam.fixedPageCount!) {
+                needsManualId = true;
+                manualIdReason = ManualIdReason.INCOMPLETE_SCRIPT;
+                resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
+            }
+
             const sourceFile = filesByFileIndex.get(group.fileIndex);
             const scriptFilePath = group.coverStorageKey || sourceFile?.storageKey || `batches/${batchId}/${group.fileIndex}`;
             const scriptFilename = sourceFile?.originalFilename || `script_${group.fileIndex}_${group.startPageNumber}.pdf`;
+
+            let persistedScript: IAnswerScript | null = null;
 
             // Step 6: Idempotent upsert enforcing (batchId, fileIndex, startPageNumber) source identity
             try {
@@ -324,6 +354,7 @@ export class StudentRosterMappingService {
 
                 if (answerScript) {
                     results.push(answerScript);
+                    persistedScript = answerScript;
                 }
             } catch (upsertErr: any) {
                 // Safe race-condition fallback for (exam, student) duplicate key error
@@ -359,10 +390,19 @@ export class StudentRosterMappingService {
 
                     if (fallbackScript) {
                         results.push(fallbackScript);
+                        persistedScript = fallbackScript;
                     }
                 } else {
                     throw upsertErr;
                 }
+            }
+
+            if (persistedScript) {
+                const pageIds = group.pages.map((p: any) => p._id);
+                await IngestionPage.updateMany(
+                    { _id: { $in: pageIds } },
+                    { $set: { answerScript: persistedScript._id } }
+                );
             }
         }
 
