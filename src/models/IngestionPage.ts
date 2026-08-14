@@ -25,6 +25,7 @@ export interface IIngestionPage extends Document {
     isCoverPage?: boolean;
     candidateStudentId?: string | null;
     decodeOutcome?: DecodeOutcome | null;
+    answerScript?: mongoose.Types.ObjectId | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -105,6 +106,12 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
             type: String,
             enum: ['found', 'not_found', 'multiple', null],
             default: null
+        },
+        answerScript: {
+            type: Schema.Types.ObjectId,
+            ref: 'AnswerScript',
+            default: null,
+            index: true
         },
         metadata: {
             type: Schema.Types.Mixed

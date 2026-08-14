@@ -95,6 +95,12 @@ export class StudentRosterMappingService {
             return [];
         }
 
+        // Clear all existing page -> AnswerScript links for this batch to ensure idempotency
+        await IngestionPage.updateMany(
+            { batchId },
+            { $set: { answerScript: null } }
+        );
+
         // Step 3: Page Splitting Strategy Execution
         const strategyType = exam.splittingStrategy || SplittingStrategyType.COVER_PAGE;
         let strategy: PageSplittingStrategy;
@@ -313,6 +319,8 @@ export class StudentRosterMappingService {
             const scriptFilePath = group.coverStorageKey || sourceFile?.storageKey || `batches/${batchId}/${group.fileIndex}`;
             const scriptFilename = sourceFile?.originalFilename || `script_${group.fileIndex}_${group.startPageNumber}.pdf`;
 
+            let persistedScript: IAnswerScript | null = null;
+
             // Step 6: Idempotent upsert enforcing (batchId, fileIndex, startPageNumber) source identity
             try {
                 const answerScript = await AnswerScript.findOneAndUpdate(
@@ -346,6 +354,7 @@ export class StudentRosterMappingService {
 
                 if (answerScript) {
                     results.push(answerScript);
+                    persistedScript = answerScript;
                 }
             } catch (upsertErr: any) {
                 // Safe race-condition fallback for (exam, student) duplicate key error
@@ -381,10 +390,19 @@ export class StudentRosterMappingService {
 
                     if (fallbackScript) {
                         results.push(fallbackScript);
+                        persistedScript = fallbackScript;
                     }
                 } else {
                     throw upsertErr;
                 }
+            }
+
+            if (persistedScript) {
+                const pageIds = group.pages.map((p: any) => p._id);
+                await IngestionPage.updateMany(
+                    { _id: { $in: pageIds } },
+                    { $set: { answerScript: persistedScript._id } }
+                );
             }
         }
 
