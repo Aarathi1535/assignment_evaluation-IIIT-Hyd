@@ -14,6 +14,7 @@ import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
+import { CoverBoundarySplittingStrategy } from './splitting/CoverBoundarySplittingStrategy';
 
 
 export interface AuditContext {
@@ -92,39 +93,23 @@ export class StudentRosterMappingService {
         }
 
         // Step 3: Cover-Sheet Grouping Rule
-        // - First detected cover (isCoverPage === true) starts a script
-        // - Pages from cover N through the page immediately before cover N+1 belong to that script
-        // - Next detected cover starts the next script
-        // - Guaranteed persistence fallback: if no cover flag exists, group from page 1
-        const groups: AnswerScriptGroup[] = [];
-        let currentGroup: AnswerScriptGroup | null = null;
+        const strategy = new CoverBoundarySplittingStrategy();
+        const ranges = strategy.split(pages);
 
-        for (const page of pages) {
-            if (page.isCoverPage === true) {
-                if (currentGroup) {
-                    groups.push(currentGroup);
-                }
-                currentGroup = {
-                    batchId,
-                    fileIndex: page.fileIndex,
-                    startPageNumber: page.pageNumber,
-                    endPageNumber: page.pageNumber,
-                    pageCount: 1,
-                    candidateStudentId: page.candidateStudentId || null,
-                    decodeOutcome: page.decodeOutcome || null,
-                    coverStorageKey: page.storageKey,
-                    pages: [page]
-                };
-            } else if (currentGroup) {
-                currentGroup.endPageNumber = page.pageNumber;
-                currentGroup.pageCount += 1;
-                currentGroup.pages.push(page);
-            }
-        }
-
-        if (currentGroup) {
-            groups.push(currentGroup);
-        }
+        const groups: AnswerScriptGroup[] = ranges.map(range => {
+            const coverPage = range.pages[0];
+            return {
+                batchId,
+                fileIndex: range.fileIndex,
+                startPageNumber: range.startPageNumber,
+                endPageNumber: range.endPageNumber,
+                pageCount: range.pageCount,
+                candidateStudentId: coverPage.candidateStudentId || null,
+                decodeOutcome: coverPage.decodeOutcome || null,
+                coverStorageKey: coverPage.storageKey,
+                pages: range.pages
+            };
+        });
 
         if (groups.length === 0) {
             return [];
