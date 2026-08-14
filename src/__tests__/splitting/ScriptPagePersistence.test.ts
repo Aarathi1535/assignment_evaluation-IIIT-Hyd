@@ -410,4 +410,136 @@ describe('Script-Page Persistence Integration', () => {
         // Ensure old script 1 reference is not on page 2 or 3 anymore
         expect(secondPages[1].answerScript?.toString()).not.toBe(newScriptId1.toString());
     });
+
+    it('should assert authority and range consistency after a splitting boundary update', async () => {
+        const batchId = `batch-boundary-update-${Date.now()}`;
+        await Batch.create({
+            batchId,
+            uploadedBy: profUser._id,
+            exam: coverExam._id,
+            files: [
+                {
+                    fileId: 'f0',
+                    fileIndex: 0,
+                    originalFilename: 'file0.pdf',
+                    fileType: 'pdf',
+                    mimeType: 'application/pdf',
+                    size: 1000,
+                    pageCount: 3,
+                    storageKey: `batches/${batchId}/0/file0.pdf`
+                }
+            ],
+            totalFiles: 1,
+            totalSize: 1000,
+            totalPageCount: 3,
+            status: BatchStatus.PROCESSING
+        });
+
+        // Run 1: page 1 & 2 are cover pages, page 3 is normal.
+        // This splits the pages into 2 scripts:
+        // - Script A (pages: [1])
+        // - Script B (pages: [2, 3])
+        await IngestionPage.create([
+            {
+                batchId,
+                job: defaultJobId,
+                fileId: 'f0',
+                fileIndex: 0,
+                pageNumber: 1,
+                isCoverPage: true,
+                candidateStudentId: studentUser1._id.toString(),
+                decodeOutcome: 'found',
+                status: PageProcessingStatus.PROCESSED,
+                storageKey: `batches/${batchId}/derived/1/page.png`
+            },
+            {
+                batchId,
+                job: defaultJobId,
+                fileId: 'f0',
+                fileIndex: 0,
+                pageNumber: 2,
+                isCoverPage: true,
+                candidateStudentId: studentUser1._id.toString(),
+                decodeOutcome: 'found',
+                status: PageProcessingStatus.PROCESSED,
+                storageKey: `batches/${batchId}/derived/2/page.png`
+            },
+            {
+                batchId,
+                job: defaultJobId,
+                fileId: 'f0',
+                fileIndex: 0,
+                pageNumber: 3,
+                isCoverPage: false,
+                status: PageProcessingStatus.PROCESSED,
+                storageKey: `batches/${batchId}/derived/3/page.png`
+            }
+        ]);
+
+        const firstScripts = await service.assembleAndMapAnswerScripts(batchId, {
+            actingUserId: profUser._id.toString(),
+            actingUserRole: 'PROFESSOR'
+        });
+
+        expect(firstScripts.length).toBe(2);
+        const scriptId1 = firstScripts[0]._id;
+        const scriptId2 = firstScripts[1]._id;
+
+        // Run 2: Reprocess, but now page 2 is NO LONGER a cover page.
+        // This splits the pages into 1 script:
+        // - Script A (pages: [1, 2, 3])
+        // Script B (startPageNumber: 2) becomes obsolete and has 0 linked pages.
+        await IngestionPage.updateOne(
+            { batchId, pageNumber: 2 },
+            { $set: { isCoverPage: false, candidateStudentId: null, decodeOutcome: null } }
+        );
+
+        const secondScripts = await service.assembleAndMapAnswerScripts(batchId, {
+            actingUserId: profUser._id.toString(),
+            actingUserRole: 'PROFESSOR'
+        });
+
+        // Script splitting should now produce 1 active script
+        expect(secondScripts.length).toBe(1);
+        const activeScript = secondScripts[0];
+        expect(activeScript._id.toString()).toBe(scriptId1.toString());
+
+        // Assert 1: IngestionPage.answerScript is the authoritative source of truth
+        const pages = await IngestionPage.find({ batchId }).sort({ pageNumber: 1 });
+        expect(pages.length).toBe(3);
+
+        // All pages in the batch must point to the active script (scriptId1)
+        expect(pages[0].answerScript?.toString()).toBe(scriptId1.toString());
+        expect(pages[1].answerScript?.toString()).toBe(scriptId1.toString());
+        expect(pages[2].answerScript?.toString()).toBe(scriptId1.toString());
+
+        // Obsolete script (scriptId2) must have NO pages linking to it
+        const pagesForObsoleteScript = await IngestionPage.find({ answerScript: scriptId2 });
+        expect(pagesForObsoleteScript.length).toBe(0);
+
+        // Fetch the obsolete AnswerScript from DB to confirm it is not linked
+        const obsoleteScriptInDb = await AnswerScript.findById(scriptId2);
+        expect(obsoleteScriptInDb).toBeDefined();
+
+        // Assert 2: AnswerScript startPageNumber/endPageNumber/pageCount exactly match the pages actually linked
+        const linkedPages = await IngestionPage.find({ answerScript: activeScript._id }).sort({ pageNumber: 1 });
+        expect(linkedPages.length).toBe(activeScript.pageCount);
+
+        const minPageNum = Math.min(...linkedPages.map(p => p.pageNumber));
+        const maxPageNum = Math.max(...linkedPages.map(p => p.pageNumber));
+
+        expect(minPageNum).toBe(activeScript.startPageNumber);
+        expect(maxPageNum).toBe(activeScript.endPageNumber);
+
+        // Assert 3: There is no mismatch between the persisted AnswerScript range and its linked IngestionPages
+        for (let pageNum = activeScript.startPageNumber!; pageNum <= activeScript.endPageNumber!; pageNum++) {
+            const pageExists = linkedPages.some(p => p.pageNumber === pageNum);
+            expect(pageExists).toBe(true);
+        }
+
+        const hasOutofRangePage = linkedPages.some(
+            p => p.pageNumber < activeScript.startPageNumber! || p.pageNumber > activeScript.endPageNumber!
+        );
+        expect(hasOutofRangePage).toBe(false);
+    });
 });
