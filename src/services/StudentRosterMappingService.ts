@@ -14,7 +14,10 @@ import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
+import { SplittingStrategyType } from '../models/Exam';
+import { PageSplittingStrategy } from './splitting/PageSplittingStrategy';
 import { CoverBoundarySplittingStrategy } from './splitting/CoverBoundarySplittingStrategy';
+import { FixedPageSplittingStrategy } from './splitting/FixedPageSplittingStrategy';
 
 
 export interface AuditContext {
@@ -92,8 +95,19 @@ export class StudentRosterMappingService {
             return [];
         }
 
-        // Step 3: Cover-Sheet Grouping Rule
-        const strategy = new CoverBoundarySplittingStrategy();
+        // Step 3: Page Splitting Strategy Execution
+        const strategyType = exam.splittingStrategy || SplittingStrategyType.COVER_PAGE;
+        let strategy: PageSplittingStrategy;
+        if (strategyType === SplittingStrategyType.FIXED_PAGE) {
+            const n = exam.fixedPageCount;
+            if (n === undefined || n === null || n <= 0 || !Number.isInteger(n)) {
+                throw new HttpError('Invalid fixed page count configuration for exam', 400);
+            }
+            strategy = new FixedPageSplittingStrategy(n);
+        } else {
+            strategy = new CoverBoundarySplittingStrategy();
+        }
+
         const ranges = strategy.split(pages);
 
         const groups: AnswerScriptGroup[] = ranges.map(range => {
@@ -285,6 +299,14 @@ export class StudentRosterMappingService {
                 if (!candidateStudentId) {
                     candidateStudentId = existingIdentifiedScript.candidateStudentId || null;
                 }
+            }
+
+            // Enforce incomplete script rule for fixed-page splitting
+            if (strategyType === SplittingStrategyType.FIXED_PAGE && group.pageCount < exam.fixedPageCount!) {
+                needsManualId = true;
+                manualIdReason = ManualIdReason.INCOMPLETE_SCRIPT;
+                resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
             }
 
             const sourceFile = filesByFileIndex.get(group.fileIndex);

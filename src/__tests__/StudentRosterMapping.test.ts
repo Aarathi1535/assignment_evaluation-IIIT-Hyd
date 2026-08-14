@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import AnswerScript, { IdentificationSource, IdentificationStatus, ManualIdReason } from '../models/AnswerScript';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import Batch, { BatchStatus } from '../models/Batch';
-import Exam, { ExamStatus } from '../models/Exam';
+import Exam, { ExamStatus, SplittingStrategyType } from '../models/Exam';
 import Course from '../models/Course';
 import StudentMapping from '../models/StudentMapping';
 import User, { UserRole } from '../models/User';
@@ -1366,6 +1366,203 @@ describe('AE-051 — Map Decoded ID → Roster Student', () => {
 
             const totalDocs = await AnswerScript.countDocuments({ batchId });
             expect(totalDocs).toBe(1);
+        });
+    });
+
+    describe('10. AE-055 — Fixed-Page Script Splitting Integration', () => {
+        let fixedExam: any;
+
+        beforeEach(async () => {
+            fixedExam = await Exam.create({
+                title: 'Fixed Midterm 2026',
+                course: course._id,
+                createdBy: profUser._id,
+                examDate: new Date(),
+                totalMarks: 100,
+                status: ExamStatus.SCHEDULED,
+                numberOfQuestions: 5,
+                enrolledStudents: [enrolledStudent1._id, enrolledStudent2._id],
+                splittingStrategy: SplittingStrategyType.FIXED_PAGE,
+                fixedPageCount: 2,
+                isActive: true
+            });
+        });
+
+        it('splits pages into fixed sizes and identifies students correctly', async () => {
+            const batchId = `batch-fixed-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: fixedExam._id,
+                files: [
+                    {
+                        fileId: 'file-fixed',
+                        fileIndex: 0,
+                        originalFilename: 'fixed_exam.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 5000,
+                        pageCount: 5,
+                        storageKey: `batches/${batchId}/0/fixed.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 5000,
+                totalPageCount: 5,
+                status: BatchStatus.PROCESSING
+            });
+
+            // Create 5 pages.
+            // Page 1: cover for script 1 (has student 1's ID)
+            // Page 2: script 1 regular page
+            // Page 3: cover for script 2 (has student 2's ID)
+            // Page 4: script 2 regular page
+            // Page 5: cover for script 3 (incomplete, size 1, has student 1's ID)
+            await IngestionPage.create([
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 1,
+                    isCoverPage: false,
+                    candidateStudentId: enrolledStudent1._id.toString(),
+                    decodeOutcome: 'found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/1/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 2,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/2/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 3,
+                    isCoverPage: false,
+                    candidateStudentId: enrolledStudent2._id.toString(),
+                    decodeOutcome: 'found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/3/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 4,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/4/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 5,
+                    isCoverPage: false,
+                    candidateStudentId: enrolledStudent1._id.toString(),
+                    decodeOutcome: 'found',
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/5/page.png`
+                }
+            ]);
+
+            const scripts = await service.assembleAndMapAnswerScripts(batchId, {
+                actingUserId: profUser._id.toString(),
+                actingUserRole: 'PROFESSOR'
+            });
+
+            expect(scripts.length).toBe(3);
+
+            // Script 1 (pages 1-2): Complete, student identified
+            expect(scripts[0].startPageNumber).toBe(1);
+            expect(scripts[0].endPageNumber).toBe(2);
+            expect(scripts[0].pageCount).toBe(2);
+            expect(scripts[0].student?.toString()).toBe(enrolledStudent1._id.toString());
+            expect(scripts[0].needsManualId).toBe(false);
+
+            // Script 2 (pages 3-4): Complete, student identified
+            expect(scripts[1].startPageNumber).toBe(3);
+            expect(scripts[1].endPageNumber).toBe(4);
+            expect(scripts[1].pageCount).toBe(2);
+            expect(scripts[1].student?.toString()).toBe(enrolledStudent2._id.toString());
+            expect(scripts[1].needsManualId).toBe(false);
+
+            // Script 3 (page 5): Incomplete (size 1 < N=2), marked for manual review
+            expect(scripts[2].startPageNumber).toBe(5);
+            expect(scripts[2].endPageNumber).toBe(5);
+            expect(scripts[2].pageCount).toBe(1);
+            expect(scripts[2].needsManualId).toBe(true);
+            expect(scripts[2].manualIdReason).toBe(ManualIdReason.INCOMPLETE_SCRIPT);
+            expect(scripts[2].student).toBeNull();
+        });
+
+        it('rejects processing if fixedPageCount configuration is invalid', async () => {
+            // Set invalid fixedPageCount on the exam using direct update to bypass model validation if any
+            await Exam.updateOne({ _id: fixedExam._id }, { $set: { fixedPageCount: 0 } });
+
+            const batchId = `batch-fixed-invalid-${Date.now()}`;
+            await Batch.create({
+                batchId,
+                uploadedBy: profUser._id,
+                exam: fixedExam._id,
+                files: [
+                    {
+                        fileId: 'file-fixed',
+                        fileIndex: 0,
+                        originalFilename: 'fixed_exam.pdf',
+                        fileType: 'pdf',
+                        mimeType: 'application/pdf',
+                        size: 1000,
+                        pageCount: 2,
+                        storageKey: `batches/${batchId}/0/fixed.pdf`
+                    }
+                ],
+                totalFiles: 1,
+                totalSize: 1000,
+                totalPageCount: 2,
+                status: BatchStatus.PROCESSING
+            });
+
+            await IngestionPage.create([
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 1,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/1/page.png`
+                },
+                {
+                    batchId,
+                    job: defaultJobId,
+                    fileId: 'file-fixed',
+                    fileIndex: 0,
+                    pageNumber: 2,
+                    isCoverPage: false,
+                    status: PageProcessingStatus.PROCESSED,
+                    storageKey: `batches/${batchId}/derived/2/page.png`
+                }
+            ]);
+
+            await expect(
+                service.assembleAndMapAnswerScripts(batchId, {
+                    actingUserId: profUser._id.toString(),
+                    actingUserRole: 'PROFESSOR'
+                })
+            ).rejects.toThrow(HttpError);
         });
     });
 });

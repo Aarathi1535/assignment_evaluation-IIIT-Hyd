@@ -10,6 +10,11 @@ export enum ExamStatus {
     ARCHIVED = 'ARCHIVED'
 }
 
+export enum SplittingStrategyType {
+    COVER_PAGE = 'COVER_PAGE',
+    FIXED_PAGE = 'FIXED_PAGE'
+}
+
 export interface IExam extends Document {
     title: string;
     course: mongoose.Types.ObjectId;
@@ -20,6 +25,8 @@ export interface IExam extends Document {
     numberOfQuestions: number;
     enrolledStudents?: mongoose.Types.ObjectId[];
     rubric?: mongoose.Types.ObjectId;
+    splittingStrategy?: SplittingStrategyType;
+    fixedPageCount?: number;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -73,6 +80,16 @@ const ExamSchema = new Schema<IExam>(
             type: Schema.Types.ObjectId,
             ref: 'Rubric',
             index: true
+        },
+        splittingStrategy: {
+            type: String,
+            enum: Object.values(SplittingStrategyType),
+            default: SplittingStrategyType.COVER_PAGE,
+            index: true
+        },
+        fixedPageCount: {
+            type: Number,
+            min: 1
         },
         isActive: {
             type: Boolean,
