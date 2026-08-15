@@ -464,5 +464,52 @@ describe('Ingestion Status Tracking and Status API (AE-045)', () => {
             expect(resBody.data.failureReason).toBe('Invalid image format detected');
             expect(resBody.data.failureReason).not.toContain('ImageDecoder.decode');
         });
+
+        it('should return scriptCount reflecting the active AnswerScripts generated for the batch', async () => {
+            mockSessionUser = {
+                id: professorId,
+                email: 'prof@university.edu',
+                name: 'Professor User',
+                role: 'PROFESSOR'
+            };
+
+            const { batchId } = await createTestBatchAndJob(professorId, IngestionStatus.QUEUED, 5);
+
+            const AnswerScript = (await import('../models/AnswerScript')).default;
+            await AnswerScript.create({
+                exam: new mongoose.Types.ObjectId(),
+                batchId,
+                fileIndex: 0,
+                startPageNumber: 1,
+                endPageNumber: 2,
+                pageCount: 2,
+                isActive: true
+            });
+            await AnswerScript.create({
+                exam: new mongoose.Types.ObjectId(),
+                batchId,
+                fileIndex: 0,
+                startPageNumber: 3,
+                endPageNumber: 5,
+                pageCount: 3,
+                isActive: true
+            });
+            await AnswerScript.create({
+                exam: new mongoose.Types.ObjectId(),
+                batchId,
+                fileIndex: 0,
+                startPageNumber: 6,
+                endPageNumber: 6,
+                pageCount: 1,
+                isActive: false
+            });
+
+            const req = new Request(`http://localhost:3000/api/ingest/${batchId}`);
+            const res = await ingestStatusGET(req as any, { params: Promise.resolve({ id: batchId }) });
+
+            expect(res.status).toBe(200);
+            const resBody = await res.json();
+            expect(resBody.data.scriptCount).toBe(2);
+        });
     });
 });
