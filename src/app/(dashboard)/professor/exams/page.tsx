@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle } from 'lucide-react';
+import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -110,12 +110,20 @@ export default function ProfessorExamsPage() {
   }, [exams, searchQuery, selectedCourse]);
 
   const quickActions = (
-    <Link href="/professor/exams/create">
-      <Button variant="primary" size="md">
-        <Plus className="h-4 w-4" />
-        <span>Create Exam</span>
-      </Button>
-    </Link>
+    <div className="flex flex-wrap gap-3">
+      <Link href="/professor/exams/upload">
+        <Button variant="outline" size="md">
+          <Upload className="h-4 w-4" />
+          <span>Upload Answer Sheets</span>
+        </Button>
+      </Link>
+      <Link href="/professor/exams/create">
+        <Button variant="primary" size="md">
+          <Plus className="h-4 w-4" />
+          <span>Create Exam</span>
+        </Button>
+      </Link>
+    </div>
   );
 
   const getStatusBadgeStyle = (status: string) => {
