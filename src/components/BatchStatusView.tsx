@@ -315,8 +315,15 @@ export default function BatchStatusView({ batchId, role }: BatchStatusViewProps)
 
           {(status === 'done' || status === 'failed') && (
             <div className="flex gap-2">
+              {status === 'done' && (
+                <Link href={role === 'PROFESSOR' ? `/professor/exams/batches/${batchId}/preview` : `/admin/exams/batches/${batchId}/preview`}>
+                  <Button variant="primary" size="sm">
+                    <span>Preview Scripts</span>
+                  </Button>
+                </Link>
+              )}
               <Link href={role === 'PROFESSOR' ? '/professor/exams/upload' : '/admin/exams/upload'}>
-                <Button variant="primary" size="sm">
+                <Button variant={status === 'done' ? 'outline' : 'primary'} size="sm">
                   <span>Upload Another</span>
                 </Button>
               </Link>
