@@ -29,8 +29,8 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
     const graderId = new mongoose.Types.ObjectId().toString();
 
     beforeAll(async () => {
-        listScriptsGET = (await import('../app/api/ingest/[batchId]/scripts/route')).GET;
-        serveThumbnailGET = (await import('../app/api/ingest/[batchId]/pages/[pageId]/thumbnail/route')).GET;
+        listScriptsGET = (await import('../app/api/ingest/[id]/scripts/route')).GET;
+        serveThumbnailGET = (await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route')).GET;
     });
 
     beforeEach(() => {
@@ -175,7 +175,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request(`http://localhost:3000/api/ingest/${batchId}/scripts`);
-            const res = await listScriptsGET(req as any, { params: Promise.resolve({ batchId }) });
+            const res = await listScriptsGET(req as any, { params: Promise.resolve({ id: batchId }) });
 
             expect(res.status).toBe(200);
             const body = await res.json();
@@ -216,7 +216,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request(`http://localhost:3000/api/ingest/${batchId}/scripts`);
-            const res = await listScriptsGET(req as any, { params: Promise.resolve({ batchId }) });
+            const res = await listScriptsGET(req as any, { params: Promise.resolve({ id: batchId }) });
 
             expect(res.status).toBe(404);
             const body = await res.json();
@@ -235,7 +235,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request(`http://localhost:3000/api/ingest/${batchId}/scripts`);
-            const res = await listScriptsGET(req as any, { params: Promise.resolve({ batchId }) });
+            const res = await listScriptsGET(req as any, { params: Promise.resolve({ id: batchId }) });
 
             expect(res.status).toBe(403);
         });
@@ -249,7 +249,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request('http://localhost:3000/api/ingest/nonexistent-batch/scripts');
-            const res = await listScriptsGET(req as any, { params: Promise.resolve({ batchId: 'nonexistent-batch' }) });
+            const res = await listScriptsGET(req as any, { params: Promise.resolve({ id: 'nonexistent-batch' }) });
 
             expect(res.status).toBe(404);
         });
@@ -271,7 +271,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
 
             const req = new Request(`http://localhost:3000/api/ingest/${batchId}/pages/${page1Id}/thumbnail`);
-            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ batchId, pageId: page1Id }) });
+            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ id: batchId, pageId: page1Id }) });
 
             expect(res.status).toBe(200);
             expect(res.headers.get('Content-Type')).toBe('image/jpeg');
@@ -293,7 +293,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request(`http://localhost:3000/api/ingest/${otherBatchId}/pages/${page1Id}/thumbnail`);
-            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ batchId: otherBatchId, pageId: page1Id }) });
+            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ id: otherBatchId, pageId: page1Id }) });
 
             expect(res.status).toBe(404);
             const body = await res.json();
@@ -311,7 +311,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request(`http://localhost:3000/api/ingest/${batchId}/pages/${page1Id}/thumbnail`);
-            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ batchId, pageId: page1Id }) });
+            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ id: batchId, pageId: page1Id }) });
 
             expect(res.status).toBe(404);
         });
@@ -328,7 +328,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
             };
 
             const req = new Request(`http://localhost:3000/api/ingest/${batchId}/pages/${nonexistentPageId}/thumbnail`);
-            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ batchId, pageId: nonexistentPageId }) });
+            const res = await serveThumbnailGET(req as any, { params: Promise.resolve({ id: batchId, pageId: nonexistentPageId }) });
 
             expect(res.status).toBe(404);
         });
