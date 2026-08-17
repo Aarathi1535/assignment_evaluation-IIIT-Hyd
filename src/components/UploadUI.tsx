@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   UploadCloud, 
   FileText, 
@@ -37,6 +38,7 @@ interface UploadUIProps {
 }
 
 export default function UploadUI({ role }: UploadUIProps) {
+  const router = useRouter();
   const [exams, setExams] = useState<ExamItem[]>([]);
   const [courses, setCourses] = useState<CourseItem[]>([]);
   const [loadingExams, setLoadingExams] = useState(true);
@@ -257,9 +259,11 @@ export default function UploadUI({ role }: UploadUIProps) {
         try {
           const res = JSON.parse(xhr.responseText);
           if (res.success && res.data?.batchId) {
-            setUploadStatus('processing');
-            // Begin Polling Ingestion Status
-            startPolling(res.data.batchId);
+            if (role === 'PROFESSOR') {
+              router.push(`/professor/exams/batches/${res.data.batchId}`);
+            } else {
+              router.push(`/admin/exams/batches/${res.data.batchId}`);
+            }
           } else {
             setUploadStatus('error');
             setErrorMessage(res.message || 'Server processed upload but returned unexpected structure.');
@@ -291,50 +295,7 @@ export default function UploadUI({ role }: UploadUIProps) {
     xhr.send(formData);
   };
 
-  // 2. Processing Phase (polling status API until terminal state)
-  const startPolling = (id: string) => {
-    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
 
-    const poll = async () => {
-      try {
-        const res = await fetch(`/api/ingest/${id}`);
-        const result = await res.json();
-
-        if (res.status === 200 && result.success && result.data) {
-          const jobData = result.data;
-          
-          setProcessingProgress({
-            processedPages: jobData.processedPages || 0,
-            totalPages: jobData.totalPages || 0,
-            failedPages: jobData.failedPages || 0,
-            status: jobData.status
-          });
-
-          if (jobData.status === 'done') {
-            setUploadStatus('success');
-            setSuccessMessage(`Ingestion completely processed! Successfully graded and stored all ${jobData.processedPages} pages.`);
-            clearAllFiles();
-          } else if (jobData.status === 'failed') {
-            setUploadStatus('error');
-            setErrorMessage(jobData.failureReason || 'Ingestion worker encountered a processing failure.');
-          } else {
-            // Keep polling (queued / processing)
-            pollTimerRef.current = setTimeout(poll, 2000);
-          }
-        } else {
-          // Keep polling on temporary API errors or show warning
-          console.warn('Polling status warning:', result.message);
-          pollTimerRef.current = setTimeout(poll, 2000);
-        }
-      } catch (err) {
-        console.error('Polling connection error:', err);
-        // Retry polling on networking errors
-        pollTimerRef.current = setTimeout(poll, 2000);
-      }
-    };
-
-    pollTimerRef.current = setTimeout(poll, 1000);
-  };
 
   // Cancel/Reset uploading state
   const handleReset = () => {

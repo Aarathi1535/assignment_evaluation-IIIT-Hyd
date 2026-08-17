@@ -4,6 +4,7 @@ import BatchService from '../../../../services/BatchService';
 import { requirePermission } from '../../../../lib/apiAuth';
 import { Permission } from '../../../../constants/permissions';
 import { HttpError } from '../../../../lib/errors';
+import AnswerScript from '../../../../models/AnswerScript';
 
 export async function GET(
     req: NextRequest,
@@ -31,6 +32,8 @@ export async function GET(
         await connectDB();
         const job = await BatchService.getIngestionStatus(id, auth.user.id, auth.user.role);
 
+        const scriptCount = await AnswerScript.countDocuments({ batchId: job.batchId, isActive: true });
+
         return NextResponse.json(
             {
                 success: true,
@@ -41,6 +44,7 @@ export async function GET(
                     totalPages: job.totalPages,
                     processedPages: job.processedPages,
                     failedPages: job.failedPages,
+                    scriptCount,
                     startedAt: job.startedAt || null,
                     completedAt: job.completedAt || null,
                     createdAt: job.createdAt,
