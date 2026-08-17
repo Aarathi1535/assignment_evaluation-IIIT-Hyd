@@ -60,6 +60,7 @@ export async function GET(
 
       return {
         _id: script._id,
+        __v: script.__v,
         exam: script.exam,
         student: script.student,
         candidateStudentId: script.candidateStudentId,

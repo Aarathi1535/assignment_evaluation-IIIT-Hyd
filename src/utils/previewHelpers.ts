@@ -11,6 +11,7 @@ export interface PageInfo {
 
 export interface ScriptInfo {
   _id: string;
+  __v?: number;
   exam: string;
   student?: string | null;
   candidateStudentId?: string | null;

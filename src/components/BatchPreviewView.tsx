@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { 
@@ -9,7 +9,11 @@ import {
   Loader2, 
   CheckCircle2, 
   HelpCircle,
-  FileText
+  FileText,
+  ChevronLeft,
+  ChevronRight,
+  ArrowRight,
+  Plus
 } from 'lucide-react';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -86,6 +90,263 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [savingId, setSavingId] = useState(false);
   const [saveError, setSaveError] = useState('');
+
+  // Correction UI states
+  const [activeScriptIdForReorder, setActiveScriptIdForReorder] = useState<string | null>(null);
+  const [reorderPageIds, setReorderPageIds] = useState<string[]>([]);
+  const [activeScriptIdForSplit, setActiveScriptIdForSplit] = useState<string | null>(null);
+  const [splitPoints, setSplitPoints] = useState<Set<number>>(new Set());
+  const [activeScriptIdForMerge, setActiveScriptIdForMerge] = useState<string | null>(null);
+  const [mergeTargetScriptId, setMergeTargetScriptId] = useState('');
+  const [activePageIdForMove, setActivePageIdForMove] = useState<string | null>(null);
+  const [moveTargetScriptId, setMoveTargetScriptId] = useState('');
+  const [savingCorrection, setSavingCorrection] = useState(false);
+  const [correctionError, setCorrectionError] = useState('');
+
+  // Extracted script fetching
+  const fetchScripts = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/ingest/${batchId}/scripts`);
+
+      if (res.status === 401 || res.status === 403) {
+        setUnauthorized(true);
+        setLoading(false);
+        return;
+      }
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          setError('Batch not found or access denied.');
+        } else {
+          setError(`Error retrieving batch scripts: ${res.statusText}`);
+        }
+        setLoading(false);
+        return;
+      }
+
+      const result = await res.json();
+      if (result.success && result.data) {
+        setScripts(result.data);
+        const integrity = validateDataIntegrity(result.data);
+        setDuplicatePages(integrity.duplicatePageIds);
+        setError('');
+      } else {
+        setError(result.message || 'Failed to retrieve batch scripts.');
+      }
+    } catch (err) {
+      console.error('Fetch scripts error:', err);
+      setError('Network error: Failed to connect to the server.');
+    } finally {
+      setLoading(false);
+    }
+  }, [batchId]);
+
+  const handleStartReorder = (script: ScriptInfo) => {
+    setActiveScriptIdForReorder(script._id);
+    setReorderPageIds(script.pages.map(p => p._id));
+    setCorrectionError('');
+  };
+
+  const handleShiftPage = (index: number, direction: 'left' | 'right') => {
+    setReorderPageIds(prev => {
+      const next = [...prev];
+      const targetIndex = direction === 'left' ? index - 1 : index + 1;
+      if (targetIndex >= 0 && targetIndex < next.length) {
+        const temp = next[index];
+        next[index] = next[targetIndex];
+        next[targetIndex] = temp;
+      }
+      return next;
+    });
+  };
+
+  const handleSaveReorder = async (script: ScriptInfo) => {
+    try {
+      setSavingCorrection(true);
+      setCorrectionError('');
+      const res = await fetch(`/api/ingest/${batchId}/scripts/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scriptId: script._id,
+          version: script.__v ?? 0,
+          orderedPageIds: reorderPageIds
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.message || 'Failed to reorder pages');
+      }
+      await fetchScripts();
+      setActiveScriptIdForReorder(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error reordering pages';
+      setCorrectionError(msg);
+    } finally {
+      setSavingCorrection(false);
+    }
+  };
+
+  const handleStartSplit = (script: ScriptInfo) => {
+    setActiveScriptIdForSplit(script._id);
+    setSplitPoints(new Set());
+    setCorrectionError('');
+  };
+
+  const handleToggleSplitPoint = (index: number) => {
+    setSplitPoints(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveSplit = async (script: ScriptInfo) => {
+    try {
+      setSavingCorrection(true);
+      setCorrectionError('');
+
+      const groups: string[][] = [];
+      let currentGroup: string[] = [];
+
+      for (let i = 0; i < script.pages.length; i++) {
+        currentGroup.push(script.pages[i]._id);
+        if (splitPoints.has(i)) {
+          groups.push(currentGroup);
+          currentGroup = [];
+        }
+      }
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+      }
+
+      if (groups.length < 2) {
+        throw new Error('Please add at least one split point to split the script.');
+      }
+
+      const res = await fetch(`/api/ingest/${batchId}/scripts/split`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scriptId: script._id,
+          version: script.__v ?? 0,
+          groups
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.message || 'Failed to split script');
+      }
+      await fetchScripts();
+      setActiveScriptIdForSplit(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error splitting script';
+      setCorrectionError(msg);
+    } finally {
+      setSavingCorrection(false);
+    }
+  };
+
+  const handleStartMerge = (script: ScriptInfo) => {
+    setActiveScriptIdForMerge(script._id);
+    setMergeTargetScriptId('');
+    setCorrectionError('');
+  };
+
+  const handleSaveMerge = async (script: ScriptInfo) => {
+    if (!mergeTargetScriptId) {
+      setCorrectionError('Please select a target script to merge into.');
+      return;
+    }
+
+    const targetScript = scripts.find(s => s._id === mergeTargetScriptId);
+    if (!targetScript) {
+      setCorrectionError('Target script not found.');
+      return;
+    }
+
+    try {
+      setSavingCorrection(true);
+      setCorrectionError('');
+
+      const res = await fetch(`/api/ingest/${batchId}/scripts/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceScriptId: script._id,
+          targetScriptId: mergeTargetScriptId,
+          versions: {
+            [script._id]: script.__v ?? 0,
+            [mergeTargetScriptId]: targetScript.__v ?? 0
+          }
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.message || 'Failed to merge scripts');
+      }
+      await fetchScripts();
+      setActiveScriptIdForMerge(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error merging scripts';
+      setCorrectionError(msg);
+    } finally {
+      setSavingCorrection(false);
+    }
+  };
+
+  const handleStartMovePage = (pageId: string) => {
+    setActivePageIdForMove(pageId);
+    setMoveTargetScriptId('');
+    setCorrectionError('');
+  };
+
+  const handleSaveMovePage = async (script: ScriptInfo, pageId: string) => {
+    if (!moveTargetScriptId) {
+      setCorrectionError('Please select a target script.');
+      return;
+    }
+
+    const targetScript = scripts.find(s => s._id === moveTargetScriptId);
+    if (!targetScript) {
+      setCorrectionError('Target script not found.');
+      return;
+    }
+
+    try {
+      setSavingCorrection(true);
+      setCorrectionError('');
+
+      const res = await fetch(`/api/ingest/${batchId}/scripts/remap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pageId,
+          targetScriptId: moveTargetScriptId,
+          versions: {
+            [script._id]: script.__v ?? 0,
+            [moveTargetScriptId]: targetScript.__v ?? 0
+          }
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.message || 'Failed to move page');
+      }
+      await fetchScripts();
+      setActivePageIdForMove(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error moving page';
+      setCorrectionError(msg);
+    } finally {
+      setSavingCorrection(false);
+    }
+  };
 
   const handleOpenIdentify = async (scriptId: string, examId: string) => {
     setSelectedScriptForId(scriptId);
@@ -169,46 +430,11 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
     if (sessionStatus === 'loading') return;
     if (isUnauthorizedUser) return;
 
-    const fetchScripts = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch(`/api/ingest/${batchId}/scripts`);
-
-        if (res.status === 401 || res.status === 403) {
-          setUnauthorized(true);
-          setLoading(false);
-          return;
-        }
-
-        if (!res.ok) {
-          if (res.status === 404) {
-            setError('Batch not found or access denied.');
-          } else {
-            setError(`Error retrieving batch scripts: ${res.statusText}`);
-          }
-          setLoading(false);
-          return;
-        }
-
-        const result = await res.json();
-        if (result.success && result.data) {
-          setScripts(result.data);
-          const integrity = validateDataIntegrity(result.data);
-          setDuplicatePages(integrity.duplicatePageIds);
-          setError('');
-        } else {
-          setError(result.message || 'Failed to retrieve batch scripts.');
-        }
-      } catch (err) {
-        console.error('Fetch scripts error:', err);
-        setError('Network error: Failed to connect to the server.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchScripts();
-  }, [batchId, session, sessionStatus, isAuthorized, isUnauthorizedUser]);
+    const timer = setTimeout(() => {
+      fetchScripts();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [sessionStatus, isUnauthorizedUser, fetchScripts]);
 
   if (sessionStatus === 'loading' || (loading && !error && !unauthorized && !isUnauthorizedUser)) {
     return (
@@ -389,6 +615,7 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                       variant="primary"
                       size="sm"
                       onClick={() => handleOpenIdentify(script._id, script.exam)}
+                      disabled={savingCorrection || activeScriptIdForReorder !== null || activeScriptIdForSplit !== null || activeScriptIdForMerge !== null || activePageIdForMove !== null}
                     >
                       Identify
                     </Button>
@@ -460,12 +687,254 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                 </div>
               )}
 
-              {/* Pages Grid */}
+              {/* General Correction Error Alert */}
+              {correctionError && (
+                (activeScriptIdForMerge === script._id) ||
+                (activeScriptIdForSplit === script._id) ||
+                (activeScriptIdForReorder === script._id) ||
+                (activePageIdForMove && script.pages.some(p => p._id === activePageIdForMove))
+              ) && (
+                <div className="mb-4 flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-brand p-3 text-rose-900 text-xs font-bold leading-normal shadow-3xs">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
+                  <span>{correctionError}</span>
+                </div>
+              )}
+
+              {/* Merge Script Mode */}
+              {activeScriptIdForMerge === script._id && (
+                <div className="mb-6 p-4 border border-rose-200 rounded-brand bg-rose-50/20 space-y-4 shadow-3xs">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-extrabold text-rose-900 uppercase tracking-wider flex items-center gap-2">
+                      <ArrowRight className="h-4 w-4 text-rose-600" />
+                      <span>Merge Script</span>
+                    </h4>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setActiveScriptIdForMerge(null)}
+                      disabled={savingCorrection}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+
+                  <div className="max-w-md space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700">Select Target Script to Merge Into:</label>
+                      <select
+                        value={mergeTargetScriptId}
+                        onChange={(e) => setMergeTargetScriptId(e.target.value)}
+                        className="w-full px-3 py-2 rounded-brand border border-slate-300 bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary cursor-pointer"
+                        disabled={savingCorrection}
+                      >
+                        <option value="">Choose target script...</option>
+                        {scripts
+                          .filter(s => s._id !== script._id)
+                          .map((s) => (
+                            <option key={s._id} value={s._id}>
+                              Script #{scripts.findIndex(x => x._id === s._id) + 1} (Pages {s.startPageNumber}-{s.endPageNumber}) - {s.pages.length} pages
+                            </option>
+                          ))
+                        }
+                      </select>
+                    </div>
+
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-brand text-amber-900 text-xs font-semibold leading-relaxed">
+                      ⚠️ WARNING: This will merge all pages from this script into the target script. This script will be permanently deleted.
+                    </div>
+
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleSaveMerge(script)}
+                      disabled={savingCorrection || !mergeTargetScriptId}
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                    >
+                      {savingCorrection ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                          <span>Merging...</span>
+                        </>
+                      ) : (
+                        <span>Confirm & Merge</span>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Split Script Mode */}
+              {activeScriptIdForSplit === script._id && (
+                <div className="mb-6 p-4 border border-brand-primary/20 rounded-brand bg-slate-50/50 space-y-4 shadow-3xs">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <Plus className="h-4 w-4 text-brand-primary" />
+                      <span>Split Script into Groups</span>
+                    </h4>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setActiveScriptIdForSplit(null)}
+                      disabled={savingCorrection}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+
+                  <div className="text-xs text-slate-600 leading-relaxed bg-blue-50 border border-blue-100 rounded-brand p-3 font-medium">
+                    💡 Click the dashed lines between pages below to place split boundaries. The script will be split into multiple scripts at those boundaries.
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-brand text-amber-900 text-xs font-bold">
+                    <span>Preview:</span>
+                    <span className="font-extrabold">This will split the script into {splitPoints.size + 1} scripts.</span>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleSaveSplit(script)}
+                      disabled={savingCorrection || splitPoints.size === 0}
+                    >
+                      {savingCorrection ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                          <span>Splitting...</span>
+                        </>
+                      ) : (
+                        <span>Confirm & Split</span>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Reorder Pages Mode control bar */}
+              {activeScriptIdForReorder === script._id && (
+                <div className="mb-6 flex items-center justify-between bg-slate-50 border border-slate-200 rounded-brand p-4 shadow-3xs">
+                  <span className="text-xs font-bold text-slate-700">Reordering Mode: Shift page positions using arrows.</span>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleSaveReorder(script)}
+                      disabled={savingCorrection}
+                    >
+                      {savingCorrection ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                          <span>Saving...</span>
+                        </>
+                      ) : (
+                        <span>Save Order</span>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setActiveScriptIdForReorder(null)}
+                      disabled={savingCorrection}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Pages Grid or Reorder Grid or Split Grid */}
               {(!script.pages || script.pages.length === 0) ? (
                 <div className="text-center py-6 text-slate-400 text-xs font-semibold border border-dashed border-slate-200 rounded-brand bg-slate-50/50">
                   No pages associated with this script.
                 </div>
+              ) : activeScriptIdForSplit === script._id ? (
+                /* Interactive Split Grid */
+                <div className="flex flex-wrap items-center gap-y-6 gap-x-2 py-4">
+                  {script.pages.map((page, idx) => {
+                    const isSplitPoint = splitPoints.has(idx);
+                    const isLast = idx === script.pages.length - 1;
+
+                    return (
+                      <React.Fragment key={page._id}>
+                        <div className="relative border border-slate-200 rounded-brand overflow-hidden bg-slate-50 flex flex-col items-center justify-center p-2 w-32 h-44 shadow-2xs">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={page.thumbnailUrl}
+                            alt={`Page ${page.pageNumber}`}
+                            className="object-contain max-h-32 max-w-full select-none"
+                          />
+                          <div className="text-3xs font-extrabold text-slate-500 mt-2">Page {page.pageNumber}</div>
+                        </div>
+
+                        {!isLast && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSplitPoint(idx)}
+                            disabled={savingCorrection}
+                            className={`group relative flex flex-col items-center justify-center w-8 h-44 border-y border-dashed transition-all cursor-pointer ${
+                              isSplitPoint
+                                ? 'border-rose-400 bg-rose-50/50 hover:bg-rose-100/50'
+                                : 'border-slate-200 bg-transparent hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className={`absolute w-0.5 h-full border-l border-dashed transition-all ${
+                              isSplitPoint ? 'border-rose-500 scale-x-125' : 'border-slate-300 group-hover:border-slate-400'
+                            }`} />
+
+                            <div className={`z-10 p-1 rounded-full shadow-2xs transition-all ${
+                              isSplitPoint
+                                ? 'bg-rose-500 text-white'
+                                : 'bg-slate-100 text-slate-500 group-hover:bg-slate-200 group-hover:scale-110'
+                            }`}>
+                              <Plus className="h-3 w-3" />
+                            </div>
+                          </button>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              ) : activeScriptIdForReorder === script._id ? (
+                /* Reorder Grid */
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 py-2">
+                  {reorderPageIds.map((pageId, idx) => {
+                    const page = script.pages.find(p => p._id === pageId);
+                    if (!page) return null;
+
+                    return (
+                      <div key={pageId} className="flex flex-col space-y-2 border border-slate-200 rounded-brand p-2 bg-slate-50 shadow-3xs">
+                        <ThumbnailImage
+                          src={page.thumbnailUrl}
+                          alt={`Page ${page.pageNumber}`}
+                        />
+                        <div className="flex items-center justify-between text-2xs font-bold text-slate-500">
+                          <span>Page {page.pageNumber}</span>
+                        </div>
+
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleShiftPage(idx, 'left')}
+                            disabled={idx === 0 || savingCorrection}
+                            className="flex-1 flex items-center justify-center p-1 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-30 disabled:hover:bg-white cursor-pointer"
+                          >
+                            <ChevronLeft className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleShiftPage(idx, 'right')}
+                            disabled={idx === reorderPageIds.length - 1 || savingCorrection}
+                            className="flex-1 flex items-center justify-center p-1 rounded border border-slate-350 bg-white hover:bg-slate-50 text-slate-600 disabled:opacity-30 disabled:hover:bg-white cursor-pointer"
+                          >
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
+                /* Regular Grid */
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                   {script.pages.map((page) => (
                     <div key={page._id} className="group relative flex flex-col space-y-1.5">
@@ -479,8 +948,92 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                           <span className="text-slate-400 font-mono text-3xs font-semibold">File #{page.fileIndex}</span>
                         )}
                       </div>
+
+                      {/* Move Page controls */}
+                      {isAuthorized && activePageIdForMove !== page._id && (
+                        <button
+                          type="button"
+                          onClick={() => handleStartMovePage(page._id)}
+                          className="w-full mt-1 py-1 text-4xs uppercase tracking-wider font-extrabold text-slate-500 border border-dashed border-slate-300 rounded hover:bg-slate-50 hover:text-slate-700 cursor-pointer transition-colors"
+                          disabled={savingCorrection || activeScriptIdForReorder !== null || activeScriptIdForSplit !== null || activeScriptIdForMerge !== null || selectedScriptForId !== null}
+                        >
+                          Move Page
+                        </button>
+                      )}
+
+                      {activePageIdForMove === page._id && (
+                        <div className="mt-1 p-2 border border-brand-primary/30 rounded bg-slate-100 space-y-2 shadow-2xs">
+                          <select
+                            value={moveTargetScriptId}
+                            onChange={(e) => setMoveTargetScriptId(e.target.value)}
+                            className="w-full p-1 rounded border border-slate-350 bg-white text-slate-800 text-3xs focus:outline-none cursor-pointer"
+                            disabled={savingCorrection}
+                          >
+                            <option value="">Move to...</option>
+                            {scripts
+                              .filter(s => s._id !== script._id)
+                              .map((s) => (
+                                <option key={s._id} value={s._id}>
+                                  Script #{scripts.findIndex(x => x._id === s._id) + 1}
+                                </option>
+                              ))
+                            }
+                          </select>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleSaveMovePage(script, page._id)}
+                              disabled={savingCorrection || !moveTargetScriptId}
+                              className="flex-1 py-0.5 rounded bg-brand-primary hover:bg-brand-primary/95 text-white text-4xs font-extrabold cursor-pointer"
+                            >
+                              Go
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setActivePageIdForMove(null)}
+                              disabled={savingCorrection}
+                              className="flex-1 py-0.5 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-4xs font-extrabold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Action Toolbar */}
+              {isAuthorized && (
+                <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3 mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleStartReorder(script)}
+                    disabled={savingCorrection || activeScriptIdForReorder !== null || activeScriptIdForSplit !== null || activeScriptIdForMerge !== null || selectedScriptForId !== null || activePageIdForMove !== null}
+                  >
+                    <ArrowRight className="h-3.5 w-3.5 mr-1.5 text-slate-500" />
+                    <span>Reorder Pages</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleStartSplit(script)}
+                    disabled={savingCorrection || activeScriptIdForReorder !== null || activeScriptIdForSplit !== null || activeScriptIdForMerge !== null || selectedScriptForId !== null || activePageIdForMove !== null}
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1.5 text-slate-500" />
+                    <span>Split Script</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleStartMerge(script)}
+                    disabled={savingCorrection || activeScriptIdForReorder !== null || activeScriptIdForSplit !== null || activeScriptIdForMerge !== null || selectedScriptForId !== null || activePageIdForMove !== null}
+                  >
+                    <ArrowRight className="h-3.5 w-3.5 mr-1.5 text-slate-500" />
+                    <span>Merge Script</span>
+                  </Button>
                 </div>
               )}
             </Card>
