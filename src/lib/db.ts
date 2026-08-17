@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { initBackgroundWorker } from './workerInit';
+import { validateMongoTopology } from './validateMongoTopology';
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -40,6 +41,9 @@ export async function connectDB() {
 
   try {
     mongooseCache.conn = await mongooseCache.promise;
+    // Validate topology before accepting traffic. Throws in production
+    // if connected to a standalone MongoDB that cannot support transactions.
+    validateMongoTopology(mongooseCache.conn.connection);
     initBackgroundWorker();
   } catch (e) {
     mongooseCache.promise = null;
