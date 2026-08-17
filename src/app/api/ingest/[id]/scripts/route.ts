@@ -55,7 +55,10 @@ export async function GET(
           fileIndex: p.fileIndex,
           thumbnailUrl: `/api/ingest/${batchId}/pages/${p._id}/thumbnail`,
           width: p.width,
-          height: p.height
+          height: p.height,
+          nearBlank: p.nearBlank,
+          isDuplicate: p.isDuplicate,
+          duplicateOf: p.duplicateOf ? p.duplicateOf.toString() : null
         }));
 
       return {

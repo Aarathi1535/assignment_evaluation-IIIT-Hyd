@@ -26,6 +26,10 @@ export interface IIngestionPage extends Document {
     candidateStudentId?: string | null;
     decodeOutcome?: DecodeOutcome | null;
     answerScript?: mongoose.Types.ObjectId | null;
+    nearBlank?: boolean;
+    isDuplicate?: boolean;
+    duplicateOf?: mongoose.Types.ObjectId | null;
+    perceptualHash?: string | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -112,6 +116,26 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
             ref: 'AnswerScript',
             default: null,
             index: true
+        },
+        nearBlank: {
+            type: Boolean,
+            default: false,
+            index: true
+        },
+        isDuplicate: {
+            type: Boolean,
+            default: false,
+            index: true
+        },
+        duplicateOf: {
+            type: Schema.Types.ObjectId,
+            ref: 'IngestionPage',
+            default: null,
+            index: true
+        },
+        perceptualHash: {
+            type: String,
+            default: null
         },
         metadata: {
             type: Schema.Types.Mixed

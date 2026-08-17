@@ -857,6 +857,16 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                     return (
                       <React.Fragment key={page._id}>
                         <div className="relative border border-slate-200 rounded-brand overflow-hidden bg-slate-50 flex flex-col items-center justify-center p-2 w-32 h-44 shadow-2xs">
+                          {page.nearBlank && (
+                            <div className="absolute top-2 left-2 z-10 bg-amber-500 text-white px-1.5 py-0.5 rounded text-4xs font-black uppercase tracking-wider shadow-2xs select-none">
+                              Blank
+                            </div>
+                          )}
+                          {page.isDuplicate && (
+                            <div className="absolute top-2 right-2 z-10 bg-rose-500 text-white px-1.5 py-0.5 rounded text-4xs font-black uppercase tracking-wider shadow-2xs select-none">
+                              Duplicate
+                            </div>
+                          )}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={page.thumbnailUrl}
@@ -902,7 +912,17 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                     if (!page) return null;
 
                     return (
-                      <div key={pageId} className="flex flex-col space-y-2 border border-slate-200 rounded-brand p-2 bg-slate-50 shadow-3xs">
+                      <div key={pageId} className="relative flex flex-col space-y-2 border border-slate-200 rounded-brand p-2 bg-slate-50 shadow-3xs">
+                        {page.nearBlank && (
+                          <div className="absolute top-2 left-2 z-10 bg-amber-500 text-white px-1.5 py-0.5 rounded text-4xs font-black uppercase tracking-wider shadow-2xs select-none">
+                            Blank
+                          </div>
+                        )}
+                        {page.isDuplicate && (
+                          <div className="absolute top-2 right-2 z-10 bg-rose-500 text-white px-1.5 py-0.5 rounded text-4xs font-black uppercase tracking-wider shadow-2xs select-none">
+                            Duplicate
+                          </div>
+                        )}
                         <ThumbnailImage
                           src={page.thumbnailUrl}
                           alt={`Page ${page.pageNumber}`}
@@ -938,6 +958,16 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                   {script.pages.map((page) => (
                     <div key={page._id} className="group relative flex flex-col space-y-1.5">
+                      {page.nearBlank && (
+                        <div className="absolute top-2 left-2 z-10 bg-amber-500 text-white px-1.5 py-0.5 rounded text-4xs font-black uppercase tracking-wider shadow-2xs select-none">
+                          Blank
+                        </div>
+                      )}
+                      {page.isDuplicate && (
+                        <div className="absolute top-2 right-2 z-10 bg-rose-500 text-white px-1.5 py-0.5 rounded text-4xs font-black uppercase tracking-wider shadow-2xs select-none">
+                          Duplicate
+                        </div>
+                      )}
                       <ThumbnailImage 
                         src={page.thumbnailUrl} 
                         alt={`Page ${page.pageNumber}`} 

@@ -7,6 +7,9 @@ export interface PageInfo {
   thumbnailUrl: string;
   width?: number;
   height?: number;
+  nearBlank?: boolean;
+  isDuplicate?: boolean;
+  duplicateOf?: string | null;
 }
 
 export interface ScriptInfo {
