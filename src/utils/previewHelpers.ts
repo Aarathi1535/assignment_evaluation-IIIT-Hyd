@@ -7,10 +7,14 @@ export interface PageInfo {
   thumbnailUrl: string;
   width?: number;
   height?: number;
+  nearBlank?: boolean;
+  isDuplicate?: boolean;
+  duplicateOf?: string | null;
 }
 
 export interface ScriptInfo {
   _id: string;
+  __v?: number;
   exam: string;
   student?: string | null;
   candidateStudentId?: string | null;

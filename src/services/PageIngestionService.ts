@@ -7,6 +7,7 @@ import { IPageRenderer, DefaultPdfRenderer, DefaultImageRenderer, RenderPageResu
 import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
 import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
 import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDetector';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -34,6 +35,11 @@ export interface PageProcessResult {
 }
 
 export class PageIngestionService {
+    static readonly LUMINANCE_THRESHOLD = 240;
+    static readonly NON_WHITE_PERCENT_THRESHOLD = 0.5;
+    static readonly BORDER_MARGIN_PERCENT = 0.05;
+    static readonly HAMMING_DISTANCE_THRESHOLD = 10;
+
     private renderer: IPageRenderer;
     private imageRenderer: IPageRenderer;
     private derivedStorage: IDerivedStorageService;
@@ -314,6 +320,34 @@ export class PageIngestionService {
                 }
             }
 
+            // AE-065: Blank Page and Duplicate Detection
+            let nearBlank = false;
+            let isDuplicate = false;
+            let duplicateOf: mongoose.Types.ObjectId | null = null;
+            let perceptualHash: string | null = null;
+
+            if (renderResult.image && renderResult.image.buffer) {
+                try {
+                    const detection = await this.detectBlankAndHash({
+                        buffer: renderResult.image.buffer,
+                        batchId,
+                        fileIndex,
+                        pageNumber
+                    });
+                    nearBlank = detection.nearBlank;
+                    perceptualHash = detection.perceptualHash;
+                    isDuplicate = detection.isDuplicate;
+                    duplicateOf = detection.duplicateOf;
+                } catch (err) {
+                    console.error(`Detection failure on batch ${batchId} page ${pageNumber}:`, err);
+                    // Safe fallback: do not crash page ingestion on detection/perceptual hashing failures
+                    nearBlank = false;
+                    perceptualHash = null;
+                    isDuplicate = false;
+                    duplicateOf = null;
+                }
+            }
+
             // Persist or update page record as PROCESSED pointing to derived storageKey, thumbnailKey, and detection metadata
             const pageRecord = await IngestionPage.findOneAndUpdate(
                 { batchId, fileIndex, pageNumber },
@@ -333,6 +367,10 @@ export class PageIngestionService {
                     isCoverPage,
                     candidateStudentId,
                     decodeOutcome,
+                    nearBlank,
+                    isDuplicate,
+                    duplicateOf,
+                    perceptualHash,
                     metadata: {
                         fileType,
                         fileIndex,
@@ -348,6 +386,10 @@ export class PageIngestionService {
                         isCoverPage,
                         candidateStudentId,
                         decodeOutcome,
+                        nearBlank,
+                        isDuplicate,
+                        duplicateOf: duplicateOf ? duplicateOf.toString() : null,
+                        perceptualHash,
                         ...renderResult.metadata
                     }
                 },
@@ -399,6 +441,120 @@ export class PageIngestionService {
                 failureReason: sanitizedReason,
                 pageRecord: pageRecord || undefined
             };
+        }
+    }
+
+    /**
+     * AE-065: Performs near-blank page detection and perceptual hashing (dHash) to flag duplicates.
+     */
+    async detectBlankAndHash(input: {
+        buffer: Buffer;
+        batchId: string;
+        fileIndex: number;
+        pageNumber: number;
+    }): Promise<{
+        nearBlank: boolean;
+        perceptualHash: string | null;
+        isDuplicate: boolean;
+        duplicateOf: mongoose.Types.ObjectId | null;
+    }> {
+        try {
+            const image = await loadImage(input.buffer);
+            if (image.width <= 0 || image.height <= 0) {
+                return { nearBlank: false, perceptualHash: null, isDuplicate: false, duplicateOf: null };
+            }
+
+            // 1. Near-Blank Detection using Canvas pixels (excluding border margins to ignore scanner edge shadow)
+            const canvas = createCanvas(image.width, image.height);
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+            const imgData = ctx.getImageData(0, 0, image.width, image.height);
+            const data = imgData.data;
+
+            const startX = Math.floor(image.width * PageIngestionService.BORDER_MARGIN_PERCENT);
+            const endX = Math.floor(image.width * (1 - PageIngestionService.BORDER_MARGIN_PERCENT));
+            const startY = Math.floor(image.height * PageIngestionService.BORDER_MARGIN_PERCENT);
+            const endY = Math.floor(image.height * (1 - PageIngestionService.BORDER_MARGIN_PERCENT));
+
+            let nonWhiteCount = 0;
+            let scannedPixels = 0;
+
+            for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                    const index = (y * image.width + x) * 4;
+                    const r = data[index];
+                    const g = data[index + 1];
+                    const b = data[index + 2];
+                    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+                    if (luminance < PageIngestionService.LUMINANCE_THRESHOLD) {
+                        nonWhiteCount++;
+                    }
+                    scannedPixels++;
+                }
+            }
+
+            const nonWhitePercent = scannedPixels > 0 ? (nonWhiteCount / scannedPixels) * 100 : 0;
+            const nearBlank = nonWhitePercent < PageIngestionService.NON_WHITE_PERCENT_THRESHOLD;
+
+            // 2. Perceptual dHash: resize to 9x8 and compare adjacent horizontal gradients
+            const hashCanvas = createCanvas(9, 8);
+            const hashCtx = hashCanvas.getContext('2d');
+            hashCtx.drawImage(image, 0, 0, 9, 8);
+            const hashData = hashCtx.getImageData(0, 0, 9, 8).data;
+
+            const gray: number[] = [];
+            for (let i = 0; i < hashData.length; i += 4) {
+                const r = hashData[i];
+                const g = hashData[i + 1];
+                const b = hashData[i + 2];
+                const val = 0.299 * r + 0.587 * g + 0.114 * b;
+                gray.push(val);
+            }
+
+            let hashBits = '';
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const left = gray[row * 9 + col];
+                    const right = gray[row * 9 + col + 1];
+                    hashBits += left > right ? '1' : '0';
+                }
+            }
+
+            // 3. Duplicate Detection within the same batch (using Hamming distance <= 10)
+            const siblingPages = await IngestionPage.find({
+                batchId: input.batchId,
+                status: PageProcessingStatus.PROCESSED,
+                perceptualHash: { $ne: null }
+            }).select('_id pageNumber perceptualHash');
+
+            let isDuplicate = false;
+            let duplicateOf: mongoose.Types.ObjectId | null = null;
+
+            for (const sibling of siblingPages) {
+                if (sibling.perceptualHash) {
+                    let distance = 0;
+                    for (let i = 0; i < 64; i++) {
+                        if (hashBits[i] !== sibling.perceptualHash[i]) {
+                            distance++;
+                        }
+                    }
+                    if (distance <= PageIngestionService.HAMMING_DISTANCE_THRESHOLD) {
+                        isDuplicate = true;
+                        duplicateOf = sibling._id as mongoose.Types.ObjectId;
+                        break;
+                    }
+                }
+            }
+
+            return {
+                nearBlank,
+                perceptualHash: hashBits,
+                isDuplicate,
+                duplicateOf
+            };
+        } catch (err) {
+            console.error('Error in detectBlankAndHash:', err);
+            throw err;
         }
     }
 

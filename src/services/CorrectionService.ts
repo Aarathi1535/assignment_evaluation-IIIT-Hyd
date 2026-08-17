@@ -53,6 +53,13 @@ class CorrectionService {
             throw new HttpError('Source script not found', 404);
         }
 
+        const targetFileIndex = targetScript.fileIndex ?? 0;
+        const targetFile = batch.files.find(f => f.fileIndex === targetFileIndex);
+        if (!targetFile) {
+            throw new HttpError(`File index ${targetFileIndex} not found in batch`, 400);
+        }
+        const targetFileId = targetFile.fileId;
+
         // Verify optimistic concurrency locking versions
         const sourceExpectedVersion = versions[sourceScriptId.toString()];
         const targetExpectedVersion = versions[targetScriptId.toString()];
@@ -92,44 +99,11 @@ class CorrectionService {
                 throw new HttpError('Concurrency conflict: Target script has been modified', 409);
             }
 
-            // Update page's answer script
-            freshPage.answerScript = freshTarget._id as mongoose.Types.ObjectId;
-            await freshPage.save({ session });
-
-            // Recompute range/counts for source script
-            const remainingPages = await IngestionPage.find({ answerScript: freshSource._id })
-                .sort({ pageNumber: 1 })
-                .session(session);
-
-            let sourceDeleted = false;
             const previousSourceState = {
                 startPageNumber: freshSource.startPageNumber,
                 endPageNumber: freshSource.endPageNumber,
                 pageCount: freshSource.pageCount
             };
-            let newSourceState: unknown = null;
-
-            if (remainingPages.length === 0) {
-                await AnswerScript.deleteOne({ _id: freshSource._id }).session(session);
-                sourceDeleted = true;
-                newSourceState = 'DELETED';
-            } else {
-                freshSource.startPageNumber = remainingPages[0].pageNumber;
-                freshSource.endPageNumber = remainingPages[remainingPages.length - 1].pageNumber;
-                freshSource.pageCount = remainingPages.length;
-                freshSource.__v = (freshSource.__v || 0) + 1;
-                await freshSource.save({ session });
-                newSourceState = {
-                    startPageNumber: freshSource.startPageNumber,
-                    endPageNumber: freshSource.endPageNumber,
-                    pageCount: freshSource.pageCount
-                };
-            }
-
-            // Recompute range/counts for target script
-            const targetPages = await IngestionPage.find({ answerScript: freshTarget._id })
-                .sort({ pageNumber: 1 })
-                .session(session);
 
             const previousTargetState = {
                 startPageNumber: freshTarget.startPageNumber,
@@ -137,51 +111,180 @@ class CorrectionService {
                 pageCount: freshTarget.pageCount
             };
 
-            freshTarget.startPageNumber = targetPages[0].pageNumber;
-            freshTarget.endPageNumber = targetPages[targetPages.length - 1].pageNumber;
-            freshTarget.pageCount = targetPages.length;
-            freshTarget.__v = (freshTarget.__v || 0) + 1;
-            await freshTarget.save({ session });
+            const sourceFileIndex = freshSource.fileIndex ?? 0;
+
+            // Phase 1: Identify all affected pages in source and destination files
+            const sourcePages = await IngestionPage.find({
+                batchId,
+                fileIndex: sourceFileIndex
+            }).session(session);
+
+            const targetPages = sourceFileIndex === targetFileIndex
+                ? sourcePages
+                : await IngestionPage.find({
+                    batchId,
+                    fileIndex: targetFileIndex
+                }).session(session);
+
+            // Phase 2: Put affected pages into a collision-free temporary state
+            if (sourceFileIndex === targetFileIndex) {
+                for (let i = 0; i < sourcePages.length; i++) {
+                    await IngestionPage.updateOne(
+                        { _id: sourcePages[i]._id },
+                        { $set: { pageNumber: 100000 + i } },
+                        { session }
+                    );
+                }
+            } else {
+                for (let i = 0; i < sourcePages.length; i++) {
+                    await IngestionPage.updateOne(
+                        { _id: sourcePages[i]._id },
+                        { $set: { pageNumber: 200000 + i } },
+                        { session }
+                    );
+                }
+                for (let i = 0; i < targetPages.length; i++) {
+                    await IngestionPage.updateOne(
+                        { _id: targetPages[i]._id },
+                        { $set: { pageNumber: 100000 + i } },
+                        { session }
+                    );
+                }
+            }
+
+            // Phase 3: Apply final file identity to the moved page
+            // Temporarily set its pageNumber to a unique offset in the target file space
+            const tempPageNumber = sourceFileIndex === targetFileIndex
+                ? (100000 + sourcePages.findIndex(p => p._id.toString() === freshPage._id.toString()))
+                : (100000 + targetPages.length);
+
+            await IngestionPage.updateOne(
+                { _id: freshPage._id },
+                {
+                    $set: {
+                        answerScript: freshTarget._id,
+                        fileIndex: targetFileIndex,
+                        fileId: targetFileId,
+                        pageNumber: tempPageNumber
+                    }
+                },
+                { session }
+            );
+
+            // Phase 4: Recompute final page numbering sequentially starting from 1
+            const resequenceFilePagesFinal = async (fIndex: number, targetScriptIdToAppend?: string, pageToAppendId?: string) => {
+                const scripts = await AnswerScript.find({
+                    batchId,
+                    fileIndex: fIndex,
+                    isActive: true
+                }).sort({ startPageNumber: 1 }).session(session);
+
+                const allPagesInOrder: mongoose.Types.ObjectId[] = [];
+
+                for (const script of scripts) {
+                    const pages = await IngestionPage.find({
+                        answerScript: script._id
+                    }).session(session);
+
+                    if (targetScriptIdToAppend && script._id.toString() === targetScriptIdToAppend && pageToAppendId) {
+                        const otherPages = pages.filter(p => p._id.toString() !== pageToAppendId);
+                        otherPages.sort((a, b) => a.pageNumber - b.pageNumber);
+                        const otherPageIds = otherPages.map(p => p._id);
+                        allPagesInOrder.push(...otherPageIds, new mongoose.Types.ObjectId(pageToAppendId));
+                    } else {
+                        pages.sort((a, b) => a.pageNumber - b.pageNumber);
+                        allPagesInOrder.push(...pages.map(p => p._id));
+                    }
+                }
+
+                // Phase 4a: Update database to final sequential values
+                for (let i = 0; i < allPagesInOrder.length; i++) {
+                    const pId = allPagesInOrder[i];
+                    const finalPageNumber = i + 1;
+                    await IngestionPage.updateOne(
+                        { _id: pId },
+                        { $set: { pageNumber: finalPageNumber } },
+                        { session }
+                    );
+                }
+
+                // Phase 5: Recompute AnswerScript summaries from the database
+                for (const script of scripts) {
+                    const scriptPages = await IngestionPage.find({
+                        answerScript: script._id
+                    }).sort({ pageNumber: 1 }).session(session);
+
+                    if (scriptPages.length === 0) {
+                        await AnswerScript.deleteOne({ _id: script._id }).session(session);
+                    } else {
+                        script.startPageNumber = scriptPages[0].pageNumber;
+                        script.endPageNumber = scriptPages[scriptPages.length - 1].pageNumber;
+                        script.pageCount = scriptPages.length;
+                        script.__v = (script.__v || 0) + 1;
+                        await script.save({ session });
+                    }
+                }
+            };
+
+            if (sourceFileIndex === targetFileIndex) {
+                await resequenceFilePagesFinal(targetFileIndex, freshTarget._id.toString(), freshPage._id.toString());
+            } else {
+                await resequenceFilePagesFinal(targetFileIndex, freshTarget._id.toString(), freshPage._id.toString());
+                await resequenceFilePagesFinal(sourceFileIndex);
+            }
+
+            // Check if source script was deleted
+            const finalSourcePages = await IngestionPage.find({ answerScript: freshSource._id }).session(session);
+            const sourceDeleted = finalSourcePages.length === 0;
+
+            const freshSourceAfter = sourceDeleted ? null : await AnswerScript.findOne({ _id: freshSource._id }).session(session);
+            const freshTargetAfter = await AnswerScript.findOne({ _id: freshTarget._id }).session(session);
+
+            const newSourceState = sourceDeleted ? 'DELETED' : {
+                startPageNumber: freshSourceAfter?.startPageNumber,
+                endPageNumber: freshSourceAfter?.endPageNumber,
+                pageCount: freshSourceAfter?.pageCount
+            };
 
             const newTargetState = {
-                startPageNumber: freshTarget.startPageNumber,
-                endPageNumber: freshTarget.endPageNumber,
-                pageCount: freshTarget.pageCount
+                startPageNumber: freshTargetAfter?.startPageNumber,
+                endPageNumber: freshTargetAfter?.endPageNumber,
+                pageCount: freshTargetAfter?.pageCount
             };
 
             // Validate startPageNumber uniqueness
-            const affectedIds = sourceDeleted ? [freshTarget._id] : [freshSource._id, freshTarget._id];
-            const otherScripts = await AnswerScript.find({
-                batchId,
-                fileIndex: freshTarget.fileIndex,
-                isActive: true,
-                _id: { $nin: affectedIds }
-            }).session(session);
+            const validateStartPageNumbers = async (fIndex: number) => {
+                const scripts = await AnswerScript.find({
+                    batchId,
+                    fileIndex: fIndex,
+                    isActive: true
+                }).session(session);
+                const starts = scripts.map(s => s.startPageNumber);
+                const uniqueStarts = new Set(starts);
+                if (uniqueStarts.size !== starts.length) {
+                    throw new HttpError(`Duplicate startPageNumber detected in fileIndex ${fIndex}`, 400);
+                }
+            };
 
-            const usedStarts = new Set(otherScripts.map(s => s.startPageNumber));
-            if (!sourceDeleted && freshSource.startPageNumber !== undefined) {
-                if (usedStarts.has(freshSource.startPageNumber)) {
-                    throw new HttpError(`Duplicate startPageNumber ${freshSource.startPageNumber} detected for source script`, 400);
-                }
-                usedStarts.add(freshSource.startPageNumber);
+            await validateStartPageNumbers(targetFileIndex);
+            if (sourceFileIndex !== targetFileIndex) {
+                await validateStartPageNumbers(sourceFileIndex);
             }
-            if (freshTarget.startPageNumber !== undefined) {
-                if (usedStarts.has(freshTarget.startPageNumber)) {
-                    throw new HttpError(`Duplicate startPageNumber ${freshTarget.startPageNumber} detected for target script`, 400);
-                }
-            }
+
+            const finalPage = await IngestionPage.findOne({ _id: pageId }).session(session);
+            if (!finalPage) throw new HttpError('Page not found at end of transaction', 404);
 
             // Audit log write (inside transaction)
             await AuditLog.create([{
                 user: new mongoose.Types.ObjectId(context.actingUserId),
                 action: 'SCRIPT_REMAP',
                 outcome: 'SUCCESS',
-                entityId: freshPage._id,
+                entityId: finalPage._id,
                 entityType: 'IngestionPage',
                 details: {
                     batchId,
-                    pageId: freshPage._id.toString(),
-                    pageNumber: freshPage.pageNumber,
+                    pageId: finalPage._id.toString(),
+                    pageNumber: finalPage.pageNumber,
                     previousScriptId: freshSource._id.toString(),
                     newScriptId: freshTarget._id.toString(),
                     previousSourceState,
@@ -198,7 +301,7 @@ class CorrectionService {
 
             return {
                 sourceDeleted,
-                remappedPage: freshPage
+                remappedPage: finalPage
             };
         } catch (error) {
             if (useTransaction) {
@@ -303,7 +406,90 @@ class CorrectionService {
                 { session }
             );
 
-            // Recompute range/counts for target script
+            // After re-pointing, pages from the source script still carry their original
+            // fileIndex/fileId/pageNumber values. If source and target came from different
+            // files, the merged script now owns pages with duplicate pageNumbers
+            // (e.g. both files had a pageNumber:1), which will cause E11000 on
+            // (batchId, fileIndex, startPageNumber) when a subsequent split is attempted.
+            //
+            // Fix: migrate every source page into the target file's numbering space.
+            // This is a three-phase operation to avoid intermediate unique-index violations
+            // on IngestionPage's (batchId, fileId, pageNumber) and
+            // (batchId, fileIndex, pageNumber) compound indexes.
+
+            const targetFileIndex = freshTarget.fileIndex ?? 0;
+            const targetFile = batch.files.find(f => f.fileIndex === targetFileIndex);
+            if (!targetFile) {
+                throw new HttpError(
+                    `Target file not found in batch for fileIndex ${targetFileIndex}`,
+                    400
+                );
+            }
+            const targetFileId = targetFile.fileId;
+
+            // Pages now belonging to the merged target script that are still in the
+            // source file's space (only present on cross-file merges).
+            const sourceFileIndex = freshSource.fileIndex ?? 0;
+            const crossFilePages =
+                targetFileIndex !== sourceFileIndex
+                    ? await IngestionPage.find({
+                          answerScript: freshTarget._id,
+                          fileIndex: sourceFileIndex
+                      }).session(session)
+                    : [];
+
+            if (crossFilePages.length > 0) {
+                // Find the maximum pageNumber currently occupied in the TARGET file
+                // (across all scripts in that file, not just the target script).
+                const allTargetFilePages = await IngestionPage.find({
+                    batchId,
+                    fileIndex: targetFileIndex
+                }).session(session);
+                const maxTargetPageNum = allTargetFilePages.reduce(
+                    (max, p) => Math.max(max, p.pageNumber),
+                    0
+                );
+
+                // Phase 1: Move source pages to a large temporary pageNumber while they
+                // still carry the source fileIndex/fileId.  This vacates their current
+                // (batchId, sourceFileId, pageNumber) and (batchId, sourceFileIndex, pageNumber)
+                // index slots without touching target-file pages.
+                for (let i = 0; i < crossFilePages.length; i++) {
+                    await IngestionPage.updateOne(
+                        { _id: crossFilePages[i]._id },
+                        { $set: { pageNumber: 5_000_000 + i } },
+                        { session }
+                    );
+                }
+
+                // Phase 2: Update source pages' fileIndex and fileId to match the target file.
+                // At this point they still carry the large temp pageNumber so neither index
+                // is violated: (batchId, targetFileId, 5000000+i) is safe.
+                for (const p of crossFilePages) {
+                    await IngestionPage.updateOne(
+                        { _id: p._id },
+                        { $set: { fileIndex: targetFileIndex, fileId: targetFileId } },
+                        { session }
+                    );
+                }
+
+                // Phase 3: Assign final sequential pageNumbers that continue directly
+                // after the highest existing page in the target file.
+                // Source pages are sorted by their original pageNumber to preserve
+                // intra-file ordering.
+                const sortedCrossFilePages = [...crossFilePages].sort(
+                    (a, b) => a.pageNumber - b.pageNumber
+                );
+                for (let i = 0; i < sortedCrossFilePages.length; i++) {
+                    await IngestionPage.updateOne(
+                        { _id: sortedCrossFilePages[i]._id },
+                        { $set: { pageNumber: maxTargetPageNum + i + 1 } },
+                        { session }
+                    );
+                }
+            }
+
+            // Recompute range/counts for target script from the (now-consistent) pages
             const targetPages = await IngestionPage.find({ answerScript: freshTarget._id })
                 .sort({ pageNumber: 1 })
                 .session(session);
@@ -331,16 +517,19 @@ class CorrectionService {
             // Delete source script (atomically)
             await AnswerScript.deleteOne({ _id: freshSource._id }).session(session);
 
-            // Validate startPageNumber uniqueness
-            const otherScripts = await AnswerScript.find({
+            // Validate startPageNumber uniqueness post-merge
+            const remainingScripts = await AnswerScript.find({
                 batchId,
                 fileIndex: freshTarget.fileIndex,
                 isActive: true,
                 _id: { $nin: [freshTarget._id] }
             }).session(session);
-            const usedStarts = new Set(otherScripts.map(s => s.startPageNumber));
+            const usedStarts = new Set(remainingScripts.map(s => s.startPageNumber));
             if (freshTarget.startPageNumber !== undefined && usedStarts.has(freshTarget.startPageNumber)) {
-                throw new HttpError(`Duplicate startPageNumber ${freshTarget.startPageNumber} detected for target script after merge`, 400);
+                throw new HttpError(
+                    `Duplicate startPageNumber ${freshTarget.startPageNumber} detected for target script after merge`,
+                    400
+                );
             }
 
             // Audit log write (inside transaction)
