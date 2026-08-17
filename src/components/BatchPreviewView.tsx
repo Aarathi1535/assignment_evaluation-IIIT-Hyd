@@ -21,6 +21,7 @@ import {
   checkOperatorPermission, 
   getIdentificationBadgeConfig 
 } from '@/utils/previewHelpers';
+import { SearchableSelect } from './ui/SearchableSelect';
 
 interface BatchPreviewViewProps {
   batchId: string;
@@ -77,6 +78,87 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
   const [error, setError] = useState('');
   const [unauthorized, setUnauthorized] = useState(false);
   const [duplicatePages, setDuplicatePages] = useState<string[]>([]);
+
+  const [filterUnidentified, setFilterUnidentified] = useState(false);
+  const [selectedScriptForId, setSelectedScriptForId] = useState<string | null>(null);
+  const [rosterMap, setRosterMap] = useState<Record<string, { id: string; name: string; email: string; rollNumber: string | null }[]>>({});
+  const [loadingRoster, setLoadingRoster] = useState(false);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [savingId, setSavingId] = useState(false);
+  const [saveError, setSaveError] = useState('');
+
+  const handleOpenIdentify = async (scriptId: string, examId: string) => {
+    setSelectedScriptForId(scriptId);
+    setSelectedStudentId('');
+    setSaveError('');
+
+    if (rosterMap[examId]) {
+      return;
+    }
+
+    try {
+      setLoadingRoster(true);
+      const res = await fetch(`/api/exams/${examId}/students`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch student roster: ${res.statusText}`);
+      }
+      const json = await res.json();
+      if (json.success && json.data) {
+        setRosterMap(prev => ({ ...prev, [examId]: json.data }));
+      } else {
+        throw new Error(json.message || 'Failed to fetch student roster');
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Error loading roster.';
+      setSaveError(errMsg);
+    } finally {
+      setLoadingRoster(false);
+    }
+  };
+
+  const handleSaveIdentify = async (scriptId: string) => {
+    if (!selectedStudentId) {
+      setSaveError('Please select a student');
+      return;
+    }
+
+    try {
+      setSavingId(true);
+      setSaveError('');
+
+      const res = await fetch(`/api/answerscripts/${scriptId}/identify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selectedStudentId })
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.message || `Failed to save identification: ${res.statusText}`);
+      }
+
+      if (json.success && json.data) {
+        const updatedScript = json.data;
+        setScripts(prev => prev.map(s => s._id === scriptId ? {
+          ...s,
+          student: updatedScript.student,
+          candidateStudentId: updatedScript.candidateStudentId,
+          identificationSource: updatedScript.identificationSource,
+          identificationStatus: updatedScript.identificationStatus,
+          needsManualId: updatedScript.needsManualId,
+          manualIdReason: updatedScript.manualIdReason
+        } : s));
+        setSelectedScriptForId(null);
+      } else {
+        throw new Error(json.message || 'Failed to save identification');
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Network error: Failed to save identification.';
+      setSaveError(errMsg);
+    } finally {
+      setSavingId(false);
+    }
+  };
 
   const sessionUser = session?.user;
   const userRole = sessionUser?.role?.toUpperCase();
@@ -209,6 +291,10 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
     );
   }
 
+  const filteredScripts = filterUnidentified
+    ? scripts.filter(s => s.identificationStatus !== 'IDENTIFIED' || s.needsManualId)
+    : scripts;
+
   return (
     <div className="max-w-6xl mx-auto space-y-6 font-sans">
       
@@ -241,9 +327,23 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
         </div>
       )}
 
+      {/* Filtering Options */}
+      <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-brand p-4 shadow-3xs">
+        <span className="text-xs font-bold text-slate-700">Filter options</span>
+        <label className="inline-flex items-center gap-2 cursor-pointer select-none text-xs font-extrabold text-slate-600">
+          <input
+            type="checkbox"
+            checked={filterUnidentified}
+            onChange={(e) => setFilterUnidentified(e.target.checked)}
+            className="rounded border-slate-350 text-brand-primary focus:ring-brand-primary/20 cursor-pointer h-4 w-4"
+          />
+          <span>Show only unidentified scripts requiring review</span>
+        </label>
+      </div>
+
       {/* Script Grouping Cards */}
       <div className="space-y-6">
-        {scripts.map((script, index) => {
+        {filteredScripts.map((script, index) => {
           const badgeConfig = getIdentificationBadgeConfig(script);
           const isIdentified = badgeConfig.variant === 'success';
 
@@ -265,7 +365,7 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                 </div>
 
                 {/* Identity status display */}
-                <div>
+                <div className="flex items-center gap-3">
                   <span className={`inline-flex items-start md:items-center gap-2 px-3 py-1.5 rounded-brand text-xs font-bold border transition-colors ${
                     isIdentified 
                       ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
@@ -283,8 +383,82 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
                       </span>
                     </div>
                   </span>
+
+                  {!isIdentified && selectedScriptForId !== script._id && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleOpenIdentify(script._id, script.exam)}
+                    >
+                      Identify
+                    </Button>
+                  )}
                 </div>
               </div>
+
+              {/* Manual Identification Form */}
+              {selectedScriptForId === script._id && (
+                <div className="mb-6 p-4 border border-brand-primary/20 rounded-brand bg-slate-50/50 space-y-4 shadow-3xs">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider">Manual Student Identification</h4>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedScriptForId(null)}
+                      disabled={savingId}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+
+                  {loadingRoster ? (
+                    <div className="flex items-center space-x-2 py-4 justify-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-brand-primary" />
+                      <span className="text-xs text-slate-500 font-semibold pl-2">Loading exam student roster...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {saveError && (
+                        <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-brand p-3 text-rose-900 text-xs font-bold leading-normal">
+                          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
+                          <span>{saveError}</span>
+                        </div>
+                      )}
+
+                      <div className="max-w-md">
+                        <SearchableSelect
+                          label="Select Student from Exam Roster"
+                          placeholder="Search student by name, roll number, or email..."
+                          value={selectedStudentId}
+                          onChange={(val) => setSelectedStudentId(val)}
+                          options={(rosterMap[script.exam] || []).map(stud => ({
+                            value: stud.id,
+                            label: `${stud.name} (${stud.rollNumber || 'No Roll Number'}) — ${stud.email}`
+                          }))}
+                        />
+                      </div>
+
+                      <div className="flex gap-3">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => handleSaveIdentify(script._id)}
+                          disabled={savingId || !selectedStudentId}
+                        >
+                          {savingId ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                              <span>Saving...</span>
+                            </>
+                          ) : (
+                            <span>Save Identification</span>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Pages Grid */}
               {(!script.pages || script.pages.length === 0) ? (
