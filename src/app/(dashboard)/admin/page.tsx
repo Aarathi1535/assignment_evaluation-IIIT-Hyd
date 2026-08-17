@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Users, BookOpen, FileText, Terminal, UserPlus, Settings, ShieldAlert } from 'lucide-react';
+import Link from 'next/link';
+import { Users, BookOpen, FileText, Terminal, UserPlus, Settings, ShieldAlert, Upload } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -44,6 +45,12 @@ export default function AdminDashboardPage() {
 
   const quickActions = (
     <>
+      <Link href="/admin/exams/upload">
+        <Button variant="outline" size="md">
+          <Upload className="h-4 w-4" />
+          <span>Upload Answer Sheets</span>
+        </Button>
+      </Link>
       <Button variant="primary" size="md">
         <UserPlus className="h-4 w-4" />
         <span>Manage Users</span>
