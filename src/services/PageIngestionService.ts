@@ -7,7 +7,8 @@ import { IPageRenderer, DefaultPdfRenderer, DefaultImageRenderer, RenderPageResu
 import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
 import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
 import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDetector';
-import { defaultImageEnhancer, IImageEnhancer } from './ImageEnhancer';
+import { writeAuditLog } from '../lib/audit';
+import { defaultImageEnhancer, IImageEnhancer, EnhancementParams } from './ImageEnhancer';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 export interface ProcessPageInput {
@@ -276,6 +277,8 @@ export class PageIngestionService {
             let deskewAngle = 0;
             let orientation = 0;
 
+            let enhancementParams: Record<string, number> | undefined = undefined;
+
             if (renderResult.image && renderResult.image.buffer) {
                 // AE-066: Auto-enhance (Deskew & Rotate)
                 try {
@@ -285,6 +288,16 @@ export class PageIngestionService {
                         enhancementApplied = true;
                         deskewAngle = enhancement.deskewAngle;
                         orientation = enhancement.orientation;
+                        enhancementParams = {
+                            deskewAngle: enhancement.deskewAngle,
+                            orientation: enhancement.orientation
+                        };
+                        if (enhancement.brightness !== undefined) {
+                            enhancementParams.brightness = enhancement.brightness;
+                        }
+                        if (enhancement.contrast !== undefined) {
+                            enhancementParams.contrast = enhancement.contrast;
+                        }
                         // The buffer dimensions might have changed after rotation
                         // For exact dimensions, we would read it, but typically it swaps on 90/270
                         if (orientation === 90 || orientation === 270) {
@@ -400,6 +413,7 @@ export class PageIngestionService {
                     isDuplicate,
                     duplicateOf,
                     perceptualHash,
+                    enhancementParams,
                     metadata: {
                         fileType,
                         fileIndex,
@@ -474,6 +488,168 @@ export class PageIngestionService {
                 pageRecord: pageRecord || undefined
             };
         }
+    }
+
+    /**
+     * AE-068: Re-enhances a previously processed page with explicit enhancement parameters.
+     */
+    async updateEnhancementParams(
+        pageId: string | mongoose.Types.ObjectId,
+        params: EnhancementParams,
+        userId: string | mongoose.Types.ObjectId,
+        ipAddress?: string
+    ): Promise<PageProcessResult> {
+        const page = await IngestionPage.findById(pageId);
+        if (!page) {
+            throw new Error('Page not found');
+        }
+
+        if (page.status !== PageProcessingStatus.PROCESSED) {
+            throw new Error('Cannot update enhancement parameters for an unprocessed or failed page');
+        }
+
+        const originalStorageKey = page.metadata?.originalStorageKey as string;
+        if (!originalStorageKey) {
+            throw new Error('Original storage key not found in page metadata');
+        }
+
+        let bufferToProcess: Buffer | undefined = undefined;
+        try {
+            const storageRoot = process.env.ORIGINAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'originals');
+            const relativePath = originalStorageKey.replace(/^batches\//, '');
+            const diskPath = path.join(storageRoot, relativePath);
+            if (fs.existsSync(diskPath)) {
+                bufferToProcess = await fs.promises.readFile(diskPath);
+            }
+        } catch {
+            throw new Error('Could not read original immutable source file');
+        }
+
+        if (!bufferToProcess) {
+            throw new Error('Original immutable source file missing or inaccessible');
+        }
+
+        const fileType = page.metadata?.fileType as string || 'png';
+        const isImage =
+            fileType === 'image' ||
+            fileType === 'jpg' ||
+            fileType === 'jpeg' ||
+            fileType === 'png' ||
+            fileType === 'webp' ||
+            fileType?.startsWith('image/');
+        const activeRenderer = isImage ? this.imageRenderer : this.renderer;
+
+        // 1. Render from original buffer
+        const renderResult: RenderPageResult = await this.executeWithTimeout(
+            async () => {
+                return await activeRenderer.renderPage({
+                    batchId: page.batchId,
+                    fileId: page.fileId,
+                    pageNumber: page.pageNumber,
+                    fileType,
+                    storageKey: originalStorageKey,
+                    fileBuffer: bufferToProcess
+                });
+            },
+            this.defaultPageTimeoutMs,
+            `Page ${page.pageNumber} processing timed out`
+        );
+
+        if (!renderResult.success || !renderResult.image || !renderResult.image.buffer) {
+            throw new Error('Failed to re-render page from original source');
+        }
+
+        // 2. Enhance with explicit parameters
+        const enhancement = await this.imageEnhancer.enhancePage(renderResult.image.buffer, renderResult.image.format, params);
+        const enhancedBuffer = enhancement.applied ? enhancement.buffer : renderResult.image.buffer;
+        let pageWidth = renderResult.image.width;
+        let pageHeight = renderResult.image.height;
+        const orientation = enhancement.orientation || 0;
+        if (enhancement.applied && (orientation === 90 || orientation === 270)) {
+            pageWidth = renderResult.image.height;
+            pageHeight = renderResult.image.width;
+        }
+
+        // 3. Store new derived page
+        const storedDerived = await this.derivedStorage.storeDerivedPage({
+            batchId: page.batchId,
+            fileId: page.fileId,
+            pageNumber: page.pageNumber,
+            buffer: enhancedBuffer,
+            format: renderResult.image.format
+        });
+        const pageStorageKey = storedDerived.storageKey;
+
+        // 4. Regenerate thumbnail
+        let thumbnailKey: string | null = null;
+        try {
+            const thumb = await this.thumbnailGenerator.generateThumbnail(enhancedBuffer, pageWidth, pageHeight);
+            const storedThumb = await this.derivedStorage.storeDerivedThumbnail({
+                batchId: page.batchId,
+                fileId: page.fileId,
+                pageNumber: page.pageNumber,
+                buffer: thumb.buffer,
+                format: 'jpg'
+            });
+            thumbnailKey = storedThumb.storageKey;
+        } catch {
+            thumbnailKey = null; // Thumbnail failure doesn't crash the update
+        }
+
+        // 5. Update page record
+        const enhancementParams = {
+            deskewAngle: enhancement.deskewAngle,
+            orientation: enhancement.orientation
+        } as Record<string, number>;
+
+        if (enhancement.brightness !== undefined) enhancementParams.brightness = enhancement.brightness;
+        if (enhancement.contrast !== undefined) enhancementParams.contrast = enhancement.contrast;
+        const updatedMetadata = {
+            ...page.metadata,
+            derivedStorageKey: pageStorageKey,
+            thumbnailKey,
+            width: pageWidth,
+            height: pageHeight,
+            enhancementApplied: enhancement.applied,
+            deskewAngle: enhancement.deskewAngle,
+            orientation: enhancement.orientation
+        };
+
+        const updatedPage = await IngestionPage.findByIdAndUpdate(
+            pageId,
+            {
+                storageKey: pageStorageKey,
+                thumbnailKey,
+                width: pageWidth,
+                height: pageHeight,
+                enhancementParams,
+                metadata: updatedMetadata
+            },
+            { new: true, runValidators: true }
+        );
+
+        // 6. Audit Log
+        await writeAuditLog({
+            user: userId,
+            action: 'UPDATE_ENHANCEMENT_PARAMS',
+            outcome: 'SUCCESS',
+            entityId: pageId,
+            entityType: 'IngestionPage',
+            details: {
+                batchId: page.batchId,
+                pageNumber: page.pageNumber,
+                oldParams: page.enhancementParams,
+                newParams: enhancementParams
+            },
+            ipAddress
+        });
+
+        return {
+            success: true,
+            pageNumber: updatedPage!.pageNumber,
+            fileId: updatedPage!.fileId,
+            pageRecord: updatedPage || undefined
+        };
     }
 
     /**

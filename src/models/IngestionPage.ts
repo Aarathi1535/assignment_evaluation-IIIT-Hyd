@@ -30,6 +30,7 @@ export interface IIngestionPage extends Document {
     isDuplicate?: boolean;
     duplicateOf?: mongoose.Types.ObjectId | null;
     perceptualHash?: string | null;
+    enhancementParams?: Record<string, number> | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -135,6 +136,10 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
         },
         perceptualHash: {
             type: String,
+            default: null
+        },
+        enhancementParams: {
+            type: Schema.Types.Mixed,
             default: null
         },
         metadata: {
