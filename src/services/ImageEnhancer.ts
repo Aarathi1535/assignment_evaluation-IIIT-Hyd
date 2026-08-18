@@ -15,29 +15,29 @@ export class DefaultImageEnhancer implements IImageEnhancer {
     async enhancePage(buffer: Buffer, format: 'png' | 'jpeg' | 'webp' = 'png'): Promise<ImageEnhancementResult> {
         try {
             const img = await loadImage(buffer);
-            
+
             // 1. Downscale for analysis
             const MAX_DIM = 400;
             const scale = Math.min(1.0, MAX_DIM / Math.max(img.width, img.height));
             const sWidth = Math.max(1, Math.round(img.width * scale));
             const sHeight = Math.max(1, Math.round(img.height * scale));
-            
+
             const analyzeCanvas = createCanvas(sWidth, sHeight);
             const aCtx = analyzeCanvas.getContext('2d');
             // Ensure white background
             aCtx.fillStyle = '#FFFFFF';
             aCtx.fillRect(0, 0, sWidth, sHeight);
             aCtx.drawImage(img, 0, 0, sWidth, sHeight);
-            
+
             let hVar = this.getProjectionVariance(aCtx, sWidth, sHeight, 0);
             const vVar = this.getProjectionVariance(aCtx, sWidth, sHeight, 90);
-            
+
             // AE-066: If variance is extremely low, it lacks clear text structure.
             // Avoid unreliable enhancement on blank or purely noise images.
             if (hVar < 50 && vVar < 50) {
                 return { buffer, deskewAngle: 0, orientation: 0, applied: false };
             }
-            
+
             let orientation = 0;
             if (vVar > hVar * 2.0) {
                 const leftSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'left');
@@ -54,10 +54,10 @@ export class DefaultImageEnhancer implements IImageEnhancer {
                     orientation = 180;
                 }
             }
-            
+
             let bestAngle = 0;
             let maxVar = -1;
-            
+
             // Scan -10 to +10 degrees relative to orientation
             for (let angle = -10; angle <= 10; angle += 0.5) {
                 const currentVar = this.getProjectionVariance(aCtx, sWidth, sHeight, angle + orientation);
@@ -66,23 +66,26 @@ export class DefaultImageEnhancer implements IImageEnhancer {
                     bestAngle = angle;
                 }
             }
-            
+
             // If the variance didn't significantly improve over 0 deskew, discard it
             const zeroVar = this.getProjectionVariance(aCtx, sWidth, sHeight, orientation);
             if (maxVar < zeroVar * 1.15) {
                 bestAngle = 0;
             }
-            
-            if (bestAngle === 0 && orientation === 0) {
+
+            const { p5, p95 } = this.getContrastStats(aCtx, sWidth, sHeight);
+            const needsContrast = p5 > 100 || (p95 - p5) < 100;
+
+            if (bestAngle === 0 && orientation === 0 && !needsContrast) {
                 return { buffer, deskewAngle: 0, orientation: 0, applied: false };
             }
-            
+
             // 3. Apply transformation
             const totalRotationDeg = orientation + bestAngle;
             const rad = Math.abs(totalRotationDeg * Math.PI / 180);
             let newWidth = img.width;
             let newHeight = img.height;
-            
+
             if (orientation === 90 || orientation === 270) {
                 newWidth = img.height * Math.abs(Math.cos(rad)) + img.width * Math.abs(Math.sin(rad));
                 newHeight = img.width * Math.abs(Math.cos(rad)) + img.height * Math.abs(Math.sin(rad));
@@ -90,15 +93,15 @@ export class DefaultImageEnhancer implements IImageEnhancer {
                 newWidth = img.width * Math.abs(Math.cos(rad)) + img.height * Math.abs(Math.sin(rad));
                 newHeight = img.height * Math.abs(Math.cos(rad)) + img.width * Math.abs(Math.sin(rad));
             }
-            
+
             const finalCanvas = createCanvas(Math.round(newWidth), Math.round(newHeight));
             const fCtx = finalCanvas.getContext('2d');
-            
+
             if (format === 'jpeg') {
                 fCtx.fillStyle = '#FFFFFF';
                 fCtx.fillRect(0, 0, finalCanvas.width, finalCanvas.height);
             }
-            
+
             fCtx.translate(finalCanvas.width / 2, finalCanvas.height / 2);
             // Rotate the context by the exact angle (this counter-rotates the image)
             // Example: If text is skewed down by 5 deg (image rotated +5 deg),
@@ -110,33 +113,44 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             // Actually, if we rotate the context by -5, the drawn image will be rotated -5.
             // Let's use bestAngle directly. We can verify in test.
             fCtx.rotate(-totalRotationDeg * Math.PI / 180);
+
+            if (needsContrast) {
+                const safeP95 = Math.max(p95, p5 + 1);
+                const scale = 255 / (safeP95 - p5);
+                const offset = -p5 * scale;
+                const c = Math.max(1, 1 - (offset / 127.5));
+                const b = scale / c;
+                fCtx.filter = `brightness(${b}) contrast(${c})`;
+            }
+
             fCtx.drawImage(img, -img.width / 2, -img.height / 2);
-            
+            fCtx.filter = 'none';
+
             let outBuffer: Buffer;
             if (format === 'jpeg') outBuffer = finalCanvas.toBuffer('image/jpeg');
             else if (format === 'webp') outBuffer = finalCanvas.toBuffer('image/webp');
             else outBuffer = finalCanvas.toBuffer('image/png');
-            
+
             return { buffer: outBuffer, deskewAngle: bestAngle, orientation, applied: true };
         } catch {
             // Failsafe: return original buffer on any error
             return { buffer, deskewAngle: 0, orientation: 0, applied: false };
         }
     }
-    
+
     private getProjectionVariance(ctx: import('@napi-rs/canvas').SKRSContext2D, width: number, height: number, angleDeg: number): number {
         const tempCanvas = createCanvas(width, height);
         const tCtx = tempCanvas.getContext('2d');
         tCtx.fillStyle = '#FFFFFF';
         tCtx.fillRect(0, 0, width, height);
-        
+
         tCtx.translate(width / 2, height / 2);
         tCtx.rotate(angleDeg * Math.PI / 180);
         tCtx.drawImage(ctx.canvas, -width / 2, -height / 2);
-        
+
         const imgData = tCtx.getImageData(0, 0, width, height).data;
         const rowSums = new Float64Array(height);
-        
+
         let sum = 0;
         for (let y = 0; y < height; y++) {
             let rowSum = 0;
@@ -148,30 +162,30 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             rowSums[y] = rowSum;
             sum += rowSum;
         }
-        
+
         const mean = sum / height;
         let variance = 0;
         for (let y = 0; y < height; y++) {
             const diff = rowSums[y] - mean;
             variance += diff * diff;
         }
-        
+
         return variance / height;
     }
-    
+
     private getMarginDensity(ctx: import('@napi-rs/canvas').SKRSContext2D, width: number, height: number, edge: 'top'|'bottom'|'left'|'right'): number {
         const imgData = ctx.getImageData(0, 0, width, height).data;
         let sum = 0;
-        
+
         const marginPercent = 0.2;
         let startY = 0, endY = height;
         let startX = 0, endX = width;
-        
+
         if (edge === 'top') endY = Math.floor(height * marginPercent);
         if (edge === 'bottom') startY = Math.floor(height * (1 - marginPercent));
         if (edge === 'left') endX = Math.floor(width * marginPercent);
         if (edge === 'right') startX = Math.floor(width * (1 - marginPercent));
-        
+
         for (let y = startY; y < endY; y++) {
             for (let x = startX; x < endX; x++) {
                 const idx = (y * width + x) * 4;
@@ -180,6 +194,43 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             }
         }
         return sum;
+    }
+
+    private getContrastStats(ctx: import('@napi-rs/canvas').SKRSContext2D, width: number, height: number): { p5: number, p95: number } {
+        const imgData = ctx.getImageData(0, 0, width, height).data;
+        const histogram = new Int32Array(256);
+        let total = 0;
+
+        for (let i = 0; i < imgData.length; i += 4) {
+            const luma = Math.round(0.299 * imgData[i] + 0.587 * imgData[i+1] + 0.114 * imgData[i+2]);
+            const clampedLuma = Math.max(0, Math.min(255, luma));
+            histogram[clampedLuma]++;
+            total++;
+        }
+
+        let p5 = 0;
+        let count = 0;
+        const target5 = total * 0.05;
+        for (let i = 0; i < 256; i++) {
+            count += histogram[i];
+            if (count >= target5) {
+                p5 = i;
+                break;
+            }
+        }
+
+        let p95 = 255;
+        count = 0;
+        const target95 = total * 0.95;
+        for (let i = 0; i < 256; i++) {
+            count += histogram[i];
+            if (count >= target95) {
+                p95 = i;
+                break;
+            }
+        }
+
+        return { p5, p95 };
     }
 }
 
