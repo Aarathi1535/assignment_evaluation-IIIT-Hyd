@@ -222,18 +222,18 @@ describe('AE-065 Duplicate / Blank Page Detection tests', () => {
 
             const canvas1 = createCanvas(200, 200);
             const ctx1 = canvas1.getContext('2d');
-            ctx1.fillStyle = '#000000';
-            ctx1.fillRect(0, 0, 100, 200);
             ctx1.fillStyle = '#FFFFFF';
-            ctx1.fillRect(100, 0, 100, 200);
+            ctx1.fillRect(0, 0, 200, 200);
+            ctx1.fillStyle = '#000000';
+            ctx1.fillText('Page 1 Content', 30, 80);
             const buf1 = canvas1.toBuffer('image/png');
 
             const canvas2 = createCanvas(200, 200);
             const ctx2 = canvas2.getContext('2d');
             ctx2.fillStyle = '#FFFFFF';
-            ctx2.fillRect(0, 0, 100, 200);
+            ctx2.fillRect(0, 0, 200, 200);
             ctx2.fillStyle = '#000000';
-            ctx2.fillRect(100, 0, 100, 200);
+            ctx2.fillText('Completely different Page 2', 30, 80);
             const buf2 = canvas2.toBuffer('image/png');
 
             const page1Result = await pageIngestionService.processPage({

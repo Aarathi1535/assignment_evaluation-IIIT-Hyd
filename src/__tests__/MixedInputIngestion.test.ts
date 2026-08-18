@@ -7,6 +7,17 @@ import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import batchService from '../services/BatchService';
 import { IngestionWorker } from '../services/IngestionWorker';
 import { DefaultImageRenderer } from '../services/PageRenderer';
+import { defaultImageEnhancer } from '../services/ImageEnhancer';
+
+vi.mock('../services/ImageEnhancer', () => {
+    return {
+        defaultImageEnhancer: {
+            enhancePage: vi.fn().mockImplementation(async (buffer) => {
+                return { buffer, deskewAngle: 0, orientation: 0, applied: false };
+            })
+        }
+    };
+});
 
 function createValidPdfBuffer(pageCount = 1, widthPt = 612, heightPt = 792): Buffer {
     let pdfStr = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [`;
