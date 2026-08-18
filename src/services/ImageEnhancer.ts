@@ -4,15 +4,24 @@ export interface ImageEnhancementResult {
     buffer: Buffer;
     deskewAngle: number;
     orientation: number;
+    brightness?: number;
+    contrast?: number;
     applied: boolean;
 }
 
+export interface EnhancementParams {
+    deskewAngle?: number;
+    orientation?: number;
+    brightness?: number;
+    contrast?: number;
+}
+
 export interface IImageEnhancer {
-    enhancePage(buffer: Buffer, format?: 'png' | 'jpeg' | 'webp'): Promise<ImageEnhancementResult>;
+    enhancePage(buffer: Buffer, format?: 'png' | 'jpeg' | 'webp', params?: EnhancementParams): Promise<ImageEnhancementResult>;
 }
 
 export class DefaultImageEnhancer implements IImageEnhancer {
-    async enhancePage(buffer: Buffer, format: 'png' | 'jpeg' | 'webp' = 'png'): Promise<ImageEnhancementResult> {
+    async enhancePage(buffer: Buffer, format: 'png' | 'jpeg' | 'webp' = 'png', params?: EnhancementParams): Promise<ImageEnhancementResult> {
         try {
             const img = await loadImage(buffer);
 
@@ -29,55 +38,79 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             aCtx.fillRect(0, 0, sWidth, sHeight);
             aCtx.drawImage(img, 0, 0, sWidth, sHeight);
 
-            let hVar = this.getProjectionVariance(aCtx, sWidth, sHeight, 0);
-            const vVar = this.getProjectionVariance(aCtx, sWidth, sHeight, 90);
-
-            // AE-066: If variance is extremely low, it lacks clear text structure.
-            // Avoid unreliable enhancement on blank or purely noise images.
-            if (hVar < 50 && vVar < 50) {
-                return { buffer, deskewAngle: 0, orientation: 0, applied: false };
-            }
-
-            let orientation = 0;
-            if (vVar > hVar * 2.0) {
-                const leftSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'left');
-                const rightSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'right');
-                // Original top margin (which has more ink) moves to the right when rotated 90 degrees clockwise.
-                orientation = rightSum > leftSum * 1.2 ? 90 : 270;
-                hVar = vVar;
-            } else {
-                const topSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'top');
-                const bottomSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'bottom');
-                // Normal text has more ink at the top (header) and empty space at the bottom.
-                // If bottom has significantly more ink than top, it's upside down.
-                if (bottomSum > topSum * 2.0) {
-                    orientation = 180;
-                }
-            }
-
             let bestAngle = 0;
-            let maxVar = -1;
+            let orientation = 0;
+            let needsContrast = false;
+            let b = 1;
+            let c = 1;
 
-            // Scan -10 to +10 degrees relative to orientation
-            for (let angle = -10; angle <= 10; angle += 0.5) {
-                const currentVar = this.getProjectionVariance(aCtx, sWidth, sHeight, angle + orientation);
-                if (currentVar > maxVar) {
-                    maxVar = currentVar;
-                    bestAngle = angle;
+            if (params && (params.deskewAngle !== undefined || params.orientation !== undefined || params.brightness !== undefined || params.contrast !== undefined)) {
+                // If explicit parameters are passed, use them and skip auto-detection
+                bestAngle = params.deskewAngle ?? 0;
+                orientation = params.orientation ?? 0;
+                if (params.brightness !== undefined || params.contrast !== undefined) {
+                    needsContrast = true;
+                    b = params.brightness ?? 1;
+                    c = params.contrast ?? 1;
                 }
-            }
+            } else {
+                // Perform Auto-Detection
+                let hVar = this.getProjectionVariance(aCtx, sWidth, sHeight, 0);
+                const vVar = this.getProjectionVariance(aCtx, sWidth, sHeight, 90);
 
-            // If the variance didn't significantly improve over 0 deskew, discard it
-            const zeroVar = this.getProjectionVariance(aCtx, sWidth, sHeight, orientation);
-            if (maxVar < zeroVar * 1.15) {
-                bestAngle = 0;
-            }
+                // AE-066: If variance is extremely low, it lacks clear text structure.
+                // Avoid unreliable enhancement on blank or purely noise images.
+                if (hVar < 50 && vVar < 50) {
+                    return { buffer, deskewAngle: 0, orientation: 0, applied: false };
+                }
 
-            const { p5, p95 } = this.getContrastStats(aCtx, sWidth, sHeight);
-            const needsContrast = p5 > 100 || (p95 - p5) < 100;
+                if (vVar > hVar * 2.0) {
+                    const leftSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'left');
+                    const rightSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'right');
+                    // Original top margin (which has more ink) moves to the right when rotated 90 degrees clockwise.
+                    orientation = rightSum > leftSum * 1.2 ? 90 : 270;
+                    hVar = vVar;
+                } else {
+                    const topSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'top');
+                    const bottomSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'bottom');
+                    // Normal text has more ink at the top (header) and empty space at the bottom.
+                    // If bottom has significantly more ink than top, it's upside down.
+                    if (bottomSum > topSum * 2.0) {
+                        orientation = 180;
+                    }
+                }
 
-            if (bestAngle === 0 && orientation === 0 && !needsContrast) {
-                return { buffer, deskewAngle: 0, orientation: 0, applied: false };
+                let maxVar = -1;
+
+                // Scan -10 to +10 degrees relative to orientation
+                for (let angle = -10; angle <= 10; angle += 0.5) {
+                    const currentVar = this.getProjectionVariance(aCtx, sWidth, sHeight, angle + orientation);
+                    if (currentVar > maxVar) {
+                        maxVar = currentVar;
+                        bestAngle = angle;
+                    }
+                }
+
+                // If the variance didn't significantly improve over 0 deskew, discard it
+                const zeroVar = this.getProjectionVariance(aCtx, sWidth, sHeight, orientation);
+                if (maxVar < zeroVar * 1.15) {
+                    bestAngle = 0;
+                }
+
+                const { p5, p95 } = this.getContrastStats(aCtx, sWidth, sHeight);
+                needsContrast = p5 > 100 || (p95 - p5) < 100;
+
+                if (needsContrast) {
+                    const safeP95 = Math.max(p95, p5 + 1);
+                    const scale = 255 / (safeP95 - p5);
+                    const offset = -p5 * scale;
+                    c = Math.max(1, 1 - (offset / 127.5));
+                    b = scale / c;
+                }
+
+                if (bestAngle === 0 && orientation === 0 && !needsContrast) {
+                    return { buffer, deskewAngle: 0, orientation: 0, applied: false };
+                }
             }
 
             // 3. Apply transformation
@@ -115,11 +148,6 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             fCtx.rotate(-totalRotationDeg * Math.PI / 180);
 
             if (needsContrast) {
-                const safeP95 = Math.max(p95, p5 + 1);
-                const scale = 255 / (safeP95 - p5);
-                const offset = -p5 * scale;
-                const c = Math.max(1, 1 - (offset / 127.5));
-                const b = scale / c;
                 fCtx.filter = `brightness(${b}) contrast(${c})`;
             }
 
@@ -131,7 +159,7 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             else if (format === 'webp') outBuffer = finalCanvas.toBuffer('image/webp');
             else outBuffer = finalCanvas.toBuffer('image/png');
 
-            return { buffer: outBuffer, deskewAngle: bestAngle, orientation, applied: true };
+            return { buffer: outBuffer, deskewAngle: bestAngle, orientation, brightness: needsContrast ? b : undefined, contrast: needsContrast ? c : undefined, applied: true };
         } catch {
             // Failsafe: return original buffer on any error
             return { buffer, deskewAngle: 0, orientation: 0, applied: false };
