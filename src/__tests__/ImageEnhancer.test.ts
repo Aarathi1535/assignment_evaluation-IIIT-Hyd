@@ -140,4 +140,58 @@ describe('ImageEnhancer', () => {
         // Applied should be false because deskew=0, orientation=0, and contrast is already good
         expect(result.applied).toBe(false);
     });
+
+    describe('AE-069 Enhancement Determinism', () => {
+        it('should produce byte-identical output for the exact same input and parameters', async () => {
+            const buffer = createSyntheticTestImage(5, 0, '#333333', '#DDDDDD');
+            const result1 = await defaultImageEnhancer.enhancePage(buffer, 'png', { deskewAngle: 5, brightness: 1.2, contrast: 1.1 });
+            const result2 = await defaultImageEnhancer.enhancePage(buffer, 'png', { deskewAngle: 5, brightness: 1.2, contrast: 1.1 });
+
+            // 1. Same input + same parameters produces deterministic output (byte-identical in same environment)
+            expect(result1.buffer.equals(result2.buffer)).toBe(true);
+            expect(result1.deskewAngle).toBe(result2.deskewAngle);
+            expect(result1.applied).toBe(result2.applied);
+        });
+
+        it('should produce output with predictable property equivalence', async () => {
+            const buffer = createSyntheticTestImage(5, 90, '#333333', '#DDDDDD');
+            const result1 = await defaultImageEnhancer.enhancePage(buffer, 'png', { deskewAngle: 5, orientation: 90 });
+
+            // 3. Add property-based/semantic assertions for output equivalence
+            const { loadImage } = await import('@napi-rs/canvas');
+            const img1 = await loadImage(result1.buffer);
+
+            // Original was 800x1000. It is 800x1000 canvas containing a rotated drawing.
+            // When rotated 95 degrees, new width ~ 1000*cos(95) + 800*sin(95) ~ 87 + 796 = 883
+            // new height ~ 800*cos(95) + 1000*sin(95) ~ 69 + 996 = 1065
+            // We use property tolerances instead of fragile byte hashes.
+            expect(img1.width).toBeGreaterThan(850);
+            expect(img1.height).toBeGreaterThan(1050);
+        });
+
+        it('should produce meaningfully different results for different parameters', async () => {
+            const buffer = createSyntheticTestImage(0, 0, '#555555', '#AAAAAA');
+            const resultBright = await defaultImageEnhancer.enhancePage(buffer, 'png', { brightness: 2.0, contrast: 1.0 });
+            const resultDark = await defaultImageEnhancer.enhancePage(buffer, 'png', { brightness: 0.5, contrast: 1.0 });
+
+            // 4. Verify different enhancement parameters produce meaningfully different results
+            expect(resultBright.buffer.equals(resultDark.buffer)).toBe(false);
+
+            const { loadImage, createCanvas } = await import('@napi-rs/canvas');
+            const imgBright = await loadImage(resultBright.buffer);
+            const canvasB = createCanvas(imgBright.width, imgBright.height);
+            const ctxB = canvasB.getContext('2d');
+            ctxB.drawImage(imgBright, 0, 0);
+            const dataB = ctxB.getImageData(0, 0, 10, 10).data;
+
+            const imgDark = await loadImage(resultDark.buffer);
+            const canvasD = createCanvas(imgDark.width, imgDark.height);
+            const ctxD = canvasD.getContext('2d');
+            ctxD.drawImage(imgDark, 0, 0);
+            const dataD = ctxD.getImageData(0, 0, 10, 10).data;
+
+            // The bright image should have higher luma values on average
+            expect(dataB[0]).toBeGreaterThan(dataD[0]);
+        });
+    });
 });

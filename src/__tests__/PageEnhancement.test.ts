@@ -181,4 +181,63 @@ describe('AE-068 Page Enhancement Update Workflow', () => {
             testUserId
         )).rejects.toThrow('Cannot update enhancement parameters for an unprocessed or failed page');
     });
+
+    it('should be perfectly deterministic when applying the same parameters repeatedly (AE-069)', async () => {
+        const buffer = createSyntheticBuffer();
+        const originalStorageKey = `batches/${testBatchId}/original.png`;
+        const diskPath = path.join(originalStorageRoot, testBatchId, 'original.png');
+        fs.mkdirSync(path.dirname(diskPath), { recursive: true });
+        fs.writeFileSync(diskPath, buffer);
+
+        const page = await IngestionPage.create({
+            batchId: testBatchId,
+            job: new mongoose.Types.ObjectId(),
+            fileId: 'file-4',
+            fileIndex: 3,
+            storageKey: 'old-derived-key',
+            thumbnailKey: 'old-thumbnail-key',
+            pageNumber: 1,
+            status: PageProcessingStatus.PROCESSED,
+            enhancementParams: { deskewAngle: 0, orientation: 0 },
+            metadata: {
+                originalStorageKey,
+                derivedStorageKey: 'old-derived-key',
+                fileType: 'png'
+            }
+        });
+
+        const explicitParams = {
+            deskewAngle: 5,
+            orientation: 90,
+            brightness: 1.5,
+            contrast: 1.2
+        };
+
+        await pageIngestionService.updateEnhancementParams(
+            page._id as mongoose.Types.ObjectId,
+            explicitParams,
+            testUserId,
+            '127.0.0.1'
+        );
+
+        // Capture the buffer passed to derived storage
+        const call1Args = (mockDerivedStorage.storeDerivedPage as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { buffer: Buffer };
+
+        // Call again with same params
+        await pageIngestionService.updateEnhancementParams(
+            page._id as mongoose.Types.ObjectId,
+            explicitParams,
+            testUserId,
+            '127.0.0.1'
+        );
+
+        const call2Args = (mockDerivedStorage.storeDerivedPage as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][0] as { buffer: Buffer };
+
+        // 1. Outputs must be byte-identical (AE-069 Determinism)
+        expect(call1Args.buffer.equals(call2Args.buffer)).toBe(true);
+
+        // 2. The original immutable source MUST NOT have changed
+        const diskBufferAfter = fs.readFileSync(diskPath);
+        expect(diskBufferAfter.equals(buffer)).toBe(true);
+    });
 });
