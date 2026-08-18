@@ -7,6 +7,7 @@ import { IPageRenderer, DefaultPdfRenderer, DefaultImageRenderer, RenderPageResu
 import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
 import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
 import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDetector';
+import { defaultImageEnhancer, IImageEnhancer } from './ImageEnhancer';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 export interface ProcessPageInput {
@@ -23,6 +24,7 @@ export interface ProcessPageInput {
     derivedStorage?: IDerivedStorageService;
     thumbnailGenerator?: IThumbnailGenerator;
     coverSheetDetector?: ICoverSheetDetector;
+    imageEnhancer?: IImageEnhancer;
 }
 
 export interface PageProcessResult {
@@ -45,6 +47,7 @@ export class PageIngestionService {
     private derivedStorage: IDerivedStorageService;
     private thumbnailGenerator: IThumbnailGenerator;
     private coverSheetDetector: ICoverSheetDetector;
+    private imageEnhancer: IImageEnhancer;
     private defaultPageTimeoutMs = 5000;
 
     constructor(
@@ -52,13 +55,15 @@ export class PageIngestionService {
         derivedStorage?: IDerivedStorageService,
         thumbnailGenerator?: IThumbnailGenerator,
         imageRenderer?: IPageRenderer,
-        coverSheetDetector?: ICoverSheetDetector
+        coverSheetDetector?: ICoverSheetDetector,
+        imageEnhancer?: IImageEnhancer
     ) {
         this.renderer = renderer || new DefaultPdfRenderer();
         this.imageRenderer = imageRenderer || new DefaultImageRenderer();
         this.derivedStorage = derivedStorage || defaultDerivedStorageService;
         this.thumbnailGenerator = thumbnailGenerator || defaultThumbnailGenerator;
         this.coverSheetDetector = coverSheetDetector || defaultCoverSheetDetector;
+        this.imageEnhancer = imageEnhancer || defaultImageEnhancer;
     }
 
     setRenderer(renderer: IPageRenderer): void {
@@ -134,6 +139,7 @@ export class PageIngestionService {
         const activeDerivedStorage = derivedStorage || this.derivedStorage;
         const activeThumbnailGenerator = thumbnailGenerator || this.thumbnailGenerator;
         const activeCoverSheetDetector = coverSheetDetector || this.coverSheetDetector;
+        const activeImageEnhancer = input.imageEnhancer || this.imageEnhancer;
 
         // Idempotency check: If this exact page was already successfully processed, reuse it
         const existingPage = await IngestionPage.findOne({
@@ -262,12 +268,35 @@ export class PageIngestionService {
                 };
             }
 
-            // If image is present on render result, store as mutable derived asset
+            // If image is present on render result, enhance and store as mutable derived asset
             let pageStorageKey = originalStorageKey;
-            const pageWidth = renderResult.image?.width;
-            const pageHeight = renderResult.image?.height;
+            let pageWidth = renderResult.image?.width;
+            let pageHeight = renderResult.image?.height;
+            let enhancementApplied = false;
+            let deskewAngle = 0;
+            let orientation = 0;
 
             if (renderResult.image && renderResult.image.buffer) {
+                // AE-066: Auto-enhance (Deskew & Rotate)
+                try {
+                    const enhancement = await activeImageEnhancer.enhancePage(renderResult.image.buffer, renderResult.image.format);
+                    if (enhancement.applied) {
+                        renderResult.image.buffer = enhancement.buffer;
+                        enhancementApplied = true;
+                        deskewAngle = enhancement.deskewAngle;
+                        orientation = enhancement.orientation;
+                        // The buffer dimensions might have changed after rotation
+                        // For exact dimensions, we would read it, but typically it swaps on 90/270
+                        if (orientation === 90 || orientation === 270) {
+                            pageWidth = renderResult.image.height;
+                            pageHeight = renderResult.image.width;
+                        }
+                    }
+                } catch (e) {
+                    // Safe fallback: ingestion continues without enhancement
+                    console.error(`Enhancement failed on page ${pageNumber}:`, e);
+                }
+
                 const storedDerived = await activeDerivedStorage.storeDerivedPage({
                     batchId,
                     fileId,
@@ -390,6 +419,9 @@ export class PageIngestionService {
                         isDuplicate,
                         duplicateOf: duplicateOf ? duplicateOf.toString() : null,
                         perceptualHash,
+                        enhancementApplied,
+                        deskewAngle,
+                        orientation,
                         ...renderResult.metadata
                     }
                 },
