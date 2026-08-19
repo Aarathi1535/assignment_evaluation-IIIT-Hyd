@@ -25,6 +25,10 @@ export interface IIngestionPage extends Document {
     isCoverPage?: boolean;
     candidateStudentId?: string | null;
     decodeOutcome?: DecodeOutcome | null;
+    qrStudentId?: string | null;
+    qrDecodeOutcome?: DecodeOutcome | null;
+    omrStudentId?: string | null;
+    omrDecodeOutcome?: DecodeOutcome | null;
     answerScript?: mongoose.Types.ObjectId | null;
     nearBlank?: boolean;
     isDuplicate?: boolean;
@@ -108,6 +112,28 @@ const IngestionPageSchema = new Schema<IIngestionPage>(
             index: true
         },
         decodeOutcome: {
+            type: String,
+            enum: ['found', 'not_found', 'multiple', null],
+            default: null
+        },
+        qrStudentId: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true
+        },
+        qrDecodeOutcome: {
+            type: String,
+            enum: ['found', 'not_found', 'multiple', null],
+            default: null
+        },
+        omrStudentId: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true
+        },
+        omrDecodeOutcome: {
             type: String,
             enum: ['found', 'not_found', 'multiple', null],
             default: null

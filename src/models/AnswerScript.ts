@@ -10,6 +10,7 @@ export enum ManualIdReason {
 
 export enum IdentificationSource {
     QR = 'QR',
+    OMR = 'OMR',
     OPERATOR = 'OPERATOR',
     OCR = 'OCR'
 }
@@ -17,6 +18,14 @@ export enum IdentificationSource {
 export enum IdentificationStatus {
     IDENTIFIED = 'IDENTIFIED',
     UNIDENTIFIED = 'UNIDENTIFIED'
+}
+
+export interface IIdentificationHistory {
+    student?: mongoose.Types.ObjectId | null;
+    candidateStudentId?: string | null;
+    identificationSource?: IdentificationSource | 'QR' | 'OMR' | 'OPERATOR' | 'OCR' | null;
+    identificationStatus?: IdentificationStatus | 'IDENTIFIED' | 'UNIDENTIFIED' | null;
+    updatedAt?: Date;
 }
 
 export interface IAnswerScript extends Document {
@@ -30,13 +39,19 @@ export interface IAnswerScript extends Document {
     endPageNumber?: number;
     pageCount?: number;
     candidateStudentId?: string | null;
-    identificationSource?: IdentificationSource | 'QR' | 'OPERATOR' | 'OCR' | null;
+    identificationSource?: IdentificationSource | 'QR' | 'OMR' | 'OPERATOR' | 'OCR' | null;
     identificationStatus?: IdentificationStatus | 'IDENTIFIED' | 'UNIDENTIFIED' | null;
     decodeOutcome?: string | null;
     needsManualId?: boolean;
     manualIdReason?: ManualIdReason | string | null;
     metadata?: Record<string, unknown>;
     isActive: boolean;
+    qrStudentId?: string | null;
+    qrDecodeOutcome?: string | null;
+    omrStudentId?: string | null;
+    omrDecodeOutcome?: string | null;
+    hasIdentificationConflict?: boolean;
+    identificationHistory: IIdentificationHistory[];
     createdAt: Date;
     updatedAt: Date;
 }
@@ -113,6 +128,56 @@ const AnswerScriptSchema = new Schema<IAnswerScript>(
             type: String,
             enum: [...Object.values(ManualIdReason), null],
             default: null
+        },
+        qrStudentId: {
+            type: String,
+            default: null
+        },
+        qrDecodeOutcome: {
+            type: String,
+            default: null
+        },
+        omrStudentId: {
+            type: String,
+            default: null
+        },
+        omrDecodeOutcome: {
+            type: String,
+            default: null
+        },
+        hasIdentificationConflict: {
+            type: Boolean,
+            default: false
+        },
+        identificationHistory: {
+            type: [
+                {
+                    student: {
+                        type: Schema.Types.ObjectId,
+                        ref: 'User',
+                        default: null
+                    },
+                    candidateStudentId: {
+                        type: String,
+                        default: null
+                    },
+                    identificationSource: {
+                        type: String,
+                        enum: [...Object.values(IdentificationSource), null],
+                        default: null
+                    },
+                    identificationStatus: {
+                        type: String,
+                        enum: [...Object.values(IdentificationStatus), null],
+                        default: null
+                    },
+                    updatedAt: {
+                        type: Date,
+                        default: Date.now
+                    }
+                }
+            ],
+            default: []
         },
         metadata: {
             type: Schema.Types.Mixed

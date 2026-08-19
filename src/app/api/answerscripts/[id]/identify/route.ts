@@ -126,6 +126,23 @@ export async function POST(
 
     const previousStudentId = script.student ? script.student.toString() : null;
 
+    const identificationHistory = script.identificationHistory || [];
+    const isIdentityChanging = (
+      String(script.student || '') !== String(studentId || '') ||
+      script.identificationSource !== 'OPERATOR' ||
+      script.identificationStatus !== 'IDENTIFIED'
+    );
+
+    if (isIdentityChanging) {
+      identificationHistory.push({
+        student: script.student || null,
+        candidateStudentId: script.candidateStudentId || null,
+        identificationSource: script.identificationSource || null,
+        identificationStatus: script.identificationStatus || null,
+        updatedAt: script.updatedAt || new Date()
+      });
+    }
+
     // 6. Perform atomic update
     try {
       const updated = await AnswerScript.findOneAndUpdate(
@@ -137,10 +154,11 @@ export async function POST(
             identificationSource: 'OPERATOR',
             identificationStatus: 'IDENTIFIED',
             needsManualId: false,
-            manualIdReason: null
+            manualIdReason: null,
+            identificationHistory
           }
         },
-        { new: true, runValidators: true }
+        { returnDocument: 'after', runValidators: true }
       );
 
       // Record successful manual identification in the audit log
