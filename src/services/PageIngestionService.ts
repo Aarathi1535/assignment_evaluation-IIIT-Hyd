@@ -10,6 +10,7 @@ import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDete
 import { writeAuditLog } from '../lib/audit';
 import { defaultImageEnhancer, IImageEnhancer, EnhancementParams } from './ImageEnhancer';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
+import defaultOMRReader, { OMRReader, OMRStatus } from './OMRReader';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -26,6 +27,7 @@ export interface ProcessPageInput {
     thumbnailGenerator?: IThumbnailGenerator;
     coverSheetDetector?: ICoverSheetDetector;
     imageEnhancer?: IImageEnhancer;
+    omrReader?: OMRReader;
     qrStudentId?: string | null;
     qrDecodeOutcome?: 'found' | 'not_found' | 'multiple' | null;
     omrStudentId?: string | null;
@@ -53,6 +55,7 @@ export class PageIngestionService {
     private thumbnailGenerator: IThumbnailGenerator;
     private coverSheetDetector: ICoverSheetDetector;
     private imageEnhancer: IImageEnhancer;
+    private omrReader: OMRReader;
     private defaultPageTimeoutMs = 5000;
 
     constructor(
@@ -61,7 +64,8 @@ export class PageIngestionService {
         thumbnailGenerator?: IThumbnailGenerator,
         imageRenderer?: IPageRenderer,
         coverSheetDetector?: ICoverSheetDetector,
-        imageEnhancer?: IImageEnhancer
+        imageEnhancer?: IImageEnhancer,
+        omrReader?: OMRReader
     ) {
         this.renderer = renderer || new DefaultPdfRenderer();
         this.imageRenderer = imageRenderer || new DefaultImageRenderer();
@@ -69,6 +73,7 @@ export class PageIngestionService {
         this.thumbnailGenerator = thumbnailGenerator || defaultThumbnailGenerator;
         this.coverSheetDetector = coverSheetDetector || defaultCoverSheetDetector;
         this.imageEnhancer = imageEnhancer || defaultImageEnhancer;
+        this.omrReader = omrReader || defaultOMRReader;
     }
 
     setRenderer(renderer: IPageRenderer): void {
@@ -111,6 +116,14 @@ export class PageIngestionService {
         return this.coverSheetDetector;
     }
 
+    setOMRReader(omrReader: OMRReader): void {
+        this.omrReader = omrReader;
+    }
+
+    getOMRReader(): OMRReader {
+        return this.omrReader;
+    }
+
     /**
      * Processes a single page of an uploaded original file with timeout, error sanitization,
      * normalized derived-asset persistence, thumbnail generation, cover sheet detection, and idempotent reconciliation.
@@ -129,7 +142,8 @@ export class PageIngestionService {
             renderer,
             derivedStorage,
             thumbnailGenerator,
-            coverSheetDetector
+            coverSheetDetector,
+            omrReader
         } = input;
 
         const isImage =
@@ -145,6 +159,7 @@ export class PageIngestionService {
         const activeThumbnailGenerator = thumbnailGenerator || this.thumbnailGenerator;
         const activeCoverSheetDetector = coverSheetDetector || this.coverSheetDetector;
         const activeImageEnhancer = input.imageEnhancer || this.imageEnhancer;
+        const activeOMRReader = omrReader || this.omrReader;
 
         // Idempotency check: If this exact page was already successfully processed, reuse it
         const existingPage = await IngestionPage.findOne({
@@ -372,6 +387,45 @@ export class PageIngestionService {
                 }
             }
 
+            // AE-070: OMR Fallback Bubble Reader (Only on pageNumber === 1 from canonical normalized/enhanced image)
+            let omrStudentId: string | null = null;
+            let omrDecodeOutcome: 'found' | 'not_found' | 'multiple' | null = null;
+
+            if (isCoverPage && renderResult.image && renderResult.image.buffer) {
+                try {
+                    const Batch = mongoose.models.Batch || (await import('../models/Batch')).default;
+                    const batchRecord = await Batch.findOne({ batchId });
+                    if (batchRecord && batchRecord.exam) {
+                        const Exam = mongoose.models.Exam || (await import('../models/Exam')).default;
+                        const examRecord = await Exam.findById(batchRecord.exam);
+                        if (examRecord && examRecord.omrTemplate) {
+                            const omrResult = await activeOMRReader.readOMR(
+                                renderResult.image.buffer,
+                                examRecord.omrTemplate
+                            );
+
+                            if (omrResult.status === OMRStatus.SUCCESS) {
+                                omrStudentId = omrResult.studentId;
+                                omrDecodeOutcome = 'found';
+                            } else if (omrResult.status === OMRStatus.AMBIGUOUS) {
+                                omrStudentId = null;
+                                omrDecodeOutcome = 'multiple';
+                            } else if (omrResult.status === OMRStatus.UNREADABLE) {
+                                omrStudentId = null;
+                                omrDecodeOutcome = 'not_found';
+                            } else if (omrResult.status === OMRStatus.INVALID_CONFIGURATION) {
+                                omrStudentId = null;
+                                omrDecodeOutcome = null;
+                            }
+                        }
+                    }
+                } catch (omrErr) {
+                    console.error(`OMR Reader failure on batch ${batchId} page ${pageNumber}:`, omrErr);
+                    omrStudentId = null;
+                    omrDecodeOutcome = 'not_found';
+                }
+            }
+
             // AE-065: Blank Page and Duplicate Detection
             let nearBlank = false;
             let isDuplicate = false;
@@ -421,8 +475,8 @@ export class PageIngestionService {
                     decodeOutcome,
                     qrStudentId: input.qrStudentId !== undefined ? input.qrStudentId : (isCoverPage ? candidateStudentId : null),
                     qrDecodeOutcome: input.qrDecodeOutcome !== undefined ? input.qrDecodeOutcome : (isCoverPage ? decodeOutcome : null),
-                    omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : null,
-                    omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : null,
+                    omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : (isCoverPage ? omrStudentId : null),
+                    omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : (isCoverPage ? omrDecodeOutcome : null),
                     nearBlank,
                     isDuplicate,
                     duplicateOf,
@@ -445,8 +499,8 @@ export class PageIngestionService {
                         decodeOutcome,
                         qrStudentId: input.qrStudentId !== undefined ? input.qrStudentId : (isCoverPage ? candidateStudentId : null),
                         qrDecodeOutcome: input.qrDecodeOutcome !== undefined ? input.qrDecodeOutcome : (isCoverPage ? decodeOutcome : null),
-                        omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : null,
-                        omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : null,
+                        omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : (isCoverPage ? omrStudentId : null),
+                        omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : (isCoverPage ? omrDecodeOutcome : null),
                         nearBlank,
                         isDuplicate,
                         duplicateOf: duplicateOf ? duplicateOf.toString() : null,
