@@ -6,6 +6,62 @@ const objectIdSchema = z.string().regex(objectIdRegex, {
   message: 'Invalid MongoDB ObjectId',
 });
 
+const omrBubbleSchema = z.object({
+  value: z.string().min(1, { message: 'Bubble value must not be empty' }),
+  x: z.number().min(0, { message: 'x coordinate must be >= 0' }).max(1, { message: 'x coordinate must be <= 1' }),
+  y: z.number().min(0, { message: 'y coordinate must be >= 0' }).max(1, { message: 'y coordinate must be <= 1' }),
+  width: z.number().min(0, { message: 'width must be >= 0' }).max(1, { message: 'width must be <= 1' }),
+  height: z.number().min(0, { message: 'height must be >= 0' }).max(1, { message: 'height must be <= 1' })
+}).refine(data => data.x + data.width <= 1.000001, {
+  message: 'Bubble region width extends outside the normalized page boundary'
+}).refine(data => data.y + data.height <= 1.000001, {
+  message: 'Bubble region height extends outside the normalized page boundary'
+});
+
+const omrColumnSchema = z.object({
+  columnIndex: z.number().int({ message: 'columnIndex must be an integer' }).min(0, { message: 'columnIndex must be >= 0' }),
+  bubbles: z.array(omrBubbleSchema).min(1, { message: 'Column must contain at least one bubble' })
+}).refine(data => {
+  const values = data.bubbles.map(b => b.value);
+  return new Set(values).size === values.length;
+}, {
+  message: 'Duplicate bubble values detected in the same column'
+});
+
+export const omrTemplateSchema = z.object({
+  pageIndex: z.number().int({ message: 'pageIndex must be an integer' }).min(0, { message: 'pageIndex must be >= 0' }),
+  columns: z.array(omrColumnSchema).min(1, { message: 'OMR template must contain at least one column' })
+}).refine(data => {
+  const indices = data.columns.map(c => c.columnIndex);
+  return new Set(indices).size === indices.length;
+}, {
+  message: 'Duplicate columnIndexes detected in OMR template'
+}).refine(data => {
+  const indices = data.columns.map(c => c.columnIndex).sort((a, b) => a - b);
+  for (let i = 0; i < indices.length; i++) {
+    if (indices[i] !== i) {
+      return false;
+    }
+  }
+  return true;
+}, {
+  message: 'Column indexes must be contiguous and start from 0'
+}).refine(data => {
+  const coordinates = new Set<string>();
+  for (const col of data.columns) {
+    for (const b of col.bubbles) {
+      const key = `${b.x.toFixed(6)},${b.y.toFixed(6)}`;
+      if (coordinates.has(key)) {
+        return false;
+      }
+      coordinates.add(key);
+    }
+  }
+  return true;
+}, {
+  message: 'Duplicate bubble coordinates detected in OMR template'
+});
+
 export const createExamSchema = z.object({
   title: z.string()
     .trim()
@@ -25,6 +81,7 @@ export const createExamSchema = z.object({
     .int({ message: 'Number of questions must be an integer' })
     .min(1, { message: 'Number of questions must be at least 1' })
     .max(100, { message: 'Number of questions cannot exceed 100' }),
+  omrTemplate: omrTemplateSchema.nullable().optional(),
 }).strict();
 
 export const updateExamSchema = createExamSchema.partial();

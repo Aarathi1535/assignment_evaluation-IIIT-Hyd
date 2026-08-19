@@ -224,6 +224,9 @@ class ExamService {
                 if (data.isActive !== undefined && data.isActive !== examBefore.isActive) {
                     changedFields.push('isActive');
                 }
+                if (data.omrTemplate !== undefined) {
+                    changedFields.push('omrTemplate');
+                }
 
                 await writeAuditLog({
                     user: context.actingUserId,

@@ -15,6 +15,24 @@ export enum SplittingStrategyType {
     FIXED_PAGE = 'FIXED_PAGE'
 }
 
+export interface IOMRBubble {
+    value: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface IOMRColumn {
+    columnIndex: number;
+    bubbles: IOMRBubble[];
+}
+
+export interface IOMRTemplate {
+    pageIndex: number;
+    columns: IOMRColumn[];
+}
+
 export interface IExam extends Document {
     title: string;
     course: mongoose.Types.ObjectId;
@@ -27,10 +45,38 @@ export interface IExam extends Document {
     rubric?: mongoose.Types.ObjectId;
     splittingStrategy?: SplittingStrategyType;
     fixedPageCount?: number;
+    omrTemplate?: IOMRTemplate | null;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
+
+const OMRBubbleSchema = new Schema<IOMRBubble>(
+    {
+        value: { type: String, required: true, trim: true },
+        x: { type: Number, required: true, min: 0, max: 1 },
+        y: { type: Number, required: true, min: 0, max: 1 },
+        width: { type: Number, required: true, min: 0, max: 1 },
+        height: { type: Number, required: true, min: 0, max: 1 }
+    },
+    { _id: false }
+);
+
+const OMRColumnSchema = new Schema<IOMRColumn>(
+    {
+        columnIndex: { type: Number, required: true, min: 0 },
+        bubbles: { type: [OMRBubbleSchema], required: true }
+    },
+    { _id: false }
+);
+
+const OMRTemplateSchema = new Schema<IOMRTemplate>(
+    {
+        pageIndex: { type: Number, required: true, min: 0 },
+        columns: { type: [OMRColumnSchema], required: true }
+    },
+    { _id: false }
+);
 
 const ExamSchema = new Schema<IExam>(
     {
@@ -90,6 +136,10 @@ const ExamSchema = new Schema<IExam>(
         fixedPageCount: {
             type: Number,
             min: 1
+        },
+        omrTemplate: {
+            type: OMRTemplateSchema,
+            default: null
         },
         isActive: {
             type: Boolean,
