@@ -310,6 +310,10 @@ class BatchService {
 
         return updatedJob;
     }
+
+    async getBatches(actingUserId?: string, actingUserRole?: string): Promise<IBatch[]> {
+        return await BatchRepository.getBatches(actingUserId, actingUserRole);
+    }
 }
 
 const batchService = new BatchService();

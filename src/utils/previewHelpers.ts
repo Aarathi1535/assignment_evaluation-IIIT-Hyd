@@ -1,5 +1,23 @@
 import { Permission, UserRole, hasPermission } from '@/constants/permissions';
 
+export interface OMRColumnDetail {
+  columnIndex: number;
+  selectedValue: string | null;
+  strongestValue: string | null;
+  strongestFillRatio: number;
+  secondStrongestValue?: string | null;
+  secondStrongestFillRatio?: number;
+  confidenceMargin?: number;
+  reason?: string;
+}
+
+export interface OMRResultDetail {
+  status: 'SUCCESS' | 'AMBIGUOUS' | 'UNREADABLE' | 'INVALID_CONFIGURATION';
+  studentId: string | null;
+  failureReason?: string;
+  columns: OMRColumnDetail[];
+}
+
 export interface PageInfo {
   _id: string;
   pageNumber: number;
@@ -10,6 +28,14 @@ export interface PageInfo {
   nearBlank?: boolean;
   isDuplicate?: boolean;
   duplicateOf?: string | null;
+  omrResult?: OMRResultDetail | null;
+}
+
+export interface RosterStudentInfo {
+  _id: string;
+  name: string;
+  email: string;
+  role: string;
 }
 
 export interface ScriptInfo {
@@ -27,6 +53,13 @@ export interface ScriptInfo {
   endPageNumber: number;
   pageCount: number;
   pages: PageInfo[];
+  qrStudentId?: string | null;
+  qrDecodeOutcome?: string | null;
+  omrStudentId?: string | null;
+  omrDecodeOutcome?: string | null;
+  hasIdentificationConflict?: boolean;
+  omrResolvedStudent?: RosterStudentInfo | null;
+  qrResolvedStudent?: RosterStudentInfo | null;
 }
 
 /**
@@ -83,8 +116,13 @@ export function getIdentificationBadgeConfig(script: ScriptInfo): {
   description: string;
 } {
   if (script.identificationStatus === 'IDENTIFIED' && script.candidateStudentId) {
+    let sourceLabel = 'Identified';
+    if (script.identificationSource === 'QR') sourceLabel = 'Identified by QR';
+    if (script.identificationSource === 'OMR') sourceLabel = 'Identified by OMR';
+    if (script.identificationSource === 'OPERATOR') sourceLabel = 'Identified by Operator';
+
     return {
-      label: 'Identified',
+      label: sourceLabel,
       variant: 'success',
       description: `Student ID: ${script.candidateStudentId}`
     };

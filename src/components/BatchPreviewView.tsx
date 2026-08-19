@@ -23,7 +23,8 @@ import {
   ScriptInfo, 
   validateDataIntegrity, 
   checkOperatorPermission, 
-  getIdentificationBadgeConfig 
+  getIdentificationBadgeConfig,
+  OMRColumnDetail
 } from '@/utils/previewHelpers';
 import { SearchableSelect } from './ui/SearchableSelect';
 
@@ -530,12 +531,19 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
           <div className="text-2xs font-extrabold text-slate-400 uppercase tracking-wider">Processed Batch Preview</div>
           <h2 className="text-xl font-black text-slate-800 tracking-tight font-mono">{batchId}</h2>
         </div>
-        <Link href={role === 'PROFESSOR' ? `/professor/exams/batches/${batchId}` : `/admin/exams/batches/${batchId}`}>
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="h-4 w-4 mr-1.5" />
-            <span>Batch Status</span>
-          </Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href={role === 'PROFESSOR' ? '/professor/exams/batches' : '/admin/exams/batches'}>
+            <Button variant="outline" size="sm">
+              <ArrowLeft className="h-4 w-4 mr-1.5" />
+              <span>Back to Batches</span>
+            </Button>
+          </Link>
+          <Link href={role === 'PROFESSOR' ? `/professor/exams/batches/${batchId}` : `/admin/exams/batches/${batchId}`}>
+            <Button variant="outline" size="sm">
+              <span>Batch Status</span>
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Data Integrity Warning Banner */}
@@ -624,68 +632,184 @@ export default function BatchPreviewView({ batchId, role }: BatchPreviewViewProp
               </div>
 
               {/* Manual Identification Form */}
-              {selectedScriptForId === script._id && (
-                <div className="mb-6 p-4 border border-brand-primary/20 rounded-brand bg-slate-50/50 space-y-4 shadow-3xs">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider">Manual Student Identification</h4>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setSelectedScriptForId(null)}
-                      disabled={savingId}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
+              {selectedScriptForId === script._id && (() => {
+                const qrSucceeded = script.qrDecodeOutcome === 'found';
+                const qrStudentId = script.qrStudentId;
+                const coverPage = script.pages.find(p => p.pageNumber === 1);
+                const omrResult = coverPage ? coverPage.omrResult : null;
+                const omrResolvedStudent = script.omrResolvedStudent;
 
-                  {loadingRoster ? (
-                    <div className="flex items-center space-x-2 py-4 justify-center">
-                      <Loader2 className="h-5 w-5 animate-spin text-brand-primary" />
-                      <span className="text-xs text-slate-500 font-semibold pl-2">Loading exam student roster...</span>
+                return (
+                  <div className="mb-6 p-4 border border-brand-primary/20 rounded-brand bg-slate-50/50 space-y-4 shadow-3xs font-sans">
+                    <div className="flex items-center justify-between border-b border-slate-200/60 pb-3">
+                      <h4 className="text-sm font-extrabold text-slate-800 uppercase tracking-wider">Student Identification Helper</h4>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSelectedScriptForId(null)}
+                        disabled={savingId}
+                      >
+                        Cancel
+                      </Button>
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {saveError && (
-                        <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-brand p-3 text-rose-900 text-xs font-bold leading-normal">
-                          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
-                          <span>{saveError}</span>
-                        </div>
-                      )}
 
-                      <div className="max-w-md">
-                        <SearchableSelect
-                          label="Select Student from Exam Roster"
-                          placeholder="Search student by name, roll number, or email..."
-                          value={selectedStudentId}
-                          onChange={(val) => setSelectedStudentId(val)}
-                          options={(rosterMap[script.exam] || []).map(stud => ({
-                            value: stud.id,
-                            label: `${stud.name} (${stud.rollNumber || 'No Roll Number'}) — ${stud.email}`
-                          }))}
-                        />
+                    {loadingRoster ? (
+                      <div className="flex items-center space-x-2 py-4 justify-center">
+                        <Loader2 className="h-5 w-5 animate-spin text-brand-primary" />
+                        <span className="text-xs text-slate-500 font-semibold pl-2">Loading exam student roster...</span>
                       </div>
+                    ) : (
+                      <div className="grid md:grid-cols-2 gap-6 pt-1">
 
-                      <div className="flex gap-3">
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          onClick={() => handleSaveIdentify(script._id)}
-                          disabled={savingId || !selectedStudentId}
-                        >
-                          {savingId ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                              <span>Saving...</span>
-                            </>
+                        {/* OMR & QR Status Panel (Left) */}
+                        <div className="space-y-4 border-r border-slate-200/60 pr-0 md:pr-6">
+
+                          {/* QR status */}
+                          <div className="p-3.5 rounded bg-white border border-slate-200 space-y-2">
+                            <div className="text-4xs text-slate-400 font-extrabold uppercase tracking-wider">QR Identification Status</div>
+                            {qrSucceeded ? (
+                              <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50/40 p-2 rounded border border-emerald-100/60 text-xs font-bold">
+                                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                                <span>Identified by QR: Student ID {qrStudentId} (Authoritative)</span>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-slate-500 font-semibold flex items-center gap-1.5 p-1 px-2 bg-slate-100 rounded">
+                                <AlertCircle className="h-4 w-4 text-slate-400 shrink-0" />
+                                <span>QR identification unavailable</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* OMR status */}
+                          {omrResult ? (
+                            <div className="p-3.5 rounded bg-white border border-slate-200 space-y-3">
+                              <div className="text-4xs text-slate-400 font-extrabold uppercase tracking-wider">OMR Fallback Status</div>
+
+                              {/* OMR State rendering */}
+                              {omrResult.status === 'SUCCESS' && (
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between text-xs font-bold bg-blue-50/40 border border-blue-100 p-2 rounded text-blue-800">
+                                    <div className="flex items-center gap-2">
+                                      <CheckCircle2 className="h-4 w-4 text-blue-600 shrink-0" />
+                                      <span>OMR fallback available: ID {omrResult.studentId}</span>
+                                    </div>
+                                    {omrResolvedStudent && (
+                                      <Button
+                                        type="button"
+                                        variant="primary"
+                                        size="sm"
+                                        onClick={() => setSelectedStudentId(omrResolvedStudent._id)}
+                                        className="text-4xs uppercase tracking-wider font-extrabold"
+                                      >
+                                        Use OMR Fallback
+                                      </Button>
+                                    )}
+                                  </div>
+
+                                  {omrResolvedStudent && (
+                                    <div className="text-3xs text-slate-500 font-bold border-l-2 border-brand-primary pl-2">
+                                      Matched Roster Student: <span className="text-slate-800">{omrResolvedStudent.name} ({omrResolvedStudent.email})</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {omrResult.status === 'AMBIGUOUS' && (
+                                <div className="flex items-center gap-2 text-amber-900 bg-amber-50/40 p-2 rounded border border-amber-200/60 text-xs font-bold">
+                                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                                  <span>OMR result is ambiguous (multiple or weak marks)</span>
+                                </div>
+                              )}
+
+                              {omrResult.status === 'UNREADABLE' && (
+                                <div className="flex items-center gap-2 text-rose-900 bg-rose-50/40 p-2 rounded border border-rose-250 text-xs font-bold">
+                                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                                  <span>OMR could not read this page ({omrResult.failureReason || 'all bubbles empty'})</span>
+                                </div>
+                              )}
+
+                              {omrResult.status === 'INVALID_CONFIGURATION' && (
+                                <div className="flex items-center gap-2 text-rose-950 bg-rose-50 border border-rose-300 p-2 rounded text-xs font-black uppercase tracking-wider">
+                                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 animate-pulse" />
+                                  <span>OMR Template Configuration Error</span>
+                                </div>
+                              )}
+
+                              {/* OMR columns preview */}
+                              <div className="space-y-1.5 pt-1">
+                                <div className="text-4xs text-slate-400 font-bold uppercase tracking-wider">OMR Columns Detail</div>
+                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                  {omrResult.columns && omrResult.columns.map((col: OMRColumnDetail) => (
+                                    <div key={col.columnIndex} className="flex-1 min-w-[70px] p-2 bg-slate-50 border border-slate-200/60 rounded text-center text-3xs font-bold">
+                                      <div className="text-5xs text-slate-400 uppercase">Col {col.columnIndex + 1}</div>
+                                      <div className="text-sm font-black text-slate-850 mt-0.5">{col.selectedValue !== null ? col.selectedValue : '-'}</div>
+                                      <div className="text-5xs text-slate-455 mt-1 font-semibold">
+                                        Ratio: {col.strongestFillRatio !== undefined ? `${Math.round(col.strongestFillRatio * 100)}%` : '--'}
+                                      </div>
+                                      {col.confidenceMargin !== undefined && (
+                                        <div className="text-5xs text-slate-455 mt-0.5 font-semibold">
+                                          Margin: {Math.round(col.confidenceMargin * 100)}%
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
                           ) : (
-                            <span>Save Identification</span>
+                            <div className="text-3xs text-slate-450 italic p-3 bg-slate-50 border border-slate-200 rounded">
+                              No OMR result diagnostics found for page 1.
+                            </div>
                           )}
-                        </Button>
+                        </div>
+
+                        {/* Manual / Confirmation Selector (Right) */}
+                        <div className="space-y-4 flex flex-col justify-between">
+                          <div className="space-y-4">
+                            {saveError && (
+                              <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded p-3 text-rose-900 text-xs font-bold leading-normal">
+                                <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
+                                <span>{saveError}</span>
+                              </div>
+                            )}
+
+                            <div className="max-w-md">
+                              <SearchableSelect
+                                label="Select Student from Exam Roster"
+                                placeholder="Search student by name, roll number, or email..."
+                                value={selectedStudentId}
+                                onChange={(val) => setSelectedStudentId(val)}
+                                options={(rosterMap[script.exam] || []).map(stud => ({
+                                  value: stud.id,
+                                  label: `${stud.name} (${stud.rollNumber || 'No Roll Number'}) — ${stud.email}`
+                                }))}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="pt-4 border-t border-slate-100 flex justify-end">
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => handleSaveIdentify(script._id)}
+                              disabled={savingId || !selectedStudentId}
+                            >
+                              {savingId ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                                  <span>Saving...</span>
+                                </>
+                              ) : (
+                                <span>Save Identification</span>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* General Correction Error Alert */}
               {correctionError && (

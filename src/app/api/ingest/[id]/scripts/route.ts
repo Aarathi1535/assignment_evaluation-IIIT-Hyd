@@ -5,6 +5,13 @@ import { Permission } from '../../../../../constants/permissions';
 import BatchRepository from '../../../../../repositories/BatchRepository';
 import AnswerScript from '../../../../../models/AnswerScript';
 import IngestionPage from '../../../../../models/IngestionPage';
+import StudentMapping from '../../../../../models/StudentMapping';
+import { IUser } from '../../../../../models/User';
+
+interface PopulatedStudentMapping {
+  anonymousId: string;
+  student: IUser;
+}
 
 export async function GET(
   req: NextRequest,
@@ -45,6 +52,17 @@ export async function GET(
     // Fetch IngestionPages for this batch, sorted deterministically
     const pages = await IngestionPage.find({ batchId }).sort({ fileIndex: 1, pageNumber: 1 });
 
+    // Fetch StudentMappings to resolve anonymous IDs to student users
+    const mappings = batch.exam
+      ? (await StudentMapping.find({ exam: batch.exam }).populate('student')) as unknown as PopulatedStudentMapping[]
+      : [];
+    const mappingMap = new Map<string, IUser>();
+    for (const m of mappings) {
+      if (m.anonymousId && m.student) {
+        mappingMap.set(m.anonymousId, m.student);
+      }
+    }
+
     // Construct response mapping
     const formattedScripts = scripts.map(script => {
       const scriptPages = pages
@@ -58,8 +76,27 @@ export async function GET(
           height: p.height,
           nearBlank: p.nearBlank,
           isDuplicate: p.isDuplicate,
-          duplicateOf: p.duplicateOf ? p.duplicateOf.toString() : null
+          duplicateOf: p.duplicateOf ? p.duplicateOf.toString() : null,
+          omrResult: p.metadata?.omrResult || null
         }));
+
+      const omrAnonId = script.omrStudentId;
+      const omrResolvedStudent = omrAnonId ? mappingMap.get(omrAnonId) : null;
+      const omrResolvedStudentFormatted = omrResolvedStudent ? {
+        _id: omrResolvedStudent._id.toString(),
+        name: omrResolvedStudent.name,
+        email: omrResolvedStudent.email,
+        role: omrResolvedStudent.role
+      } : null;
+
+      const qrAnonId = script.qrStudentId;
+      const qrResolvedStudent = qrAnonId ? mappingMap.get(qrAnonId) : null;
+      const qrResolvedStudentFormatted = qrResolvedStudent ? {
+        _id: qrResolvedStudent._id.toString(),
+        name: qrResolvedStudent.name,
+        email: qrResolvedStudent.email,
+        role: qrResolvedStudent.role
+      } : null;
 
       return {
         _id: script._id,
@@ -75,6 +112,13 @@ export async function GET(
         startPageNumber: script.startPageNumber,
         endPageNumber: script.endPageNumber,
         pageCount: script.pageCount,
+        qrStudentId: script.qrStudentId || null,
+        qrDecodeOutcome: script.qrDecodeOutcome || null,
+        omrStudentId: script.omrStudentId || null,
+        omrDecodeOutcome: script.omrDecodeOutcome || null,
+        hasIdentificationConflict: script.hasIdentificationConflict || false,
+        omrResolvedStudent: omrResolvedStudentFormatted,
+        qrResolvedStudent: qrResolvedStudentFormatted,
         pages: scriptPages
       };
     });

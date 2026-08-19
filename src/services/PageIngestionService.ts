@@ -10,7 +10,7 @@ import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDete
 import { writeAuditLog } from '../lib/audit';
 import { defaultImageEnhancer, IImageEnhancer, EnhancementParams } from './ImageEnhancer';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import defaultOMRReader, { OMRReader, OMRStatus } from './OMRReader';
+import defaultOMRReader, { OMRReader, OMRStatus, OMRResult } from './OMRReader';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -390,6 +390,7 @@ export class PageIngestionService {
             // AE-070: OMR Fallback Bubble Reader (Only on pageNumber === 1 from canonical normalized/enhanced image)
             let omrStudentId: string | null = null;
             let omrDecodeOutcome: 'found' | 'not_found' | 'multiple' | null = null;
+            let omrResult: OMRResult | null = null;
 
             if (isCoverPage && renderResult.image && renderResult.image.buffer) {
                 try {
@@ -399,7 +400,7 @@ export class PageIngestionService {
                         const Exam = mongoose.models.Exam || (await import('../models/Exam')).default;
                         const examRecord = await Exam.findById(batchRecord.exam);
                         if (examRecord && examRecord.omrTemplate) {
-                            const omrResult = await activeOMRReader.readOMR(
+                            omrResult = await activeOMRReader.readOMR(
                                 renderResult.image.buffer,
                                 examRecord.omrTemplate
                             );
@@ -423,6 +424,12 @@ export class PageIngestionService {
                     console.error(`OMR Reader failure on batch ${batchId} page ${pageNumber}:`, omrErr);
                     omrStudentId = null;
                     omrDecodeOutcome = 'not_found';
+                    omrResult = {
+                        status: OMRStatus.UNREADABLE,
+                        studentId: null,
+                        columns: [],
+                        failureReason: String(omrErr)
+                    };
                 }
             }
 
@@ -501,6 +508,7 @@ export class PageIngestionService {
                         qrDecodeOutcome: input.qrDecodeOutcome !== undefined ? input.qrDecodeOutcome : (isCoverPage ? decodeOutcome : null),
                         omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : (isCoverPage ? omrStudentId : null),
                         omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : (isCoverPage ? omrDecodeOutcome : null),
+                        omrResult,
                         nearBlank,
                         isDuplicate,
                         duplicateOf: duplicateOf ? duplicateOf.toString() : null,
