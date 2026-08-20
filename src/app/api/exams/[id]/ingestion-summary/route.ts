@@ -4,7 +4,7 @@ import { connectDB } from '../../../../../lib/db';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
-import IngestionApprovalService from '../../../../../services/IngestionApprovalService';
+import IngestionApprovalService, { ReviewDashboardScript } from '../../../../../services/IngestionApprovalService';
 
 /**
  * GET /api/exams/[id]/ingestion-summary
@@ -52,7 +52,7 @@ export async function GET(
     const url = new URL(req.url);
     const categoryParam = url.searchParams.get('category');
     
-    let scripts: Record<string, unknown>[] | null = null;
+    let scripts: ReviewDashboardScript[] | null = null;
     if (categoryParam) {
       if (!['total', 'unmatched', 'blank', 'duplicate', 'conflict'].includes(categoryParam)) {
         return NextResponse.json({

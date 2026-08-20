@@ -11,6 +11,43 @@ export interface IngestionApprovalAuditContext {
     ipAddress?: string;
 }
 
+export interface ReviewDashboardScript {
+    _id: string;
+    batchId: string;
+    fileIndex: number;
+    startPageNumber: number;
+    endPageNumber: number;
+    pageCount: number;
+    identificationStatus: string;
+    student: string | null;
+    needsManualId?: boolean;
+    manualIdReason?: string | null;
+    hasIdentificationConflict?: boolean;
+    omrStudentId?: string | null;
+    qrStudentId?: string | null;
+    pages: {
+        _id: string;
+        pageNumber: number;
+        fileIndex: number;
+        thumbnailUrl: string;
+        nearBlank: boolean;
+        isDuplicate: boolean;
+        duplicateOf: string | null;
+    }[];
+    omrResolvedStudent?: {
+        _id: string;
+        name: string;
+        email: string;
+        role: string;
+    } | null;
+    qrResolvedStudent?: {
+        _id: string;
+        name: string;
+        email: string;
+        role: string;
+    } | null;
+}
+
 class IngestionApprovalService {
     /**
      * Builds the deterministic canonical representation of the approved assembly state.
@@ -541,7 +578,7 @@ class IngestionApprovalService {
         examId: string,
         category: 'total' | 'unmatched' | 'blank' | 'duplicate' | 'conflict',
         context: IngestionApprovalAuditContext
-    ): Promise<unknown[]> {
+    ): Promise<ReviewDashboardScript[]> {
         if (!mongoose.Types.ObjectId.isValid(examId)) {
             throw new HttpError('Invalid Exam ID format', 400);
         }
@@ -591,8 +628,7 @@ class IngestionApprovalService {
             }
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result: any[] = [];
+        const result: ReviewDashboardScript[] = [];
         for (const script of scripts) {
             const scriptPages = pagesByScript.get(script._id.toString()) || [];
             const pagesCount = scriptPages.length;
@@ -638,8 +674,10 @@ class IngestionApprovalService {
 
                 result.push({
                     ...script,
+                    _id: script._id.toString(),
+                    student: script.student ? script.student.toString() : null,
                     pages: scriptPages.map(p => ({
-                        _id: p._id,
+                        _id: p._id.toString(),
                         pageNumber: p.pageNumber,
                         fileIndex: p.fileIndex,
                         thumbnailUrl: `/api/ingest/${script.batchId}/pages/${p._id}/thumbnail`,
@@ -649,7 +687,7 @@ class IngestionApprovalService {
                     })),
                     omrResolvedStudent: omrResolvedStudentFormatted,
                     qrResolvedStudent: qrResolvedStudentFormatted
-                });
+                } as unknown as ReviewDashboardScript);
             }
         }
 
