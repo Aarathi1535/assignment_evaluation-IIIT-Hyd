@@ -100,7 +100,7 @@ class ExamRepository {
      */
     async updateIngestionApproval(
         id: string,
-        data: Partial<Pick<IExam, 'ingestionApprovalStatus' | 'approvedBy' | 'approvedAt'>>,
+        data: Partial<Pick<IExam, 'ingestionApprovalStatus' | 'approvedBy' | 'approvedAt' | 'assemblySeal' | 'assemblySealKeyId' | 'assemblySealAt' | 'assemblySealBy'>>,
         actingUserId?: string,
         actingUserRole?: string
     ): Promise<IExam | null> {
@@ -114,6 +114,7 @@ class ExamRepository {
             { new: true, runValidators: true }
         );
     }
+
 }
 
 const examRepository = new ExamRepository();

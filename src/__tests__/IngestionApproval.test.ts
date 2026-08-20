@@ -439,7 +439,6 @@ describe('AE-074 Ingestion Approval', () => {
     // ─── Test 12: New successful batch invalidates existing approval ──────────────
 
     it('12. new successful batch invalidates existing APPROVED state', async () => {
-        const { default: BatchService } = await import('../services/BatchService');
 
         const exam = await createExam(professorId);
         // Set to APPROVED
