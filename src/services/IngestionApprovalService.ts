@@ -400,6 +400,261 @@ class IngestionApprovalService {
             };
         }
     }
+
+    /**
+     * Aggregates and returns review dashboard summary counts for a given exam.
+     * Enforces ownership/scope checking.
+     */
+    async getReviewDashboardSummary(
+        examId: string,
+        context: IngestionApprovalAuditContext
+    ): Promise<{
+        totalScripts: number;
+        unmatched: number;
+        blank: number;
+        duplicate: number;
+        conflict: number;
+    }> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+
+        const exam = await ExamRepository.getExamById(examId, context.actingUserId, context.actingUserRole);
+        if (!exam) {
+            throw new HttpError('Exam not found or access denied', 404);
+        }
+
+        const AnswerScript = (await import('../models/AnswerScript')).default;
+
+        const results = await AnswerScript.aggregate([
+            {
+                $match: {
+                    exam: new mongoose.Types.ObjectId(examId),
+                    isActive: true
+                }
+            },
+            {
+                $lookup: {
+                    from: 'ingestionpages',
+                    localField: '_id',
+                    foreignField: 'answerScript',
+                    as: 'pages'
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    student: 1,
+                    needsManualId: 1,
+                    manualIdReason: 1,
+                    hasIdentificationConflict: 1,
+                    pagesCount: { $size: '$pages' },
+                    nearBlankPagesCount: {
+                        $size: {
+                            $filter: {
+                                input: '$pages',
+                                as: 'p',
+                                cond: { $eq: ['$$p.nearBlank', true] }
+                            }
+                        }
+                    },
+                    hasDuplicatePage: {
+                        $gt: [
+                            {
+                                $size: {
+                                    $filter: {
+                                        input: '$pages',
+                                        as: 'p',
+                                        cond: { $eq: ['$$p.isDuplicate', true] }
+                                    }
+                                }
+                            },
+                            0
+                        ]
+                    }
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    hasIdentificationConflict: 1,
+                    isUnmatched: {
+                        $or: [
+                            { $eq: ['$needsManualId', true] },
+                            { $eq: ['$student', null] }
+                        ]
+                    },
+                    isBlank: {
+                        $and: [
+                            { $gt: ['$pagesCount', 0] },
+                            { $eq: ['$pagesCount', '$nearBlankPagesCount'] }
+                        ]
+                    },
+                    isDuplicate: {
+                        $or: [
+                            { $eq: ['$hasDuplicatePage', true] },
+                            { $eq: ['$manualIdReason', 'DUPLICATE_STUDENT'] }
+                        ]
+                    }
+                }
+            },
+            {
+                $facet: {
+                    totalScripts: [
+                        { $count: 'count' }
+                    ],
+                    unmatched: [
+                        { $match: { isUnmatched: true } },
+                        { $count: 'count' }
+                    ],
+                    blank: [
+                        { $match: { isBlank: true } },
+                        { $count: 'count' }
+                    ],
+                    duplicate: [
+                        { $match: { isDuplicate: true } },
+                        { $count: 'count' }
+                    ],
+                    conflict: [
+                        { $match: { hasIdentificationConflict: true } },
+                        { $count: 'count' }
+                    ]
+                }
+            }
+        ]);
+
+        const summary = results[0] || {};
+        return {
+            totalScripts: summary.totalScripts?.[0]?.count ?? 0,
+            unmatched: summary.unmatched?.[0]?.count ?? 0,
+            blank: summary.blank?.[0]?.count ?? 0,
+            duplicate: summary.duplicate?.[0]?.count ?? 0,
+            conflict: summary.conflict?.[0]?.count ?? 0
+        };
+    }
+
+    /**
+     * Retrieves scripts belonging to a specific category.
+     * Enforces ownership/scope checking.
+     */
+    async getReviewDashboardScripts(
+        examId: string,
+        category: 'total' | 'unmatched' | 'blank' | 'duplicate' | 'conflict',
+        context: IngestionApprovalAuditContext
+    ): Promise<unknown[]> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+
+        const exam = await ExamRepository.getExamById(examId, context.actingUserId, context.actingUserRole);
+        if (!exam) {
+            throw new HttpError('Exam not found or access denied', 404);
+        }
+
+        const AnswerScript = (await import('../models/AnswerScript')).default;
+        const IngestionPage = (await import('../models/IngestionPage')).default;
+        const StudentMapping = (await import('../models/StudentMapping')).default;
+
+        const scripts = await AnswerScript.find({ exam: new mongoose.Types.ObjectId(examId), isActive: true })
+            .sort({ batchId: 1, fileIndex: 1, startPageNumber: 1 })
+            .lean();
+
+        const scriptIds = scripts.map(s => s._id);
+
+        // Fetch all pages for these scripts
+        const pages = await IngestionPage.find({ answerScript: { $in: scriptIds } }).lean();
+
+        // Fetch student mappings to resolve student details
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mappings = (await StudentMapping.find({ exam: new mongoose.Types.ObjectId(examId) }).populate('student')).map((m: any) => ({
+            anonymousId: m.anonymousId,
+            student: m.student
+        }));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mappingMap = new Map<string, any>();
+        for (const m of mappings) {
+            if (m.anonymousId && m.student) {
+                mappingMap.set(m.anonymousId, m.student);
+            }
+        }
+
+        // Map pages by scriptId
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pagesByScript = new Map<string, any[]>();
+        for (const page of pages) {
+            const sId = page.answerScript?.toString();
+            if (sId) {
+                if (!pagesByScript.has(sId)) {
+                    pagesByScript.set(sId, []);
+                }
+                pagesByScript.get(sId)!.push(page);
+            }
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result: any[] = [];
+        for (const script of scripts) {
+            const scriptPages = pagesByScript.get(script._id.toString()) || [];
+            const pagesCount = scriptPages.length;
+            const nearBlankPagesCount = scriptPages.filter(p => p.nearBlank).length;
+            const hasDuplicatePage = scriptPages.some(p => p.isDuplicate);
+
+            const isUnmatched = script.needsManualId === true || script.student === null;
+            const isBlank = pagesCount > 0 && pagesCount === nearBlankPagesCount;
+            const isDuplicate = hasDuplicatePage || script.manualIdReason === 'DUPLICATE_STUDENT';
+            const hasIdentificationConflict = script.hasIdentificationConflict === true;
+
+            let matches = false;
+            if (category === 'total') {
+                matches = true;
+            } else if (category === 'unmatched') {
+                matches = isUnmatched;
+            } else if (category === 'blank') {
+                matches = isBlank;
+            } else if (category === 'duplicate') {
+                matches = isDuplicate;
+            } else if (category === 'conflict') {
+                matches = hasIdentificationConflict;
+            }
+
+            if (matches) {
+                const omrAnonId = script.omrStudentId;
+                const omrResolvedStudent = omrAnonId ? mappingMap.get(omrAnonId) : null;
+                const omrResolvedStudentFormatted = omrResolvedStudent ? {
+                    _id: omrResolvedStudent._id.toString(),
+                    name: omrResolvedStudent.name,
+                    email: omrResolvedStudent.email,
+                    role: omrResolvedStudent.role
+                } : null;
+
+                const qrAnonId = script.qrStudentId;
+                const qrResolvedStudent = qrAnonId ? mappingMap.get(qrAnonId) : null;
+                const qrResolvedStudentFormatted = qrResolvedStudent ? {
+                    _id: qrResolvedStudent._id.toString(),
+                    name: qrResolvedStudent.name,
+                    email: qrResolvedStudent.email,
+                    role: qrResolvedStudent.role
+                } : null;
+
+                result.push({
+                    ...script,
+                    pages: scriptPages.map(p => ({
+                        _id: p._id,
+                        pageNumber: p.pageNumber,
+                        fileIndex: p.fileIndex,
+                        thumbnailUrl: `/api/ingest/${script.batchId}/pages/${p._id}/thumbnail`,
+                        nearBlank: p.nearBlank,
+                        isDuplicate: p.isDuplicate,
+                        duplicateOf: p.duplicateOf ? p.duplicateOf.toString() : null
+                    })),
+                    omrResolvedStudent: omrResolvedStudentFormatted,
+                    qrResolvedStudent: qrResolvedStudentFormatted
+                });
+            }
+        }
+
+        return result;
+    }
 }
 
 const ingestionApprovalService = new IngestionApprovalService();

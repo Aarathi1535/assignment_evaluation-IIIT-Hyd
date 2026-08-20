@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
+import Link from 'next/link';
 import { CheckCircle2, Clock, ShieldCheck, ShieldAlert, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
@@ -207,18 +208,25 @@ export function IngestionApprovalPanel({
         {/* Action buttons */}
         <div className="flex flex-wrap gap-2">
           {!isApproved && (
-            <Button
-              id={`approve-ingestion-btn-${examId}`}
-              variant="primary"
-              size="sm"
-              isLoading={loading}
-              disabled={loading}
-              onClick={() => callApi('approve-ingestion')}
-              aria-label="Approve ingestion for this exam"
-            >
-              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-              Approve & Seal Ingestion
-            </Button>
+            <>
+              <Button
+                id={`approve-ingestion-btn-${examId}`}
+                variant="primary"
+                size="sm"
+                isLoading={loading}
+                disabled={loading}
+                onClick={() => callApi('approve-ingestion')}
+                aria-label="Approve ingestion for this exam"
+              >
+                <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                Approve & Seal Ingestion
+              </Button>
+              <Link href={`/professor/exams/${examId}/review-dashboard`}>
+                <Button variant="outline" size="sm">
+                  <span>Go to Review Dashboard</span>
+                </Button>
+              </Link>
+            </>
           )}
           {isApproved && (
             <>
@@ -246,6 +254,11 @@ export function IngestionApprovalPanel({
                 <ShieldAlert className="h-4 w-4" aria-hidden="true" />
                 Revoke Approval
               </Button>
+              <Link href={`/professor/exams/${examId}/review-dashboard`}>
+                <Button variant="outline" size="sm">
+                  <span>Go to Review Dashboard</span>
+                </Button>
+              </Link>
             </>
           )}
         </div>

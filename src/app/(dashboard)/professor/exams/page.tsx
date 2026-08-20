@@ -278,17 +278,23 @@ export default function ProfessorExamsPage() {
                       </div>
 
                       {/* Footer Actions */}
-                      <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between gap-2">
-                        <Link href={`/professor/exams/edit/${exam._id}`} className="flex-1">
-                          <Button variant="outline" size="sm" className="w-full h-9">
-                            <Edit3 className="h-4 w-4 mr-1.5" />
+                      <div className="pt-4 mt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                        <Link href={`/professor/exams/edit/${exam._id}`} className="flex-1 min-w-[70px]">
+                          <Button variant="outline" size="sm" className="w-full h-9 text-xs px-2">
+                            <Edit3 className="h-3.5 w-3.5 mr-1" />
                             <span>Edit</span>
                           </Button>
                         </Link>
-                        <Link href={`/professor/exams/edit/${exam._id}/rubric`} className="flex-1">
-                          <Button variant="outline" size="sm" className="w-full h-9">
-                            <FileText className="h-4 w-4 mr-1.5" />
+                        <Link href={`/professor/exams/edit/${exam._id}/rubric`} className="flex-1 min-w-[70px]">
+                          <Button variant="outline" size="sm" className="w-full h-9 text-xs px-2">
+                            <FileText className="h-3.5 w-3.5 mr-1" />
                             <span>Rubric</span>
+                          </Button>
+                        </Link>
+                        <Link href={`/professor/exams/${exam._id}/review-dashboard`} className="flex-1 min-w-[70px]">
+                          <Button variant="outline" size="sm" className="w-full h-9 text-xs px-2">
+                            <Search className="h-3.5 w-3.5 mr-1" />
+                            <span>Review</span>
                           </Button>
                         </Link>
                         <Button
