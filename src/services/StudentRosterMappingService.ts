@@ -199,94 +199,151 @@ export class StudentRosterMappingService {
 
         // Step 5: Process each group, resolve student, detect duplicates, and upsert AnswerScript
         for (const group of groups) {
-            // Promote candidate from IngestionPage cover to AnswerScript
-            let candidateStudentId = group.candidateStudentId ? group.candidateStudentId.trim() : null;
-            let identificationSource = candidateStudentId ? IdentificationSource.QR : null;
+            const coverPage = group.pages[0];
+            let qrStudentId: string | null = null;
+            let qrDecodeOutcome: string | null = null;
 
-            let matchedUser: IUser | null = null;
-            let candidateRaw = candidateStudentId;
-
-            if (candidateRaw) {
-                // Support AE-052 deterministic payload: examId:studentId
-                if (candidateRaw.includes(':')) {
-                    const parts = candidateRaw.split(':');
-                    if (parts.length === 2 && parts[1]) {
-                        candidateRaw = parts[1].trim();
-                    }
+            if (coverPage) {
+                if (coverPage.qrStudentId !== undefined && coverPage.qrStudentId !== null) {
+                    qrStudentId = coverPage.qrStudentId;
+                } else {
+                    qrStudentId = coverPage.candidateStudentId || group.candidateStudentId || null;
                 }
 
-                // Try matching by ObjectId
-                if (mongoose.Types.ObjectId.isValid(candidateRaw) && userByIdMap.has(candidateRaw)) {
-                    matchedUser = userByIdMap.get(candidateRaw) || null;
+                if (coverPage.qrDecodeOutcome !== undefined && coverPage.qrDecodeOutcome !== null) {
+                    qrDecodeOutcome = coverPage.qrDecodeOutcome;
+                } else {
+                    qrDecodeOutcome = coverPage.decodeOutcome || group.decodeOutcome || null;
                 }
-                // Try matching by email
-                else if (userByEmailMap.has(candidateRaw.toLowerCase())) {
-                    matchedUser = userByEmailMap.get(candidateRaw.toLowerCase()) || null;
-                }
-                // Try matching by anonymousId
-                else if (userByAnonIdMap.has(candidateRaw)) {
-                    matchedUser = userByAnonIdMap.get(candidateRaw) || null;
-                }
-                // Try matching by rollNumber
-                else {
-                    const normalized = normalizeRollNumber(candidateRaw);
-                    if (normalized && userByRollNumberMap.has(normalized)) {
-                        matchedUser = userByRollNumberMap.get(normalized) || null;
-                    }
-                }
+            } else {
+                qrStudentId = group.candidateStudentId || null;
+                qrDecodeOutcome = group.decodeOutcome || null;
             }
 
-            // Step 5.1: Determine AE-053 identification state
+            const omrStudentId = coverPage && coverPage.omrStudentId !== undefined ? coverPage.omrStudentId : null;
+            const omrDecodeOutcome = coverPage && coverPage.omrDecodeOutcome !== undefined ? coverPage.omrDecodeOutcome : null;
+
+            // Resolve QR user
+            let qrMatchedUser: IUser | null = null;
+            if (qrStudentId && qrDecodeOutcome === 'found') {
+                qrMatchedUser = this.resolveStudentFromRoster(
+                    qrStudentId,
+                    userByIdMap,
+                    userByEmailMap,
+                    userByAnonIdMap,
+                    userByRollNumberMap
+                );
+            }
+
+            // Resolve OMR user
+            let omrMatchedUser: IUser | null = null;
+            if (omrStudentId && omrDecodeOutcome === 'found') {
+                omrMatchedUser = this.resolveStudentFromRoster(
+                    omrStudentId,
+                    userByIdMap,
+                    userByEmailMap,
+                    userByAnonIdMap,
+                    userByRollNumberMap
+                );
+            }
+
+            const checkStatus = async (
+                studentId: string | null,
+                decodeOutcome: string | null,
+                matchedUser: IUser | null
+            ) => {
+                let isValid = false;
+                let user: IUser | null = null;
+                let reason: ManualIdReason | null = null;
+
+                if (decodeOutcome === 'multiple') {
+                    reason = ManualIdReason.MULTIPLE_CODES;
+                } else if (!studentId || decodeOutcome === 'not_found') {
+                    reason = ManualIdReason.NO_CODE_FOUND;
+                } else if (!matchedUser || !enrolledUserIds.has(matchedUser._id.toString())) {
+                    reason = ManualIdReason.NOT_IN_ROSTER;
+                } else {
+                    const existingScript = await AnswerScript.findOne({
+                        exam: exam._id,
+                        student: matchedUser._id,
+                        isActive: true
+                    });
+                    const isDuplicate = existingScript && (
+                        existingScript.batchId !== batchId ||
+                        existingScript.fileIndex !== group.fileIndex ||
+                        existingScript.startPageNumber !== group.startPageNumber
+                    );
+                    if (isDuplicate) {
+                        reason = ManualIdReason.DUPLICATE_STUDENT;
+                    } else {
+                        isValid = true;
+                        user = matchedUser;
+                    }
+                }
+
+                return { isValid, user, reason };
+            };
+
+            const qrStatus = await checkStatus(qrStudentId, qrDecodeOutcome, qrMatchedUser);
+            const omrStatus = await checkStatus(omrStudentId, omrDecodeOutcome, omrMatchedUser);
+
             let resolvedStudentId: mongoose.Types.ObjectId | null = null;
+            let candidateStudentId: string | null = null;
+            let identificationSource: IdentificationSource | null = null;
+            let identificationStatus: IdentificationStatus = IdentificationStatus.UNIDENTIFIED;
             let needsManualId = false;
             let manualIdReason: ManualIdReason | null = null;
-            let identificationStatus: IdentificationStatus = IdentificationStatus.UNIDENTIFIED;
 
-            if (group.decodeOutcome === 'multiple') {
-                // Outcome C: MULTIPLE_CODES
-                needsManualId = true;
-                manualIdReason = ManualIdReason.MULTIPLE_CODES;
-                resolvedStudentId = null;
-                identificationStatus = IdentificationStatus.UNIDENTIFIED;
-            } else if (!candidateStudentId || group.decodeOutcome === 'not_found') {
-                // Outcome B: NO_CODE_FOUND
-                needsManualId = true;
-                manualIdReason = ManualIdReason.NO_CODE_FOUND;
-                resolvedStudentId = null;
-                identificationStatus = IdentificationStatus.UNIDENTIFIED;
-            } else if (!matchedUser || !enrolledUserIds.has(matchedUser._id.toString())) {
-                // Outcome D: NOT_IN_ROSTER
-                needsManualId = true;
-                manualIdReason = ManualIdReason.NOT_IN_ROSTER;
-                resolvedStudentId = null;
-                identificationStatus = IdentificationStatus.UNIDENTIFIED;
+            if (qrStatus.isValid) {
+                resolvedStudentId = qrStatus.user!._id as mongoose.Types.ObjectId;
+                candidateStudentId = qrStudentId;
+                identificationSource = IdentificationSource.QR;
+                identificationStatus = IdentificationStatus.IDENTIFIED;
+                needsManualId = false;
+                manualIdReason = null;
+            } else if (omrStatus.isValid) {
+                resolvedStudentId = omrStatus.user!._id as mongoose.Types.ObjectId;
+                candidateStudentId = omrStudentId;
+                identificationSource = IdentificationSource.OMR;
+                identificationStatus = IdentificationStatus.IDENTIFIED;
+                needsManualId = false;
+                manualIdReason = null;
             } else {
-                // Check if another identified AnswerScript for (exam, student) already exists
-                const existingScript = await AnswerScript.findOne({
-                    exam: exam._id,
-                    student: matchedUser._id,
-                    isActive: true
-                });
+                resolvedStudentId = null;
+                identificationStatus = IdentificationStatus.UNIDENTIFIED;
+                needsManualId = true;
 
-                if (
-                    existingScript &&
-                    (existingScript.batchId !== batchId ||
-                        existingScript.fileIndex !== group.fileIndex ||
-                        existingScript.startPageNumber !== group.startPageNumber)
-                ) {
-                    // Outcome E: DUPLICATE_STUDENT
-                    needsManualId = true;
+                // Determine failed candidate and source
+                let failedSource: IdentificationSource | null = null;
+                let failedCandidate: string | null = null;
+
+                if (qrStudentId) {
+                    failedSource = IdentificationSource.QR;
+                    failedCandidate = qrStudentId;
+                } else if (omrStudentId) {
+                    failedSource = IdentificationSource.OMR;
+                    failedCandidate = omrStudentId;
+                }
+
+                candidateStudentId = failedCandidate;
+                identificationSource = failedSource;
+
+                if (qrStatus.reason === ManualIdReason.DUPLICATE_STUDENT || omrStatus.reason === ManualIdReason.DUPLICATE_STUDENT) {
                     manualIdReason = ManualIdReason.DUPLICATE_STUDENT;
-                    resolvedStudentId = null;
-                    identificationStatus = IdentificationStatus.UNIDENTIFIED;
+                } else if (qrStatus.reason === ManualIdReason.NOT_IN_ROSTER || omrStatus.reason === ManualIdReason.NOT_IN_ROSTER) {
+                    manualIdReason = ManualIdReason.NOT_IN_ROSTER;
+                } else if (qrStatus.reason === ManualIdReason.MULTIPLE_CODES || omrStatus.reason === ManualIdReason.MULTIPLE_CODES) {
+                    manualIdReason = ManualIdReason.MULTIPLE_CODES;
                 } else {
-                    // Outcome A: SUCCESSFULLY_IDENTIFIED
-                    resolvedStudentId = matchedUser._id as mongoose.Types.ObjectId;
-                    needsManualId = false;
-                    manualIdReason = null;
-                    identificationStatus = IdentificationStatus.IDENTIFIED;
+                    manualIdReason = ManualIdReason.NO_CODE_FOUND;
                 }
             }
+
+            const hasIdentificationConflict = !!(
+                qrStudentId &&
+                omrStudentId &&
+                qrStudentId.trim() !== omrStudentId.trim()
+            );
 
             // Verify if the script is already identified (e.g. by an operator or previous scan).
             // Automatic processing must not silently overwrite manual operator identifications.
@@ -296,14 +353,32 @@ export class StudentRosterMappingService {
                 startPageNumber: group.startPageNumber
             });
 
+            const identificationHistory = existingIdentifiedScript?.identificationHistory || [];
+
             if (existingIdentifiedScript && existingIdentifiedScript.identificationStatus === IdentificationStatus.IDENTIFIED) {
                 resolvedStudentId = existingIdentifiedScript.student as mongoose.Types.ObjectId | null;
                 identificationStatus = existingIdentifiedScript.identificationStatus as IdentificationStatus;
                 identificationSource = existingIdentifiedScript.identificationSource as any;
                 needsManualId = existingIdentifiedScript.needsManualId || false;
                 manualIdReason = (existingIdentifiedScript.manualIdReason as ManualIdReason | null) || null;
-                if (!candidateStudentId) {
+                if (existingIdentifiedScript.identificationSource === IdentificationSource.OPERATOR) {
                     candidateStudentId = existingIdentifiedScript.candidateStudentId || null;
+                }
+            } else {
+                const isIdentityChanging = existingIdentifiedScript && (
+                    String(existingIdentifiedScript.student || '') !== String(resolvedStudentId || '') ||
+                    existingIdentifiedScript.identificationSource !== identificationSource ||
+                    existingIdentifiedScript.identificationStatus !== identificationStatus
+                );
+
+                if (isIdentityChanging) {
+                    identificationHistory.push({
+                        student: existingIdentifiedScript.student || null,
+                        candidateStudentId: existingIdentifiedScript.candidateStudentId || null,
+                        identificationSource: existingIdentifiedScript.identificationSource || null,
+                        identificationStatus: existingIdentifiedScript.identificationStatus || null,
+                        updatedAt: existingIdentifiedScript.updatedAt || new Date()
+                    });
                 }
             }
 
@@ -346,6 +421,12 @@ export class StudentRosterMappingService {
                             decodeOutcome: group.decodeOutcome || null,
                             needsManualId,
                             manualIdReason,
+                            qrStudentId,
+                            qrDecodeOutcome,
+                            omrStudentId,
+                            omrDecodeOutcome,
+                            hasIdentificationConflict,
+                            identificationHistory,
                             isActive: true
                         }
                     },
@@ -382,6 +463,12 @@ export class StudentRosterMappingService {
                                 decodeOutcome: group.decodeOutcome || null,
                                 needsManualId: true,
                                 manualIdReason: ManualIdReason.DUPLICATE_STUDENT,
+                                qrStudentId,
+                                qrDecodeOutcome,
+                                omrStudentId,
+                                omrDecodeOutcome,
+                                hasIdentificationConflict,
+                                identificationHistory,
                                 isActive: true
                             }
                         },
@@ -407,6 +494,41 @@ export class StudentRosterMappingService {
         }
 
         return results;
+    }
+
+    private resolveStudentFromRoster(
+        candidateRaw: string,
+        userByIdMap: Map<string, IUser>,
+        userByEmailMap: Map<string, IUser>,
+        userByAnonIdMap: Map<string, IUser>,
+        userByRollNumberMap: Map<string, IUser>
+    ): IUser | null {
+        let queryStr = candidateRaw.trim();
+        if (queryStr.includes(':')) {
+            const parts = queryStr.split(':');
+            if (parts.length === 2 && parts[1]) {
+                queryStr = parts[1].trim();
+            }
+        }
+
+        // Try matching by ObjectId
+        if (mongoose.Types.ObjectId.isValid(queryStr) && userByIdMap.has(queryStr)) {
+            return userByIdMap.get(queryStr) || null;
+        }
+        // Try matching by email
+        if (userByEmailMap.has(queryStr.toLowerCase())) {
+            return userByEmailMap.get(queryStr.toLowerCase()) || null;
+        }
+        // Try matching by anonymousId
+        if (userByAnonIdMap.has(queryStr)) {
+            return userByAnonIdMap.get(queryStr) || null;
+        }
+        // Try matching by rollNumber
+        const normalized = normalizeRollNumber(queryStr);
+        if (normalized && userByRollNumberMap.has(normalized)) {
+            return userByRollNumberMap.get(normalized) || null;
+        }
+        return null;
     }
 }
 

@@ -26,6 +26,10 @@ export interface ProcessPageInput {
     thumbnailGenerator?: IThumbnailGenerator;
     coverSheetDetector?: ICoverSheetDetector;
     imageEnhancer?: IImageEnhancer;
+    qrStudentId?: string | null;
+    qrDecodeOutcome?: 'found' | 'not_found' | 'multiple' | null;
+    omrStudentId?: string | null;
+    omrDecodeOutcome?: 'found' | 'not_found' | 'multiple' | null;
 }
 
 export interface PageProcessResult {
@@ -248,12 +252,18 @@ export class PageIngestionService {
                         isCoverPage,
                         candidateStudentId: null,
                         decodeOutcome: isCoverPage ? 'not_found' : null,
+                        qrStudentId: null,
+                        qrDecodeOutcome: isCoverPage ? 'not_found' : null,
+                        omrStudentId: null,
+                        omrDecodeOutcome: null,
                         metadata: {
                             fileType,
                             fileIndex,
                             pageNumber,
                             isCoverPage,
                             decodeOutcome: isCoverPage ? 'not_found' : null,
+                            qrDecodeOutcome: isCoverPage ? 'not_found' : null,
+                            omrDecodeOutcome: null,
                             ...renderResult.metadata
                         }
                     },
@@ -409,6 +419,10 @@ export class PageIngestionService {
                     isCoverPage,
                     candidateStudentId,
                     decodeOutcome,
+                    qrStudentId: input.qrStudentId !== undefined ? input.qrStudentId : (isCoverPage ? candidateStudentId : null),
+                    qrDecodeOutcome: input.qrDecodeOutcome !== undefined ? input.qrDecodeOutcome : (isCoverPage ? decodeOutcome : null),
+                    omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : null,
+                    omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : null,
                     nearBlank,
                     isDuplicate,
                     duplicateOf,
@@ -429,6 +443,10 @@ export class PageIngestionService {
                         isCoverPage,
                         candidateStudentId,
                         decodeOutcome,
+                        qrStudentId: input.qrStudentId !== undefined ? input.qrStudentId : (isCoverPage ? candidateStudentId : null),
+                        qrDecodeOutcome: input.qrDecodeOutcome !== undefined ? input.qrDecodeOutcome : (isCoverPage ? decodeOutcome : null),
+                        omrStudentId: input.omrStudentId !== undefined ? input.omrStudentId : null,
+                        omrDecodeOutcome: input.omrDecodeOutcome !== undefined ? input.omrDecodeOutcome : null,
                         nearBlank,
                         isDuplicate,
                         duplicateOf: duplicateOf ? duplicateOf.toString() : null,
@@ -469,12 +487,18 @@ export class PageIngestionService {
                     isCoverPage,
                     candidateStudentId: null,
                     decodeOutcome: isCoverPage ? 'not_found' : null,
+                    qrStudentId: null,
+                    qrDecodeOutcome: isCoverPage ? 'not_found' : null,
+                    omrStudentId: null,
+                    omrDecodeOutcome: null,
                     metadata: {
                         fileType,
                         fileIndex,
                         pageNumber,
                         isCoverPage,
-                        decodeOutcome: isCoverPage ? 'not_found' : null
+                        decodeOutcome: isCoverPage ? 'not_found' : null,
+                        qrDecodeOutcome: isCoverPage ? 'not_found' : null,
+                        omrDecodeOutcome: null
                     }
                 },
                 { upsert: true, returnDocument: 'after', runValidators: true }
