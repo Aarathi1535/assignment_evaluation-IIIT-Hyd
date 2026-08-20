@@ -11,6 +11,9 @@ import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import AnswerScript from '../models/AnswerScript';
 import AuditLog from '../models/AuditLog';
 import { UserRole } from '../constants/permissions';
+import Batch from '../models/Batch';
+import IngestionJob from '../models/IngestionJob';
+import User from '../models/User';
 
 let mockSessionUser: any = null;
 
@@ -94,8 +97,8 @@ describe('AE-076 Review Dashboard Summary & Counts', () => {
     }
 
     function makeRequest(category?: string) {
-        const url = category 
-            ? `http://localhost/api?category=${category}` 
+        const url = category
+            ? `http://localhost/api?category=${category}`
             : 'http://localhost/api';
         return new Request(url, {
             method: 'GET',
@@ -232,7 +235,7 @@ describe('AE-076 Review Dashboard Summary & Counts', () => {
 
         // Set role to PROFESSOR but a different user id
         mockSessionUser = { id: otherProfessorId, email: 'other@test.com', name: 'Other', role: UserRole.PROFESSOR };
-        
+
         const res = await ingestionSummaryGET(makeRequest(), makeContext(exam._id.toString()));
         const body = await res.json();
 
@@ -257,7 +260,7 @@ describe('AE-076 Review Dashboard Summary & Counts', () => {
 
     it('9. dashboard/API uses persisted state rather than client-side invented state', async () => {
         const exam = await createExam(professorId);
-        
+
         const spySummary = vi.spyOn(mongoose.Model, 'aggregate');
 
         mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
@@ -267,7 +270,7 @@ describe('AE-076 Review Dashboard Summary & Counts', () => {
         expect(res.status).toBe(200);
         expect(body.success).toBe(true);
         expect(spySummary).toHaveBeenCalled();
-        
+
         spySummary.mockRestore();
     });
 
