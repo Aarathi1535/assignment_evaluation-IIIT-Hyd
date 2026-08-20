@@ -35,6 +35,7 @@ export enum Permission {
     // Batch & Ingestion management
     CREATE_BATCH = 'CREATE_BATCH',
     VIEW_BATCH = 'VIEW_BATCH',
+    APPROVE_INGESTION = 'APPROVE_INGESTION',
 
     // View permissions
     VIEW_OWN_RESULTS = 'VIEW_OWN_RESULTS',
@@ -59,7 +60,8 @@ export const RolePermissions: Record<UserRole, Permission[]> = {
         Permission.PUBLISH_GRADES,
         Permission.VIEW_COURSES,
         Permission.CREATE_BATCH,
-        Permission.VIEW_BATCH
+        Permission.VIEW_BATCH,
+        Permission.APPROVE_INGESTION
     ],
     [UserRole.TA]: [
         Permission.VIEW_COURSES,

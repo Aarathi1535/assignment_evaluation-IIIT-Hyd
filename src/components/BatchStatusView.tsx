@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
+import { IngestionApprovalPanel, type IngestionApprovalStatus } from './ui/IngestionApprovalPanel';
 
 interface IngestionJobData {
   batchId: string;
@@ -25,6 +26,12 @@ interface IngestionJobData {
   createdAt: string;
   updatedAt: string;
   failureReason?: string | null;
+  /** Exam ID linked to this batch, if any */
+  examId?: string | null;
+  /** Current ingestion approval status for the exam */
+  ingestionApprovalStatus?: IngestionApprovalStatus;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
 }
 
 interface BatchStatusViewProps {
@@ -331,6 +338,17 @@ export default function BatchStatusView({ batchId, role }: BatchStatusViewProps)
           )}
         </div>
       </Card>
+      {/* Ingestion Approval Panel — shown when processing is complete and batch is exam-linked */}
+      {status === 'done' && job.examId && (
+        <div className="mt-2">
+          <IngestionApprovalPanel
+            examId={job.examId}
+            approvalStatus={job.ingestionApprovalStatus ?? 'PENDING_REVIEW'}
+            approvedBy={job.approvedBy}
+            approvedAt={job.approvedAt}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import AnswerScript, { IAnswerScript, IdentificationStatus, ManualIdReason } from '../models/AnswerScript';
 import IngestionPage, { IIngestionPage } from '../models/IngestionPage';
 import AuditLog from '../models/AuditLog';
+import Exam, { IngestionApprovalStatus } from '../models/Exam';
 import BatchRepository from '../repositories/BatchRepository';
 import { HttpError } from '../lib/errors';
 
@@ -12,6 +13,24 @@ export interface CorrectionAuditContext {
 }
 
 class CorrectionService {
+    /**
+     * Guards all correction mutations: throws 409 if the exam linked to this
+     * batch has ingestion approval status APPROVED.
+     * This enforces the freeze-after-approval rule from AE-074.
+     */
+    private async assertIngestionNotApproved(examId: mongoose.Types.ObjectId | undefined | null): Promise<void> {
+        if (!examId) return;
+        const exam = await Exam.findOne({ _id: examId, isActive: true }).lean();
+        if (!exam) return;
+        const status = exam.ingestionApprovalStatus ?? IngestionApprovalStatus.PENDING_REVIEW;
+        if (status === IngestionApprovalStatus.APPROVED) {
+            throw new HttpError(
+                'Ingestion has been approved. Revoke approval before making corrections.',
+                409
+            );
+        }
+    }
+
     async remapPage(
         batchId: string,
         pageId: string,
@@ -24,6 +43,9 @@ class CorrectionService {
         if (!batch) {
             throw new HttpError('Batch not found or access denied', 404);
         }
+
+        // Gate: block corrections if exam ingestion is approved (AE-074)
+        await this.assertIngestionNotApproved(batch.exam);
 
         const page = await IngestionPage.findById(pageId);
         if (!page || page.batchId !== batchId) {
@@ -326,6 +348,9 @@ class CorrectionService {
             throw new HttpError('Batch not found or access denied', 404);
         }
 
+        // Gate: block corrections if exam ingestion is approved (AE-074)
+        await this.assertIngestionNotApproved(batch.exam);
+
         if (sourceScriptId === targetScriptId) {
             throw new HttpError('Cannot merge a script with itself', 400);
         }
@@ -582,6 +607,9 @@ class CorrectionService {
             throw new HttpError('Batch not found or access denied', 404);
         }
 
+        // Gate: block corrections if exam ingestion is approved (AE-074)
+        await this.assertIngestionNotApproved(batch.exam);
+
         const originalScript = await AnswerScript.findOne({ _id: scriptId, batchId, isActive: true });
         if (!originalScript) {
             throw new HttpError('AnswerScript not found or does not belong to the batch', 404);
@@ -795,6 +823,9 @@ class CorrectionService {
         if (!batch) {
             throw new HttpError('Batch not found or access denied', 404);
         }
+
+        // Gate: block corrections if exam ingestion is approved (AE-074)
+        await this.assertIngestionNotApproved(batch.exam);
 
         const script = await AnswerScript.findOne({ _id: scriptId, batchId, isActive: true });
         if (!script) {

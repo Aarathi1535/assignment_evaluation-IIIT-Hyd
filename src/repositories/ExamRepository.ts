@@ -33,15 +33,15 @@ class ExamRepository {
 
         if (actingUserRole === 'STUDENT') {
             query.status = ExamStatus.PUBLISHED;
-            
+
             const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
             const enrolledCourses = await Course.find({ enrolledStudents: new mongoose.Types.ObjectId(actingUserId), isActive: true });
             const enrolledCourseIds = enrolledCourses.map(c => c._id);
-            
+
             const StudentMapping = mongoose.models.StudentMapping || await import('../models/StudentMapping').then(m => m.default);
             const studentMappings = await StudentMapping.find({ student: actingUserId });
             const enrolledExamIds = studentMappings.map(m => m.exam);
-            
+
             query.$or = [
                 { enrolledStudents: new mongoose.Types.ObjectId(actingUserId) },
                 { _id: { $in: enrolledExamIds } },
@@ -54,7 +54,7 @@ class ExamRepository {
             const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
             const assignedCourses = await Course.find({ teachingAssistants: new mongoose.Types.ObjectId(actingUserId), isActive: true });
             const assignedCourseIds = assignedCourses.map(c => c._id);
-            
+
             query.course = { $in: assignedCourseIds };
             return query;
         }
@@ -91,6 +91,27 @@ class ExamRepository {
             query,
             { isActive: false },
             { new: true }
+        );
+    }
+
+    /**
+     * Atomically updates ingestion approval state on an exam.
+     * Enforces the same ownership/scope rules as updateExam.
+     */
+    async updateIngestionApproval(
+        id: string,
+        data: Partial<Pick<IExam, 'ingestionApprovalStatus' | 'approvedBy' | 'approvedAt'>>,
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<IExam | null> {
+        const query = await this.buildExamQuery(id, actingUserId, actingUserRole);
+        if (!query) {
+            return null;
+        }
+        return await Exam.findOneAndUpdate(
+            query,
+            { $set: data },
+            { new: true, runValidators: true }
         );
     }
 }
