@@ -53,6 +53,29 @@ class BatchRepository {
         return await Batch.findOne(query);
     }
 
+    async getBatches(actingUserId?: string, actingUserRole?: string): Promise<IBatch[]> {
+        if (!actingUserId || !actingUserRole) {
+            return [];
+        }
+
+        const baseQuery: QueryFilter<IBatch> = {
+            isActive: true
+        };
+
+        if (actingUserRole === 'ADMIN' || actingUserRole === SYSTEM_ROLE) {
+            // unrestricted
+        } else if (actingUserRole === 'PROFESSOR') {
+            if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
+                return [];
+            }
+            baseQuery.uploadedBy = new mongoose.Types.ObjectId(actingUserId);
+        } else {
+            return [];
+        }
+
+        return await Batch.find(baseQuery).populate('exam').sort({ createdAt: -1 });
+    }
+
     async updateBatch(id: string, data: Partial<IBatch>, actingUserId?: string, actingUserRole?: string): Promise<IBatch | null> {
         const query = this.buildBatchQuery(id, actingUserId, actingUserRole);
         if (!query) {

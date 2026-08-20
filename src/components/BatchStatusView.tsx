@@ -306,10 +306,10 @@ export default function BatchStatusView({ batchId, role }: BatchStatusViewProps)
 
         {/* Footer Actions */}
         <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-          <Link href={role === 'PROFESSOR' ? '/professor/exams' : '/admin'}>
+          <Link href={role === 'PROFESSOR' ? '/professor/exams/batches' : '/admin/exams/batches'}>
             <Button variant="outline" size="sm">
               <ArrowLeft className="h-4 w-4 mr-1.5" />
-              <span>Dashboard</span>
+              <span>Back to Batches</span>
             </Button>
           </Link>
 

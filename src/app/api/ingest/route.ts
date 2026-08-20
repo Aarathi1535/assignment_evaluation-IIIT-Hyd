@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../lib/db';
 import BatchService, { UploadFileInput } from '../../../services/BatchService';
 import { requirePermission } from '../../../lib/apiAuth';
+import { IBatch } from '../../../models/Batch';
+import { IExam } from '../../../models/Exam';
+
+interface PopulatedBatch extends Omit<IBatch, 'exam'> {
+  exam?: IExam | null;
+}
 import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
 import {
@@ -126,6 +132,50 @@ export async function POST(req: NextRequest) {
                 }
             },
             { status: 201 }
+        );
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+        const status = error instanceof HttpError ? error.statusCode : 500;
+        return NextResponse.json(
+            {
+                success: false,
+                message,
+                data: null
+            },
+            { status }
+        );
+    }
+}
+
+export async function GET() {
+    const auth = await requirePermission(Permission.VIEW_BATCH);
+    if (!auth.authorized) {
+        return auth.response;
+    }
+
+    try {
+        await connectDB();
+        const batches = (await BatchService.getBatches(auth.user.id, auth.user.role)) as unknown as PopulatedBatch[];
+
+        const result = batches.map(b => ({
+            batchId: b.batchId,
+            examId: b.exam ? b.exam._id.toString() : null,
+            examTitle: b.exam ? b.exam.title : 'No Exam Linked',
+            status: b.status,
+            totalFiles: b.totalFiles,
+            totalSize: b.totalSize,
+            totalPageCount: b.totalPageCount,
+            createdAt: b.createdAt,
+            updatedAt: b.updatedAt
+        }));
+
+        return NextResponse.json(
+            {
+                success: true,
+                message: 'Batches retrieved successfully',
+                data: result
+            },
+            { status: 200 }
         );
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
