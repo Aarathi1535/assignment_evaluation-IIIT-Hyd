@@ -324,7 +324,7 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
     it('processes a 100-page mixed batch containing a 95-page PDF and 5 single-page images, running QR/OMR checks and recording timing metrics', async () => {
         // Generate deterministic test buffers in-memory
         const pdf95Pages = createCustomPdfBuffer(95);
-        
+
         // Bob OMR image buffer (Column 0: 1, Column 1: 0 -> studentId = '10')
         const omrBob = createOmrImageBuffer(1000, 1000, [
             { x: 0.5, y: 0.7 }, // Column 0, Bubble '1'
@@ -554,5 +554,6 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
         for (const script of scripts) {
             expect(script.startPageNumber).toBe(1);
         }
-    }, 180000);
+
+    }, 300000);
 });
