@@ -15,6 +15,11 @@ export enum SplittingStrategyType {
     FIXED_PAGE = 'FIXED_PAGE'
 }
 
+export enum IngestionApprovalStatus {
+    PENDING_REVIEW = 'PENDING_REVIEW',
+    APPROVED = 'APPROVED'
+}
+
 export interface IOMRBubble {
     value: string;
     x: number;
@@ -47,6 +52,9 @@ export interface IExam extends Document {
     fixedPageCount?: number;
     omrTemplate?: IOMRTemplate | null;
     isActive: boolean;
+    ingestionApprovalStatus: IngestionApprovalStatus;
+    approvedBy?: mongoose.Types.ObjectId | null;
+    approvedAt?: Date | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -144,6 +152,22 @@ const ExamSchema = new Schema<IExam>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        ingestionApprovalStatus: {
+            type: String,
+            enum: Object.values(IngestionApprovalStatus),
+            default: IngestionApprovalStatus.PENDING_REVIEW,
+            required: true,
+            index: true
+        },
+        approvedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        },
+        approvedAt: {
+            type: Date,
+            default: null
         }
     },
     {

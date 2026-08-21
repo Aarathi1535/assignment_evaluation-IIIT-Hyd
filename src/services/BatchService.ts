@@ -212,7 +212,20 @@ class BatchService {
                 ipAddress: context.ipAddress
             });
 
+            // If this batch is linked to an exam, reset the exam's ingestion
+            // approval to PENDING_REVIEW. A new batch changes the ingestion
+            // assembly state and requires a reviewer to re-approve.
+            if (examId) {
+                const { default: IngestionApprovalService } = await import('./IngestionApprovalService');
+                await IngestionApprovalService.resetToReview(examId, {
+                    actingUserId: context.actingUserId,
+                    actingUserRole: context.actingUserRole ?? '',
+                    ipAddress: context.ipAddress
+                });
+            }
+
             return { batch: newBatch, job: newJob };
+
         } catch (error) {
             // Clean up any files stored on disk for this batch
             await ImmutableStorageService.cleanupBatch(batchId).catch(() => { });
