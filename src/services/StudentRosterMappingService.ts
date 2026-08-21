@@ -355,7 +355,7 @@ export class StudentRosterMappingService {
 
             const identificationHistory = existingIdentifiedScript?.identificationHistory || [];
 
-            if (existingIdentifiedScript && existingIdentifiedScript.identificationStatus === IdentificationStatus.IDENTIFIED) {
+            if (existingIdentifiedScript && existingIdentifiedScript.identificationSource === IdentificationSource.OPERATOR) {
                 resolvedStudentId = existingIdentifiedScript.student as mongoose.Types.ObjectId | null;
                 identificationStatus = existingIdentifiedScript.identificationStatus as IdentificationStatus;
                 identificationSource = existingIdentifiedScript.identificationSource as any;
@@ -492,6 +492,13 @@ export class StudentRosterMappingService {
                 );
             }
         }
+
+        // Clean up obsolete AnswerScript records that were not recreated during this run
+        const processedScriptIds = results.map(s => s._id);
+        await AnswerScript.deleteMany({
+            batchId,
+            _id: { $nin: processedScriptIds }
+        });
 
         return results;
     }
