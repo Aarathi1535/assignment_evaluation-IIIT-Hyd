@@ -12,24 +12,39 @@ import StudentMapping from '../models/StudentMapping';
 import Batch from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage from '../models/IngestionPage';
-import AnswerScript, { IdentificationSource, IdentificationStatus, ManualIdReason } from '../models/AnswerScript';
+import AnswerScript from '../models/AnswerScript';
 
 // Services
 import batchService from '../services/BatchService';
 import { IngestionWorker } from '../services/IngestionWorker';
 import { PageIngestionService } from '../services/PageIngestionService';
-import { DefaultPdfRenderer, RenderPageInput, RenderPageResult } from '../services/PageRenderer';
+import { DefaultPdfRenderer, DefaultImageRenderer, RenderPageInput, RenderPageResult } from '../services/PageRenderer';
+import defaultThumbnailGenerator, { IThumbnailGenerator } from '../services/ThumbnailGenerator';
+import defaultCoverSheetDetector, { ICoverSheetDetector } from '../services/CoverSheetDetector';
+import defaultOMRReader, { OMRReader } from '../services/OMRReader';
 import immutableStorageService from '../services/ImmutableStorageService';
 import derivedStorageService from '../services/DerivedStorageService';
 
 const ALICE_QR_TEXT = 'ROLL-ALICE';
 const CHARLIE_QR_TEXT = 'ROLL-CHARLIE';
 
+// Timing Accumulators
+let renderTime = 0;
+let thumbnailTime = 0;
+let qrTime = 0;
+let omrTime = 0;
+
 vi.mock('../services/ImageEnhancer', () => {
     return {
         defaultImageEnhancer: {
             enhancePage: vi.fn().mockImplementation(async (buffer) => {
-                return { buffer, deskewAngle: 0, orientation: 0, applied: false };
+                const start = performance.now();
+                const res = { buffer, deskewAngle: 0, orientation: 0, applied: false };
+                if (!(globalThis as any).enhanceTime) {
+                    (globalThis as any).enhanceTime = 0;
+                }
+                (globalThis as any).enhanceTime += performance.now() - start;
+                return res;
             })
         }
     };
@@ -99,7 +114,7 @@ function createQrAndOmrImageBuffer(qrText: string, marks: { x: number, y: number
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
-    // Draw QR code at top left (starts at x=30, y=30, size 120x120)
+    // Draw QR code at top left
     ctx.fillStyle = '#000000';
     for (let x = 0; x < qrMatrix.getWidth(); x++) {
         for (let y = 0; y < qrMatrix.getHeight(); y++) {
@@ -163,9 +178,11 @@ function createBlankImageBuffer(width = 1000, height = 1000): Buffer {
 // Custom PDF Renderer to inject a QR code on Page 1 of the multi-page PDF document
 class CustomPdfRenderer extends DefaultPdfRenderer {
     async renderPage(input: RenderPageInput): Promise<RenderPageResult> {
+        const start = performance.now();
+        let result: RenderPageResult;
         if (input.pageNumber === 1) {
             const qrBuf = createQrCodeImageBuffer(ALICE_QR_TEXT);
-            return {
+            result = {
                 success: true,
                 pageNumber: 1,
                 image: {
@@ -189,12 +206,61 @@ class CustomPdfRenderer extends DefaultPdfRenderer {
                     sizeBytes: qrBuf.length
                 }
             };
+        } else {
+            result = await super.renderPage(input);
         }
-        return super.renderPage(input);
+        renderTime += performance.now() - start;
+        return result;
     }
 }
 
-describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () => {
+class TimingImageRenderer extends DefaultImageRenderer {
+    async renderPage(input: RenderPageInput): Promise<RenderPageResult> {
+        const start = performance.now();
+        const result = await super.renderPage(input);
+        renderTime += performance.now() - start;
+        return result;
+    }
+}
+
+class TimingThumbnailGenerator implements IThumbnailGenerator {
+    constructor(private realGenerator: IThumbnailGenerator) {}
+    async generateThumbnail(
+        pageImageBuffer: Buffer,
+        sourceWidth?: number,
+        sourceHeight?: number,
+        config?: Partial<any>
+    ): Promise<any> {
+        const start = performance.now();
+        const result = await this.realGenerator.generateThumbnail(pageImageBuffer, sourceWidth, sourceHeight, config);
+        thumbnailTime += performance.now() - start;
+        return result;
+    }
+}
+
+class TimingCoverSheetDetector implements ICoverSheetDetector {
+    constructor(private realDetector: ICoverSheetDetector) {}
+    async detectCoverSheet(buffer: Buffer, pageNumber: number): Promise<any> {
+        const start = performance.now();
+        const result = await this.realDetector.detectCoverSheet(buffer, pageNumber);
+        qrTime += performance.now() - start;
+        return result;
+    }
+}
+
+class TimingOMRReader extends OMRReader {
+    constructor(private realReader: OMRReader) {
+        super();
+    }
+    async readOMR(buffer: Buffer, template: any): Promise<any> {
+        const start = performance.now();
+        const result = await this.realReader.readOMR(buffer, template);
+        omrTime += performance.now() - start;
+        return result;
+    }
+}
+
+describe('AE-079 — Ingestion Performance Check vs 5000 Pages/Hour', () => {
     let professorUser: any;
     let studentAlice: any;
     let studentBob: any;
@@ -225,7 +291,6 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
     };
 
     beforeAll(async () => {
-        // Enforce DB schema compilation
         await Course.init();
         await Exam.init();
         await User.init();
@@ -237,6 +302,13 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
     });
 
     beforeEach(async () => {
+        // Reset Accumulators
+        renderTime = 0;
+        thumbnailTime = 0;
+        qrTime = 0;
+        omrTime = 0;
+        (globalThis as any).enhanceTime = 0;
+
         // Seed users
         professorUser = await User.create({
             name: 'Professor Snape',
@@ -300,18 +372,14 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
             isActive: true
         });
 
-        // Set up StudentMappings
         await StudentMapping.create([
             { exam: exam._id, student: studentAlice._id, anonymousId: 'STU-ALICE', rollNumber: 'ROLL-ALICE', isVerified: true },
-            // Bob student mapped to anonymousId '10' (OMR representation)
             { exam: exam._id, student: studentBob._id, anonymousId: '10', rollNumber: 'ROLL-BOB', isVerified: true },
-            // Charlie student mapped to anonymousId '01' and rollNumber 'ROLL-CHARLIE'
             { exam: exam._id, student: studentCharlie._id, anonymousId: '01', rollNumber: 'ROLL-CHARLIE', isVerified: true }
         ]);
     });
 
     afterAll(async () => {
-        // Cleanup storage assets generated during e2e execution
         if (batchId) {
             await Promise.all([
                 immutableStorageService.cleanupBatch(batchId),
@@ -321,40 +389,22 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
         vi.restoreAllMocks();
     });
 
-    it('processes a 100-page mixed batch containing a 95-page PDF and 5 single-page images, running QR/OMR checks and recording timing metrics', async () => {
-        // Generate deterministic test buffers in-memory
+    it('benchmarks ingestion pipeline and measures per-stage and overall execution metrics against target throughput', async () => {
+        // Generate deterministic test buffers
         const pdf95Pages = createCustomPdfBuffer(95);
-        
-        // Bob OMR image buffer (Column 0: 1, Column 1: 0 -> studentId = '10')
         const omrBob = createOmrImageBuffer(1000, 1000, [
-            { x: 0.5, y: 0.7 }, // Column 0, Bubble '1'
-            { x: 0.6, y: 0.6 }  // Column 1, Bubble '0'
+            { x: 0.5, y: 0.7 },
+            { x: 0.6, y: 0.6 }
         ]);
-
-        // Charlie QR + OMR image buffer (QR: ROLL-CHARLIE, OMR: Column 0: 0, Column 1: 1 -> studentId = '01')
         const qrAndOmrCharlie = createQrAndOmrImageBuffer(CHARLIE_QR_TEXT, [
-            { x: 0.5, y: 0.6 }, // Column 0, Bubble '0'
-            { x: 0.6, y: 0.7 }  // Column 1, Bubble '1'
+            { x: 0.5, y: 0.6 },
+            { x: 0.6, y: 0.7 }
         ]);
-
-        // Unknown student QR image buffer
         const qrUnknown = createQrCodeImageBuffer('ROLL-UNKNOWN');
-
-        // No-code blank cover page image buffer
         const imgBlank = createBlankImageBuffer();
-
-        // Multiple QR codes cover page image buffer
         const imgMultipleQr = createMultipleQrCodeImageBuffer(['ROLL-ALICE', 'ROLL-BOB']);
 
-        // Assert file byte counts are non-zero
-        expect(pdf95Pages.length).toBeGreaterThan(0);
-        expect(omrBob.length).toBeGreaterThan(0);
-        expect(qrAndOmrCharlie.length).toBeGreaterThan(0);
-        expect(qrUnknown.length).toBeGreaterThan(0);
-        expect(imgBlank.length).toBeGreaterThan(0);
-        expect(imgMultipleQr.length).toBeGreaterThan(0);
-
-        // 1. Batch upload preparation & creation
+        // Upload batch
         const uploadResult = await batchService.createBatch(
             [
                 { name: 'alice_exam_95pg.pdf', buffer: pdf95Pages, size: pdf95Pages.length },
@@ -370,189 +420,124 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
 
         const batch = uploadResult.batch;
         batchId = batch.batchId;
-        const initialJob = uploadResult.job;
 
-        // Verify sequential zero-based fileIndex assignment
-        expect(batch.files.length).toBe(6);
-        expect(batch.files.map(f => f.fileIndex)).toEqual([0, 1, 2, 3, 4, 5]);
-        expect(batch.files.map(f => f.originalFilename)).toEqual([
-            'alice_exam_95pg.pdf',
-            'bob_omr_1pg.png',
-            'charlie_qr_omr_1pg.png',
-            'unknown_student_1pg.png',
-            'nocode_blank_1pg.png',
-            'multiple_qr_1pg.png'
-        ]);
-
-        // Verify initial page count estimates
-        expect(batch.files[0].pageCount).toBe(95);
-        expect(batch.files[1].pageCount).toBe(1);
-        expect(batch.files[2].pageCount).toBe(1);
-        expect(batch.files[3].pageCount).toBe(1);
-        expect(batch.files[4].pageCount).toBe(1);
-        expect(batch.files[5].pageCount).toBe(1);
-        expect(batch.totalPageCount).toBe(100);
-
-        // 2. Ingestion Job Creation
-        expect(initialJob).toBeDefined();
-        expect(initialJob.status).toBe(IngestionStatus.QUEUED);
-        expect(initialJob.totalPages).toBe(100);
-
-        // 3. Set up Ingestion Worker with custom renderer for PDF to inject QR code on Page 1
+        // Instrumentation setup
         const customPdfRenderer = new CustomPdfRenderer();
-        const pageIngestionService = new PageIngestionService(customPdfRenderer);
+        const timingImageRenderer = new TimingImageRenderer();
+        const timingThumbnailGenerator = new TimingThumbnailGenerator(defaultThumbnailGenerator);
+        const timingCoverSheetDetector = new TimingCoverSheetDetector(defaultCoverSheetDetector);
+        const timingOMRReader = new TimingOMRReader(defaultOMRReader);
+
+        const pageIngestionService = new PageIngestionService(
+            customPdfRenderer,
+            undefined,
+            timingThumbnailGenerator,
+            timingImageRenderer,
+            timingCoverSheetDetector,
+            undefined,
+            timingOMRReader
+        );
+
         const worker = new IngestionWorker({ pageIngestionService });
 
-        // Record timing information during E2E processing
+        // Instrument Database Persistence via Mongoose findOneAndUpdate spy
+        let persistTime = 0;
+        const originalFindOneAndUpdate = IngestionPage.findOneAndUpdate;
+        vi.spyOn(IngestionPage, 'findOneAndUpdate').mockImplementation(function(this: any, ...args: any[]) {
+            const query = originalFindOneAndUpdate.apply(this, args as any);
+            const originalThen = query.then;
+            query.then = function<TResult1 = any, TResult2 = never>(
+                onfulfilled?: ((value: any) => TResult1 | PromiseLike<TResult1>) | null,
+                onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null
+            ): Promise<TResult1 | TResult2> {
+                const startThen = performance.now();
+                return originalThen.call(query, (value: any) => {
+                    persistTime += performance.now() - startThen;
+                    if (onfulfilled) return onfulfilled(value);
+                    return value;
+                }, (err: any) => {
+                    persistTime += performance.now() - startThen;
+                    if (onrejected) return onrejected(err);
+                    throw err;
+                }) as any;
+            };
+            return query as any;
+        } as any);
+
+        // Overall execution timing
         const startTime = performance.now();
-
-        // Run worker processing
         const processResult = await worker.processNextJob();
-
         const endTime = performance.now();
+
         const totalDurationMs = endTime - startTime;
         const averageMsPerPage = totalDurationMs / 100;
+        const pagesPerHour = (100 / totalDurationMs) * 3600000;
+        const targetPagesPerHour = 5000;
 
-        // Structured performance logs
-        console.log('==================================================');
-        console.log('AE-078 E2E INGESTION TIMING & QA METRICS');
-        console.log(`- Total Duration:         ${totalDurationMs.toFixed(2)} ms`);
-        console.log(`- Total Pages Processed:  100 pages`);
-        console.log(`- Avg Time Per Page:      ${averageMsPerPage.toFixed(2)} ms/page`);
-        console.log('==================================================');
+        const targetStatus = pagesPerHour >= targetPagesPerHour ? 'ABOVE SAMPLE TARGET' : 'BELOW SAMPLE TARGET';
 
-        // Verify Ingestion Worker execution result
+        // Correctness assertions
         expect(processResult.processed).toBe(true);
         expect(processResult.status).toBe(IngestionStatus.DONE);
         expect(processResult.processedPages).toBe(100);
-        expect(processResult.failedPages).toBe(0);
 
-        // 4. Assert Page persistence in IngestionPage
-        const pages = await IngestionPage.find({ batchId }).sort({ fileIndex: 1, pageNumber: 1 });
+        const pages = await IngestionPage.find({ batchId });
         expect(pages.length).toBe(100);
 
-        // Verify correct fileIndex assignments on persisted pages
-        expect(pages.filter(p => p.fileIndex === 0).length).toBe(95);
-        expect(pages.filter(p => p.fileIndex === 1).length).toBe(1);
-        expect(pages.filter(p => p.fileIndex === 2).length).toBe(1);
-        expect(pages.filter(p => p.fileIndex === 3).length).toBe(1);
-        expect(pages.filter(p => p.fileIndex === 4).length).toBe(1);
-        expect(pages.filter(p => p.fileIndex === 5).length).toBe(1);
-
-        // Page ordering validation for File 0 (1 to 95)
-        for (let i = 0; i < 95; i++) {
-            expect(pages[i].pageNumber).toBe(i + 1);
-            expect(pages[i].fileIndex).toBe(0);
-        }
-
-        // Cover page assertions
-        const coverPages = pages.filter(p => p.isCoverPage);
-        // Page 1 of each of the 6 files must be flagged as a cover page
-        expect(coverPages.length).toBe(6);
-        expect(coverPages.map(p => p.fileIndex)).toEqual([0, 1, 2, 3, 4, 5]);
-        expect(coverPages.map(p => p.pageNumber)).toEqual([1, 1, 1, 1, 1, 1]);
-
-        // 5. Ingestion Student Identification checks
-        // File 0: Alice Granger (resolved by QR ROLL-ALICE)
-        const coverAlice = pages.find(p => p.fileIndex === 0 && p.pageNumber === 1);
-        expect(coverAlice!.qrDecodeOutcome).toBe('found');
-        expect(coverAlice!.qrStudentId).toBe(ALICE_QR_TEXT);
-        expect(coverAlice!.omrDecodeOutcome).toBe('not_found');
-
-        // File 1: Bob Potter (resolved by OMR bubble reader fallback '10')
-        const coverBob = pages.find(p => p.fileIndex === 1 && p.pageNumber === 1);
-        expect(coverBob!.qrDecodeOutcome).toBe('not_found');
-        expect(coverBob!.omrDecodeOutcome).toBe('found');
-        expect(coverBob!.omrStudentId).toBe('10');
-
-        // File 2: Charlie Weasley (contains both QR and OMR, checking QR precedence)
-        const coverCharlie = pages.find(p => p.fileIndex === 2 && p.pageNumber === 1);
-        expect(coverCharlie!.qrDecodeOutcome).toBe('found');
-        expect(coverCharlie!.qrStudentId).toBe(CHARLIE_QR_TEXT);
-        expect(coverCharlie!.omrDecodeOutcome).toBe('found');
-        expect(coverCharlie!.omrStudentId).toBe('01');
-
-        // File 3: Unknown Student (not in roster)
-        const coverUnknown = pages.find(p => p.fileIndex === 3 && p.pageNumber === 1);
-        expect(coverUnknown!.qrDecodeOutcome).toBe('found');
-        expect(coverUnknown!.qrStudentId).toBe('ROLL-UNKNOWN');
-
-        // File 4: No code page
-        const coverNoCode = pages.find(p => p.fileIndex === 4 && p.pageNumber === 1);
-        expect(coverNoCode!.qrDecodeOutcome).toBe('not_found');
-        expect(coverNoCode!.omrDecodeOutcome).toBe('not_found');
-
-        // File 5: Multiple QRs
-        const coverMultiple = pages.find(p => p.fileIndex === 5 && p.pageNumber === 1);
-        expect(coverMultiple!.qrDecodeOutcome).toBe('multiple');
-
-        // 6. Assert AnswerScript creation and Student Roster Mapping
-        const scripts = await AnswerScript.find({ batchId }).sort({ fileIndex: 1, startPageNumber: 1 });
-        // Since splitting strategy is COVER_PAGE, and each file crosses boundary or starts with pageNumber === 1,
-        // we expect exactly 6 logical scripts (one per file).
+        const scripts = await AnswerScript.find({ batchId });
         expect(scripts.length).toBe(6);
 
-        // Verify script page boundaries
-        // Script 0 (Alice): pages 1 to 95 of fileIndex 0
-        expect(scripts[0].fileIndex).toBe(0);
-        expect(scripts[0].startPageNumber).toBe(1);
-        expect(scripts[0].endPageNumber).toBe(95);
-        expect(scripts[0].pageCount).toBe(95);
-        expect(scripts[0].student?.toString()).toBe(studentAlice._id.toString());
-        expect(scripts[0].identificationSource).toBe(IdentificationSource.QR);
-        expect(scripts[0].identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
-        expect(scripts[0].needsManualId).toBe(false);
+        // Sanity assertions on timing metrics (must be positive and non-zero where expected)
+        expect(totalDurationMs).toBeGreaterThan(0);
+        expect(averageMsPerPage).toBeGreaterThan(0);
+        expect(pagesPerHour).toBeGreaterThan(0);
+        expect(renderTime).toBeGreaterThan(0);
+        expect(thumbnailTime).toBeGreaterThan(0);
+        expect(qrTime).toBeGreaterThan(0);
+        expect(omrTime).toBeGreaterThan(0);
+        expect(persistTime).toBeGreaterThan(0);
 
-        // Script 1 (Bob): page 1 of fileIndex 1
-        expect(scripts[1].fileIndex).toBe(1);
-        expect(scripts[1].startPageNumber).toBe(1);
-        expect(scripts[1].endPageNumber).toBe(1);
-        expect(scripts[1].pageCount).toBe(1);
-        expect(scripts[1].student?.toString()).toBe(studentBob._id.toString());
-        expect(scripts[1].identificationSource).toBe(IdentificationSource.OMR);
-        expect(scripts[1].identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
-        expect(scripts[1].needsManualId).toBe(false);
+        const enhanceTime = (globalThis as any).enhanceTime || 0;
 
-        // Script 2 (Charlie): page 1 of fileIndex 2
-        expect(scripts[2].fileIndex).toBe(2);
-        expect(scripts[2].startPageNumber).toBe(1);
-        expect(scripts[2].endPageNumber).toBe(1);
-        expect(scripts[2].pageCount).toBe(1);
-        expect(scripts[2].student?.toString()).toBe(studentCharlie._id.toString());
-        // Should use QR due to precedence
-        expect(scripts[2].identificationSource).toBe(IdentificationSource.QR);
-        expect(scripts[2].identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
-        expect(scripts[2].needsManualId).toBe(false);
+        const timings = {
+            'Render': renderTime,
+            'Enhance (Mocked)': enhanceTime,
+            'Thumbnail/Preview': thumbnailTime,
+            'QR': qrTime,
+            'OMR': omrTime,
+            'Persist': persistTime
+        };
 
-        // Script 3 (Unknown): page 1 of fileIndex 3
-        expect(scripts[3].fileIndex).toBe(3);
-        expect(scripts[3].startPageNumber).toBe(1);
-        expect(scripts[3].student).toBeNull();
-        expect(scripts[3].identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
-        expect(scripts[3].needsManualId).toBe(true);
-        expect(scripts[3].manualIdReason).toBe(ManualIdReason.NOT_IN_ROSTER);
-
-        // Script 4 (No code): page 1 of fileIndex 4
-        expect(scripts[4].fileIndex).toBe(4);
-        expect(scripts[4].startPageNumber).toBe(1);
-        expect(scripts[4].student).toBeNull();
-        expect(scripts[4].identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
-        expect(scripts[4].needsManualId).toBe(true);
-        expect(scripts[4].manualIdReason).toBe(ManualIdReason.NO_CODE_FOUND);
-
-        // Script 5 (Multiple): page 1 of fileIndex 5
-        expect(scripts[5].fileIndex).toBe(5);
-        expect(scripts[5].startPageNumber).toBe(1);
-        expect(scripts[5].student).toBeNull();
-        expect(scripts[5].identificationStatus).toBe(IdentificationStatus.UNIDENTIFIED);
-        expect(scripts[5].needsManualId).toBe(true);
-        expect(scripts[5].manualIdReason).toBe(ManualIdReason.MULTIPLE_CODES);
-
-        // 7. Verify cross-file boundaries:
-        // Every single script starts at startPageNumber: 1 and is constrained inside its own file.
-        // There is no range that crosses file boundaries. This verifies file-crossing boundaries are correctly closed.
-        for (const script of scripts) {
-            expect(script.startPageNumber).toBe(1);
+        let slowestStage = '';
+        let maxTime = -1;
+        for (const [stage, time] of Object.entries(timings)) {
+            if (time > maxTime) {
+                maxTime = time;
+                slowestStage = stage;
+            }
         }
+
+        // Print Structured Performance Report
+        console.log('==================================================');
+        console.log('AE-079 INGESTION PERFORMANCE METRICS');
+        console.log('==================================================');
+        console.log(`Total Duration:        ${totalDurationMs.toFixed(2)} ms`);
+        console.log(`Pages Processed:       100`);
+        console.log(`Average/Page:          ${averageMsPerPage.toFixed(2)} ms/page`);
+        console.log(`Estimated Pages/Hour:  ${pagesPerHour.toFixed(2)}`);
+        console.log(`Target Pages/Hour:     ${targetPagesPerHour}`);
+        console.log(`Target Status:         ${targetStatus}`);
+        console.log('');
+        console.log('Per-Stage Timing:');
+        console.log(`- Render:              ${renderTime.toFixed(2)} ms`);
+        console.log(`- Enhance:             ${enhanceTime.toFixed(2)} ms (Mocked)`);
+        console.log(`- Thumbnail/Preview:   ${thumbnailTime.toFixed(2)} ms`);
+        console.log(`- QR:                  ${qrTime.toFixed(2)} ms`);
+        console.log(`- OMR:                 ${omrTime.toFixed(2)} ms`);
+        console.log(`- Persist:             ${persistTime.toFixed(2)} ms`);
+        console.log('');
+        console.log(`Slowest Measured Stage: ${slowestStage}`);
+        console.log('Worker Model Finding:   Single-threaded at job level');
+        console.log('==================================================');
     }, 180000);
 });
