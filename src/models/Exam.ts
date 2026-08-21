@@ -55,6 +55,10 @@ export interface IExam extends Document {
     ingestionApprovalStatus: IngestionApprovalStatus;
     approvedBy?: mongoose.Types.ObjectId | null;
     approvedAt?: Date | null;
+    assemblySeal?: string | null;
+    assemblySealKeyId?: string | null;
+    assemblySealAt?: Date | null;
+    assemblySealBy?: mongoose.Types.ObjectId | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -167,6 +171,23 @@ const ExamSchema = new Schema<IExam>(
         },
         approvedAt: {
             type: Date,
+            default: null
+        },
+        assemblySeal: {
+            type: String,
+            default: null
+        },
+        assemblySealKeyId: {
+            type: String,
+            default: null
+        },
+        assemblySealAt: {
+            type: Date,
+            default: null
+        },
+        assemblySealBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
             default: null
         }
     },
