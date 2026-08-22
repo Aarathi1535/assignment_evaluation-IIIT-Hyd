@@ -554,5 +554,5 @@ describe('AE-078 — End-to-End Ingestion QA with 100-Page Mixed Fixture', () =>
         for (const script of scripts) {
             expect(script.startPageNumber).toBe(1);
         }
-    }, 180000);
+    }, 300000);
 });

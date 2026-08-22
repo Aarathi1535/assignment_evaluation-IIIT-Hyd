@@ -14,7 +14,7 @@ import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
-import { SplittingStrategyType } from '../models/Exam';
+import { SplittingStrategyType, IngestionApprovalStatus } from '../models/Exam';
 import { PageSplittingStrategy } from './splitting/PageSplittingStrategy';
 import { CoverBoundarySplittingStrategy } from './splitting/CoverBoundarySplittingStrategy';
 import { FixedPageSplittingStrategy } from './splitting/FixedPageSplittingStrategy';
@@ -83,6 +83,13 @@ export class StudentRosterMappingService {
         );
         if (!exam) {
             throw new HttpError('Exam not found', 404);
+        }
+
+        if (exam.ingestionApprovalStatus === IngestionApprovalStatus.APPROVED) {
+            throw new HttpError(
+                'Ingestion has been approved. Revoke approval before making corrections.',
+                409
+            );
         }
 
         // Step 2: Fetch IngestionPages sorted canonically by (fileIndex ASC, pageNumber ASC)
@@ -355,15 +362,40 @@ export class StudentRosterMappingService {
 
             const identificationHistory = existingIdentifiedScript?.identificationHistory || [];
 
-            if (existingIdentifiedScript && existingIdentifiedScript.identificationSource === IdentificationSource.OPERATOR) {
+            const precedenceMap: Record<string, number> = {
+                'OPERATOR': 4,
+                'QR': 3,
+                'OMR': 2,
+                'OCR': 1
+            };
+
+            const existingPrecedence = existingIdentifiedScript?.identificationSource
+                ? (precedenceMap[existingIdentifiedScript.identificationSource] || 0)
+                : 0;
+
+            const newPrecedence = identificationSource
+                ? (precedenceMap[identificationSource] || 0)
+                : 0;
+
+            const identityChanged =
+                String(existingIdentifiedScript?.student || '') !==
+                String(resolvedStudentId || '');
+
+            const shouldOverwrite =
+                existingIdentifiedScript &&
+                existingPrecedence > 0 &&
+                (
+                    newPrecedence > existingPrecedence ||
+                    (newPrecedence === existingPrecedence && identityChanged)
+                );
+
+            if (existingIdentifiedScript && existingIdentifiedScript.student && !shouldOverwrite) {
                 resolvedStudentId = existingIdentifiedScript.student as mongoose.Types.ObjectId | null;
                 identificationStatus = existingIdentifiedScript.identificationStatus as IdentificationStatus;
                 identificationSource = existingIdentifiedScript.identificationSource as any;
                 needsManualId = existingIdentifiedScript.needsManualId || false;
                 manualIdReason = (existingIdentifiedScript.manualIdReason as ManualIdReason | null) || null;
-                if (existingIdentifiedScript.identificationSource === IdentificationSource.OPERATOR) {
-                    candidateStudentId = existingIdentifiedScript.candidateStudentId || null;
-                }
+                candidateStudentId = candidateStudentId || existingIdentifiedScript.candidateStudentId || null;
             } else {
                 const isIdentityChanging = existingIdentifiedScript && (
                     String(existingIdentifiedScript.student || '') !== String(resolvedStudentId || '') ||
@@ -493,12 +525,20 @@ export class StudentRosterMappingService {
             }
         }
 
-        // Clean up obsolete AnswerScript records that were not recreated during this run
+        // Clean up obsolete AnswerScript records that were not recreated during this run (soft deletion)
         const processedScriptIds = results.map(s => s._id);
-        await AnswerScript.deleteMany({
-            batchId,
-            _id: { $nin: processedScriptIds }
-        });
+        await AnswerScript.updateMany(
+            {
+                batchId,
+                _id: { $nin: processedScriptIds }
+            },
+            {
+                $set: {
+                    isActive: false,
+                    student: null
+                }
+            }
+        );
 
         return results;
     }

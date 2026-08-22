@@ -440,6 +440,25 @@ describe('AE-079 — Ingestion Performance Check vs 5000 Pages/Hour', () => {
 
         const worker = new IngestionWorker({ pageIngestionService });
 
+        // Instrument Storage Writes
+        let storageWriteTime = 0;
+        const originalStoreDerivedPage = derivedStorageService.storeDerivedPage;
+        const originalStoreDerivedThumbnail = derivedStorageService.storeDerivedThumbnail;
+
+        vi.spyOn(derivedStorageService, 'storeDerivedPage').mockImplementation(async function(this: any, ...args: any[]) {
+            const start = performance.now();
+            const res = await originalStoreDerivedPage.apply(this, args as any);
+            storageWriteTime += performance.now() - start;
+            return res;
+        });
+
+        vi.spyOn(derivedStorageService, 'storeDerivedThumbnail').mockImplementation(async function(this: any, ...args: any[]) {
+            const start = performance.now();
+            const res = await originalStoreDerivedThumbnail.apply(this, args as any);
+            storageWriteTime += performance.now() - start;
+            return res;
+        });
+
         // Instrument Database Persistence via Mongoose findOneAndUpdate spy
         let persistTime = 0;
         const originalFindOneAndUpdate = IngestionPage.findOneAndUpdate;
@@ -496,6 +515,7 @@ describe('AE-079 — Ingestion Performance Check vs 5000 Pages/Hour', () => {
         expect(qrTime).toBeGreaterThan(0);
         expect(omrTime).toBeGreaterThan(0);
         expect(persistTime).toBeGreaterThan(0);
+        expect(storageWriteTime).toBeGreaterThan(0);
 
         const enhanceTime = (globalThis as any).enhanceTime || 0;
 
@@ -505,7 +525,8 @@ describe('AE-079 — Ingestion Performance Check vs 5000 Pages/Hour', () => {
             'Thumbnail/Preview': thumbnailTime,
             'QR': qrTime,
             'OMR': omrTime,
-            'Persist': persistTime
+            'Persist': persistTime,
+            'Storage Writes': storageWriteTime
         };
 
         let slowestStage = '';
@@ -535,6 +556,7 @@ describe('AE-079 — Ingestion Performance Check vs 5000 Pages/Hour', () => {
         console.log(`- QR:                  ${qrTime.toFixed(2)} ms`);
         console.log(`- OMR:                 ${omrTime.toFixed(2)} ms`);
         console.log(`- Persist:             ${persistTime.toFixed(2)} ms`);
+        console.log(`- Storage Writes:      ${storageWriteTime.toFixed(2)} ms`);
         console.log('');
         console.log(`Slowest Measured Stage: ${slowestStage}`);
         console.log('Worker Model Finding:   Single-threaded at job level');
