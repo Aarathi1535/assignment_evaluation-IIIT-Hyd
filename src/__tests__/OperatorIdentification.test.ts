@@ -512,6 +512,11 @@ describe('GitHub Issue #41 — Operator-Based AnswerScript Identification', () =
             // We run background assembly simulation where cover sheet QR scans to Student B
             const defaultStudentRosterMappingService = (await import('../services/StudentRosterMappingService')).default;
 
+            await AnswerScript.updateOne(
+                { _id: scriptForCorr._id },
+                { $set: { identificationSource: 'OPERATOR' } }
+            );
+
             // Create associated IngestionPages for corr script to simulate scanner background ingestion
             await IngestionPage.create({
                 batchId: 'batch-01',
