@@ -44,6 +44,11 @@ export async function connectDB() {
     // Validate topology before accepting traffic. Throws in production
     // if connected to a standalone MongoDB that cannot support transactions.
     validateMongoTopology(mongooseCache.conn.connection);
+
+    // Migrate unique indexes to composite indexes
+    const { migrateIndexes } = await import('../utils/dbMigration');
+    await migrateIndexes();
+
     initBackgroundWorker();
   } catch (e) {
     mongooseCache.promise = null;
