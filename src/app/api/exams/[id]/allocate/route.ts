@@ -67,19 +67,25 @@ export async function POST(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let resultData: any = { examId: id, rule };
 
-    if (rule === AllocationRule.EQUAL) {
+    if (rule === AllocationRule.EQUAL || rule === AllocationRule.QUESTION) {
       if (!taIds || !Array.isArray(taIds) || taIds.length === 0) {
         return NextResponse.json({
           success: false,
-          message: 'At least one selected TA must be provided for equal allocation',
+          message: `At least one selected TA must be provided for ${rule.toLowerCase()} allocation`,
           data: null
         }, { status: 400 });
       }
 
       // Check if user is authenticated (should be, as checked by requirePermission)
       const actingUserId = auth.user?.id || '';
-      const createdAllocations = await AllocationService.allocateEqual(id, taIds, actingUserId);
-      resultData = createdAllocations;
+
+      if (rule === AllocationRule.EQUAL) {
+        const createdAllocations = await AllocationService.allocateEqual(id, taIds, actingUserId);
+        resultData = createdAllocations;
+      } else {
+        const createdAllocations = await AllocationService.allocateByQuestion(id, taIds, actingUserId);
+        resultData = createdAllocations;
+      }
     } else {
       // Run the allocation re-run contract / check for other rules (future / placeholder)
       await AllocationService.prepareForAllocation(id);
