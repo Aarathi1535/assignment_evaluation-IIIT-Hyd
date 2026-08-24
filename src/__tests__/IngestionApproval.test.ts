@@ -16,6 +16,7 @@ import AnswerScript from '../models/AnswerScript';
 import AuditLog from '../models/AuditLog';
 import User from '../models/User';
 import Course from '../models/Course';
+import { AllocationRule } from '../models/Allocation';
 import BatchRepository from '../repositories/BatchRepository';
 import { UserRole } from '../constants/permissions';
 
@@ -317,9 +318,25 @@ describe('AE-074 Ingestion Approval', () => {
             approvedAt: new Date()
         });
 
+        // Enroll TA on the course for this exam
+        await Course.findByIdAndUpdate(exam.course, {
+            $set: { teachingAssistants: [new mongoose.Types.ObjectId(taId)] }
+        });
+
+        // Create an eligible answer script for this exam
+        await AnswerScript.create({
+            exam: exam._id,
+            student: new mongoose.Types.ObjectId(),
+            needsManualId: false,
+            isActive: true
+        });
+
         mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
 
-        const req = makeRequest();
+        const req = makeRequest({
+            rule: AllocationRule.EQUAL,
+            taIds: [taId]
+        });
         const res = await allocatePOST(req, makeContext(exam._id.toString()));
         const body = await res.json();
 
