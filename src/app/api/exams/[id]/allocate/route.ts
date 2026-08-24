@@ -44,10 +44,12 @@ export async function POST(
 
     // Parse options from request body if available
     let rule: AllocationRule | undefined;
+    let taIds: string[] | undefined;
     try {
       const body = await req.json();
-      if (body && body.rule) {
+      if (body) {
         rule = body.rule;
+        taIds = body.taIds;
       }
     } catch {
       // Body may be empty or not JSON, ignore
@@ -62,13 +64,31 @@ export async function POST(
       }, { status: 400 });
     }
 
-    // Run the allocation re-run contract / check
-    await AllocationService.prepareForAllocation(id);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let resultData: any = { examId: id, rule };
+
+    if (rule === AllocationRule.EQUAL) {
+      if (!taIds || !Array.isArray(taIds) || taIds.length === 0) {
+        return NextResponse.json({
+          success: false,
+          message: 'At least one selected TA must be provided for equal allocation',
+          data: null
+        }, { status: 400 });
+      }
+
+      // Check if user is authenticated (should be, as checked by requirePermission)
+      const actingUserId = auth.user?.id || '';
+      const createdAllocations = await AllocationService.allocateEqual(id, taIds, actingUserId);
+      resultData = createdAllocations;
+    } else {
+      // Run the allocation re-run contract / check for other rules (future / placeholder)
+      await AllocationService.prepareForAllocation(id);
+    }
 
     return NextResponse.json({
       success: true,
-      message: 'Allocation prepared successfully. Re-run contract verified.',
-      data: { examId: id, rule }
+      message: 'Allocation completed successfully',
+      data: resultData
     }, { status: 200 });
 
   } catch (error: unknown) {

@@ -481,7 +481,7 @@ describe('Allocation Foundation Tests (AE-082)', () => {
 
             const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
                 method: 'POST',
-                body: JSON.stringify({ rule: AllocationRule.EQUAL })
+                body: JSON.stringify({})
             });
 
             const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
@@ -498,7 +498,7 @@ describe('Allocation Foundation Tests (AE-082)', () => {
 
             const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
                 method: 'POST',
-                body: JSON.stringify({ rule: AllocationRule.EQUAL })
+                body: JSON.stringify({})
             });
 
             const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
@@ -523,7 +523,7 @@ describe('Allocation Foundation Tests (AE-082)', () => {
 
             const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
                 method: 'POST',
-                body: JSON.stringify({ rule: AllocationRule.EQUAL })
+                body: JSON.stringify({})
             });
 
             const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
