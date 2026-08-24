@@ -5,6 +5,8 @@ import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
 import IngestionApprovalService from '../../../../../services/IngestionApprovalService';
+import AllocationService from '../../../../../services/AllocationService';
+import { AllocationRule } from '../../../../../models/Allocation';
 
 /**
  * POST /api/exams/[id]/allocate
@@ -13,8 +15,7 @@ import IngestionApprovalService from '../../../../../services/IngestionApprovalS
  * Enforces that ingestion must be APPROVED before any grading or allocation
  * can begin for the exam. Returns 403 if not approved.
  *
- * Full allocation business logic will be added in a later ticket (AE-075+).
- * This endpoint establishes the gate required by the ticket specification.
+ * Validates request payload and triggers re-run prepare contract (AE-082).
  */
 export async function POST(
   req: NextRequest,
@@ -41,13 +42,33 @@ export async function POST(
     // AE-074 gate: exam ingestion must be APPROVED before grading/allocation
     await IngestionApprovalService.requireApproved(id);
 
-    // Placeholder: full allocation logic will be implemented in a future ticket.
-    // This endpoint currently validates the gate and returns a success response
-    // indicating the exam is cleared for allocation.
+    // Parse options from request body if available
+    let rule: AllocationRule | undefined;
+    try {
+      const body = await req.json();
+      if (body && body.rule) {
+        rule = body.rule;
+      }
+    } catch {
+      // Body may be empty or not JSON, ignore
+    }
+
+    // Validate the rule if it was provided
+    if (rule && !Object.values(AllocationRule).includes(rule)) {
+      return NextResponse.json({
+        success: false,
+        message: `Invalid allocation rule: ${rule}`,
+        data: null
+      }, { status: 400 });
+    }
+
+    // Run the allocation re-run contract / check
+    await AllocationService.prepareForAllocation(id);
+
     return NextResponse.json({
       success: true,
-      message: 'Exam ingestion is approved. Allocation can proceed.',
-      data: { examId: id }
+      message: 'Allocation prepared successfully. Re-run contract verified.',
+      data: { examId: id, rule }
     }, { status: 200 });
 
   } catch (error: unknown) {
@@ -60,3 +81,4 @@ export async function POST(
     }, { status });
   }
 }
+
