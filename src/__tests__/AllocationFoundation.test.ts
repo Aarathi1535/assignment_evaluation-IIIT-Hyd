@@ -508,6 +508,8 @@ describe('Allocation Foundation Tests (AE-082)', () => {
         });
 
         it('should succeed and run the preparation contract when authorized and ingestion is approved', async () => {
+            const spy = vi.spyOn(AllocationService, 'allocateEqual').mockResolvedValue([]);
+
             // Approve the exam ingestion first
             await Exam.updateOne(
                 { _id: testExamId },
@@ -523,13 +525,18 @@ describe('Allocation Foundation Tests (AE-082)', () => {
 
             const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
                 method: 'POST',
-                body: JSON.stringify({})
+                body: JSON.stringify({
+                    rule: AllocationRule.EQUAL,
+                    taIds: [taId1.toString()]
+                })
             });
 
             const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
             expect(res.status).toBe(200);
             const data = await res.json();
             expect(data.success).toBe(true);
+
+            spy.mockRestore();
         });
 
         it('should reject invalid allocation rules', async () => {
@@ -554,6 +561,161 @@ describe('Allocation Foundation Tests (AE-082)', () => {
             expect(res.status).toBe(400);
             const data = await res.json();
             expect(data.message).toContain('Invalid allocation rule');
+        });
+
+        it('Blocker 1: missing rule returns 400 and does not delete existing allocations', async () => {
+            // Seed an existing allocation to prove it is not deleted
+            const initialAlloc = new Allocation({
+                exam: testExamId,
+                ta: taId1,
+                answerScript: new mongoose.Types.ObjectId(),
+                allocatedBy: professorId,
+                status: AllocationStatus.PENDING
+            });
+            await initialAlloc.save();
+
+            await Exam.updateOne(
+                { _id: testExamId },
+                { $set: { ingestionApprovalStatus: IngestionApprovalStatus.APPROVED } }
+            );
+
+            mockSessionUser = {
+                id: professorId.toString(),
+                email: 'prof@univ.edu',
+                name: 'Prof User',
+                role: UserRole.PROFESSOR
+            };
+
+            const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+                method: 'POST',
+                body: JSON.stringify({ taIds: [taId1.toString()] }) // rule is missing
+            });
+
+            const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
+            expect(res.status).toBe(400);
+            const data = await res.json();
+            expect(data.message).toContain('Allocation rule is required');
+
+            // Verify that the existing allocation was not deleted
+            const dbAllocsCount = await Allocation.countDocuments({ exam: testExamId });
+            expect(dbAllocsCount).toBe(1);
+        });
+
+        it('Blocker 1: empty body returns 400 and does not delete existing allocations', async () => {
+            const initialAlloc = new Allocation({
+                exam: testExamId,
+                ta: taId1,
+                answerScript: new mongoose.Types.ObjectId(),
+                allocatedBy: professorId,
+                status: AllocationStatus.PENDING
+            });
+            await initialAlloc.save();
+
+            await Exam.updateOne(
+                { _id: testExamId },
+                { $set: { ingestionApprovalStatus: IngestionApprovalStatus.APPROVED } }
+            );
+
+            mockSessionUser = {
+                id: professorId.toString(),
+                email: 'prof@univ.edu',
+                name: 'Prof User',
+                role: UserRole.PROFESSOR
+            };
+
+            const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+                method: 'POST',
+                body: JSON.stringify({})
+            });
+
+            const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
+            expect(res.status).toBe(400);
+
+            const dbAllocsCount = await Allocation.countDocuments({ exam: testExamId });
+            expect(dbAllocsCount).toBe(1);
+        });
+
+        it('Blocker 1: malformed JSON returns 400 and does not delete existing allocations', async () => {
+            const initialAlloc = new Allocation({
+                exam: testExamId,
+                ta: taId1,
+                answerScript: new mongoose.Types.ObjectId(),
+                allocatedBy: professorId,
+                status: AllocationStatus.PENDING
+            });
+            await initialAlloc.save();
+
+            await Exam.updateOne(
+                { _id: testExamId },
+                { $set: { ingestionApprovalStatus: IngestionApprovalStatus.APPROVED } }
+            );
+
+            mockSessionUser = {
+                id: professorId.toString(),
+                email: 'prof@univ.edu',
+                name: 'Prof User',
+                role: UserRole.PROFESSOR
+            };
+
+            const req = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+                method: 'POST',
+                body: '{ malformed json'
+            });
+
+            const res = await allocatePOST(req, { params: Promise.resolve({ id: testExamId.toString() }) });
+            expect(res.status).toBe(400);
+
+            const dbAllocsCount = await Allocation.countDocuments({ exam: testExamId });
+            expect(dbAllocsCount).toBe(1);
+        });
+
+        it('Blocker 1: valid EQUAL, QUESTION, and RANDOM requests successfully invoke their methods', async () => {
+            await Exam.updateOne(
+                { _id: testExamId },
+                { $set: { ingestionApprovalStatus: IngestionApprovalStatus.APPROVED } }
+            );
+
+            mockSessionUser = {
+                id: professorId.toString(),
+                email: 'prof@univ.edu',
+                name: 'Prof User',
+                role: UserRole.PROFESSOR
+            };
+
+            const equalSpy = vi.spyOn(AllocationService, 'allocateEqual').mockResolvedValue([]);
+            const questionSpy = vi.spyOn(AllocationService, 'allocateByQuestion').mockResolvedValue([]);
+            const randomSpy = vi.spyOn(AllocationService, 'allocateRandom').mockResolvedValue([]);
+
+            // 1. EQUAL
+            const reqEqual = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+                method: 'POST',
+                body: JSON.stringify({ rule: AllocationRule.EQUAL, taIds: [taId1.toString()] })
+            });
+            const resEqual = await allocatePOST(reqEqual, { params: Promise.resolve({ id: testExamId.toString() }) });
+            expect(resEqual.status).toBe(200);
+            expect(equalSpy).toHaveBeenCalled();
+
+            // 2. QUESTION
+            const reqQuestion = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+                method: 'POST',
+                body: JSON.stringify({ rule: AllocationRule.QUESTION, taIds: [taId1.toString()] })
+            });
+            const resQuestion = await allocatePOST(reqQuestion, { params: Promise.resolve({ id: testExamId.toString() }) });
+            expect(resQuestion.status).toBe(200);
+            expect(questionSpy).toHaveBeenCalled();
+
+            // 3. RANDOM
+            const reqRandom = new NextRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+                method: 'POST',
+                body: JSON.stringify({ rule: AllocationRule.RANDOM, taIds: [taId1.toString()], seed: 123 })
+            });
+            const resRandom = await allocatePOST(reqRandom, { params: Promise.resolve({ id: testExamId.toString() }) });
+            expect(resRandom.status).toBe(200);
+            expect(randomSpy).toHaveBeenCalled();
+
+            equalSpy.mockRestore();
+            questionSpy.mockRestore();
+            randomSpy.mockRestore();
         });
     });
 });
