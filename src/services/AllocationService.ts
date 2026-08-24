@@ -240,6 +240,110 @@ export class AllocationService {
         const createdAllocations = await Allocation.create(allocationsToCreate);
         return createdAllocations;
     }
+
+    /**
+     * Allocates all eligible scripts of the exam randomly across the provided TAs using a seeded PRNG.
+     */
+    static async allocateRandom(
+        examId: string,
+        taIds: string[],
+        allocatedById: string,
+        seed: number
+    ): Promise<IAllocation[]> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+        if (!allocatedById || !mongoose.Types.ObjectId.isValid(allocatedById)) {
+            throw new HttpError('Invalid Allocated By ID format', 400);
+        }
+        if (!taIds || taIds.length === 0) {
+            throw new HttpError('At least one selected TA must be provided for allocation', 400);
+        }
+        if (
+            seed === undefined ||
+            seed === null ||
+            typeof seed !== 'number' ||
+            !Number.isFinite(seed) ||
+            !Number.isInteger(seed)
+        ) {
+            throw new HttpError('Invalid seed: seed must be a finite integer number', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+
+        // Fetch Exam and Course
+        const exam = await Exam.findById(examObjectId);
+        if (!exam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const course = await Course.findById(exam.course);
+        if (!course) {
+            throw new HttpError('Course not found for this exam', 404);
+        }
+
+        // Validate that all provided TAs are registered on the course
+        this.validateTeachingAssistants(course, taIds);
+
+        // Run re-run check/cleaning contract
+        await this.prepareForAllocation(examId);
+
+        // Fetch eligible scripts
+        const eligibleScripts = await this.getEligibleScripts(examObjectId);
+
+        if (eligibleScripts.length === 0) {
+            throw new HttpError('No eligible scripts found for allocation', 400);
+        }
+
+        // Sort scripts lexicographically by Hex ID string to be deterministic before shuffling
+        const sortedScripts = [...eligibleScripts].sort((a, b) =>
+            a._id.toString().localeCompare(b._id.toString())
+        );
+
+        // Sort TAs lexicographically to be deterministic
+        const sortedTAs = [...taIds].sort((a, b) => a.localeCompare(b));
+
+        // Shuffle scripts using Fisher-Yates with seeded random
+        const random = getSeededRandom(seed);
+        const shuffledScripts = [...sortedScripts];
+        for (let i = shuffledScripts.length - 1; i > 0; i--) {
+            const j = Math.floor(random() * (i + 1));
+            const temp = shuffledScripts[i];
+            shuffledScripts[i] = shuffledScripts[j];
+            shuffledScripts[j] = temp;
+        }
+
+        const allocationsToCreate = [];
+
+        for (let i = 0; i < shuffledScripts.length; i++) {
+            const script = shuffledScripts[i];
+            const taId = sortedTAs[i % sortedTAs.length];
+
+            allocationsToCreate.push({
+                exam: examObjectId,
+                ta: new mongoose.Types.ObjectId(taId),
+                answerScript: script._id,
+                allocatedBy: new mongoose.Types.ObjectId(allocatedById),
+                status: AllocationStatus.PENDING,
+                rule: AllocationRule.RANDOM,
+                seed
+            });
+        }
+
+        // Save allocations and return them
+        const createdAllocations = await Allocation.create(allocationsToCreate);
+        return createdAllocations;
+    }
+}
+
+function getSeededRandom(seed: number): () => number {
+    let state = seed | 0;
+    return function () {
+        state = (state + 0x6D2B79F5) | 0;
+        let t = Math.imul(state ^ (state >>> 15), state | 1);
+        t = (t + Math.imul(t ^ (t >>> 7), t | 61)) | 0;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
 }
 
 export default AllocationService;

@@ -45,11 +45,13 @@ export async function POST(
     // Parse options from request body if available
     let rule: AllocationRule | undefined;
     let taIds: string[] | undefined;
+    let seed: unknown;
     try {
       const body = await req.json();
       if (body) {
         rule = body.rule;
         taIds = body.taIds;
+        seed = body.seed;
       }
     } catch {
       // Body may be empty or not JSON, ignore
@@ -67,7 +69,7 @@ export async function POST(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let resultData: any = { examId: id, rule };
 
-    if (rule === AllocationRule.EQUAL || rule === AllocationRule.QUESTION) {
+    if (rule === AllocationRule.EQUAL || rule === AllocationRule.QUESTION || rule === AllocationRule.RANDOM) {
       if (!taIds || !Array.isArray(taIds) || taIds.length === 0) {
         return NextResponse.json({
           success: false,
@@ -82,8 +84,25 @@ export async function POST(
       if (rule === AllocationRule.EQUAL) {
         const createdAllocations = await AllocationService.allocateEqual(id, taIds, actingUserId);
         resultData = createdAllocations;
-      } else {
+      } else if (rule === AllocationRule.QUESTION) {
         const createdAllocations = await AllocationService.allocateByQuestion(id, taIds, actingUserId);
+        resultData = createdAllocations;
+      } else {
+        // rule === AllocationRule.RANDOM
+        if (
+          seed === undefined ||
+          seed === null ||
+          typeof seed !== 'number' ||
+          !Number.isFinite(seed) ||
+          !Number.isInteger(seed)
+        ) {
+          return NextResponse.json({
+            success: false,
+            message: 'Invalid seed: seed must be a finite integer number',
+            data: null
+          }, { status: 400 });
+        }
+        const createdAllocations = await AllocationService.allocateRandom(id, taIds, actingUserId, seed);
         resultData = createdAllocations;
       }
     } else {
