@@ -5,6 +5,7 @@ import AnswerScript, { IAnswerScript } from '../models/AnswerScript';
 import Exam from '../models/Exam';
 import Course, { ICourse } from '../models/Course';
 import { HttpError } from '../lib/errors';
+import AuditLog from '../models/AuditLog';
 
 export class AllocationService {
     /**
@@ -516,6 +517,104 @@ export class AllocationService {
             totalExcludedScripts: excludedScripts.length,
             excludedCountsByReason
         };
+    }
+
+    /**
+     * Reassigns an existing allocation to another TA on the same course.
+     * Operates inside a transaction and validates target TA eligibility and conflicts.
+     */
+    static async reassignAllocation(
+        examId: string,
+        allocationId: string,
+        targetTaId: string,
+        actingUserId: string
+    ): Promise<IAllocation> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(allocationId)) {
+            throw new HttpError('Invalid Allocation ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(targetTaId)) {
+            throw new HttpError('Invalid Target TA ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
+            throw new HttpError('Invalid Acting User ID format', 400);
+        }
+
+        const allocationObjectId = new mongoose.Types.ObjectId(allocationId);
+        const targetTaObjectId = new mongoose.Types.ObjectId(targetTaId);
+        const actingUserObjectId = new mongoose.Types.ObjectId(actingUserId);
+
+        return await this.runInTransaction(async (session) => {
+            // 1. Fetch the existing allocation
+            const allocation = await Allocation.findById(allocationObjectId).session(session || null);
+            if (!allocation) {
+                throw new HttpError('Allocation not found', 404);
+            }
+
+            // Verify cross-resource exam matching
+            if (allocation.exam.toString() !== examId) {
+                throw new HttpError('Allocation does not belong to the specified exam', 400);
+            }
+
+            // 2. Fetch the exam to verify course/TAs
+            const exam = await Exam.findById(allocation.exam).session(session || null);
+            if (!exam) {
+                throw new HttpError('Exam associated with this allocation not found', 404);
+            }
+
+            // 3. Fetch the course
+            const course = await Course.findById(exam.course).session(session || null);
+            if (!course) {
+                throw new HttpError('Course associated with this exam not found', 404);
+            }
+
+            // 4. Validate target TA belongs to course
+            this.validateTeachingAssistants(course, [targetTaId]);
+
+            // 5. If TA is already the same, do nothing
+            if (allocation.ta.toString() === targetTaId) {
+                return allocation;
+            }
+
+            // 6. Check unique index constraint manually to prevent duplicate allocation conflicts
+            const conflictExists = await Allocation.exists({
+                ta: targetTaObjectId,
+                answerScript: allocation.answerScript,
+                question: allocation.question,
+                _id: { $ne: allocationObjectId }
+            }).session(session || null);
+
+            if (conflictExists) {
+                throw new HttpError('Reassignment conflict: The target TA is already allocated to this script/question.', 400);
+            }
+
+            const previousTaId = allocation.ta.toString();
+
+            // 7. Update allocation
+            allocation.ta = targetTaObjectId;
+            allocation.allocatedBy = actingUserObjectId;
+            await allocation.save({ session });
+
+            // 8. Audit log inside the transaction
+            await AuditLog.create([{
+                user: actingUserObjectId,
+                action: 'ALLOCATION_REASSIGN',
+                outcome: 'SUCCESS',
+                entityId: allocationObjectId,
+                entityType: 'Allocation',
+                details: {
+                    examId: exam._id.toString(),
+                    answerScriptId: allocation.answerScript.toString(),
+                    question: allocation.question,
+                    previousTaId,
+                    newTaId: targetTaId
+                }
+            }], { session });
+
+            return allocation;
+        });
     }
 
     /**
