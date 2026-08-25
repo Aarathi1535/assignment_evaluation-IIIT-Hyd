@@ -69,7 +69,9 @@ describe('AE-074 Ingestion Approval', () => {
 
     afterAll(async () => {
         await mongoose.disconnect();
-        await replSet.stop();
+        if (replSet) {
+            await replSet.stop();
+        }
 
         const fallbackUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/test-placeholder-safety';
         try {

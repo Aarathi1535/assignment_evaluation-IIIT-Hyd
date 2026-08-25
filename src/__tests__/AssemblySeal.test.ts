@@ -59,7 +59,9 @@ describe('AE-075 Ingestion Assembly Seal', () => {
 
     afterAll(async () => {
         await mongoose.disconnect();
-        await replSet.stop();
+        if (replSet) {
+            await replSet.stop();
+        }
 
         const fallbackUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/test-placeholder-safety';
         try {

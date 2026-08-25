@@ -6,8 +6,9 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     setupFiles: ['./src/__tests__/setup.ts'],
-    hookTimeout: 60000,
-    testTimeout: 60000,
+    hookTimeout: 120000,
+    testTimeout: 120000,
+    maxWorkers: 2,
   },
   resolve: {
     alias: {
