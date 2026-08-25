@@ -123,6 +123,10 @@ describe('Allocation QUESTION Strategy Tests (AE-084)', () => {
                 expect(alloc.answerScript.toString()).toBe(s._id.toString());
                 expect(alloc.status).toBe(AllocationStatus.PENDING);
             }
+
+            // Verify no (answerScript, question) pair appears more than once (AE-089)
+            const pairSet = new Set(result.map(a => `${a.answerScript.toString()}-${a.question}`));
+            expect(pairSet.size).toBe(result.length);
         });
 
         it('Multiple scripts receive allocations for every question and every eligible (script, question) pair is allocated exactly once', async () => {
@@ -151,6 +155,10 @@ describe('Allocation QUESTION Strategy Tests (AE-084)', () => {
             expect(s2Allocs.map(a => a.question)).toContain(1);
             expect(s2Allocs.map(a => a.question)).toContain(2);
             expect(s2Allocs.map(a => a.question)).toContain(3);
+
+            // Verify no (answerScript, question) pair appears more than once (AE-089)
+            const pairSet = new Set(result.map(a => `${a.answerScript.toString()}-${a.question}`));
+            expect(pairSet.size).toBe(result.length);
         });
 
         it('Questions are distributed evenly/round-robin among TAs and a TA can hold multiple different questions for the same script', async () => {
@@ -176,6 +184,10 @@ describe('Allocation QUESTION Strategy Tests (AE-084)', () => {
             expect(q1Alloc?.ta.toString()).toBe(taId1.toString());
             expect(q2Alloc?.ta.toString()).toBe(taId2.toString());
             expect(q3Alloc?.ta.toString()).toBe(taId1.toString()); // taId1 holds Q1 and Q3 on same script
+
+            // Verify no (answerScript, question) pair appears more than once (AE-089)
+            const pairSet = new Set(result.map(a => `${a.answerScript.toString()}-${a.question}`));
+            expect(pairSet.size).toBe(result.length);
         });
 
         it('One TA receives all questions', async () => {
@@ -192,6 +204,10 @@ describe('Allocation QUESTION Strategy Tests (AE-084)', () => {
             for (const alloc of result) {
                 expect(alloc.ta.toString()).toBe(taId1.toString());
             }
+
+            // Verify no (answerScript, question) pair appears more than once (AE-089)
+            const pairSet = new Set(result.map(a => `${a.answerScript.toString()}-${a.question}`));
+            expect(pairSet.size).toBe(result.length);
         });
 
         it('More TAs than questions works (some TAs receive no questions, no empty Allocation records are created)', async () => {
