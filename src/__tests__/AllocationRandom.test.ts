@@ -131,6 +131,12 @@ describe('Allocation RANDOM Strategy Tests (AE-085)', () => {
             const r2Mapping = result2.map(a => ({ script: a.answerScript.toString(), ta: a.ta.toString() }));
 
             expect(r1Mapping).toEqual(r2Mapping);
+
+            // Verify no answerScript appears more than once (AE-089)
+            const r1ScriptIds = result1.map(a => a.answerScript.toString());
+            expect(new Set(r1ScriptIds).size).toBe(result1.length);
+            const r2ScriptIds = result2.map(a => a.answerScript.toString());
+            expect(new Set(r2ScriptIds).size).toBe(result2.length);
         });
 
         it('Different seeds can produce different mappings', async () => {
@@ -204,6 +210,10 @@ describe('Allocation RANDOM Strategy Tests (AE-085)', () => {
             expect(Math.abs(ta1Count - ta2Count)).toBeLessThanOrEqual(1);
             expect(Math.abs(ta1Count - ta3Count)).toBeLessThanOrEqual(1);
             expect(Math.abs(ta2Count - ta3Count)).toBeLessThanOrEqual(1);
+
+            // Verify no answerScript appears more than once (AE-089)
+            const scriptIds = result.map(a => a.answerScript.toString());
+            expect(new Set(scriptIds).size).toBe(result.length);
         });
 
         it('One TA receives all eligible scripts', async () => {
@@ -243,6 +253,44 @@ describe('Allocation RANDOM Strategy Tests (AE-085)', () => {
             expect(ta2Count).toBeLessThanOrEqual(1);
             expect(ta3Count).toBeLessThanOrEqual(1);
             expect(ta1Count + ta2Count + ta3Count).toBe(2);
+
+            // Verify no answerScript appears more than once (AE-089)
+            const scriptIds = result.map(a => a.answerScript.toString());
+            expect(new Set(scriptIds).size).toBe(result.length);
+        });
+
+        it('verify every eligible script is allocated exactly once with no duplicate answerScript allocations across multiple different seeds (AE-089)', async () => {
+            const scripts = [
+                await createScript(new mongoose.Types.ObjectId()),
+                await createScript(new mongoose.Types.ObjectId()),
+                await createScript(new mongoose.Types.ObjectId()),
+                await createScript(new mongoose.Types.ObjectId()),
+                await createScript(new mongoose.Types.ObjectId())
+            ];
+
+            const seeds = [42, 1337, 2026, 9999];
+            for (const seed of seeds) {
+                // Clean existing allocations to start fresh
+                await Allocation.deleteMany({});
+
+                const result = await AllocationService.allocateRandom(
+                    testExamId.toString(),
+                    [taId1.toString(), taId2.toString(), taId3.toString()],
+                    professorId.toString(),
+                    seed
+                );
+
+                expect(result).toHaveLength(scripts.length);
+
+                // Verify every eligible script is allocated exactly once
+                const scriptIds = result.map(a => a.answerScript.toString());
+                const uniqueScriptIds = new Set(scriptIds);
+                expect(uniqueScriptIds.size).toBe(scripts.length);
+
+                for (const script of scripts) {
+                    expect(scriptIds.filter(id => id === script._id.toString())).toHaveLength(1);
+                }
+            }
         });
     });
 

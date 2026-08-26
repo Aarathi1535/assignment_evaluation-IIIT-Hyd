@@ -144,6 +144,10 @@ describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
                 expect(alloc.rule).toBe(AllocationRule.EQUAL);
                 expect(alloc.question).toBeUndefined();
             }
+
+            // Verify no answerScript appears more than once (AE-089)
+            const scriptIds = result.map(a => a.answerScript.toString());
+            expect(new Set(scriptIds).size).toBe(result.length);
         });
 
         it('equal distribution with a remainder', async () => {
@@ -170,6 +174,10 @@ describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
             // One receives 3, the other receives 2
             expect(Math.abs(ta1Count - ta2Count)).toBe(1);
             expect(ta1Count + ta2Count).toBe(5);
+
+            // Verify no answerScript appears more than once (AE-089)
+            const scriptIds = result.map(a => a.answerScript.toString());
+            expect(new Set(scriptIds).size).toBe(result.length);
         });
 
         it('one TA', async () => {
@@ -188,6 +196,10 @@ describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
             expect(result).toHaveLength(3);
             const ta1Count = result.filter(a => a.ta.toString() === taId1.toString()).length;
             expect(ta1Count).toBe(3);
+
+            // Verify no answerScript appears more than once (AE-089)
+            const scriptIds = result.map(a => a.answerScript.toString());
+            expect(new Set(scriptIds).size).toBe(result.length);
         });
 
         it('more TAs than scripts', async () => {
@@ -211,6 +223,10 @@ describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
             expect(ta2Count).toBeLessThanOrEqual(1);
             expect(ta3Count).toBeLessThanOrEqual(1);
             expect(ta1Count + ta2Count + ta3Count).toBe(2);
+
+            // Verify no answerScript appears more than once (AE-089)
+            const scriptIds = result.map(a => a.answerScript.toString());
+            expect(new Set(scriptIds).size).toBe(result.length);
         });
 
         it('no eligible scripts throws validation error', async () => {
