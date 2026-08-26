@@ -177,8 +177,22 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             const viewer = { id: taUser._id.toString(), role: UserRole.TA };
             const result = await Anonymizer.serializeAnswerScript(answerScript, viewer);
 
-            // Allowed safe fields
-            expect(result).toHaveProperty('_id');
+            // 1. Exact Allowlist verification (matches exact keys and no extra ones)
+            const allowedKeys = [
+                '_id',
+                'exam',
+                'anonymousId',
+                'scriptReference',
+                'startPageNumber',
+                'endPageNumber',
+                'pageCount',
+                'isActive',
+                'createdAt',
+                'updatedAt'
+            ];
+            expect(Object.keys(result).sort()).toEqual(allowedKeys.sort());
+
+            // 2. Value checks
             expect(result.exam).toBe(examBlind._id.toString());
             expect(result.anonymousId).toBe('ANON-POTTER-777');
             expect(result.scriptReference).toBe('Script #ANON-POTTER-777');
@@ -186,18 +200,6 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             expect(result.endPageNumber).toBe(4);
             expect(result.pageCount).toBe(4);
             expect(result.isActive).toBe(true);
-
-            // Strict omission of diagnostics, file paths, and metadata
-            expect(result.student).toBeUndefined();
-            expect(result.candidateStudentId).toBeUndefined();
-            expect(result.filePath).toBeUndefined();
-            expect(result.filename).toBeUndefined();
-            expect(result.batchId).toBeUndefined();
-            expect(result.fileIndex).toBeUndefined();
-            expect(result.needsManualId).toBeUndefined();
-            expect(result.manualIdReason).toBeUndefined();
-            expect(result.decodeOutcome).toBeUndefined();
-            expect(result.metadata).toBeUndefined();
         });
 
         it('should return full detailed output for authorized professor/admin', async () => {
@@ -239,6 +241,19 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             const viewer = { id: taUser._id.toString(), role: UserRole.TA };
             const result = await Anonymizer.serializeAnswerScript(populatedScript, viewer);
 
+            const allowedKeys = [
+                '_id',
+                'exam',
+                'anonymousId',
+                'scriptReference',
+                'startPageNumber',
+                'endPageNumber',
+                'pageCount',
+                'isActive',
+                'createdAt',
+                'updatedAt'
+            ];
+            expect(Object.keys(result).sort()).toEqual(allowedKeys.sort());
             expect(result.student).toBeUndefined();
             expect(result.anonymousId).toBe('ANON-POTTER-777');
         });
@@ -279,16 +294,40 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             const result = await Anonymizer.serializeGrade(populatedGrade, viewer);
 
             // Grade allowlist fields
-            expect(result).toHaveProperty('_id');
+            const allowedGradeKeys = [
+                '_id',
+                'answerScript',
+                'rubric',
+                'marksAwarded',
+                'totalScore',
+                'feedback',
+                'isFinal',
+                'question',
+                'createdAt',
+                'updatedAt'
+            ];
+            expect(Object.keys(result).sort()).toEqual(allowedGradeKeys.sort());
+
             expect(result.totalScore).toBe(10);
             expect(result.feedback).toBe('Satisfactory performance');
 
             // Nested script allowlist fields
             expect(result.answerScript).toBeDefined();
+            const allowedScriptKeys = [
+                '_id',
+                'exam',
+                'anonymousId',
+                'scriptReference',
+                'startPageNumber',
+                'endPageNumber',
+                'pageCount',
+                'isActive',
+                'createdAt',
+                'updatedAt'
+            ];
+            expect(Object.keys(result.answerScript).sort()).toEqual(allowedScriptKeys.sort());
             expect(result.answerScript.anonymousId).toBe('ANON-POTTER-777');
             expect(result.answerScript.scriptReference).toBe('Script #ANON-POTTER-777');
-            expect(result.answerScript.student).toBeUndefined();
-            expect(result.answerScript.filePath).toBeUndefined();
         });
 
         it('should return un-anonymized Grade to Professor/Admin', async () => {
