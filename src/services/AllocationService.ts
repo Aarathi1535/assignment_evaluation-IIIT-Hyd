@@ -8,18 +8,13 @@ import { HttpError } from '../lib/errors';
 
 export class AllocationService {
     /**
-     * Prepares the exam for allocation by enforcing the re-run contract:
-     * - Checks if grading has already commenced (status !== PENDING or Grade exists).
-     * - If so, throws a 400 HttpError.
-     * - Otherwise, deletes existing allocations for the exam to avoid stale records.
+     * Checks if grading has already commenced for the given exam.
+     * Throws 400 HttpError if grading has commenced or grades exist.
      */
-    static async prepareForAllocation(examId: string, session?: mongoose.ClientSession): Promise<void> {
-        if (!mongoose.Types.ObjectId.isValid(examId)) {
-            throw new HttpError('Invalid Exam ID format', 400);
-        }
-
-        const examObjectId = new mongoose.Types.ObjectId(examId);
-
+    static async checkGradingCommenced(
+        examObjectId: mongoose.Types.ObjectId,
+        session?: mongoose.ClientSession
+    ): Promise<void> {
         // Find existing allocations for the exam
         const existingAllocations = await Allocation.find({ exam: examObjectId }).session(session ?? null);
 
@@ -51,6 +46,22 @@ export class AllocationService {
                 );
             }
         }
+    }
+
+    /**
+     * Prepares the exam for allocation by enforcing the re-run contract:
+     * - Checks if grading has already commenced (status !== PENDING or Grade exists).
+     * - If so, throws a 400 HttpError.
+     * - Otherwise, deletes existing allocations for the exam to avoid stale records.
+     */
+    static async prepareForAllocation(examId: string, session?: mongoose.ClientSession): Promise<void> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+
+        await this.checkGradingCommenced(examObjectId, session);
 
         // Safe to clear existing allocations
         await Allocation.deleteMany({ exam: examObjectId }, { session });
@@ -69,6 +80,39 @@ export class AllocationService {
                 throw new HttpError(`User ${taId} is not a teaching assistant for this course`, 400);
             }
         }
+    }
+
+    /**
+     * Validates that exam.numberOfQuestions is a positive, non-null, finite integer.
+     */
+    static validateNumberOfQuestions(numQuestions: unknown): number {
+        if (
+            numQuestions === undefined ||
+            numQuestions === null ||
+            typeof numQuestions !== 'number' ||
+            isNaN(numQuestions) ||
+            numQuestions < 1 ||
+            !Number.isInteger(numQuestions)
+        ) {
+            throw new HttpError(`Invalid number of questions: ${numQuestions}`, 400);
+        }
+        return numQuestions as number;
+    }
+
+    /**
+     * Validates that seed is a finite integer.
+     */
+    static validateSeed(seed: unknown): number {
+        if (
+            seed === undefined ||
+            seed === null ||
+            typeof seed !== 'number' ||
+            !Number.isFinite(seed) ||
+            !Number.isInteger(seed)
+        ) {
+            throw new HttpError('Invalid seed: seed must be a finite integer number', 400);
+        }
+        return seed as number;
     }
 
     /**
@@ -188,17 +232,7 @@ export class AllocationService {
         this.validateTeachingAssistants(course, taIds);
 
         // Validate Exam.numberOfQuestions
-        const numQuestions = exam.numberOfQuestions;
-        if (
-            numQuestions === undefined ||
-            numQuestions === null ||
-            typeof numQuestions !== 'number' ||
-            isNaN(numQuestions) ||
-            numQuestions < 1 ||
-            !Number.isInteger(numQuestions)
-        ) {
-            throw new HttpError(`Invalid number of questions: ${numQuestions}`, 400);
-        }
+        const numQuestions = this.validateNumberOfQuestions(exam.numberOfQuestions);
 
         return await this.runInTransaction(async (session) => {
             // Run re-run check/cleaning contract
@@ -252,15 +286,7 @@ export class AllocationService {
         if (!taIds || taIds.length === 0) {
             throw new HttpError('At least one selected TA must be provided for allocation', 400);
         }
-        if (
-            seed === undefined ||
-            seed === null ||
-            typeof seed !== 'number' ||
-            !Number.isFinite(seed) ||
-            !Number.isInteger(seed)
-        ) {
-            throw new HttpError('Invalid seed: seed must be a finite integer number', 400);
-        }
+        this.validateSeed(seed);
 
         const examObjectId = new mongoose.Types.ObjectId(examId);
 
@@ -449,6 +475,9 @@ export class AllocationService {
         // Validate that all provided TAs are registered on the course
         this.validateTeachingAssistants(course, taIds);
 
+        // Check if grading has commenced
+        await this.checkGradingCommenced(examObjectId);
+
         // Get eligible and excluded scripts
         const { eligibleScripts, excludedScripts } = await this.getEligibleAndExcludedScripts(examObjectId);
 
@@ -456,7 +485,12 @@ export class AllocationService {
             throw new HttpError('No eligible scripts found for allocation', 400);
         }
 
-        const numQuestions = exam.numberOfQuestions || 1;
+        let numQuestions = 0;
+        if (rule === AllocationRule.QUESTION) {
+            numQuestions = this.validateNumberOfQuestions(exam.numberOfQuestions);
+        } else if (rule === AllocationRule.RANDOM) {
+            this.validateSeed(seed);
+        }
 
         // Compute the distribution
         const distribution = this.computeDistribution(rule, eligibleScripts, taIds, numQuestions, seed);

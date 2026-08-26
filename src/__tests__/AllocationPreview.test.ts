@@ -2,11 +2,12 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { NextRequest } from 'next/server';
-import Allocation, { AllocationRule } from '../models/Allocation';
+import Allocation, { AllocationRule, AllocationStatus } from '../models/Allocation';
 import AnswerScript from '../models/AnswerScript';
 import Exam, { IngestionApprovalStatus } from '../models/Exam';
 import Course from '../models/Course';
 import User from '../models/User';
+import Grade from '../models/Grade';
 
 // Mock NextAuth session
 let mockSessionUser: any = null;
@@ -25,6 +26,7 @@ vi.mock('next-auth', async (importOriginal) => {
 describe('Professor Allocation Preview & UI Settings API Tests (AE-087)', () => {
     let previewPOST: any;
     let allocateGET: any;
+    let allocatePOST: any;
     let testExamId: mongoose.Types.ObjectId;
     let testCourseId: mongoose.Types.ObjectId;
     let professorId: mongoose.Types.ObjectId;
@@ -37,6 +39,7 @@ describe('Professor Allocation Preview & UI Settings API Tests (AE-087)', () => 
     beforeAll(async () => {
         previewPOST = (await import('../app/api/exams/[id]/allocate/preview/route')).POST;
         allocateGET = (await import('../app/api/exams/[id]/allocate/route')).GET;
+        allocatePOST = (await import('../app/api/exams/[id]/allocate/route')).POST;
 
         // Force model initialization
         await Allocation.init();
@@ -57,6 +60,7 @@ describe('Professor Allocation Preview & UI Settings API Tests (AE-087)', () => 
         await Allocation.deleteMany({});
         await AnswerScript.deleteMany({});
         await User.deleteMany({});
+        await Grade.deleteMany({});
 
         // Create TAs in database so populate works
         await new User({ _id: taId1, name: 'TA 1', email: 'ta1@example.com', role: 'TA', password: 'password123' }).save();
@@ -265,5 +269,126 @@ describe('Professor Allocation Preview & UI Settings API Tests (AE-087)', () => 
         const body = await res.json();
         expect(body.success).toBe(false);
         expect(body.message).toContain('Ingestion has not been approved');
+    });
+
+    it('7. numberOfQuestions = 0 is rejected by both preview and actual allocation', async () => {
+        // Set exam numberOfQuestions to 0
+        await Exam.findByIdAndUpdate(testExamId, { numberOfQuestions: 0 });
+
+        // Create 1 eligible script
+        await AnswerScript.create([
+            { exam: testExamId, student: studentId1, batchId: 'b1', fileIndex: 0, startPageNumber: 1, endPageNumber: 1, pageCount: 1, isActive: true }
+        ]);
+
+        // 1. Preview allocation
+        const previewReq = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/preview`, {
+            rule: AllocationRule.QUESTION,
+            taIds: [taId1.toString()]
+        });
+        const previewRes = await previewPOST(previewReq, makeContext(testExamId.toString()));
+        expect(previewRes.status).toBe(400);
+        const previewBody = await previewRes.json();
+        expect(previewBody.success).toBe(false);
+        expect(previewBody.message).toContain('Invalid number of questions: 0');
+
+        // 2. Actual allocation
+        const allocateReq = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate`, {
+            rule: AllocationRule.QUESTION,
+            taIds: [taId1.toString()]
+        });
+        const allocateRes = await allocatePOST(allocateReq, makeContext(testExamId.toString()));
+        expect(allocateRes.status).toBe(400);
+        const allocateBody = await allocateRes.json();
+        expect(allocateBody.success).toBe(false);
+        expect(allocateBody.message).toContain('Invalid number of questions: 0');
+    });
+
+    it('8. preview is rejected when grading has commenced (existing allocation has non-pending status)', async () => {
+        // Create 1 eligible script
+        const script = await AnswerScript.create(
+            { exam: testExamId, student: studentId1, batchId: 'b1', fileIndex: 0, startPageNumber: 1, endPageNumber: 1, pageCount: 1, isActive: true }
+        );
+
+        // Create an existing allocation with status IN_PROGRESS
+        await Allocation.create({
+            exam: testExamId,
+            ta: taId1,
+            answerScript: script._id,
+            allocatedBy: professorId,
+            status: AllocationStatus.IN_PROGRESS,
+            rule: AllocationRule.EQUAL
+        });
+
+        const req = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/preview`, {
+            rule: AllocationRule.EQUAL,
+            taIds: [taId1.toString()]
+        });
+
+        const res = await previewPOST(req, makeContext(testExamId.toString()));
+        expect(res.status).toBe(400);
+
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Cannot re-run allocation: grading has already commenced for this exam.');
+    });
+
+    it('9. preview is rejected when grading has commenced (grades exist for the exam)', async () => {
+        // Create 1 eligible script
+        const script = await AnswerScript.create(
+            { exam: testExamId, student: studentId1, batchId: 'b1', fileIndex: 0, startPageNumber: 1, endPageNumber: 1, pageCount: 1, isActive: true }
+        );
+
+        // Create a Grade document for that script
+        await Grade.create({
+            answerScript: script._id,
+            rubric: new mongoose.Types.ObjectId(),
+            gradedBy: professorId,
+            marksAwarded: [],
+            totalScore: 0,
+            isFinal: false
+        });
+
+        const req = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/preview`, {
+            rule: AllocationRule.EQUAL,
+            taIds: [taId1.toString()]
+        });
+
+        const res = await previewPOST(req, makeContext(testExamId.toString()));
+        expect(res.status).toBe(400);
+
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Cannot re-run allocation: grades already exist for this exam.');
+    });
+
+    it('10. preview remains side-effect free: does not delete or modify existing allocations', async () => {
+        // Create 1 eligible script
+        const script = await AnswerScript.create(
+            { exam: testExamId, student: studentId1, batchId: 'b1', fileIndex: 0, startPageNumber: 1, endPageNumber: 1, pageCount: 1, isActive: true }
+        );
+
+        // Create an existing allocation with status PENDING (which allows preview to proceed, as grading has not commenced)
+        const initialAlloc = await Allocation.create({
+            exam: testExamId,
+            ta: taId1,
+            answerScript: script._id,
+            allocatedBy: professorId,
+            status: AllocationStatus.PENDING,
+            rule: AllocationRule.EQUAL
+        });
+
+        // Run preview
+        const req = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/preview`, {
+            rule: AllocationRule.EQUAL,
+            taIds: [taId1.toString()]
+        });
+
+        const res = await previewPOST(req, makeContext(testExamId.toString()));
+        expect(res.status).toBe(200);
+
+        // Verify that the existing PENDING allocation was NOT deleted (unlike real allocation, which deletes existing allocations on re-run)
+        const allocations = await Allocation.find({ exam: testExamId });
+        expect(allocations).toHaveLength(1);
+        expect(allocations[0]._id.toString()).toBe(initialAlloc._id.toString());
     });
 });
