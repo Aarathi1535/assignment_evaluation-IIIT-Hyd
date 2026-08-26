@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 import Exam from '../models/Exam';
 import StudentMapping from '../models/StudentMapping';
 import AnswerScript from '../models/AnswerScript';
@@ -54,6 +55,7 @@ export class Anonymizer {
             const studentIdStr = studentId?.toString();
 
             let anonymousId = 'ANONYMOUS';
+            let scriptReference = '';
 
             if (studentIdStr) {
                 const compositeKey = examIdStr ? `${examIdStr}:${studentIdStr}` : studentIdStr;
@@ -70,11 +72,25 @@ export class Anonymizer {
                 }
             }
 
+            if (anonymousId && anonymousId !== 'ANONYMOUS') {
+                scriptReference = `Script #${anonymousId}`;
+            } else {
+                const scriptId = (scriptObj._id || '').toString();
+                const secret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+                if (!secret || secret.trim() === '') {
+                    throw new Error('ORIGINAL_STORAGE_HMAC_SECRET is missing or not configured');
+                }
+                const hmac = crypto.createHmac('sha256', secret).update(scriptId).digest('hex');
+                const suffix = hmac.slice(0, 6).toUpperCase();
+                scriptReference = `Script #UNASSIGNED-${suffix}`;
+            }
+
             // Minimal safe allowlist for blind-mode output (omits filePath, filename, batchId, manualIdReason, etc.)
             return {
                 _id: scriptObj._id?.toString() || scriptObj._id,
                 exam: examIdStr,
                 anonymousId,
+                scriptReference,
                 startPageNumber: scriptObj.startPageNumber,
                 endPageNumber: scriptObj.endPageNumber,
                 pageCount: scriptObj.pageCount,

@@ -181,6 +181,7 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             expect(result).toHaveProperty('_id');
             expect(result.exam).toBe(examBlind._id.toString());
             expect(result.anonymousId).toBe('ANON-POTTER-777');
+            expect(result.scriptReference).toBe('Script #ANON-POTTER-777');
             expect(result.startPageNumber).toBe(1);
             expect(result.endPageNumber).toBe(4);
             expect(result.pageCount).toBe(4);
@@ -285,6 +286,7 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             // Nested script allowlist fields
             expect(result.answerScript).toBeDefined();
             expect(result.answerScript.anonymousId).toBe('ANON-POTTER-777');
+            expect(result.answerScript.scriptReference).toBe('Script #ANON-POTTER-777');
             expect(result.answerScript.student).toBeUndefined();
             expect(result.answerScript.filePath).toBeUndefined();
         });
@@ -401,6 +403,99 @@ describe('AE-090 Anonymization Serializer Tests', () => {
 
             // Verify N+1 queries were prevented for grades bulk serialization
             expect(findSpy).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe('D. AE-092 Anonymized Script Reference ID Tests', () => {
+        it('should return Script #anonymousId for identified students and protect student PII', async () => {
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+            const result = await Anonymizer.serializeAnswerScript(answerScript, viewer);
+
+            expect(result.scriptReference).toBe('Script #ANON-POTTER-777');
+            expect(result.student).toBeUndefined();
+            expect(result.candidateStudentId).toBeUndefined();
+        });
+
+        it('should be stable and return identical scriptReference on repeated serialization', async () => {
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+
+            const result1 = await Anonymizer.serializeAnswerScript(answerScript, viewer);
+            const result2 = await Anonymizer.serializeAnswerScript(answerScript, viewer);
+
+            expect(result1.scriptReference).toBe('Script #ANON-POTTER-777');
+            expect(result2.scriptReference).toBe(result1.scriptReference);
+        });
+
+        it('should handle unidentified students by returning a deterministic fallback containing no raw script ObjectId', async () => {
+            const unassignedScript = await AnswerScript.create({
+                exam: examBlind._id,
+                student: null,
+                filePath: '/scans/potions/unassigned.pdf',
+                filename: 'unassigned.pdf',
+                isActive: true
+            });
+
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+
+            const result1 = await Anonymizer.serializeAnswerScript(unassignedScript, viewer);
+            const result2 = await Anonymizer.serializeAnswerScript(unassignedScript, viewer);
+
+            // 1. Matches exact expected format (Script #UNASSIGNED-XXXXXX)
+            expect(result1.scriptReference).toMatch(/^Script #UNASSIGNED-[A-Z0-9]{6}$/);
+
+            // 2. Repeated serialization produces the same reference
+            expect(result2.scriptReference).toBe(result1.scriptReference);
+
+            // 3. Extract suffix using regex
+            const match = result1.scriptReference.match(/^Script #UNASSIGNED-([A-Z0-9]{6})$/);
+            expect(match).not.toBeNull();
+            const suffix = match![1];
+
+            // 4. Verify raw ObjectId is not exposed in the reference
+            expect(result1.scriptReference).not.toContain(unassignedScript._id.toString());
+            expect(unassignedScript._id.toString()).not.toContain(suffix.toLowerCase());
+        });
+
+        it('should fail/throw when process.env.ORIGINAL_STORAGE_HMAC_SECRET is missing for unidentified scripts', async () => {
+            const unassignedScript = await AnswerScript.create({
+                exam: examBlind._id,
+                student: null,
+                filePath: '/scans/potions/unassigned2.pdf',
+                filename: 'unassigned2.pdf',
+                isActive: true
+            });
+
+            const currentSecret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+            delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+
+            await expect(Anonymizer.serializeAnswerScript(unassignedScript, viewer)).rejects.toThrow(
+                'ORIGINAL_STORAGE_HMAC_SECRET is missing or not configured'
+            );
+
+            // Restore secret
+            process.env.ORIGINAL_STORAGE_HMAC_SECRET = currentSecret;
+        });
+
+        it('should preserve cross-exam correctness for scriptReference', async () => {
+            const script1 = answerScript;
+            const script2 = await AnswerScript.create({
+                exam: examBlind2._id,
+                student: studentUser._id,
+                filePath: '/scans/potions/script_quiz.pdf',
+                filename: 'script_quiz.pdf',
+                isActive: true
+            });
+
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+            const results = await Anonymizer.serializeAnswerScripts([script1, script2], viewer);
+
+            const res1 = results.find(r => r._id.toString() === script1._id.toString());
+            expect(res1!.scriptReference).toBe('Script #ANON-POTTER-777');
+
+            const res2 = results.find(r => r._id.toString() === script2._id.toString());
+            expect(res2!.scriptReference).toBe('Script #ANON-POTTER-888');
         });
     });
 });
