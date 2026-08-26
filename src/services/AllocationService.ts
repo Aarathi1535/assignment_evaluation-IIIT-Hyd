@@ -558,6 +558,35 @@ export class AllocationService {
                 throw new HttpError('Allocation does not belong to the specified exam', 400);
             }
 
+            // Prevent reassignment of work that has already started or been graded
+            if (allocation.status !== AllocationStatus.PENDING) {
+                throw new HttpError('Cannot reassign allocation: grading/work has already started.', 400);
+            }
+
+            const gradeQuery: {
+                answerScript: mongoose.Types.ObjectId;
+                question?: number;
+                $or?: Array<{ question: null } | { question: { $exists: false } }>;
+            } = {
+                answerScript: allocation.answerScript
+            };
+            if (allocation.question !== undefined && allocation.question !== null) {
+                gradeQuery.question = allocation.question;
+            } else {
+                gradeQuery.$or = [
+                    { question: null },
+                    { question: { $exists: false } }
+                ];
+            }
+
+            const gradeExists = await Grade.findOne(gradeQuery).select('_id').session(session || null);
+            if (gradeExists) {
+                throw new HttpError(
+                    'Cannot reassign allocation: a grade already exists for this answer script and question.',
+                    400
+                );
+            }
+
             // 2. Fetch the exam to verify course/TAs
             const exam = await Exam.findById(allocation.exam).session(session || null);
             if (!exam) {

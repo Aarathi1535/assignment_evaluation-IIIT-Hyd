@@ -8,6 +8,7 @@ import Exam from '../models/Exam';
 import Course from '../models/Course';
 import User from '../models/User';
 import AuditLog from '../models/AuditLog';
+import Grade from '../models/Grade';
 
 // Mock NextAuth session
 let mockSessionUser: any = null;
@@ -55,6 +56,7 @@ describe('Manual Allocation Reassignment API & Transaction Tests (AE-088)', () =
         await AnswerScript.deleteMany({});
         await User.deleteMany({});
         await AuditLog.deleteMany({});
+        await Grade.deleteMany({});
 
         // Create Users
         await new User({ _id: professorId, name: 'Prof. Reassign', email: 'prof@iiit.ac.in', role: 'PROFESSOR', password: 'password123' }).save();
@@ -381,5 +383,123 @@ describe('Manual Allocation Reassignment API & Transaction Tests (AE-088)', () =
         // Assert that the whole allocation in DB was NOT modified and remains allocated to taId1
         const dbWhole = await Allocation.findById(wholeAllocId);
         expect(dbWhole!.ta.toString()).toBe(taId1.toString());
+    });
+
+    it('8. Reassignment of a non-PENDING allocation is rejected and makes no changes', async () => {
+        // Create an allocation for taId1 with status IN_PROGRESS
+        const allocation = await new Allocation({
+            exam: testExamId,
+            ta: taId1,
+            answerScript: scriptId1,
+            allocatedBy: professorId,
+            status: AllocationStatus.IN_PROGRESS,
+            rule: AllocationRule.EQUAL
+        }).save();
+
+        const req = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/reassign`, {
+            allocationId: allocation._id.toString(),
+            targetTaId: taId2.toString()
+        });
+
+        const res = await reassignPUT(req, makeContext(testExamId.toString()));
+        expect(res.status).toBe(400);
+
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Cannot reassign allocation: grading/work has already started');
+
+        // Verify database state: TA remains taId1
+        const dbAlloc = await Allocation.findById(allocation._id);
+        expect(dbAlloc!.ta.toString()).toBe(taId1.toString());
+
+        // Verify no audit log was created
+        const auditCount = await AuditLog.countDocuments({ action: 'ALLOCATION_REASSIGN' });
+        expect(auditCount).toBe(0);
+    });
+
+    it('9. Reassignment when a Grade already exists for the allocation is rejected and makes no changes', async () => {
+        // Create an allocation for taId1 with status PENDING, for a specific question (e.g., question 1)
+        const allocation = await new Allocation({
+            exam: testExamId,
+            ta: taId1,
+            answerScript: scriptId1,
+            allocatedBy: professorId,
+            status: AllocationStatus.PENDING,
+            rule: AllocationRule.QUESTION,
+            question: 1
+        }).save();
+
+        // Create a Grade document for the same answerScript and question
+        await Grade.create({
+            answerScript: scriptId1,
+            rubric: new mongoose.Types.ObjectId(),
+            gradedBy: professorId,
+            marksAwarded: [],
+            totalScore: 0,
+            isFinal: false,
+            question: 1
+        });
+
+        const req = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/reassign`, {
+            allocationId: allocation._id.toString(),
+            targetTaId: taId2.toString()
+        });
+
+        const res = await reassignPUT(req, makeContext(testExamId.toString()));
+        expect(res.status).toBe(400);
+
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Cannot reassign allocation: a grade already exists');
+
+        // Verify database state: TA remains taId1
+        const dbAlloc = await Allocation.findById(allocation._id);
+        expect(dbAlloc!.ta.toString()).toBe(taId1.toString());
+
+        // Verify no audit log was created
+        const auditCount = await AuditLog.countDocuments({ action: 'ALLOCATION_REASSIGN' });
+        expect(auditCount).toBe(0);
+    });
+
+    it('10. Reassignment of whole-script allocation when whole-script Grade exists is rejected', async () => {
+        // Create an allocation for taId1 with status PENDING (whole script, no question)
+        const allocation = await new Allocation({
+            exam: testExamId,
+            ta: taId1,
+            answerScript: scriptId1,
+            allocatedBy: professorId,
+            status: AllocationStatus.PENDING,
+            rule: AllocationRule.EQUAL
+        }).save();
+
+        // Create a whole-script Grade document (question is undefined)
+        await Grade.create({
+            answerScript: scriptId1,
+            rubric: new mongoose.Types.ObjectId(),
+            gradedBy: professorId,
+            marksAwarded: [],
+            totalScore: 0,
+            isFinal: false
+        });
+
+        const req = makeRequest(`http://localhost:3000/api/exams/${testExamId}/allocate/reassign`, {
+            allocationId: allocation._id.toString(),
+            targetTaId: taId2.toString()
+        });
+
+        const res = await reassignPUT(req, makeContext(testExamId.toString()));
+        expect(res.status).toBe(400);
+
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Cannot reassign allocation: a grade already exists');
+
+        // Verify database state: TA remains taId1
+        const dbAlloc = await Allocation.findById(allocation._id);
+        expect(dbAlloc!.ta.toString()).toBe(taId1.toString());
+
+        // Verify no audit log was created
+        const auditCount = await AuditLog.countDocuments({ action: 'ALLOCATION_REASSIGN' });
+        expect(auditCount).toBe(0);
     });
 });
