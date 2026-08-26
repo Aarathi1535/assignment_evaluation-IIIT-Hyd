@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
+import path from 'path';
 
 /**
  * Canonical Page Image Format supported for normalized ingestion assets.
@@ -137,7 +138,9 @@ export class DefaultPdfRenderer implements IPageRenderer {
         const loadingTask = pdfjsLib.getDocument({
             data,
             isEvalSupported: false,
-            useSystemFonts: true
+            useSystemFonts: false,
+            disableFontFace: true,
+            standardFontDataUrl: path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'standard_fonts') + '/'
         });
 
         const doc = await loadingTask.promise;
@@ -170,7 +173,9 @@ export class DefaultPdfRenderer implements IPageRenderer {
             const loadingTask = pdfjsLib.getDocument({
                 data,
                 isEvalSupported: false,
-                useSystemFonts: true
+                useSystemFonts: false,
+                disableFontFace: true,
+                standardFontDataUrl: path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'standard_fonts') + '/'
             });
 
             doc = await loadingTask.promise;
