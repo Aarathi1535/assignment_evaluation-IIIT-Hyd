@@ -8,18 +8,13 @@ import { HttpError } from '../lib/errors';
 
 export class AllocationService {
     /**
-     * Prepares the exam for allocation by enforcing the re-run contract:
-     * - Checks if grading has already commenced (status !== PENDING or Grade exists).
-     * - If so, throws a 400 HttpError.
-     * - Otherwise, deletes existing allocations for the exam to avoid stale records.
+     * Checks if grading has already commenced for the given exam.
+     * Throws 400 HttpError if grading has commenced or grades exist.
      */
-    static async prepareForAllocation(examId: string, session?: mongoose.ClientSession): Promise<void> {
-        if (!mongoose.Types.ObjectId.isValid(examId)) {
-            throw new HttpError('Invalid Exam ID format', 400);
-        }
-
-        const examObjectId = new mongoose.Types.ObjectId(examId);
-
+    static async checkGradingCommenced(
+        examObjectId: mongoose.Types.ObjectId,
+        session?: mongoose.ClientSession
+    ): Promise<void> {
         // Find existing allocations for the exam
         const existingAllocations = await Allocation.find({ exam: examObjectId }).session(session ?? null);
 
@@ -51,6 +46,22 @@ export class AllocationService {
                 );
             }
         }
+    }
+
+    /**
+     * Prepares the exam for allocation by enforcing the re-run contract:
+     * - Checks if grading has already commenced (status !== PENDING or Grade exists).
+     * - If so, throws a 400 HttpError.
+     * - Otherwise, deletes existing allocations for the exam to avoid stale records.
+     */
+    static async prepareForAllocation(examId: string, session?: mongoose.ClientSession): Promise<void> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+
+        await this.checkGradingCommenced(examObjectId, session);
 
         // Safe to clear existing allocations
         await Allocation.deleteMany({ exam: examObjectId }, { session });
@@ -69,6 +80,39 @@ export class AllocationService {
                 throw new HttpError(`User ${taId} is not a teaching assistant for this course`, 400);
             }
         }
+    }
+
+    /**
+     * Validates that exam.numberOfQuestions is a positive, non-null, finite integer.
+     */
+    static validateNumberOfQuestions(numQuestions: unknown): number {
+        if (
+            numQuestions === undefined ||
+            numQuestions === null ||
+            typeof numQuestions !== 'number' ||
+            isNaN(numQuestions) ||
+            numQuestions < 1 ||
+            !Number.isInteger(numQuestions)
+        ) {
+            throw new HttpError(`Invalid number of questions: ${numQuestions}`, 400);
+        }
+        return numQuestions as number;
+    }
+
+    /**
+     * Validates that seed is a finite integer.
+     */
+    static validateSeed(seed: unknown): number {
+        if (
+            seed === undefined ||
+            seed === null ||
+            typeof seed !== 'number' ||
+            !Number.isFinite(seed) ||
+            !Number.isInteger(seed)
+        ) {
+            throw new HttpError('Invalid seed: seed must be a finite integer number', 400);
+        }
+        return seed as number;
     }
 
     /**
@@ -125,35 +169,27 @@ export class AllocationService {
             await this.prepareForAllocation(examId, session);
 
             // Fetch eligible scripts
-            const eligibleScripts = await this.getEligibleScripts(examObjectId, session);
+            const { eligibleScripts } = await this.getEligibleAndExcludedScripts(examObjectId, session);
 
             if (eligibleScripts.length === 0) {
                 throw new HttpError('No eligible scripts found for allocation', 400);
             }
 
-            // Sort scripts lexicographically by Hex ID string to be deterministic
-            const sortedScripts = [...eligibleScripts].sort((a, b) =>
-                a._id.toString().localeCompare(b._id.toString())
+            const distribution = this.computeDistribution(
+                AllocationRule.EQUAL,
+                eligibleScripts,
+                taIds,
+                0
             );
 
-            // Sort TAs lexicographically to be deterministic
-            const sortedTAs = [...taIds].sort((a, b) => a.localeCompare(b));
-
-            const allocationsToCreate = [];
-
-            for (let i = 0; i < sortedScripts.length; i++) {
-                const script = sortedScripts[i];
-                const taId = sortedTAs[i % sortedTAs.length];
-
-                allocationsToCreate.push({
-                    exam: examObjectId,
-                    ta: new mongoose.Types.ObjectId(taId),
-                    answerScript: script._id,
-                    allocatedBy: new mongoose.Types.ObjectId(allocatedById),
-                    status: AllocationStatus.PENDING,
-                    rule: AllocationRule.EQUAL
-                });
-            }
+            const allocationsToCreate = distribution.map(d => ({
+                exam: examObjectId,
+                ta: new mongoose.Types.ObjectId(d.ta),
+                answerScript: new mongoose.Types.ObjectId(d.answerScript),
+                allocatedBy: new mongoose.Types.ObjectId(allocatedById),
+                status: AllocationStatus.PENDING,
+                rule: AllocationRule.EQUAL
+            }));
 
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
@@ -196,55 +232,35 @@ export class AllocationService {
         this.validateTeachingAssistants(course, taIds);
 
         // Validate Exam.numberOfQuestions
-        const numQuestions = exam.numberOfQuestions;
-        if (
-            numQuestions === undefined ||
-            numQuestions === null ||
-            typeof numQuestions !== 'number' ||
-            isNaN(numQuestions) ||
-            numQuestions < 1 ||
-            !Number.isInteger(numQuestions)
-        ) {
-            throw new HttpError(`Invalid number of questions: ${numQuestions}`, 400);
-        }
+        const numQuestions = this.validateNumberOfQuestions(exam.numberOfQuestions);
 
         return await this.runInTransaction(async (session) => {
             // Run re-run check/cleaning contract
             await this.prepareForAllocation(examId, session);
 
             // Fetch eligible scripts
-            const eligibleScripts = await this.getEligibleScripts(examObjectId, session);
+            const { eligibleScripts } = await this.getEligibleAndExcludedScripts(examObjectId, session);
 
             if (eligibleScripts.length === 0) {
                 throw new HttpError('No eligible scripts found for allocation', 400);
             }
 
-            // Sort scripts lexicographically by Hex ID string to be deterministic
-            const sortedScripts = [...eligibleScripts].sort((a, b) =>
-                a._id.toString().localeCompare(b._id.toString())
+            const distribution = this.computeDistribution(
+                AllocationRule.QUESTION,
+                eligibleScripts,
+                taIds,
+                numQuestions
             );
 
-            // Sort TAs lexicographically to be deterministic
-            const sortedTAs = [...taIds].sort((a, b) => a.localeCompare(b));
-
-            const allocationsToCreate = [];
-
-            // For every script, allocate questions 1..N
-            for (const script of sortedScripts) {
-                for (let q = 1; q <= numQuestions; q++) {
-                    const taId = sortedTAs[(q - 1) % sortedTAs.length];
-
-                    allocationsToCreate.push({
-                        exam: examObjectId,
-                        ta: new mongoose.Types.ObjectId(taId),
-                        answerScript: script._id,
-                        allocatedBy: new mongoose.Types.ObjectId(allocatedById),
-                        status: AllocationStatus.PENDING,
-                        rule: AllocationRule.QUESTION,
-                        question: q
-                    });
-                }
-            }
+            const allocationsToCreate = distribution.map(d => ({
+                exam: examObjectId,
+                ta: new mongoose.Types.ObjectId(d.ta),
+                answerScript: new mongoose.Types.ObjectId(d.answerScript),
+                allocatedBy: new mongoose.Types.ObjectId(allocatedById),
+                status: AllocationStatus.PENDING,
+                rule: AllocationRule.QUESTION,
+                question: d.question
+            }));
 
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
@@ -270,15 +286,7 @@ export class AllocationService {
         if (!taIds || taIds.length === 0) {
             throw new HttpError('At least one selected TA must be provided for allocation', 400);
         }
-        if (
-            seed === undefined ||
-            seed === null ||
-            typeof seed !== 'number' ||
-            !Number.isFinite(seed) ||
-            !Number.isInteger(seed)
-        ) {
-            throw new HttpError('Invalid seed: seed must be a finite integer number', 400);
-        }
+        this.validateSeed(seed);
 
         const examObjectId = new mongoose.Types.ObjectId(examId);
 
@@ -301,21 +309,119 @@ export class AllocationService {
             await this.prepareForAllocation(examId, session);
 
             // Fetch eligible scripts
-            const eligibleScripts = await this.getEligibleScripts(examObjectId, session);
+            const { eligibleScripts } = await this.getEligibleAndExcludedScripts(examObjectId, session);
 
             if (eligibleScripts.length === 0) {
                 throw new HttpError('No eligible scripts found for allocation', 400);
             }
 
-            // Sort scripts lexicographically by Hex ID string to be deterministic before shuffling
-            const sortedScripts = [...eligibleScripts].sort((a, b) =>
-                a._id.toString().localeCompare(b._id.toString())
+            const distribution = this.computeDistribution(
+                AllocationRule.RANDOM,
+                eligibleScripts,
+                taIds,
+                0,
+                seed
             );
 
-            // Sort TAs lexicographically to be deterministic
-            const sortedTAs = [...taIds].sort((a, b) => a.localeCompare(b));
+            const allocationsToCreate = distribution.map(d => ({
+                exam: examObjectId,
+                ta: new mongoose.Types.ObjectId(d.ta),
+                answerScript: new mongoose.Types.ObjectId(d.answerScript),
+                allocatedBy: new mongoose.Types.ObjectId(allocatedById),
+                status: AllocationStatus.PENDING,
+                rule: AllocationRule.RANDOM,
+                seed
+            }));
 
-            // Shuffle scripts using Fisher-Yates with seeded random
+            // Save allocations and return them
+            const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+            return createdAllocations;
+        });
+    }
+
+    /**
+     * Fetches all scripts for the exam and partitions them into eligible and excluded sets with reasons.
+     */
+    static async getEligibleAndExcludedScripts(
+        examObjectId: mongoose.Types.ObjectId,
+        session?: mongoose.ClientSession
+    ): Promise<{
+        eligibleScripts: IAnswerScript[];
+        excludedScripts: Array<{ scriptId: string; reason: string }>;
+    }> {
+        const allScripts = await AnswerScript.find({ exam: examObjectId }).session(session ?? null);
+
+        const eligibleScripts: IAnswerScript[] = [];
+        const excludedScripts: Array<{ scriptId: string; reason: string }> = [];
+
+        for (const script of allScripts) {
+            if (!script.isActive) {
+                excludedScripts.push({
+                    scriptId: script._id.toString(),
+                    reason: 'Inactive script'
+                });
+            } else if (!script.student) {
+                excludedScripts.push({
+                    scriptId: script._id.toString(),
+                    reason: 'Student not identified'
+                });
+            } else if (script.needsManualId) {
+                excludedScripts.push({
+                    scriptId: script._id.toString(),
+                    reason: script.manualIdReason || 'Needs manual identification'
+                });
+            } else {
+                eligibleScripts.push(script);
+            }
+        }
+
+        return { eligibleScripts, excludedScripts };
+    }
+
+    /**
+     * Pure function to compute deterministic allocation distribution based on selected rule.
+     */
+    static computeDistribution(
+        rule: AllocationRule,
+        eligibleScripts: IAnswerScript[],
+        taIds: string[],
+        numQuestions: number,
+        seed?: number
+    ): AllocationResult[] {
+        // Sort scripts lexicographically by Hex ID string to be deterministic
+        const sortedScripts = [...eligibleScripts].sort((a, b) =>
+            a._id.toString().localeCompare(b._id.toString())
+        );
+
+        // Sort TAs lexicographically to be deterministic
+        const sortedTAs = [...taIds].sort((a, b) => a.localeCompare(b));
+
+        const distribution: AllocationResult[] = [];
+
+        if (rule === AllocationRule.EQUAL) {
+            for (let i = 0; i < sortedScripts.length; i++) {
+                const script = sortedScripts[i];
+                const taId = sortedTAs[i % sortedTAs.length];
+                distribution.push({
+                    ta: taId,
+                    answerScript: script._id.toString()
+                });
+            }
+        } else if (rule === AllocationRule.QUESTION) {
+            for (const script of sortedScripts) {
+                for (let q = 1; q <= numQuestions; q++) {
+                    const taId = sortedTAs[(q - 1) % sortedTAs.length];
+                    distribution.push({
+                        ta: taId,
+                        answerScript: script._id.toString(),
+                        question: q
+                    });
+                }
+            }
+        } else if (rule === AllocationRule.RANDOM) {
+            if (seed === undefined || seed === null) {
+                throw new HttpError('Seed is required for random allocation', 400);
+            }
             const random = getSeededRandom(seed);
             const shuffledScripts = [...sortedScripts];
             for (let i = shuffledScripts.length - 1; i > 0; i--) {
@@ -324,28 +430,92 @@ export class AllocationService {
                 shuffledScripts[i] = shuffledScripts[j];
                 shuffledScripts[j] = temp;
             }
-
-            const allocationsToCreate = [];
-
             for (let i = 0; i < shuffledScripts.length; i++) {
                 const script = shuffledScripts[i];
                 const taId = sortedTAs[i % sortedTAs.length];
-
-                allocationsToCreate.push({
-                    exam: examObjectId,
-                    ta: new mongoose.Types.ObjectId(taId),
-                    answerScript: script._id,
-                    allocatedBy: new mongoose.Types.ObjectId(allocatedById),
-                    status: AllocationStatus.PENDING,
-                    rule: AllocationRule.RANDOM,
-                    seed
+                distribution.push({
+                    ta: taId,
+                    answerScript: script._id.toString()
                 });
             }
+        }
 
-            // Save allocations and return them
-            const createdAllocations = await Allocation.create(allocationsToCreate, { session });
-            return createdAllocations;
-        });
+        return distribution;
+    }
+
+    /**
+     * Safe, side-effect-free preview of allocations.
+     */
+    static async previewAllocation(
+        examId: string,
+        taIds: string[],
+        rule: AllocationRule,
+        seed?: number
+    ): Promise<PreviewAllocationResult> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+        if (!taIds || taIds.length === 0) {
+            throw new HttpError('At least one selected TA must be provided for allocation', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+
+        // Fetch Exam and Course
+        const exam = await Exam.findById(examObjectId);
+        if (!exam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const course = await Course.findById(exam.course);
+        if (!course) {
+            throw new HttpError('Course not found for this exam', 404);
+        }
+
+        // Validate that all provided TAs are registered on the course
+        this.validateTeachingAssistants(course, taIds);
+
+        // Check if grading has commenced
+        await this.checkGradingCommenced(examObjectId);
+
+        // Get eligible and excluded scripts
+        const { eligibleScripts, excludedScripts } = await this.getEligibleAndExcludedScripts(examObjectId);
+
+        if (eligibleScripts.length === 0) {
+            throw new HttpError('No eligible scripts found for allocation', 400);
+        }
+
+        let numQuestions = 0;
+        if (rule === AllocationRule.QUESTION) {
+            numQuestions = this.validateNumberOfQuestions(exam.numberOfQuestions);
+        } else if (rule === AllocationRule.RANDOM) {
+            this.validateSeed(seed);
+        }
+
+        // Compute the distribution
+        const distribution = this.computeDistribution(rule, eligibleScripts, taIds, numQuestions, seed);
+
+        // Calculate counts per TA
+        const allocationCounts: Record<string, number> = {};
+        for (const taId of taIds) {
+            allocationCounts[taId] = 0;
+        }
+        for (const d of distribution) {
+            allocationCounts[d.ta] = (allocationCounts[d.ta] || 0) + 1;
+        }
+
+        // Group exclusions by reason for blind-grading safety
+        const excludedCountsByReason: Record<string, number> = {};
+        for (const esc of excludedScripts) {
+            excludedCountsByReason[esc.reason] = (excludedCountsByReason[esc.reason] || 0) + 1;
+        }
+
+        return {
+            allocationCounts,
+            totalEligibleScripts: eligibleScripts.length,
+            totalExcludedScripts: excludedScripts.length,
+            excludedCountsByReason
+        };
     }
 
     /**
@@ -388,6 +558,19 @@ export class AllocationService {
             session.endSession();
         }
     }
+}
+
+export interface PreviewAllocationResult {
+    allocationCounts: Record<string, number>;
+    totalEligibleScripts: number;
+    totalExcludedScripts: number;
+    excludedCountsByReason: Record<string, number>;
+}
+
+export interface AllocationResult {
+    ta: string;
+    answerScript: string;
+    question?: number;
 }
 
 function getSeededRandom(seed: number): () => number {

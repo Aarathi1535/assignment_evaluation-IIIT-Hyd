@@ -7,6 +7,8 @@ import { HttpError } from '../../../../../lib/errors';
 import IngestionApprovalService from '../../../../../services/IngestionApprovalService';
 import AllocationService from '../../../../../services/AllocationService';
 import { AllocationRule } from '../../../../../models/Allocation';
+import Exam from '../../../../../models/Exam';
+import Course from '../../../../../models/Course';
 
 /**
  * POST /api/exams/[id]/allocate
@@ -126,6 +128,81 @@ export async function POST(
       success: true,
       message: 'Allocation completed successfully',
       data: resultData
+    }, { status: 200 });
+
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
+    return NextResponse.json({
+      success: false,
+      message,
+      data: null
+    }, { status });
+  }
+}
+
+/**
+ * GET /api/exams/[id]/allocate
+ *
+ * Retrieves the exam details (status, questions) and its course TAs
+ * to configure allocation rules.
+ */
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const auth = await requirePermission(Permission.ALLOCATE_SCRIPTS);
+  if (!auth.authorized) {
+    return auth.response;
+  }
+
+  const { id } = await context.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return NextResponse.json({
+      success: false,
+      message: 'Invalid ID format',
+      data: null
+    }, { status: 400 });
+  }
+
+  try {
+    await connectDB();
+
+    const exam = await Exam.findOne({ _id: id, isActive: true }).lean();
+    if (!exam) {
+      return NextResponse.json({
+        success: false,
+        message: 'Exam not found',
+        data: null
+      }, { status: 404 });
+    }
+
+    // Force register User model for population reference safety
+    const course = await Course.findOne({ _id: exam.course, isActive: true })
+      .populate('teachingAssistants', 'name email role isActive')
+      .lean();
+
+    if (!course) {
+      return NextResponse.json({
+        success: false,
+        message: 'Course not found for this exam',
+        data: null
+      }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Allocation settings retrieved successfully',
+      data: {
+        exam: {
+          _id: exam._id.toString(),
+          title: exam.title,
+          numberOfQuestions: exam.numberOfQuestions,
+          ingestionApprovalStatus: exam.ingestionApprovalStatus
+        },
+        teachingAssistants: course.teachingAssistants || []
+      }
     }, { status: 200 });
 
   } catch (error: unknown) {

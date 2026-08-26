@@ -56,7 +56,9 @@ describe('AE-064 Manual Correction Backend Endpoints', () => {
 
     afterAll(async () => {
         await mongoose.disconnect();
-        await replSet.stop();
+        if (replSet) {
+            await replSet.stop();
+        }
 
         // Reconnect to global fallback db
         const fallbackUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/test-placeholder-safety';

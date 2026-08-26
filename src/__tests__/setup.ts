@@ -19,7 +19,7 @@ beforeAll(async () => {
   process.env.ORIGINAL_STORAGE_KEY_ID = process.env.ORIGINAL_STORAGE_KEY_ID || 'v1';
 
   // Start in-memory MongoDB
-  mongoServer = await MongoMemoryServer.create({ instance: { launchTimeout: 60000 } });
+  mongoServer = await MongoMemoryServer.create({ instance: { launchTimeout: 120000 } });
   const mongoUri = mongoServer.getUri();
 
   // Force MONGODB_URI to point to the in-memory database
