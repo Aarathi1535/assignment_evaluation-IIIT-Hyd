@@ -5,6 +5,7 @@ import Exam, { ExamStatus } from '../models/Exam';
 import User, { UserRole } from '../models/User';
 import AnswerScript from '../models/AnswerScript';
 import Allocation, { AllocationStatus, AllocationRule } from '../models/Allocation';
+import AuditLog from '../models/AuditLog';
 
 let mockSessionUser: any = null;
 
@@ -407,6 +408,116 @@ describe('TA Allocation Claim and Release API Tests (AE-096)', () => {
       const body = await res.json();
       expect(body.success).toBe(true);
       expect(body.data.status).toBe(AllocationStatus.PENDING);
+    });
+  });
+
+  describe('Audit Logging for Claim and Release', () => {
+    beforeEach(() => {
+      mockSessionUser = {
+        id: ta1._id.toString(),
+        email: ta1.email,
+        name: ta1.name,
+        role: UserRole.TA
+      };
+    });
+
+    it('should create an audit log on successful claim transition', async () => {
+      await AuditLog.deleteMany({});
+
+      const res = await claimPOST(new Request('http://localhost'), {
+        params: Promise.resolve({ id: allocPendingWhole._id.toString() })
+      });
+      expect(res.status).toBe(200);
+
+      const auditEntries = await AuditLog.find({ action: 'ALLOCATION_CLAIM' });
+      expect(auditEntries).toHaveLength(1);
+      const audit = auditEntries[0];
+      expect(audit.action).toBe('ALLOCATION_CLAIM');
+      expect(audit.user.toString()).toBe(ta1._id.toString());
+      expect(audit.outcome).toBe('SUCCESS');
+      expect(audit.entityId?.toString()).toBe(allocPendingWhole._id.toString());
+      expect(audit.entityType).toBe('Allocation');
+      expect(audit.details).toEqual(expect.objectContaining({
+        examId: exam._id.toString(),
+        answerScriptId: scriptWhole._id.toString(),
+        taId: ta1._id.toString()
+      }));
+    });
+
+    it('should create an audit log on successful TA self-release transition', async () => {
+      await AuditLog.deleteMany({});
+
+      const res = await releasePOST(new Request('http://localhost'), {
+        params: Promise.resolve({ id: allocInProgress._id.toString() })
+      });
+      expect(res.status).toBe(200);
+
+      const auditEntries = await AuditLog.find({ action: 'ALLOCATION_RELEASE' });
+      expect(auditEntries).toHaveLength(1);
+      const audit = auditEntries[0];
+      expect(audit.action).toBe('ALLOCATION_RELEASE');
+      expect(audit.user.toString()).toBe(ta1._id.toString());
+      expect(audit.outcome).toBe('SUCCESS');
+      expect(audit.entityId?.toString()).toBe(allocInProgress._id.toString());
+      expect(audit.entityType).toBe('Allocation');
+      expect(audit.details).toEqual(expect.objectContaining({
+        owningTaId: ta1._id.toString(),
+        actingUserId: ta1._id.toString(),
+        isOverride: false
+      }));
+    });
+
+    it('should create an audit log on successful Professor override release transition', async () => {
+      mockSessionUser = {
+        id: prof._id.toString(),
+        email: prof.email,
+        name: prof.name,
+        role: UserRole.PROFESSOR
+      };
+
+      await AuditLog.deleteMany({});
+
+      const res = await releasePOST(new Request('http://localhost'), {
+        params: Promise.resolve({ id: allocInProgress._id.toString() })
+      });
+      expect(res.status).toBe(200);
+
+      const auditEntries = await AuditLog.find({ action: 'ALLOCATION_RELEASE' });
+      expect(auditEntries).toHaveLength(1);
+      const audit = auditEntries[0];
+      expect(audit.action).toBe('ALLOCATION_RELEASE');
+      expect(audit.user.toString()).toBe(prof._id.toString());
+      expect(audit.outcome).toBe('SUCCESS');
+      expect(audit.entityId?.toString()).toBe(allocInProgress._id.toString());
+      expect(audit.details).toEqual(expect.objectContaining({
+        owningTaId: ta1._id.toString(),
+        actingUserId: prof._id.toString(),
+        isOverride: true
+      }));
+    });
+
+    it('should not create an audit log when claim fails', async () => {
+      await AuditLog.deleteMany({});
+
+      const res = await claimPOST(new Request('http://localhost'), {
+        params: Promise.resolve({ id: allocInProgress._id.toString() })
+      });
+      expect(res.status).toBe(409);
+
+      const auditEntries = await AuditLog.find({ action: 'ALLOCATION_CLAIM' });
+      expect(auditEntries).toHaveLength(0);
+    });
+
+    it('should not create an audit log when release fails', async () => {
+      await AuditLog.deleteMany({});
+
+      const res = await releasePOST(new Request('http://localhost'), {
+        params: Promise.resolve({ id: allocCompleted._id.toString() })
+      });
+      expect(res.status).toBe(400);
+
+      const auditEntries = await AuditLog.find({ action: 'ALLOCATION_RELEASE' });
+      expect(auditEntries).toHaveLength(0);
     });
   });
 });
