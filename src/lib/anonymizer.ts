@@ -4,10 +4,11 @@ import crypto from 'crypto';
 import Exam from '../models/Exam';
 import StudentMapping from '../models/StudentMapping';
 import AnswerScript from '../models/AnswerScript';
+import { UserRole } from '../constants/permissions';
 
 export interface ViewerContext {
     id: string;
-    role: string;
+    role?: UserRole | string;
 }
 
 export class Anonymizer {
@@ -17,19 +18,35 @@ export class Anonymizer {
      * but the exam is set to blind-grading, we anonymize.
      */
     static async isBlindActive(examId?: string | mongoose.Types.ObjectId, viewer?: ViewerContext): Promise<boolean> {
-        if (!examId) return false;
-        
+        // Professor and Admin roles are exempt from anonymization (privileged roles)
+        if (viewer && (viewer.role === UserRole.PROFESSOR || viewer.role === UserRole.ADMIN)) {
+            return false;
+        }
+
+        // Treat invalid, missing, unrecognized viewer roles as non-privileged and fail closed
+        // (If viewer or viewer.role is missing/unrecognized, we resolve in the privacy-safe direction)
+        const isViewerRoleRecognized = !!(
+            viewer &&
+            viewer.role &&
+            Object.values(UserRole).includes(viewer.role as UserRole)
+        );
+
+        if (!isViewerRoleRecognized) {
+            return true;
+        }
+
+        // If examId is missing or unresolved, fail closed
+        if (!examId) {
+            return true;
+        }
+
         const exam = await Exam.findById(examId).lean();
-        if (!exam || !exam.blindGrading) {
-            return false;
+        // If Exam cannot be resolved or is set to blindGrading, anonymize
+        if (!exam || exam.blindGrading) {
+            return true;
         }
 
-        // Professor and Admin roles are exempt from anonymization
-        if (viewer && (viewer.role === 'PROFESSOR' || viewer.role === 'ADMIN')) {
-            return false;
-        }
-
-        return true;
+        return false;
     }
 
     /**
@@ -43,7 +60,11 @@ export class Anonymizer {
         if (!script) return {};
 
         // Convert mongoose documents to plain objects
-        const scriptObj = typeof script.toObject === 'function' ? script.toObject() : script;
+        let scriptObj = typeof script.toObject === 'function' ? script.toObject() : script;
+
+        if (scriptObj instanceof mongoose.Types.ObjectId || (scriptObj && typeof scriptObj === 'object' && !scriptObj._id && mongoose.Types.ObjectId.isValid(scriptObj.toString())) || (typeof scriptObj === 'string' && mongoose.Types.ObjectId.isValid(scriptObj))) {
+            scriptObj = { _id: scriptObj };
+        }
 
         const examId = scriptObj.exam?._id || scriptObj.exam;
         const examIdStr = examId?.toString();
@@ -173,7 +194,7 @@ export class Anonymizer {
 
         if (isBlind) {
             let serializedScript = gradeObj.answerScript;
-            if (scriptObj && typeof scriptObj === 'object') {
+            if (scriptObj) {
                 serializedScript = await this.serializeAnswerScript(scriptObj, viewer, anonymousIdMap);
             }
 

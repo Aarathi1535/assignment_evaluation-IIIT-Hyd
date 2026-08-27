@@ -537,4 +537,115 @@ describe('AE-090 Anonymization Serializer Tests', () => {
             expect(res2!.scriptReference).toBe('Script #ANON-POTTER-888');
         });
     });
+
+    describe('E. AE-093 Fail-Closed Privacy & Security Verification Tests', () => {
+        it('FAIL-CLOSED: should anonymize script and omit all PII-bearing fields when the referenced exam is missing/unresolvable', async () => {
+            const missingExamId = new mongoose.Types.ObjectId();
+            const scriptWithMissingExam = await AnswerScript.create({
+                exam: missingExamId,
+                student: studentUser._id,
+                filePath: '/scans/potions/missing_exam.pdf',
+                filename: 'missing_exam.pdf',
+                isActive: true,
+                candidateStudentId: `${missingExamId}:${studentUser._id}`,
+                qrStudentId: 'QR-POTTER',
+                omrStudentId: 'OMR-POTTER',
+                identificationHistory: [{ identificationSource: 'QR', identificationStatus: 'IDENTIFIED', student: studentUser._id }],
+                manualIdReason: 'NO_CODE_FOUND',
+                batchId: 'batch-999'
+            });
+
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+            const result = await Anonymizer.serializeAnswerScript(scriptWithMissingExam, viewer);
+
+            // Assert that the result is still anonymized and fits the allowed allowlist
+            const allowedKeys = [
+                '_id',
+                'exam',
+                'anonymousId',
+                'scriptReference',
+                'startPageNumber',
+                'endPageNumber',
+                'pageCount',
+                'isActive',
+                'createdAt',
+                'updatedAt'
+            ];
+            expect(Object.keys(result).sort()).toEqual(allowedKeys.sort());
+
+            // Explicitly assert that PII-bearing fields are absent
+            expect(result.student).toBeUndefined();
+            expect(result.filename).toBeUndefined();
+            expect(result.filePath).toBeUndefined();
+            expect(result.qrStudentId).toBeUndefined();
+            expect(result.omrStudentId).toBeUndefined();
+            expect(result.candidateStudentId).toBeUndefined();
+            expect(result.identificationHistory).toBeUndefined();
+            expect(result.manualIdReason).toBeUndefined();
+            expect(result.batchId).toBeUndefined();
+        });
+
+        it('FAIL-CLOSED: should anonymize script when viewer role is unrecognized or missing', async () => {
+            // Unrecognized role
+            const unrecognizedViewer = { id: taUser._id.toString(), role: 'INVALID_ROLE' };
+            const resultUnrecognized = await Anonymizer.serializeAnswerScript(answerScript, unrecognizedViewer as any);
+            expect(resultUnrecognized.anonymousId).toBe('ANON-POTTER-777');
+            expect(resultUnrecognized.student).toBeUndefined();
+            expect(resultUnrecognized.filePath).toBeUndefined();
+
+            // Missing/undefined role
+            const missingRoleViewer = { id: taUser._id.toString() };
+            const resultMissing = await Anonymizer.serializeAnswerScript(answerScript, missingRoleViewer as any);
+            expect(resultMissing.anonymousId).toBe('ANON-POTTER-777');
+            expect(resultMissing.student).toBeUndefined();
+            expect(resultMissing.filePath).toBeUndefined();
+        });
+
+        it('FAIL-CLOSED: should anonymize grade output and return safe placeholder when answerScript is missing/unresolvable', async () => {
+            const missingScriptId = new mongoose.Types.ObjectId();
+            const gradeWithMissingScript = await Grade.create({
+                answerScript: missingScriptId,
+                rubric: new mongoose.Types.ObjectId(),
+                gradedBy: taUser._id,
+                marksAwarded: [{ criterionName: 'Accuracy', score: 10, feedback: 'Good.' }],
+                totalScore: 10,
+                feedback: 'Nice',
+                isFinal: false,
+                question: 0
+            });
+
+            const viewer = { id: taUser._id.toString(), role: UserRole.TA };
+            const result = await Anonymizer.serializeGrade(gradeWithMissingScript, viewer);
+
+            // Assert Grade fields are allowlisted and answerScript reference is not exposed raw
+            const allowedGradeKeys = [
+                '_id',
+                'answerScript',
+                'rubric',
+                'marksAwarded',
+                'totalScore',
+                'feedback',
+                'isFinal',
+                'question',
+                'createdAt',
+                'updatedAt'
+            ];
+            for (const key of Object.keys(result)) {
+                expect(allowedGradeKeys).toContain(key);
+            }
+
+            expect(result.answerScript).toBeDefined();
+            // Assert no PII or raw unresolved document is returned
+            expect(result.answerScript.student).toBeUndefined();
+            expect(result.answerScript.filePath).toBeUndefined();
+            expect(result.answerScript.filename).toBeUndefined();
+            expect(result.answerScript.qrStudentId).toBeUndefined();
+            expect(result.answerScript.omrStudentId).toBeUndefined();
+            expect(result.answerScript.candidateStudentId).toBeUndefined();
+            // Should return a safe placeholder reference
+            expect(result.answerScript.scriptReference).toMatch(
+                /^Script #UNASSIGNED-(?:[A-F0-9]{6}|UNKNOWN)$/
+            );
+        });
+    });
 });

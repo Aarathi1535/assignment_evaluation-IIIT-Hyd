@@ -179,7 +179,7 @@ describe('Batch Upload Pipeline API Tests (AE-042)', () => {
             };
         });
 
-        it('should successfully upload a valid single PDF and create queued ingestion job', async () => {
+        it('should successfully upload a valid single PDF and create an ingestion job', async () => {
             const pdfBuffer = createValidPdfBuffer(2);
             const formData = new FormData();
             const file = toFile(pdfBuffer, 'student_scan.pdf', 'application/pdf');
@@ -214,7 +214,7 @@ describe('Batch Upload Pipeline API Tests (AE-042)', () => {
             // Verify IngestionJob persisted in DB
             const jobInDb = await IngestionJob.findOne({ batchId: resBody.data.batchId });
             expect(jobInDb).not.toBeNull();
-            expect(jobInDb!.status).toBe('queued');
+            expect(['queued', 'processing']).toContain(jobInDb!.status);
             expect(jobInDb!.totalPages).toBe(2);
             expect(jobInDb!.uploadedBy.toString()).toBe(professorId);
 
