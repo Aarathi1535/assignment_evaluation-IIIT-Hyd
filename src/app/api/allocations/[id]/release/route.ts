@@ -18,17 +18,15 @@ export async function POST(
 ) {
   // Check Permission.GRADE_SCRIPT (TAs, Admins)
   const auth = await requirePermission(Permission.GRADE_SCRIPT);
-  let isAuthorized = auth.authorized;
   let user = auth.user;
 
-  if (!isAuthorized) {
+  if (!auth.authorized) {
     // If not authorized for GRADE_SCRIPT, check ALLOCATE_SCRIPTS (Professors)
     const profAuth = await requirePermission(Permission.ALLOCATE_SCRIPTS);
     if (profAuth.authorized) {
-      isAuthorized = true;
       user = profAuth.user;
     } else {
-      return auth.response;
+      return profAuth.response;
     }
   }
 
@@ -53,6 +51,14 @@ export async function POST(
       user!.id,
       isBackupOperator
     );
+
+    if (!updatedAllocation) {
+      return NextResponse.json({
+        success: false,
+        message: 'Allocation not found or not in progress',
+        data: null
+      }, { status: 404 });
+    }
 
     return NextResponse.json({
       success: true,
