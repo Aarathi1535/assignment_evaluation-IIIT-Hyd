@@ -686,6 +686,154 @@ export class AllocationService {
             session.endSession();
         }
     }
+
+    /**
+     * Claims a PENDING allocation for the given TA, changing status to IN_PROGRESS.
+     * This update is atomic and audit-logged.
+     */
+    static async claimAllocation(
+        allocationId: string,
+        taId: string
+    ): Promise<IAllocation> {
+        if (!mongoose.Types.ObjectId.isValid(allocationId)) {
+            throw new HttpError('Invalid Allocation ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(taId)) {
+            throw new HttpError('Invalid TA ID format', 400);
+        }
+
+        const allocationObjectId = new mongoose.Types.ObjectId(allocationId);
+        const taObjectId = new mongoose.Types.ObjectId(taId);
+
+        return await this.runInTransaction(async (session) => {
+            const allocation = await Allocation.findOneAndUpdate(
+                {
+                    _id: allocationObjectId,
+                    ta: taObjectId,
+                    status: AllocationStatus.PENDING
+                },
+                {
+                    $set: { status: AllocationStatus.IN_PROGRESS }
+                },
+                { new: true, session }
+            );
+
+            if (!allocation) {
+                const exists = await Allocation.findById(allocationObjectId).session(session || null);
+                if (!exists) {
+                    throw new HttpError('Allocation not found', 404);
+                }
+                if (exists.ta.toString() !== taId) {
+                    throw new HttpError('Forbidden: This allocation belongs to another TA', 403);
+                }
+                if (exists.status === AllocationStatus.IN_PROGRESS) {
+                    throw new HttpError('Allocation is already in progress', 409);
+                }
+                if (exists.status === AllocationStatus.COMPLETED) {
+                    throw new HttpError('Cannot claim a completed allocation', 400);
+                }
+                throw new HttpError('Failed to claim allocation', 400);
+            }
+
+            // Write audit log inside the transaction
+            await AuditLog.create([{
+                user: taObjectId,
+                action: 'ALLOCATION_CLAIM',
+                outcome: 'SUCCESS',
+                entityId: allocationObjectId,
+                entityType: 'Allocation',
+                details: {
+                    examId: allocation.exam.toString(),
+                    answerScriptId: allocation.answerScript.toString(),
+                    question: allocation.question,
+                    taId: taId
+                }
+            }], { session });
+
+            return allocation;
+        });
+    }
+
+    /**
+     * Releases an IN_PROGRESS allocation back to PENDING.
+     * This update is atomic and audit-logged.
+     */
+    static async releaseAllocation(
+        allocationId: string,
+        taId: string,
+        isBackupOperator = false
+    ): Promise<IAllocation> {
+        if (!mongoose.Types.ObjectId.isValid(allocationId)) {
+            throw new HttpError('Invalid Allocation ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(taId)) {
+            throw new HttpError('Invalid TA ID format', 400);
+        }
+
+        const allocationObjectId = new mongoose.Types.ObjectId(allocationId);
+        const taObjectId = new mongoose.Types.ObjectId(taId);
+
+        const query: {
+            _id: mongoose.Types.ObjectId;
+            status: AllocationStatus;
+            ta?: mongoose.Types.ObjectId;
+        } = {
+            _id: allocationObjectId,
+            status: AllocationStatus.IN_PROGRESS
+        };
+        if (!isBackupOperator) {
+            query.ta = taObjectId;
+        }
+
+        return await this.runInTransaction(async (session) => {
+            const allocation = await Allocation.findOneAndUpdate(
+                query,
+                {
+                    $set: { status: AllocationStatus.PENDING }
+                },
+                { new: true, session }
+            );
+
+            if (!allocation) {
+                const exists = await Allocation.findById(allocationObjectId).session(session || null);
+                if (!exists) {
+                    throw new HttpError('Allocation not found', 404);
+                }
+                if (!isBackupOperator && exists.ta.toString() !== taId) {
+                    throw new HttpError('Forbidden: This allocation belongs to another TA', 403);
+                }
+                if (exists.status === AllocationStatus.PENDING) {
+                    throw new HttpError('Allocation is already pending', 400);
+                }
+                if (exists.status === AllocationStatus.COMPLETED) {
+                    throw new HttpError('Cannot release a completed allocation', 400);
+                }
+                throw new HttpError('Failed to release allocation', 400);
+            }
+
+            const owningTaId = allocation.ta.toString();
+            const isOverride = owningTaId !== taId;
+
+            // Write audit log inside the transaction
+            await AuditLog.create([{
+                user: taObjectId,
+                action: 'ALLOCATION_RELEASE',
+                outcome: 'SUCCESS',
+                entityId: allocationObjectId,
+                entityType: 'Allocation',
+                details: {
+                    examId: allocation.exam.toString(),
+                    answerScriptId: allocation.answerScript.toString(),
+                    question: allocation.question,
+                    owningTaId,
+                    actingUserId: taId,
+                    isOverride
+                }
+            }], { session });
+
+            return allocation;
+        });
+    }
 }
 
 export interface PreviewAllocationResult {
