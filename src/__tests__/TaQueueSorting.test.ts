@@ -273,9 +273,9 @@ describe('AE-097a TA Work Queue Sorting API', () => {
 
       const body = await res.json();
       expect(body.success).toBe(true);
-      expect(body.data).toHaveLength(3);
+      expect(body.data.allocations).toHaveLength(3);
 
-      const returnedIds = body.data.map((a: any) => a._id);
+      const returnedIds = body.data.allocations.map((a: any) => a._id);
       expect(returnedIds).toContain(allocA._id.toString());
       expect(returnedIds).toContain(allocB._id.toString());
       expect(returnedIds).toContain(allocC._id.toString());
@@ -288,8 +288,8 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data).toHaveLength(1);
-      expect(body.data[0]._id).toBe(allocB._id.toString());
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.allocations[0]._id).toBe(allocB._id.toString());
     });
 
     it('should support status filtering', async () => {
@@ -298,8 +298,8 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data).toHaveLength(1);
-      expect(body.data[0]._id).toBe(allocC._id.toString());
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.allocations[0]._id).toBe(allocC._id.toString());
     });
 
     it('should return 400 Bad Request for invalid examId format', async () => {
@@ -331,11 +331,11 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data).toHaveLength(3);
+      expect(body.data.allocations).toHaveLength(3);
       // Order: A (oldest, 10m ago) -> C (middle, 5m ago) -> B (newest, 1m ago)
-      expect(body.data[0]._id).toBe(allocA._id.toString());
-      expect(body.data[1]._id).toBe(allocC._id.toString());
-      expect(body.data[2]._id).toBe(allocB._id.toString());
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations[1]._id).toBe(allocC._id.toString());
+      expect(body.data.allocations[2]._id).toBe(allocB._id.toString());
     });
 
     it('should support explicit oldest sorting via sort=oldest', async () => {
@@ -344,9 +344,9 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data[0]._id).toBe(allocA._id.toString());
-      expect(body.data[1]._id).toBe(allocC._id.toString());
-      expect(body.data[2]._id).toBe(allocB._id.toString());
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations[1]._id).toBe(allocC._id.toString());
+      expect(body.data.allocations[2]._id).toBe(allocB._id.toString());
     });
 
     it('should support explicit oldest-first sorting via sort=oldest-first', async () => {
@@ -355,7 +355,7 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
     });
 
     it('should support explicit sorting via sortBy=createdAt', async () => {
@@ -364,7 +364,7 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
     });
 
     it('should return HTTP 400 Bad Request for any invalid sort value (e.g. difficulty)', async () => {
@@ -389,20 +389,19 @@ describe('AE-097a TA Work Queue Sorting API', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data).toHaveLength(2); // allocA, allocC
-      expect(body.data[0]._id).toBe(allocA._id.toString());
-      expect(body.data[1]._id).toBe(allocC._id.toString());
+      expect(body.data.allocations).toHaveLength(2); // allocA, allocC
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations[1]._id).toBe(allocC._id.toString());
     });
 
     it('should sort correctly in tandem with status filtering', async () => {
-      // allocA: PENDING (10m ago), allocC: COMPLETED (5m ago) - wait, only allocA is PENDING for TA1
       const req = new Request(`http://localhost:3000/api/allocations?status=PENDING&sort=oldest`);
       const res = await allocationsGET(req as any);
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data).toHaveLength(1);
-      expect(body.data[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
     });
   });
 
@@ -417,13 +416,12 @@ describe('AE-097a TA Work Queue Sorting API', () => {
     });
 
     it('should anonymize blind-graded exams and exclude all PII attributes', async () => {
-      // allocA is examBlind
       const req = new Request(`http://localhost:3000/api/allocations?examId=${examBlind._id.toString()}`);
       const res = await allocationsGET(req as any);
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      const answerScriptObj = body.data[0].answerScript;
+      const answerScriptObj = body.data.allocations[0].answerScript;
 
       expect(answerScriptObj.anonymousId).toBe('ANON-POTTER-777');
       expect(answerScriptObj.scriptReference).toBe('Script #ANON-POTTER-777');
@@ -450,17 +448,96 @@ describe('AE-097a TA Work Queue Sorting API', () => {
     });
 
     it('should return un-anonymized answer script details for non-blind exams', async () => {
-      // allocB is examNonBlind
       const req = new Request(`http://localhost:3000/api/allocations?examId=${examNonBlind._id.toString()}`);
       const res = await allocationsGET(req as any);
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      const answerScriptObj = body.data[0].answerScript;
+      const answerScriptObj = body.data.allocations[0].answerScript;
 
       expect(answerScriptObj.student.toString()).toBe(studentUser._id.toString());
       expect(answerScriptObj.qrStudentId).toBe('QR-HARRY');
       expect(answerScriptObj.omrStudentId).toBe('OMR-HARRY');
+    });
+  });
+
+  describe('Pagination & Sorting Integration', () => {
+    beforeEach(() => {
+      mockSessionUser = {
+        id: taUser1._id.toString(),
+        email: taUser1.email,
+        name: taUser1.name,
+        role: UserRole.TA
+      };
+    });
+
+    it('should return paginated results when limit is provided', async () => {
+      const req = new Request('http://localhost:3000/api/allocations?limit=2&page=1&sort=oldest');
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.data.allocations).toHaveLength(2);
+      expect(body.data.pagination.total).toBe(3);
+      expect(body.data.pagination.page).toBe(1);
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
+      expect(body.data.allocations[1]._id).toBe(allocC._id.toString());
+    });
+
+    it('should return the second page of results correctly and verify non-overlapping records and complete metadata', async () => {
+      const req = new Request('http://localhost:3000/api/allocations?limit=2&page=2&sort=oldest');
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.allocations[0]._id).toBe(allocB._id.toString());
+
+      // Validate all pagination metadata properties
+      expect(body.data.pagination).toEqual({
+        page: 2,
+        limit: 2,
+        total: 3,
+        totalPages: 2,
+        hasNextPage: false,
+        hasPreviousPage: true
+      });
+    });
+
+    it('should sort correctly and paginate in tandem with a status filter', async () => {
+      // allocA: PENDING (10m ago), allocB: IN_PROGRESS (1m ago), allocC: COMPLETED (5m ago)
+      // When filtering by PENDING, only allocA matches.
+      const req = new Request('http://localhost:3000/api/allocations?status=PENDING&page=1&limit=2');
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+
+      const body = await res.json();
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.allocations[0]._id).toBe(allocA._id.toString());
+      expect(body.data.pagination).toEqual({
+        page: 1,
+        limit: 2,
+        total: 1,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false
+      });
+    });
+
+    it('should reject invalid page and limit values with HTTP 400', async () => {
+      const invalidPages = ['0', '-5', 'abc', '1.5'];
+      for (const p of invalidPages) {
+        const req = new Request(`http://localhost:3000/api/allocations?page=${p}`);
+        const res = await allocationsGET(req as any);
+        expect(res.status).toBe(400);
+      }
+
+      const invalidLimits = ['0', '-10', 'xyz', '2.5'];
+      for (const l of invalidLimits) {
+        const req = new Request(`http://localhost:3000/api/allocations?limit=${l}`);
+        const res = await allocationsGET(req as any);
+        expect(res.status).toBe(400);
+      }
     });
   });
 });
