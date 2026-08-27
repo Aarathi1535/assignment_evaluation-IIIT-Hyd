@@ -27,32 +27,48 @@ interface Allocation {
   answerScript: AnswerScript | null;
 }
 
+interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
 export default function TaDashboardPage() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchAllocations = async () => {
+  const fetchAllocations = async (pageToFetch: number) => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/allocations');
+      const res = await fetch(`/api/allocations?page=${pageToFetch}&limit=20`);
       const data = await res.json();
       if (res.ok) {
-        setAllocations(data.data || []);
+        setAllocations(data.data?.allocations || []);
+        setPagination(data.data?.pagination || null);
+        setCurrentPage(pageToFetch);
       } else {
         setError(data.message || 'Failed to retrieve allocations');
+        setAllocations([]);
+        setPagination(null);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+      setAllocations([]);
+      setPagination(null);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchAllocations();
+    fetchAllocations(1);
   }, []);
 
   // Compute stats
@@ -97,7 +113,7 @@ export default function TaDashboardPage() {
 
   const quickActions = (
     <>
-      <Button variant="outline" size="md" onClick={fetchAllocations}>
+      <Button variant="outline" size="md" onClick={() => fetchAllocations(currentPage)}>
         <Clock className="h-4 w-4 text-slate-500" />
         <span>Refresh Queue</span>
       </Button>
@@ -125,7 +141,7 @@ export default function TaDashboardPage() {
       quickActions={quickActions}
     >
       <div className="space-y-6">
-        {/* Error State */}
+        {/* Error State Banner */}
         {error && (
           <div className="p-4 rounded-brand bg-rose-50 border border-rose-100 flex gap-3 text-sm text-rose-700 font-medium shadow-xs">
             <AlertCircle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
@@ -141,7 +157,7 @@ export default function TaDashboardPage() {
               <span>Assigned Grading Queue</span>
             </h2>
             <span className="text-xs font-semibold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
-              {allocations.length} Items
+              {pagination ? pagination.total : allocations.length} Items
             </span>
           </div>
 
@@ -149,6 +165,11 @@ export default function TaDashboardPage() {
             <div className="flex flex-col items-center justify-center p-12 bg-white">
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-brand-primary" />
               <span className="text-sm font-semibold text-slate-500 mt-3">Loading queue...</span>
+            </div>
+          ) : error ? (
+            <div className="p-12 text-center bg-white flex flex-col items-center justify-center">
+              <AlertCircle className="h-10 w-10 text-rose-500 mb-3" />
+              <span className="text-sm font-semibold text-slate-750">{error}</span>
             </div>
           ) : allocations.length === 0 ? (
             <div className="p-6 bg-white">
@@ -159,85 +180,117 @@ export default function TaDashboardPage() {
               />
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500 text-2xs uppercase tracking-wider font-extrabold select-none">
-                    <th className="px-6 py-4">Script Reference / Anonymous ID</th>
-                    <th className="px-6 py-4">Exam Context</th>
-                    <th className="px-6 py-4">Grading Mode / Context</th>
-                    <th className="px-6 py-4 text-center">Status</th>
-                    <th className="px-6 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {allocations.map((alloc) => {
-                    const script = alloc.answerScript;
-                    const scriptRef = script?.scriptReference || script?.anonymousId || 'Unassigned Script';
-                    const isQuestionWise = alloc.question !== undefined && alloc.question !== null;
-                    const targetUrl = script
-                      ? isQuestionWise
-                        ? `/grading/${script._id}/question/${alloc.question}`
-                        : `/grading/${script._id}`
-                      : '#';
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500 text-2xs uppercase tracking-wider font-extrabold select-none">
+                      <th className="px-6 py-4">Script Reference / Anonymous ID</th>
+                      <th className="px-6 py-4">Exam Context</th>
+                      <th className="px-6 py-4">Grading Mode / Context</th>
+                      <th className="px-6 py-4 text-center">Status</th>
+                      <th className="px-6 py-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-sm">
+                    {allocations.map((alloc) => {
+                      const script = alloc.answerScript;
+                      const scriptRef = script?.scriptReference || script?.anonymousId || 'Unassigned Script';
+                      const isQuestionWise = alloc.question !== undefined && alloc.question !== null;
+                      const targetUrl = script
+                        ? isQuestionWise
+                          ? `/grading/${script._id}/question/${alloc.question}`
+                          : `/grading/${script._id}`
+                        : '#';
 
-                    return (
-                      <tr key={alloc._id} className="hover:bg-slate-50/50 transition-colors">
-                        {/* Script Ref */}
-                        <td className="px-6 py-4.5 whitespace-nowrap">
-                          <div className="flex items-center gap-3">
-                            <div className="h-8.5 w-8.5 rounded-full bg-brand-primary/10 text-brand-primary flex items-center justify-center font-extrabold text-sm select-none">
-                              <FileText className="h-4 w-4" />
+                      return (
+                        <tr key={alloc._id} className="hover:bg-slate-50/50 transition-colors">
+                          {/* Script Ref */}
+                          <td className="px-6 py-4.5 whitespace-nowrap">
+                            <div className="flex items-center gap-3">
+                              <div className="h-8.5 w-8.5 rounded-full bg-brand-primary/10 text-brand-primary flex items-center justify-center font-extrabold text-sm select-none">
+                                <FileText className="h-4 w-4" />
+                              </div>
+                              <span className="font-bold text-slate-950">{scriptRef}</span>
                             </div>
-                            <span className="font-bold text-slate-950">{scriptRef}</span>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* Exam ID */}
-                        <td className="px-6 py-4.5 text-slate-650 font-medium whitespace-nowrap">
-                          Exam ID: {alloc.exam}
-                        </td>
+                          {/* Exam ID */}
+                          <td className="px-6 py-4.5 text-slate-650 font-medium whitespace-nowrap">
+                            Exam ID: {alloc.exam}
+                          </td>
 
-                        {/* Context Mode */}
-                        <td className="px-6 py-4.5 whitespace-nowrap">
-                          {isQuestionWise ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wide bg-purple-50 text-purple-700 border border-purple-200">
-                              Question {alloc.question}
+                          {/* Context Mode */}
+                          <td className="px-6 py-4.5 whitespace-nowrap">
+                            {isQuestionWise ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wide bg-purple-50 text-purple-700 border border-purple-200">
+                                Question {alloc.question}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wide bg-blue-50 text-blue-700 border border-blue-200">
+                                Whole Script
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Status Badge */}
+                          <td className="px-6 py-4.5 whitespace-nowrap text-center">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wider ${getStatusBadge(alloc.status)}`}>
+                              {alloc.status}
                             </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wide bg-blue-50 text-blue-700 border border-blue-200">
-                              Whole Script
-                            </span>
-                          )}
-                        </td>
+                          </td>
 
-                        {/* Status Badge */}
-                        <td className="px-6 py-4.5 whitespace-nowrap text-center">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wider ${getStatusBadge(alloc.status)}`}>
-                            {alloc.status}
-                          </span>
-                        </td>
+                          {/* Open Action */}
+                          <td className="px-6 py-4.5 whitespace-nowrap text-right">
+                            <Link href={targetUrl} passHref legacyBehavior>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={!script}
+                                className="border-slate-200 text-slate-650 hover:bg-brand-primary/5 hover:text-brand-primary hover:border-brand-primary"
+                              >
+                                <span>Open Grader</span>
+                                <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                              </Button>
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                        {/* Open Action */}
-                        <td className="px-6 py-4.5 whitespace-nowrap text-right">
-                          <Link href={targetUrl} passHref legacyBehavior>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={!script}
-                              className="border-slate-200 text-slate-650 hover:bg-brand-primary/5 hover:text-brand-primary hover:border-brand-primary"
-                            >
-                              <span>Open Grader</span>
-                              <ArrowRight className="h-3.5 w-3.5 ml-1" />
-                            </Button>
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+              {/* Pagination Controls */}
+              {pagination && pagination.totalPages > 1 && (
+                <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex justify-between items-center select-none">
+                  <div className="text-xs md:text-sm text-slate-500">
+                    Showing page <span className="font-semibold text-slate-700">{pagination.page}</span> of{' '}
+                    <span className="font-semibold text-slate-700">{pagination.totalPages}</span> ({pagination.total} total items)
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fetchAllocations(currentPage - 1)}
+                      disabled={!pagination.hasPreviousPage || isLoading}
+                      id="prev-page-btn"
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fetchAllocations(currentPage + 1)}
+                      disabled={!pagination.hasNextPage || isLoading}
+                      id="next-page-btn"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </Card>
       </div>

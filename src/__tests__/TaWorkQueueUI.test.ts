@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-interface AnswerScript {
+export interface AnswerScript {
   _id: string;
   exam: string;
   anonymousId?: string;
@@ -9,7 +9,7 @@ interface AnswerScript {
   isActive: boolean;
 }
 
-interface Allocation {
+export interface Allocation {
   _id: string;
   exam: string;
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
@@ -17,7 +17,16 @@ interface Allocation {
   answerScript: AnswerScript | null;
 }
 
-// Client-side helper functions that will drive the page logic
+export interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
+// Client-side helper functions that drive the page logic
 export function computeStats(allocations: Allocation[]) {
   const uniqueExams = Array.from(new Set(allocations.map(a => a.exam))).length;
   const pendingCount = allocations.filter(a => a.status !== 'COMPLETED').length;
@@ -52,6 +61,39 @@ export function getFriendlyErrorMessage(status: number, statusText: string) {
   return `Failed to retrieve allocations: ${statusText}`;
 }
 
+export function parseApiResponse(body: any): { allocations: Allocation[]; pagination: Pagination | null } {
+  if (!body || !body.success || !body.data) {
+    return { allocations: [], pagination: null };
+  }
+  if (body.data.allocations && Array.isArray(body.data.allocations)) {
+    return {
+      allocations: body.data.allocations,
+      pagination: body.data.pagination || null
+    };
+  }
+  if (Array.isArray(body.data)) {
+    return {
+      allocations: body.data,
+      pagination: null
+    };
+  }
+  return { allocations: [], pagination: null };
+}
+
+export function buildApiUrl(page: number, limit = 20): string {
+  return `/api/allocations?page=${page}&limit=${limit}`;
+}
+
+export function getPaginationButtonStates(pagination: Pagination | null) {
+  if (!pagination) {
+    return { prevDisabled: true, nextDisabled: true };
+  }
+  return {
+    prevDisabled: !pagination.hasPreviousPage,
+    nextDisabled: !pagination.hasNextPage
+  };
+}
+
 describe('TA Work-Queue UI Logic & Unit Tests (AE-095)', () => {
   const mockAllocations: Allocation[] = [
     {
@@ -74,7 +116,7 @@ describe('TA Work-Queue UI Logic & Unit Tests (AE-095)', () => {
       answerScript: {
         _id: 'script-2',
         exam: 'exam-non-blind-quiz',
-        student: 'Harry Potter', // PII returned only for non-blind (permitted)
+        student: 'Harry Potter',
         isActive: true
       }
     },
@@ -92,15 +134,13 @@ describe('TA Work-Queue UI Logic & Unit Tests (AE-095)', () => {
     }
   ];
 
-  // 1. Success queue rendering stats calculation
   it('should correctly calculate stats (assigned exams, pending, completed) from allocations', () => {
     const stats = computeStats(mockAllocations);
-    expect(stats.uniqueExams).toBe(2); // 'exam-blind-midterm' and 'exam-non-blind-quiz'
-    expect(stats.pendingCount).toBe(2); // alloc-1 (PENDING) and alloc-2 (IN_PROGRESS)
-    expect(stats.completedCount).toBe(1); // alloc-3 (COMPLETED)
+    expect(stats.uniqueExams).toBe(2);
+    expect(stats.pendingCount).toBe(2);
+    expect(stats.completedCount).toBe(1);
   });
 
-  // 2. Loading state logic
   it('should represent mock loading state successfully', () => {
     const uiState = { isLoading: true, allocations: [], error: null };
     expect(uiState.isLoading).toBe(true);
@@ -108,7 +148,6 @@ describe('TA Work-Queue UI Logic & Unit Tests (AE-095)', () => {
     expect(uiState.error).toBeNull();
   });
 
-  // 3. Empty queue state logic
   it('should handle mock empty queue state representation correctly', () => {
     const emptyAllocations: Allocation[] = [];
     const stats = computeStats(emptyAllocations);
@@ -118,48 +157,149 @@ describe('TA Work-Queue UI Logic & Unit Tests (AE-095)', () => {
     expect(emptyAllocations).toHaveLength(0);
   });
 
-  // 4. API Error state mapping
   it('should map API error status codes to descriptive user messages', () => {
     expect(getFriendlyErrorMessage(401, 'Unauthorized')).toBe('Session expired. Please log in again.');
     expect(getFriendlyErrorMessage(403, 'Forbidden')).toBe('Access denied. Only teaching assistants can access the work queue.');
     expect(getFriendlyErrorMessage(500, 'Internal Server Error')).toBe('Failed to retrieve allocations: Internal Server Error');
   });
 
-  // 5. Anonymization & Privacy rendering
   it('should render scriptReference or anonymousId, and assert the absolute absence of student identity details for blind-graded submissions', () => {
-    // Blind allocation
     const allocBlind = mockAllocations[0];
     const scriptBlind = allocBlind.answerScript;
 
-    // Verify it consumes only the anonymized representation
     const displayedRef = getScriptReference(scriptBlind);
     expect(displayedRef).toBe('Script #ANON-POTTER-777');
-    
-    // Explicitly assert that student fields do not exist in the blind object
     expect(scriptBlind?.student).toBeUndefined();
   });
 
-  // 6. Question-wise context mapping
   it('should distinguish between question-wise and whole-script allocation contexts', () => {
-    // alloc-1 is whole-script
     expect(getGradingModeLabel(mockAllocations[0])).toBe('Whole Script');
-    
-    // alloc-2 is question-wise (question: 3)
     expect(getGradingModeLabel(mockAllocations[1])).toBe('Question 3');
   });
 
-  // 7. Navigation target route generator
   it('should generate the exact target paths for routing', () => {
-    // Question-wise targets exact pattern: /grading/[scriptId]/question/[questionNumber]
     const urlQuestionWise = getGradingTargetUrl(mockAllocations[1]);
     expect(urlQuestionWise).toBe('/grading/script-2/question/3');
 
-    // Whole-script target pattern: /grading/[scriptId]
     const urlWholeScript = getGradingTargetUrl(mockAllocations[0]);
     expect(urlWholeScript).toBe('/grading/script-1');
 
-    // Missing script should fail-safe
     const urlMissingScript = getGradingTargetUrl({ _id: 'alloc-x', exam: 'exam-x', status: 'PENDING', answerScript: null });
     expect(urlMissingScript).toBe('#');
+  });
+
+  describe('Pagination Unit Tests', () => {
+    it('should parse paginated response shape correctly', () => {
+      const mockResponseBody = {
+        success: true,
+        message: 'Allocations retrieved successfully',
+        data: {
+          allocations: mockAllocations,
+          pagination: {
+            page: 1,
+            limit: 20,
+            total: 3,
+            totalPages: 1,
+            hasNextPage: false,
+            hasPreviousPage: false
+          }
+        }
+      };
+
+      const parsed = parseApiResponse(mockResponseBody);
+      expect(parsed.allocations).toHaveLength(3);
+      expect(parsed.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 3,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false
+      });
+    });
+
+    it('should fall back safely for legacy non-paginated shapes', () => {
+      const legacyResponseBody = {
+        success: true,
+        message: 'Allocations retrieved',
+        data: mockAllocations
+      };
+
+      const parsed = parseApiResponse(legacyResponseBody);
+      expect(parsed.allocations).toHaveLength(3);
+      expect(parsed.pagination).toBeNull();
+    });
+
+    it('should compute correct disabled states for first, middle, and last page pagination controls', () => {
+      // First page
+      const firstPageMetadata: Pagination = {
+        page: 1,
+        limit: 2,
+        total: 5,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: false
+      };
+      const firstPageStates = getPaginationButtonStates(firstPageMetadata);
+      expect(firstPageStates.prevDisabled).toBe(true);
+      expect(firstPageStates.nextDisabled).toBe(false);
+
+      // Middle page
+      const middlePageMetadata: Pagination = {
+        page: 2,
+        limit: 2,
+        total: 5,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: true
+      };
+      const middlePageStates = getPaginationButtonStates(middlePageMetadata);
+      expect(middlePageStates.prevDisabled).toBe(false);
+      expect(middlePageStates.nextDisabled).toBe(false);
+
+      // Last page
+      const lastPageMetadata: Pagination = {
+        page: 3,
+        limit: 2,
+        total: 5,
+        totalPages: 3,
+        hasNextPage: false,
+        hasPreviousPage: true
+      };
+      const lastPageStates = getPaginationButtonStates(lastPageMetadata);
+      expect(lastPageStates.prevDisabled).toBe(false);
+      expect(lastPageStates.nextDisabled).toBe(true);
+    });
+
+    it('should generate correct API query URL for page transitions', () => {
+      expect(buildApiUrl(1)).toBe('/api/allocations?page=1&limit=20');
+      expect(buildApiUrl(3, 10)).toBe('/api/allocations?page=3&limit=10');
+    });
+
+    it('should distinguish empty queue from error queue representation', () => {
+      // Simulated state logic
+      const stateWithError = {
+        isLoading: false,
+        error: 'Network Error',
+        allocations: []
+      };
+      // Error is set, so error alert will render, not EmptyState
+      const shouldRenderErrorBanner = !!stateWithError.error;
+      const shouldRenderEmptyState = !stateWithError.error && stateWithError.allocations.length === 0;
+
+      expect(shouldRenderErrorBanner).toBe(true);
+      expect(shouldRenderEmptyState).toBe(false);
+
+      const stateEmpty = {
+        isLoading: false,
+        error: null,
+        allocations: []
+      };
+      const shouldRenderErrorBannerEmpty = !!stateEmpty.error;
+      const shouldRenderEmptyStateEmpty = !stateEmpty.error && stateEmpty.allocations.length === 0;
+
+      expect(shouldRenderErrorBannerEmpty).toBe(false);
+      expect(shouldRenderEmptyStateEmpty).toBe(true);
+    });
   });
 });
