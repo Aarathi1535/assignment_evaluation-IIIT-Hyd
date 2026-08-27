@@ -68,7 +68,10 @@ export default function TaDashboardPage() {
   };
 
   useEffect(() => {
-    fetchAllocations(1);
+    const timer = setTimeout(() => {
+      fetchAllocations(1);
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   // Compute stats

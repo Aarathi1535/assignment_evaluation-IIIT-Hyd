@@ -26,6 +26,14 @@ export interface Pagination {
   hasPreviousPage: boolean;
 }
 
+export interface ParsedApiResponse {
+  success?: boolean;
+  data?: {
+    allocations?: Allocation[];
+    pagination?: Pagination | null;
+  } | Allocation[];
+}
+
 // Client-side helper functions that drive the page logic
 export function computeStats(allocations: Allocation[]) {
   const uniqueExams = Array.from(new Set(allocations.map(a => a.exam))).length;
@@ -61,20 +69,20 @@ export function getFriendlyErrorMessage(status: number, statusText: string) {
   return `Failed to retrieve allocations: ${statusText}`;
 }
 
-export function parseApiResponse(body: any): { allocations: Allocation[]; pagination: Pagination | null } {
+export function parseApiResponse(body: ParsedApiResponse | null | undefined): { allocations: Allocation[]; pagination: Pagination | null } {
   if (!body || !body.success || !body.data) {
     return { allocations: [], pagination: null };
-  }
-  if (body.data.allocations && Array.isArray(body.data.allocations)) {
-    return {
-      allocations: body.data.allocations,
-      pagination: body.data.pagination || null
-    };
   }
   if (Array.isArray(body.data)) {
     return {
       allocations: body.data,
       pagination: null
+    };
+  }
+  if (body.data.allocations && Array.isArray(body.data.allocations)) {
+    return {
+      allocations: body.data.allocations,
+      pagination: body.data.pagination || null
     };
   }
   return { allocations: [], pagination: null };
