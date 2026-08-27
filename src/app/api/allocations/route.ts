@@ -30,6 +30,37 @@ export async function GET(req: NextRequest) {
     }, { status: 400 });
   }
 
+  const pageStr = searchParams.get('page');
+  const limitStr = searchParams.get('limit');
+
+  let page = 1;
+  let limit = 20; // Safe default limit
+  const maxLimit = 100;
+
+  if (pageStr !== null) {
+    const isPositiveInteger = /^[1-9]\d*$/.test(pageStr);
+    if (!isPositiveInteger) {
+      return NextResponse.json({
+        success: false,
+        message: 'Invalid page parameter. It must be a positive integer.',
+        data: null
+      }, { status: 400 });
+    }
+    page = parseInt(pageStr, 10);
+  }
+
+  if (limitStr !== null) {
+    const isPositiveInteger = /^[1-9]\d*$/.test(limitStr);
+    if (!isPositiveInteger) {
+      return NextResponse.json({
+        success: false,
+        message: 'Invalid limit parameter. It must be a positive integer.',
+        data: null
+      }, { status: 400 });
+    }
+    limit = Math.min(parseInt(limitStr, 10), maxLimit);
+  }
+
   try {
     await connectDB();
 
@@ -40,7 +71,19 @@ export async function GET(req: NextRequest) {
       query.exam = new mongoose.Types.ObjectId(examId);
     }
 
+    // Count the total matching allocations
+    const total = await Allocation.countDocuments(query);
+    const totalPages = Math.ceil(total / limit);
+    const hasNextPage = page < totalPages;
+    const hasPreviousPage = page > 1 && totalPages > 0;
+
+    const skip = (page - 1) * limit;
+
+    // Apply skip and limit at the database level and order deterministically
     const allocations = await Allocation.find(query)
+      .sort({ _id: 1 })
+      .skip(skip)
+      .limit(limit)
       .populate('answerScript')
       .lean();
 
@@ -72,7 +115,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'Allocations retrieved successfully',
-      data: result
+      data: {
+        allocations: result,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNextPage,
+          hasPreviousPage
+        }
+      }
     }, { status: 200 });
 
   } catch (error: unknown) {

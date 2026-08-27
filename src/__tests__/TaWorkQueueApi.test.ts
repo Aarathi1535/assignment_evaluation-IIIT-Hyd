@@ -279,10 +279,10 @@ describe('TA Work Queue API Tests (AE-094)', () => {
 
       const body = await res.json();
       expect(body.success).toBe(true);
-      expect(body.data).toHaveLength(2);
+      expect(body.data.allocations).toHaveLength(2);
 
       // Verify Ron's (TA2) allocation is never returned
-      const returnedIds = body.data.map((a: any) => a._id);
+      const returnedIds = body.data.allocations.map((a: any) => a._id);
       expect(returnedIds).toContain(allocWholeScript._id.toString());
       expect(returnedIds).toContain(allocQuestionWise._id.toString());
       expect(returnedIds).not.toContain(allocOtherTa._id.toString());
@@ -296,8 +296,8 @@ describe('TA Work Queue API Tests (AE-094)', () => {
 
       const body = await res.json();
       expect(body.success).toBe(true);
-      expect(body.data).toHaveLength(1);
-      expect(body.data[0]._id).toBe(allocWholeScript._id.toString());
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.allocations[0]._id).toBe(allocWholeScript._id.toString());
     });
 
     it('should return 400 Bad Request when an invalid examId format is supplied', async () => {
@@ -315,8 +315,8 @@ describe('TA Work Queue API Tests (AE-094)', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data[0].question).toBe(2);
-      expect(body.data[0].status).toBe(AllocationStatus.IN_PROGRESS);
+      expect(body.data.allocations[0].question).toBe(2);
+      expect(body.data.allocations[0].status).toBe(AllocationStatus.IN_PROGRESS);
     });
 
     it('should run answer scripts through the anonymizer and return blind-mode allowlisted output for blind-graded exams', async () => {
@@ -325,7 +325,7 @@ describe('TA Work Queue API Tests (AE-094)', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      const scriptData = body.data[0].answerScript;
+      const scriptData = body.data.allocations[0].answerScript;
 
       expect(scriptData).toBeDefined();
       expect(scriptData.anonymousId).toBe('ANON-POTTER-777');
@@ -361,7 +361,7 @@ describe('TA Work Queue API Tests (AE-094)', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      const scriptData = body.data[0].answerScript;
+      const scriptData = body.data.allocations[0].answerScript;
 
       expect(scriptData).toBeDefined();
       // Non-blind allows full details
@@ -377,10 +377,10 @@ describe('TA Work Queue API Tests (AE-094)', () => {
       expect(res.status).toBe(200);
 
       const body = await res.json();
-      expect(body.data).toHaveLength(2);
+      expect(body.data.allocations).toHaveLength(2);
 
-      const blindAlloc = body.data.find((a: any) => a._id === allocWholeScript._id.toString());
-      const nonBlindAlloc = body.data.find((a: any) => a._id === allocQuestionWise._id.toString());
+      const blindAlloc = body.data.allocations.find((a: any) => a._id === allocWholeScript._id.toString());
+      const nonBlindAlloc = body.data.allocations.find((a: any) => a._id === allocQuestionWise._id.toString());
 
       // Blind checks
       expect(blindAlloc.answerScript.anonymousId).toBe('ANON-POTTER-777');
@@ -390,6 +390,141 @@ describe('TA Work Queue API Tests (AE-094)', () => {
       // Non-blind checks
       expect(nonBlindAlloc.answerScript.student.toString()).toBe(studentUser1._id.toString());
       expect(nonBlindAlloc.answerScript.filePath).toBe('/scans/charms/script2.pdf');
+    });
+  });
+
+  describe('Pagination & Validation', () => {
+    beforeEach(() => {
+      mockSessionUser = {
+        id: taUser1._id.toString(),
+        email: taUser1.email,
+        name: taUser1.name,
+        role: UserRole.TA
+      };
+    });
+
+    it('should return default pagination when page and limit are omitted', async () => {
+      const req = new Request('http://localhost:3000/api/allocations');
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 2,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false
+      });
+      expect(body.data.allocations).toHaveLength(2);
+    });
+
+    it('should support explicit page and limit parameters', async () => {
+      const req = new Request('http://localhost:3000/api/allocations?page=1&limit=1');
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.pagination).toEqual({
+        page: 1,
+        limit: 1,
+        total: 2,
+        totalPages: 2,
+        hasNextPage: true,
+        hasPreviousPage: false
+      });
+      expect(body.data.allocations).toHaveLength(1);
+    });
+
+    it('should paginate correctly across multiple pages', async () => {
+      // Page 1
+      let req = new Request('http://localhost:3000/api/allocations?page=1&limit=1');
+      let res = await allocationsGET(req as any);
+      const body1 = await res.json();
+      expect(body1.data.allocations).toHaveLength(1);
+      const firstAllocId = body1.data.allocations[0]._id;
+
+      // Page 2
+      req = new Request('http://localhost:3000/api/allocations?page=2&limit=1');
+      res = await allocationsGET(req as any);
+      const body2 = await res.json();
+      expect(body2.data.pagination).toEqual({
+        page: 2,
+        limit: 1,
+        total: 2,
+        totalPages: 2,
+        hasNextPage: false,
+        hasPreviousPage: true
+      });
+      expect(body2.data.allocations).toHaveLength(1);
+      const secondAllocId = body2.data.allocations[0]._id;
+
+      // Verify deterministic order pagination (different allocations)
+      expect(firstAllocId).not.toBe(secondAllocId);
+    });
+
+    it('should reject invalid page parameter with 400 Bad Request', async () => {
+      const invalidPages = ['0', '-1', 'abc', '1.5', 'NaN', ''];
+      for (const p of invalidPages) {
+        const req = new Request(`http://localhost:3000/api/allocations?page=${p}`);
+        const res = await allocationsGET(req as any);
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Invalid page parameter');
+      }
+    });
+
+    it('should reject invalid limit parameter with 400 Bad Request', async () => {
+      const invalidLimits = ['0', '-5', 'xyz', '2.5', 'NaN', ''];
+      for (const l of invalidLimits) {
+        const req = new Request(`http://localhost:3000/api/allocations?limit=${l}`);
+        const res = await allocationsGET(req as any);
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.message).toContain('Invalid limit parameter');
+      }
+    });
+
+    it('should return empty result with 200 OK when examId is valid but has no allocations', async () => {
+      // Create a new exam with no allocations
+      const otherExam = await Exam.create({
+        title: 'Empty Exam',
+        course: course._id,
+        status: ExamStatus.PUBLISHED,
+        createdBy: profUser._id,
+        examDate: new Date(),
+        totalMarks: 50,
+        numberOfQuestions: 2
+      });
+
+      const req = new Request(`http://localhost:3000/api/allocations?examId=${otherExam._id.toString()}`);
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.success).toBe(true);
+      expect(body.data.allocations).toHaveLength(0);
+      expect(body.data.pagination.total).toBe(0);
+      expect(body.data.pagination.totalPages).toBe(0);
+    });
+
+    it('should resolve blindGrading in batch and not perform Exam lookup per script (N+1 lookups avoided)', async () => {
+      const findByIdSpy = vi.spyOn(Exam, 'findById');
+      const findSpy = vi.spyOn(Exam, 'find');
+
+      const req = new Request('http://localhost:3000/api/allocations');
+      const res = await allocationsGET(req as any);
+      expect(res.status).toBe(200);
+
+      // Verify that findById was not called during serialization of answer scripts
+      expect(findByIdSpy).toHaveBeenCalledTimes(0);
+      // Verify that Exam.find was called for resolving batch statuses
+      expect(findSpy).toHaveBeenCalled();
+
+      findByIdSpy.mockRestore();
+      findSpy.mockRestore();
     });
   });
 });

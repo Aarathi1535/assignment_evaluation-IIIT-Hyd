@@ -55,7 +55,8 @@ export class Anonymizer {
     static async serializeAnswerScript(
         script: any,
         viewer: ViewerContext,
-        anonymousIdMap?: Record<string, string>
+        anonymousIdMap?: Record<string, string>,
+        blindActiveMap?: Record<string, boolean>
     ): Promise<Record<string, any>> {
         if (!script) return {};
 
@@ -69,7 +70,12 @@ export class Anonymizer {
         const examId = scriptObj.exam?._id || scriptObj.exam;
         const examIdStr = examId?.toString();
         
-        const isBlind = await this.isBlindActive(examIdStr, viewer);
+        let isBlind: boolean;
+        if (blindActiveMap && examIdStr && examIdStr in blindActiveMap) {
+            isBlind = blindActiveMap[examIdStr];
+        } else {
+            isBlind = await this.isBlindActive(examIdStr, viewer);
+        }
 
         if (isBlind) {
             const studentId = scriptObj.student?._id || scriptObj.student;
@@ -148,6 +154,8 @@ export class Anonymizer {
         );
 
         const anonymousIdMap: Record<string, string> = {};
+        const blindActiveMap: Record<string, boolean> = {};
+
         if (examIds.length > 0) {
             const mappings = await StudentMapping.find({ exam: { $in: examIds } }).lean();
             for (const m of mappings) {
@@ -156,10 +164,40 @@ export class Anonymizer {
                     anonymousIdMap[key] = m.anonymousId;
                 }
             }
+
+            // Resolve blind grading state once per distinct exam to prevent Exam lookup N+1 queries
+            const exams = await Exam.find({ _id: { $in: examIds } }).lean();
+            const examMap = new Map(exams.map(e => [e._id.toString(), e]));
+
+            for (const id of examIds) {
+                const exam = examMap.get(id);
+                // Apply the same logic as isBlindActive
+                if (viewer && (viewer.role === UserRole.PROFESSOR || viewer.role === UserRole.ADMIN)) {
+                    blindActiveMap[id] = false;
+                    continue;
+                }
+
+                const isViewerRoleRecognized = !!(
+                    viewer &&
+                    viewer.role &&
+                    Object.values(UserRole).includes(viewer.role as UserRole)
+                );
+
+                if (!isViewerRoleRecognized) {
+                    blindActiveMap[id] = true;
+                    continue;
+                }
+
+                if (!exam || exam.blindGrading) {
+                    blindActiveMap[id] = true;
+                } else {
+                    blindActiveMap[id] = false;
+                }
+            }
         }
 
         return await Promise.all(
-            scripts.map(s => this.serializeAnswerScript(s, viewer, anonymousIdMap))
+            scripts.map(s => this.serializeAnswerScript(s, viewer, anonymousIdMap, blindActiveMap))
         );
     }
 
@@ -169,7 +207,8 @@ export class Anonymizer {
     static async serializeGrade(
         grade: any,
         viewer: ViewerContext,
-        anonymousIdMap?: Record<string, string>
+        anonymousIdMap?: Record<string, string>,
+        blindActiveMap?: Record<string, boolean>
     ): Promise<Record<string, any>> {
         if (!grade) return {};
 
@@ -190,12 +229,17 @@ export class Anonymizer {
             }
         }
 
-        const isBlind = await this.isBlindActive(examIdStr, viewer);
+        let isBlind: boolean;
+        if (blindActiveMap && examIdStr && examIdStr in blindActiveMap) {
+            isBlind = blindActiveMap[examIdStr];
+        } else {
+            isBlind = await this.isBlindActive(examIdStr, viewer);
+        }
 
         if (isBlind) {
             let serializedScript = gradeObj.answerScript;
             if (scriptObj) {
-                serializedScript = await this.serializeAnswerScript(scriptObj, viewer, anonymousIdMap);
+                serializedScript = await this.serializeAnswerScript(scriptObj, viewer, anonymousIdMap, blindActiveMap);
             }
 
             // Safe allowlist of Grade fields
@@ -241,6 +285,8 @@ export class Anonymizer {
         const examIds = Array.from(new Set(scripts.map(s => s.exam?.toString()).filter(Boolean)));
 
         const anonymousIdMap: Record<string, string> = {};
+        const blindActiveMap: Record<string, boolean> = {};
+
         if (examIds.length > 0) {
             const mappings = await StudentMapping.find({ exam: { $in: examIds } }).lean();
             for (const m of mappings) {
@@ -249,10 +295,40 @@ export class Anonymizer {
                     anonymousIdMap[key] = m.anonymousId;
                 }
             }
+
+            // Resolve blind grading state once per distinct exam to prevent Exam lookup N+1 queries
+            const exams = await Exam.find({ _id: { $in: examIds } }).lean();
+            const examMap = new Map(exams.map(e => [e._id.toString(), e]));
+
+            for (const id of examIds) {
+                const exam = examMap.get(id);
+                // Apply the same logic as isBlindActive
+                if (viewer && (viewer.role === UserRole.PROFESSOR || viewer.role === UserRole.ADMIN)) {
+                    blindActiveMap[id] = false;
+                    continue;
+                }
+
+                const isViewerRoleRecognized = !!(
+                    viewer &&
+                    viewer.role &&
+                    Object.values(UserRole).includes(viewer.role as UserRole)
+                );
+
+                if (!isViewerRoleRecognized) {
+                    blindActiveMap[id] = true;
+                    continue;
+                }
+
+                if (!exam || exam.blindGrading) {
+                    blindActiveMap[id] = true;
+                } else {
+                    blindActiveMap[id] = false;
+                }
+            }
         }
 
         return await Promise.all(
-            grades.map(g => this.serializeGrade(g, viewer, anonymousIdMap))
+            grades.map(g => this.serializeGrade(g, viewer, anonymousIdMap, blindActiveMap))
         );
     }
 }
