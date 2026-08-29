@@ -834,7 +834,115 @@ export class AllocationService {
             return allocation;
         });
     }
+
+    /**
+     * Marks an IN_PROGRESS allocation as COMPLETED.
+     * This transition is atomic, idempotent, properly authorized, and audit-logged.
+     */
+    static async markCompleted(
+        allocationId: string,
+        actor: unknown
+    ): Promise<IAllocation> {
+        if (!mongoose.Types.ObjectId.isValid(allocationId)) {
+            throw new HttpError('Invalid Allocation ID format', 400);
+        }
+
+        let actorIdStr: string;
+        let actorRole: string | undefined;
+
+        if (typeof actor === 'string') {
+            actorIdStr = actor;
+        } else if (actor && typeof actor === 'object') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const actorObj = actor as Record<string, any>;
+            actorIdStr = (actorObj.actingUserId || actorObj.id || actorObj._id)?.toString();
+            actorRole = actorObj.actingUserRole || actorObj.role;
+        } else {
+            throw new HttpError('Invalid actor', 400);
+        }
+
+        if (!actorIdStr || !mongoose.Types.ObjectId.isValid(actorIdStr)) {
+            throw new HttpError('Invalid Actor ID format', 400);
+        }
+
+        const allocationObjectId = new mongoose.Types.ObjectId(allocationId);
+
+        return await this.runInTransaction(async (session) => {
+            // Retrieve user role from DB if not provided in the actor object
+            let role = actorRole;
+            if (!role) {
+                const UserModel = mongoose.models.User || mongoose.model('User');
+                const user = await UserModel.findById(actorIdStr).session(session || null);
+                if (user) {
+                    role = user.role;
+                }
+            }
+
+            const isBackupOperator = role === 'PROFESSOR' || role === 'ADMIN';
+
+            const query: {
+                _id: mongoose.Types.ObjectId;
+                status: AllocationStatus;
+                ta?: mongoose.Types.ObjectId;
+            } = {
+                _id: allocationObjectId,
+                status: AllocationStatus.IN_PROGRESS
+            };
+
+            if (!isBackupOperator) {
+                query.ta = new mongoose.Types.ObjectId(actorIdStr);
+            }
+
+            const allocation = await Allocation.findOneAndUpdate(
+                query,
+                {
+                    $set: { status: AllocationStatus.COMPLETED }
+                },
+                { new: true, session }
+            );
+
+            if (!allocation) {
+                const exists = await Allocation.findById(allocationObjectId).session(session || null);
+                if (!exists) {
+                    throw new HttpError('Allocation not found', 404);
+                }
+                if (!isBackupOperator && exists.ta.toString() !== actorIdStr) {
+                    throw new HttpError('Forbidden: This allocation belongs to another TA', 403);
+                }
+                if (exists.status === AllocationStatus.PENDING) {
+                    throw new HttpError('Cannot complete a pending allocation', 400);
+                }
+                if (exists.status === AllocationStatus.COMPLETED) {
+                    throw new HttpError('Allocation is already completed', 409);
+                }
+                throw new HttpError('Failed to complete allocation', 400);
+            }
+
+            const owningTaId = allocation.ta.toString();
+            const isOverride = owningTaId !== actorIdStr;
+
+            // Write audit log inside the transaction
+            await AuditLog.create([{
+                user: new mongoose.Types.ObjectId(actorIdStr),
+                action: 'ALLOCATION_COMPLETE',
+                outcome: 'SUCCESS',
+                entityId: allocationObjectId,
+                entityType: 'Allocation',
+                details: {
+                    examId: allocation.exam.toString(),
+                    answerScriptId: allocation.answerScript.toString(),
+                    question: allocation.question,
+                    taId: owningTaId,
+                    actingUserId: actorIdStr,
+                    isOverride
+                }
+            }], { session });
+
+            return allocation;
+        });
+    }
 }
+
 
 export interface PreviewAllocationResult {
     allocationCounts: Record<string, number>;
