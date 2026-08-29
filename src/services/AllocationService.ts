@@ -942,6 +942,103 @@ export class AllocationService {
             return allocation;
         });
     }
+
+    /**
+     * Aggregates grading progress per TA for a specific exam using a MongoDB aggregation pipeline.
+     * Evaluates total allocations and completed (graded) allocations without loading documents into memory.
+     */
+    static async getProgress(examId: string): Promise<ExamProgressResult> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+
+        const examExists = await Exam.exists({ _id: examObjectId, isActive: true });
+        if (!examExists) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const pipeline: mongoose.PipelineStage[] = [
+            {
+                $match: {
+                    exam: examObjectId
+                }
+            },
+            {
+                $group: {
+                    _id: '$ta',
+                    total: { $sum: 1 },
+                    graded: {
+                        $sum: {
+                            $cond: [{ $eq: ['$status', AllocationStatus.COMPLETED] }, 1, 0]
+                        }
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'taInfo'
+                }
+            },
+            {
+                $unwind: {
+                    path: '$taInfo',
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    taId: { $toString: '$_id' },
+                    name: { $ifNull: ['$taInfo.name', 'Unknown TA'] },
+                    graded: 1,
+                    total: 1
+                }
+            },
+            {
+                $sort: {
+                    name: 1
+                }
+            }
+        ];
+
+        const aggregatedResults = await Allocation.aggregate<TaProgressResult>(pipeline);
+
+        const totalAllocations = aggregatedResults.reduce((acc, curr) => acc + curr.total, 0);
+        const totalGraded = aggregatedResults.reduce((acc, curr) => acc + curr.graded, 0);
+
+        return {
+            examId,
+            total: totalAllocations,
+            graded: totalGraded,
+            progress: aggregatedResults
+        };
+    }
+
+    /**
+     * Alias for getProgress to ensure consistent API ergonomics.
+     */
+    static async getExamProgress(examId: string): Promise<ExamProgressResult> {
+        return this.getProgress(examId);
+    }
+}
+
+export interface TaProgressResult {
+    taId: string;
+    name: string;
+    graded: number;
+    total: number;
+}
+
+export interface ExamProgressResult {
+    examId: string;
+    total: number;
+    graded: number;
+    progress: TaProgressResult[];
 }
 
 
