@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
     const examData = {
       ...validationResult.data,
       examDate: new Date(validationResult.data.examDate),
+      gradingDeadline: validationResult.data.gradingDeadline ? new Date(validationResult.data.gradingDeadline) : null,
       createdBy: auth.user.id
     };
 

@@ -966,10 +966,15 @@ export class AllocationService {
 
         const examObjectId = new mongoose.Types.ObjectId(examId);
 
-        const examExists = await Exam.exists({ _id: examObjectId, isActive: true });
-        if (!examExists) {
+        const exam = await Exam.findById(examObjectId).select('gradingDeadline isActive');
+        if (!exam || !exam.isActive) {
             throw new HttpError('Exam not found', 404);
         }
+
+        const earliestAllocation = await Allocation.findOne({ exam: examObjectId })
+            .sort({ createdAt: 1 })
+            .select('createdAt');
+        const gradingStart = earliestAllocation ? earliestAllocation.createdAt : null;
 
         const pipeline: mongoose.PipelineStage[] = [
             {
@@ -1039,24 +1044,71 @@ export class AllocationService {
             }
         }
 
+        // AE-104b: Absolute pace calculation using explicit gradingDeadline and gradingStart
+        let paceAvailable = false;
+        let paceReason: string | undefined = undefined;
+        let expectedCompletionRatio: number | undefined = undefined;
         let bottleneckCount = 0;
+
+        if (!exam.gradingDeadline) {
+            paceAvailable = false;
+            paceReason = 'GRADING_DEADLINE_NOT_SET';
+        } else if (!gradingStart || totalAllocations === 0) {
+            paceAvailable = false;
+            paceReason = 'NO_ALLOCATIONS';
+        } else {
+            const startMs = new Date(gradingStart).getTime();
+            const deadlineMs = new Date(exam.gradingDeadline).getTime();
+            const nowMs = Date.now();
+
+            if (deadlineMs <= startMs) {
+                paceAvailable = false;
+                paceReason = 'INVALID_DEADLINE_WINDOW';
+            } else {
+                paceAvailable = true;
+                if (nowMs < startMs) {
+                    expectedCompletionRatio = 0.0;
+                } else if (nowMs >= deadlineMs) {
+                    expectedCompletionRatio = 1.0;
+                } else {
+                    expectedCompletionRatio = Math.round(((nowMs - startMs) / (deadlineMs - startMs)) * 10000) / 10000;
+                }
+            }
+        }
 
         const enrichedProgress: TaProgressResult[] = aggregatedResults.map((ta) => {
             const completionRatio = ta.total > 0 ? Math.round((ta.graded / ta.total) * 10000) / 10000 : 0;
             let isBottleneck = false;
+            let paceLag: number | undefined = undefined;
 
+            // 1. Cohort-based bottleneck detection (AE-104a)
             if (ta.total > 0 && eligibleRatios.length > 0) {
-                const diff = Math.round((cohortMedianCompletionRatio - completionRatio) * 10000) / 10000;
+                const cohortDiff = Math.round((cohortMedianCompletionRatio - completionRatio) * 10000) / 10000;
                 // Flagged when materially below the cohort median by more than 20 percentage points (0.20)
-                if (diff > 0.20) {
+                if (cohortDiff > 0.20) {
                     isBottleneck = true;
-                    bottleneckCount++;
                 }
+            }
+
+            // 2. Absolute pace-based bottleneck detection (AE-104b)
+            if (paceAvailable && expectedCompletionRatio !== undefined && ta.total > 0) {
+                paceLag = Math.round(Math.max(0, expectedCompletionRatio - completionRatio) * 10000) / 10000;
+                const paceDiff = Math.round((expectedCompletionRatio - completionRatio) * 10000) / 10000;
+                // Materially lagging behind expected pace by more than 20 percentage points (0.20)
+                if (paceDiff > 0.20) {
+                    isBottleneck = true;
+                }
+            }
+
+            if (isBottleneck) {
+                bottleneckCount++;
             }
 
             return {
                 ...ta,
                 completionRatio,
+                expectedCompletionRatio: paceAvailable ? expectedCompletionRatio : undefined,
+                paceLag,
                 isBottleneck,
                 bottleneck: isBottleneck
             };
@@ -1067,6 +1119,11 @@ export class AllocationService {
             total: totalAllocations,
             graded: totalGraded,
             cohortMedianCompletionRatio,
+            gradingDeadline: exam.gradingDeadline || null,
+            gradingStart: gradingStart || null,
+            paceAvailable,
+            paceReason,
+            expectedCompletionRatio,
             bottleneckCount,
             progress: enrichedProgress
         };
@@ -1080,9 +1137,22 @@ export class AllocationService {
     }
 
     /**
-     * Retrieves progress and specifically filtered bottlenecks for an exam.
+     * Retrieves progress and specifically filtered bottlenecks for an exam (AE-104a).
      */
     static async getBottlenecks(examId: string): Promise<ExamBottleneckResult> {
+        const progressResult = await this.getProgress(examId);
+        const bottlenecks = progressResult.progress.filter((ta) => ta.isBottleneck);
+
+        return {
+            ...progressResult,
+            bottlenecks
+        };
+    }
+
+    /**
+     * Retrieves progress and specifically filtered absolute-pace bottlenecks for an exam (AE-104b).
+     */
+    static async getAbsolutePace(examId: string): Promise<ExamAbsolutePaceResult> {
         const progressResult = await this.getProgress(examId);
         const bottlenecks = progressResult.progress.filter((ta) => ta.isBottleneck);
 
@@ -1099,6 +1169,8 @@ export interface TaProgressResult {
     graded: number;
     total: number;
     completionRatio: number;
+    expectedCompletionRatio?: number;
+    paceLag?: number;
     isBottleneck: boolean;
     bottleneck: boolean;
 }
@@ -1108,11 +1180,20 @@ export interface ExamProgressResult {
     total: number;
     graded: number;
     cohortMedianCompletionRatio: number;
+    gradingDeadline?: Date | null;
+    gradingStart?: Date | null;
+    paceAvailable: boolean;
+    paceReason?: string;
+    expectedCompletionRatio?: number;
     bottleneckCount: number;
     progress: TaProgressResult[];
 }
 
 export interface ExamBottleneckResult extends ExamProgressResult {
+    bottlenecks: TaProgressResult[];
+}
+
+export interface ExamAbsolutePaceResult extends ExamProgressResult {
     bottlenecks: TaProgressResult[];
 }
 

@@ -60,6 +60,7 @@ export interface IExam extends Document {
     assemblySealAt?: Date | null;
     assemblySealBy?: mongoose.Types.ObjectId | null;
     blindGrading?: boolean;
+    gradingDeadline?: Date | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -194,6 +195,10 @@ const ExamSchema = new Schema<IExam>(
         blindGrading: {
             type: Boolean,
             default: false
+        },
+        gradingDeadline: {
+            type: Date,
+            default: null
         }
     },
     {

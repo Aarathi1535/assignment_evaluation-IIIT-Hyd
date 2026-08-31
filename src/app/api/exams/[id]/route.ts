@@ -53,6 +53,9 @@ export async function PUT(
     if (validationResult.data.examDate !== undefined) {
       examData.examDate = new Date(validationResult.data.examDate);
     }
+    if (validationResult.data.gradingDeadline !== undefined) {
+      examData.gradingDeadline = validationResult.data.gradingDeadline ? new Date(validationResult.data.gradingDeadline) : null;
+    }
 
     const auditContext = {
       actingUserId: auth.user.id,

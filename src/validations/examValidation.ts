@@ -82,6 +82,12 @@ export const createExamSchema = z.object({
     .min(1, { message: 'Number of questions must be at least 1' })
     .max(100, { message: 'Number of questions cannot exceed 100' }),
   omrTemplate: omrTemplateSchema.nullable().optional(),
+  gradingDeadline: z.string()
+    .refine((val) => !isNaN(Date.parse(val)), {
+      message: 'Invalid date format for grading deadline',
+    })
+    .nullable()
+    .optional(),
 }).strict();
 
 export const updateExamSchema = createExamSchema.partial();
