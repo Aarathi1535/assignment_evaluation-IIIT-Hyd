@@ -6,6 +6,7 @@ import Exam from '../models/Exam';
 import Course, { ICourse } from '../models/Course';
 import { HttpError } from '../lib/errors';
 import AuditLog from '../models/AuditLog';
+import { UserRole } from '../constants/permissions';
 
 export class AllocationService {
     /**
@@ -848,7 +849,7 @@ export class AllocationService {
         }
 
         let actorIdStr: string;
-        let actorRole: string | undefined;
+        let actorRole: UserRole | string | undefined;
 
         if (typeof actor === 'string') {
             actorIdStr = actor;
@@ -878,7 +879,7 @@ export class AllocationService {
                 }
             }
 
-            const isBackupOperator = role === 'PROFESSOR' || role === 'ADMIN';
+            const isBackupOperator = role === UserRole.PROFESSOR || role === UserRole.ADMIN;
 
             const query: {
                 _id: mongoose.Types.ObjectId;

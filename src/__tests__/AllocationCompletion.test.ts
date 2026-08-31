@@ -248,7 +248,7 @@ describe('Allocation Completion Transition Tests (AE-099)', () => {
             expect(auditCount).toBe(0);
         });
 
-        it('should reject with 409 if allocation is already COMPLETED (idempotency)', async () => {
+        it('should reject with 409 if allocation is already COMPLETED (idempotency contract for Week-7 caller)', async () => {
             const alloc = await Allocation.create({
                 exam: examWhole._id,
                 ta: ta1._id,
@@ -258,6 +258,8 @@ describe('Allocation Completion Transition Tests (AE-099)', () => {
                 rule: AllocationRule.EQUAL
             });
 
+            // The future Week-7 grade-save caller receives 409 to indicate the allocation is already completed,
+            // treating it as an idempotent outcome rather than assuming the completion state was lost.
             await expect(
                 AllocationService.markCompleted(alloc._id.toString(), {
                     actingUserId: ta1._id.toString(),
@@ -267,9 +269,53 @@ describe('Allocation Completion Transition Tests (AE-099)', () => {
                 new HttpError('Allocation is already completed', 409)
             );
 
-            // Verify no new audit log
+            // Verify no new audit log is created on 409
             const auditCount = await AuditLog.countDocuments({ action: 'ALLOCATION_COMPLETE' });
             expect(auditCount).toBe(0);
+        });
+
+        it('should handle sequential completion calls idempotently: first call succeeds (IN_PROGRESS -> COMPLETED), second call returns 409 without duplicate audit entries', async () => {
+            const alloc = await Allocation.create({
+                exam: examWhole._id,
+                ta: ta1._id,
+                answerScript: scriptWhole._id,
+                allocatedBy: prof._id,
+                status: AllocationStatus.IN_PROGRESS,
+                rule: AllocationRule.EQUAL
+            });
+
+            // 1. First call: transitions IN_PROGRESS -> COMPLETED successfully
+            const firstResult = await AllocationService.markCompleted(alloc._id.toString(), {
+                actingUserId: ta1._id.toString(),
+                actingUserRole: UserRole.TA
+            });
+            expect(firstResult.status).toBe(AllocationStatus.COMPLETED);
+
+            const dbAllocAfterFirst = await Allocation.findById(alloc._id);
+            expect(dbAllocAfterFirst!.status).toBe(AllocationStatus.COMPLETED);
+
+            const auditCountAfterFirst = await AuditLog.countDocuments({ action: 'ALLOCATION_COMPLETE' });
+            expect(auditCountAfterFirst).toBe(1);
+
+            // 2. Repeated call: returns 409 Conflict indicating already completed
+            try {
+                await AllocationService.markCompleted(alloc._id.toString(), {
+                    actingUserId: ta1._id.toString(),
+                    actingUserRole: UserRole.TA
+                });
+                expect.unreachable('Second call should have thrown 409 HttpError');
+            } catch (err: any) {
+                expect(err).toBeInstanceOf(HttpError);
+                expect(err.statusCode).toBe(409);
+                expect(err.message).toBe('Allocation is already completed');
+            }
+
+            // 3. State remains COMPLETED and no duplicate audit log is generated
+            const dbAllocAfterSecond = await Allocation.findById(alloc._id);
+            expect(dbAllocAfterSecond!.status).toBe(AllocationStatus.COMPLETED);
+
+            const auditCountAfterSecond = await AuditLog.countDocuments({ action: 'ALLOCATION_COMPLETE' });
+            expect(auditCountAfterSecond).toBe(1);
         });
     });
 
