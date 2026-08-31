@@ -6,11 +6,11 @@ This document serves as the canonical engineering reference, system architecture
 
 ## 1. Purpose and Scope
 
-The Allocation Module is responsible for distributing approved student answer scripts among teaching assistants (TAs) for grading, managing the grading work-queue lifecycle, handling allocation claims and releases, recording state completions, and providing aggregated grading progress metrics to course instructors.
+The Allocation Module is responsible for distributing approved student answer scripts among teaching assistants (TAs) for grading, managing the grading work-queue lifecycle, handling allocation claims and releases, executing state completion transitions, and providing aggregated grading progress metrics to course instructors.
 
 The module boundaries are defined as:
 - **Allocation Entry**: Begins after an exam's ingestion state has been approved and sealed (`IngestionApprovalStatus.APPROVED`). Attempts to preview, configure, or execute allocations on unapproved exams are blocked at the ingestion gate.
-- **Allocation Exit**: Serves as the substrate for TA grading work queues (`GET /api/allocations`) and tracks completion transitions (`COMPLETED`). In future milestones (Week 7), the final grading submission save flow will call `AllocationService.markCompleted()` to complete each allocation.
+- **Allocation Exit**: Serves as the substrate for TA grading work queues (`GET /api/allocations`) and tracks completion transitions (`COMPLETED`). In future milestones (Week 7), the final grading submission save flow will call `AllocationService.markCompleted()` to complete each allocation. The grading save caller does not exist currently in this milestone.
 
 ---
 
@@ -36,17 +36,25 @@ stateDiagram-v2
 1. **`PENDING` → `IN_PROGRESS` (Claim)**:
    * Performed via `POST /api/allocations/[id]/claim` (`AllocationService.claimAllocation`).
    * Atomically transitions the allocation if and only if `status == PENDING` and `ta == auth.user.id`.
+   * Concurrent claims result in exactly one successful claim (HTTP 200) and a conflict response (HTTP 409) for subsequent callers.
    * Emits an `ALLOCATION_CLAIM` audit log.
 2. **`IN_PROGRESS` → `PENDING` (Release)**:
    * Performed via `POST /api/allocations/[id]/release` (`AllocationService.releaseAllocation`).
    * Atomically resets status back to `PENDING` if `status == IN_PROGRESS`.
    * Can be executed by the assigned TA or by backup operators (`PROFESSOR` / `ADMIN`).
-   * Emits an `ALLOCATION_RELEASE` audit log (flagging `isOverride: true` if released by a non-owner).
+   * Emits an `ALLOCATION_RELEASE` audit log (flagging `isOverride: true` if released by a non-owner backup operator).
 3. **`IN_PROGRESS` → `COMPLETED` (Mark Completed)**:
    * Performed via `AllocationService.markCompleted(allocationId, actor)`.
+   * Designed to be invoked by the future Week-7 grading save flow upon final grade submission.
    * Atomically transitions `IN_PROGRESS` → `COMPLETED` matching `_id` and authorized actor.
-   * Enforces idempotency (rejects repeated completions with `409 Conflict`).
-   * Emits an `ALLOCATION_COMPLETE` audit log.
+   * Emits an `ALLOCATION_COMPLETE` audit log inside a transaction.
+
+### 2.3 Completion Idempotency Contract
+* **First Successful Call (`IN_PROGRESS` → `COMPLETED`)**: Atomically updates the allocation status to `COMPLETED`, records an `ALLOCATION_COMPLETE` audit entry, and returns the updated allocation document.
+* **Repeated Call on Already `COMPLETED` Allocation**: Returns `HTTP 409 Conflict` with message `"Allocation is already completed"`. No duplicate audit log is generated.
+* **Week-7 Grade-Save Contract**: The `HTTP 409 Conflict` response is intentional and indicates the allocation is already completed. The future Week-7 grade-save caller must treat an already-completed allocation (`HTTP 409`) as an **idempotent outcome** rather than assuming the completion state was lost or failing the grading workflow.
+* **Pending Rejection**: Attempting to complete a `PENDING` allocation returns `HTTP 400 Bad Request` (`"Cannot complete a pending allocation"`).
+* **Authorization**: The primary owner (assigned TA) can only complete their own allocations. Backup operators (`UserRole.PROFESSOR`, `UserRole.ADMIN`) can complete any allocation on behalf of the assigned TA (logged with `isOverride: true`). An unassigned TA attempting to complete another TA's allocation receives `HTTP 403 Forbidden`.
 
 ---
 
@@ -73,7 +81,7 @@ The allocation engine ([`src/services/AllocationService.ts`](file:///c:/Users/AA
 * Executes in memory without persisting any database records.
 
 ### 3.3 Re-Run Protection & Script Exclusion
-* **Re-run Gate**: If an exam already has allocations where any allocation is `IN_PROGRESS` or `COMPLETED`, re-running allocation is rejected with `409 Conflict` to protect grading in progress.
+* **Re-run Gate**: If an exam already has allocations where any allocation is `IN_PROGRESS` or `COMPLETED`, re-running allocation is rejected with `400 Bad Request` to protect grading in progress.
 * **Exclusion Criteria**: Scripts lacking student identification (marked `needsManualId: true`), blank scripts (`isNearBlank: true`), duplicate scripts (`isDuplicate: true`), or inactive scripts are excluded from allocation.
 
 ### 3.4 Mixed-Mode Allocation Prevention
@@ -109,29 +117,57 @@ The TA grading work queue ([`src/app/api/allocations/route.ts`](file:///c:/Users
 The progress aggregation endpoint ([`src/app/api/exams/[id]/progress/route.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/app/api/exams/%5Bid%5D/progress/route.ts)) provides professor-facing grading progress per TA:
 * **Server-Side Aggregation**: Utilizes a single MongoDB aggregation pipeline (`$match`, `$group`, `$sum`, `$lookup`, `$unwind`, `$project`, `$sort`) in [`src/services/AllocationService.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/services/AllocationService.ts). Entire document collections are never loaded into application memory.
 * **Metrics Returned (per TA)**:
-  * `taId`: TA user ID.
-  * `name`: TA name.
-  * `email`: TA email address.
+  * `taId`: TA user ID string.
+  * `name`: TA name (defaults to `'Unknown TA'` if user record is unresolvable).
   * `total`: Total allocations assigned to that TA for the exam.
   * `graded`: Count of allocations whose status is `AllocationStatus.COMPLETED`.
 * **Exam Scoping**: Aggregation strictly matches `exam: ObjectId(examId)`.
 * **Unified Allocation Support**: Uniformly handles both whole-script and question-wise allocations without special-case counters.
-* **Privacy**: Student PII is completely excluded from the aggregation and response payload.
+* **No Email Exposure**: TA email address is explicitly excluded from the progress aggregation pipeline and response payload.
+* **Professor-Facing TA Visibility**: TA names and IDs are intentionally visible to instructors to track grading responsibilities.
+* **Zero Student PII**: Student identification, roll numbers, script filenames, and mapping references are completely excluded from the aggregation and response payload.
+
+### 6.1 Progress Response Example (200 OK)
+```json
+{
+  "success": true,
+  "message": "Progress retrieved successfully",
+  "data": {
+    "examId": "60c72b2f9b1d8a001f8e1235",
+    "total": 20,
+    "graded": 12,
+    "progress": [
+      {
+        "taId": "60c72b2f9b1d8a001f8e1001",
+        "name": "Hermione Granger",
+        "graded": 8,
+        "total": 10
+      },
+      {
+        "taId": "60c72b2f9b1d8a001f8e1002",
+        "name": "Ron Weasley",
+        "graded": 4,
+        "total": 10
+      }
+    ]
+  }
+}
+```
 
 ---
 
 ## 7. Authorization Matrix
 
-| Action | HTTP Route / Entry Point | Required Permission | Allowed Roles |
+| Action | HTTP Route / Entry Point | Required Permission / Check | Allowed Roles |
 | :--- | :--- | :--- | :--- |
 | **Allocate Scripts** | `POST /api/exams/[id]/allocate` | `Permission.ALLOCATE_SCRIPTS` | `PROFESSOR`, `ADMIN` |
 | **Preview Allocation** | `POST /api/exams/[id]/allocate/preview` | `Permission.ALLOCATE_SCRIPTS` | `PROFESSOR`, `ADMIN` |
 | **Reassign Allocation** | `PUT /api/exams/[id]/allocate/reassign` | `Permission.ALLOCATE_SCRIPTS` | `PROFESSOR`, `ADMIN` |
 | **View TA Work Queue** | `GET /api/allocations` | `Permission.VIEW_ASSIGNED_SCRIPTS` | `TA`, `ADMIN` |
-| **Claim Allocation** | `POST /api/allocations/[id]/claim` | `Permission.GRADE_SCRIPT` | `TA`, `ADMIN` |
-| **Release Allocation (Own)** | `POST /api/allocations/[id]/release` | `Permission.GRADE_SCRIPT` | `TA`, `ADMIN` |
+| **Claim Allocation** | `POST /api/allocations/[id]/claim` | `Permission.GRADE_SCRIPT` | Assigned `TA`, `ADMIN` |
+| **Release Allocation (Own)** | `POST /api/allocations/[id]/release` | `Permission.GRADE_SCRIPT` | Assigned `TA`, `ADMIN` |
 | **Release Allocation (Override)**| `POST /api/allocations/[id]/release` | `Permission.ALLOCATE_SCRIPTS` | `PROFESSOR`, `ADMIN` |
-| **Mark Completed** | `AllocationService.markCompleted()` | Caller context verification | Owning `TA`, `PROFESSOR`, `ADMIN` |
+| **Mark Completed** | `AllocationService.markCompleted()` | Role & Actor ownership check (`UserRole`) | Assigned `TA`, `PROFESSOR`, `ADMIN` |
 | **View Exam Progress** | `GET /api/exams/[id]/progress` | `Permission.ALLOCATE_SCRIPTS` | `PROFESSOR`, `ADMIN` |
 
 ---
@@ -162,5 +198,5 @@ The progress aggregation endpoint ([`src/app/api/exams/[id]/progress/route.ts`](
 
 > [!NOTE]
 > * **Live Progress Updates (Deferred to Week 6)**: Real-time progress updates via WebSocket or Server-Sent Events (SSE) are deferred to Week 6. Progress data is currently polled on demand via `GET /api/exams/[id]/progress`.
-> * **Grading Save Integration (Deferred to Week 7)**: The grading interface, marks calculation, and grade-save endpoint are scheduled for Week 7. The future Week-7 grading save flow will invoke `AllocationService.markCompleted()` upon final grade submission.
+> * **Grading UI & Grade-Save Integration (Deferred to Week 7)**: The grading interface UI, marks calculation, and grade-save endpoint are scheduled for Week 7. The future Week-7 grading save flow will invoke `AllocationService.markCompleted()` upon final grade submission. The grading save caller is not implemented in this milestone.
 > * **Difficulty-Based Work Queue Sorting (Deferred to AE-097b)**: Sorting allocations by question or script complexity/difficulty is deferred to AE-097b. The backend explicitly rejects difficulty sort parameters with HTTP 400 Bad Request.
