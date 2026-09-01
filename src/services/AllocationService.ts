@@ -1023,11 +1023,52 @@ export class AllocationService {
         const totalAllocations = aggregatedResults.reduce((acc, curr) => acc + curr.total, 0);
         const totalGraded = aggregatedResults.reduce((acc, curr) => acc + curr.graded, 0);
 
+        // AE-104a: Calculate completion ratios and cohort median among eligible TAs (total > 0)
+        const eligibleRatios = aggregatedResults
+            .filter((ta) => ta.total > 0)
+            .map((ta) => Math.round((ta.graded / ta.total) * 10000) / 10000)
+            .sort((a, b) => a - b);
+
+        let cohortMedianCompletionRatio = 0;
+        if (eligibleRatios.length > 0) {
+            const mid = Math.floor(eligibleRatios.length / 2);
+            if (eligibleRatios.length % 2 === 1) {
+                cohortMedianCompletionRatio = eligibleRatios[mid];
+            } else {
+                cohortMedianCompletionRatio = Math.round(((eligibleRatios[mid - 1] + eligibleRatios[mid]) / 2) * 10000) / 10000;
+            }
+        }
+
+        let bottleneckCount = 0;
+
+        const enrichedProgress: TaProgressResult[] = aggregatedResults.map((ta) => {
+            const completionRatio = ta.total > 0 ? Math.round((ta.graded / ta.total) * 10000) / 10000 : 0;
+            let isBottleneck = false;
+
+            if (ta.total > 0 && eligibleRatios.length > 0) {
+                const diff = Math.round((cohortMedianCompletionRatio - completionRatio) * 10000) / 10000;
+                // Flagged when materially below the cohort median by more than 20 percentage points (0.20)
+                if (diff > 0.20) {
+                    isBottleneck = true;
+                    bottleneckCount++;
+                }
+            }
+
+            return {
+                ...ta,
+                completionRatio,
+                isBottleneck,
+                bottleneck: isBottleneck
+            };
+        });
+
         return {
             examId,
             total: totalAllocations,
             graded: totalGraded,
-            progress: aggregatedResults
+            cohortMedianCompletionRatio,
+            bottleneckCount,
+            progress: enrichedProgress
         };
     }
 
@@ -1037,6 +1078,19 @@ export class AllocationService {
     static async getExamProgress(examId: string): Promise<ExamProgressResult> {
         return this.getProgress(examId);
     }
+
+    /**
+     * Retrieves progress and specifically filtered bottlenecks for an exam.
+     */
+    static async getBottlenecks(examId: string): Promise<ExamBottleneckResult> {
+        const progressResult = await this.getProgress(examId);
+        const bottlenecks = progressResult.progress.filter((ta) => ta.isBottleneck);
+
+        return {
+            ...progressResult,
+            bottlenecks
+        };
+    }
 }
 
 export interface TaProgressResult {
@@ -1044,13 +1098,22 @@ export interface TaProgressResult {
     name: string;
     graded: number;
     total: number;
+    completionRatio: number;
+    isBottleneck: boolean;
+    bottleneck: boolean;
 }
 
 export interface ExamProgressResult {
     examId: string;
     total: number;
     graded: number;
+    cohortMedianCompletionRatio: number;
+    bottleneckCount: number;
     progress: TaProgressResult[];
+}
+
+export interface ExamBottleneckResult extends ExamProgressResult {
+    bottlenecks: TaProgressResult[];
 }
 
 
