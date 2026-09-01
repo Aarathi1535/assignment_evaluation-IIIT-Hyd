@@ -31,6 +31,11 @@ class ExamService {
                 throw new HttpError('Course not found', 404);
             }
         }
+        if (data.gradingDeadline && data.examDate) {
+            if (new Date(data.gradingDeadline).getTime() < new Date(data.examDate).getTime()) {
+                throw new HttpError('Grading deadline cannot be before exam date', 400);
+            }
+        }
         try {
             // Force status to DRAFT on exam creation
             data.status = ExamStatus.DRAFT;
@@ -198,6 +203,23 @@ class ExamService {
             }
         }
 
+        // Validate gradingDeadline rules (freeze rule on grading commencement and chronology against examDate)
+        if (data.gradingDeadline !== undefined) {
+            const { AllocationService } = await import('./AllocationService');
+            try {
+                await AllocationService.checkGradingCommenced(new mongoose.Types.ObjectId(id));
+            } catch {
+                throw new HttpError('Cannot update grading deadline: grading has already commenced for this exam', 400);
+            }
+
+            if (data.gradingDeadline !== null) {
+                const effectiveExamDate = data.examDate !== undefined ? new Date(data.examDate) : new Date(examBefore.examDate);
+                if (new Date(data.gradingDeadline).getTime() < effectiveExamDate.getTime()) {
+                    throw new HttpError('Grading deadline cannot be before exam date', 400);
+                }
+            }
+        }
+
         try {
             const updatedExam = await ExamRepository.updateExam(id, data, actingUserId, actingUserRole);
 
@@ -226,6 +248,9 @@ class ExamService {
                 }
                 if (data.omrTemplate !== undefined) {
                     changedFields.push('omrTemplate');
+                }
+                if (data.gradingDeadline !== undefined) {
+                    changedFields.push('gradingDeadline');
                 }
 
                 await writeAuditLog({
