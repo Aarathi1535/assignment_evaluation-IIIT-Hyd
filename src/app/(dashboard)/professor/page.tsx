@@ -234,11 +234,18 @@ export default function ProfessorDashboardPage() {
                           {new Date(e.examDate).toLocaleDateString(undefined, { dateStyle: 'medium' })}
                         </p>
                       </div>
-                      <Link href={`/professor/exams/edit/${e._id}`}>
-                        <Button variant="outline" size="sm">
-                          Edit
-                        </Button>
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/professor/exams/${e._id}/progress`}>
+                          <Button variant="outline" size="sm">
+                            Progress
+                          </Button>
+                        </Link>
+                        <Link href={`/professor/exams/edit/${e._id}`}>
+                          <Button variant="outline" size="sm">
+                            Edit
+                          </Button>
+                        </Link>
+                      </div>
                     </div>
                   </Card>
                 );
