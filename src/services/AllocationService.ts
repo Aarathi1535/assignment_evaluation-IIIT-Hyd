@@ -7,6 +7,7 @@ import Course, { ICourse } from '../models/Course';
 import { HttpError } from '../lib/errors';
 import AuditLog from '../models/AuditLog';
 import { UserRole } from '../constants/permissions';
+import ProgressEventService from './ProgressEventService';
 
 export class AllocationService {
     /**
@@ -868,7 +869,7 @@ export class AllocationService {
 
         const allocationObjectId = new mongoose.Types.ObjectId(allocationId);
 
-        return await this.runInTransaction(async (session) => {
+        const allocation = await this.runInTransaction(async (session) => {
             // Retrieve user role from DB if not provided in the actor object
             let role = actorRole;
             if (!role) {
@@ -941,6 +942,17 @@ export class AllocationService {
 
             return allocation;
         });
+
+        // Emit transport-independent progress update event after successful completion
+        const owningTaId = allocation.ta.toString();
+        const examId = allocation.exam.toString();
+        try {
+            await ProgressEventService.emitAllocationCompleted(examId, owningTaId);
+        } catch (eventError) {
+            console.error('Failed to emit progress event:', eventError);
+        }
+
+        return allocation;
     }
 
     /**
