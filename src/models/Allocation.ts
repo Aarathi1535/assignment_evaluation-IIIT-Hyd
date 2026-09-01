@@ -21,6 +21,8 @@ export interface IAllocation extends Document {
     rule?: AllocationRule;
     question?: number;
     seed?: number;
+    claimedAt?: Date;
+    completedAt?: Date;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -70,6 +72,14 @@ const AllocationSchema = new Schema<IAllocation>(
         },
         seed: {
             type: Number,
+            required: false
+        },
+        claimedAt: {
+            type: Date,
+            required: false
+        },
+        completedAt: {
+            type: Date,
             required: false
         }
     },
