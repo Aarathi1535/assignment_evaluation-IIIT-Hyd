@@ -202,11 +202,14 @@ export class ProgressEventService {
     static async dispatchProgressEvent(examId: string, taId: string): Promise<ProgressUpdateEvent> {
         const examProgress = await AllocationService.getProgress(examId);
 
-        const taProgress = examProgress.progress.find((p) => p.taId === taId) || {
+        const taProgress: TaProgressResult = examProgress.progress.find((p) => p.taId === taId) || {
             taId,
             name: 'Unknown TA',
             graded: 0,
-            total: 0
+            total: 0,
+            completionRatio: 0,
+            isBottleneck: false,
+            bottleneck: false
         };
 
         const event: ProgressUpdateEvent = {
