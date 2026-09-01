@@ -9,7 +9,8 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   AlertCircle, 
-  Radio
+  Radio,
+  Clock
 } from 'lucide-react';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
@@ -29,6 +30,10 @@ export interface ExamProgressData {
   total: number;
   graded: number;
   progress: TaProgress[];
+  eta?: Date | string | null;
+  etaAvailable?: boolean;
+  etaReason?: string;
+  estimatedRemainingSeconds?: number | null;
 }
 
 export interface TaLiveProgressViewProps {
@@ -52,6 +57,58 @@ export function calculateProgressPercentage(graded: number, total: number, compl
   }
   if (!total || total <= 0) return 0;
   return Math.min(100, Math.max(0, Math.round((graded / total) * 100)));
+}
+
+/**
+ * Pure helper function to format overall exam grading summary metrics (AE-107).
+ */
+export function formatOverallGradingSummary(graded: number, total: number) {
+  const safeTotal = Math.max(0, total);
+  const safeGraded = Math.max(0, Math.min(safeTotal, graded));
+  const remaining = Math.max(0, safeTotal - safeGraded);
+  const percentage = safeTotal > 0 ? Math.round((safeGraded / safeTotal) * 100) : 0;
+  return {
+    graded: safeGraded,
+    total: safeTotal,
+    remaining,
+    percentage
+  };
+}
+
+/**
+ * Pure helper function to format naive ETA display based on completedAt timestamps (AE-107).
+ */
+export function formatEtaDisplay(
+  eta?: Date | string | null,
+  etaAvailable?: boolean,
+  etaReason?: string,
+  estimatedRemainingSeconds?: number | null
+): string {
+  if (etaReason === 'COMPLETED') {
+    return 'Grading Complete (100%)';
+  }
+  if (etaAvailable && eta) {
+    const dateObj = typeof eta === 'string' ? new Date(eta) : eta;
+    const dateStr = dateObj.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    if (typeof estimatedRemainingSeconds === 'number' && estimatedRemainingSeconds >= 0) {
+      if (estimatedRemainingSeconds < 60) {
+        return `~${estimatedRemainingSeconds}s remaining (${dateStr})`;
+      }
+      const mins = Math.round(estimatedRemainingSeconds / 60);
+      if (mins < 60) {
+        return `~${mins}m remaining (${dateStr})`;
+      }
+      const hours = Math.floor(mins / 60);
+      const remMins = mins % 60;
+      return `~${hours}h ${remMins}m remaining (${dateStr})`;
+    }
+    return `Est. ${dateStr}`;
+  }
+  if (etaReason === 'NO_ALLOCATIONS') {
+    return 'ETA unavailable (no allocations)';
+  }
+  return 'ETA pending more completed grading data';
 }
 
 export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) {
@@ -273,23 +330,88 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
         </div>
       )}
 
-      {/* Overall Exam Summary Card */}
-      <Card className="border border-slate-200 bg-white p-5">
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-brand-primary" />
-              <h3 className="text-base font-bold text-slate-900">Total Exam Evaluation Progress</h3>
+      {/* Overall Exam Grading Summary Card (AE-107) */}
+      <Card className="border border-slate-200 bg-white p-5 space-y-5 shadow-xs">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-brand-primary" />
+            <h3 className="text-base font-bold text-slate-900">Overall Exam Grading Summary</h3>
+          </div>
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+            Aggregate Progress
+          </span>
+        </div>
+
+        {/* 3 Metric Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Total Graded */}
+          <div className="bg-slate-50 border border-slate-200 rounded-brand p-3.5 space-y-1">
+            <p className="text-xs font-semibold text-slate-500">Total Graded</p>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-extrabold text-slate-900" data-testid="total-graded-count">
+                {totalGraded}
+              </span>
+              <span className="text-xs font-bold text-slate-500">/ {totalAssigned} allocations</span>
             </div>
-            <span className="text-sm font-bold text-slate-700">
-              {totalGraded} / {totalAssigned} Graded ({overallPercentage}%)
-            </span>
+            <p className="text-2xs text-slate-500 font-medium">
+              {Math.max(0, totalAssigned - totalGraded)} scripts remaining
+            </p>
           </div>
 
-          {/* Visual Progress Bar for Overall Exam */}
+          {/* Overall Percentage */}
+          <div className="bg-slate-50 border border-slate-200 rounded-brand p-3.5 space-y-1">
+            <p className="text-xs font-semibold text-slate-500">Grading Completion</p>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-extrabold text-brand-primary" data-testid="overall-grading-percentage">
+                {overallPercentage}%
+              </span>
+            </div>
+            <p className="text-2xs text-slate-500 font-medium">
+              Aggregate across all TAs
+            </p>
+          </div>
+
+          {/* Naive ETA */}
+          <div className="bg-slate-50 border border-slate-200 rounded-brand p-3.5 space-y-1">
+            <div className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-slate-400" />
+              <p className="text-xs font-semibold text-slate-500">Estimated Completion (ETA)</p>
+            </div>
+            <p
+              className={`text-sm font-bold truncate ${
+                progressData?.etaReason === 'COMPLETED'
+                  ? 'text-emerald-700'
+                  : progressData?.etaAvailable
+                  ? 'text-slate-900'
+                  : 'text-slate-500'
+              }`}
+              data-testid="naive-eta-display"
+            >
+              {formatEtaDisplay(
+                progressData?.eta,
+                progressData?.etaAvailable,
+                progressData?.etaReason,
+                progressData?.estimatedRemainingSeconds
+              )}
+            </p>
+            <p className="text-2xs text-slate-500 font-medium">
+              {progressData?.etaAvailable
+                ? 'Based on reliable completion timestamps'
+                : 'Requires historical completion timestamps'}
+            </p>
+          </div>
+        </div>
+
+        {/* Aggregate Visual Progress Bar */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+            <span>Overall Progress Bar</span>
+            <span>{overallPercentage}% Complete</span>
+          </div>
           <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
             <div
               role="progressbar"
+              aria-label="Overall exam grading progress"
               aria-valuenow={overallPercentage}
               aria-valuemin={0}
               aria-valuemax={100}

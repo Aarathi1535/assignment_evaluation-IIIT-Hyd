@@ -1120,6 +1120,61 @@ export class AllocationService {
             };
         });
 
+        // AE-107: Naive ETA calculation based strictly on reliable completedAt timestamps
+        let eta: Date | null = null;
+        let etaAvailable = false;
+        let etaReason: string | undefined = undefined;
+        let estimatedRemainingSeconds: number | null = null;
+
+        const remainingAllocations = Math.max(0, totalAllocations - totalGraded);
+
+        if (totalAllocations === 0) {
+            etaAvailable = false;
+            etaReason = 'NO_ALLOCATIONS';
+        } else if (remainingAllocations === 0) {
+            etaAvailable = true;
+            etaReason = 'COMPLETED';
+            estimatedRemainingSeconds = 0;
+            const latestCompleted = await Allocation.findOne({
+                exam: examObjectId,
+                status: AllocationStatus.COMPLETED,
+                completedAt: { $exists: true, $ne: null }
+            })
+                .sort({ completedAt: -1 })
+                .select('completedAt');
+            eta = latestCompleted?.completedAt || new Date();
+        } else {
+            const completedTimestamps = await Allocation.find({
+                exam: examObjectId,
+                status: AllocationStatus.COMPLETED,
+                completedAt: { $exists: true, $ne: null }
+            })
+                .sort({ completedAt: 1 })
+                .select('completedAt');
+
+            const completedCount = completedTimestamps.length;
+
+            if (completedCount < 2) {
+                etaAvailable = false;
+                etaReason = 'INSUFFICIENT_DATA';
+            } else {
+                const firstCompletedMs = new Date(completedTimestamps[0].completedAt!).getTime();
+                const lastCompletedMs = new Date(completedTimestamps[completedCount - 1].completedAt!).getTime();
+                const elapsedMs = lastCompletedMs - firstCompletedMs;
+
+                if (elapsedMs <= 0) {
+                    etaAvailable = false;
+                    etaReason = 'INSUFFICIENT_INTERVAL';
+                } else {
+                    const avgMsPerCompletion = elapsedMs / (completedCount - 1);
+                    const remainingMs = remainingAllocations * avgMsPerCompletion;
+                    estimatedRemainingSeconds = Math.round(remainingMs / 1000);
+                    eta = new Date(Date.now() + remainingMs);
+                    etaAvailable = true;
+                }
+            }
+        }
+
         return {
             examId,
             total: totalAllocations,
@@ -1131,7 +1186,11 @@ export class AllocationService {
             paceReason,
             expectedCompletionRatio,
             bottleneckCount,
-            progress: enrichedProgress
+            progress: enrichedProgress,
+            eta,
+            etaAvailable,
+            etaReason,
+            estimatedRemainingSeconds
         };
     }
 
@@ -1193,6 +1252,10 @@ export interface ExamProgressResult {
     expectedCompletionRatio?: number;
     bottleneckCount: number;
     progress: TaProgressResult[];
+    eta?: Date | null;
+    etaAvailable: boolean;
+    etaReason?: string;
+    estimatedRemainingSeconds?: number | null;
 }
 
 export interface ExamBottleneckResult extends ExamProgressResult {
