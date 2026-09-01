@@ -10,7 +10,9 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Radio,
-  Clock
+  Clock,
+  ChevronRight,
+  FileText
 } from 'lucide-react';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
@@ -34,6 +36,32 @@ export interface ExamProgressData {
   etaAvailable?: boolean;
   etaReason?: string;
   estimatedRemainingSeconds?: number | null;
+}
+
+export interface TaAllocatedScriptItem {
+  allocationId: string;
+  scriptId: string;
+  answerScriptId: string | null;
+  question: number | null;
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+  claimedAt: Date | string | null;
+  completedAt: Date | string | null;
+  durationSeconds: number | null;
+}
+
+export interface TaWorkloadData {
+  examId: string;
+  examTitle: string;
+  ta: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  total: number;
+  graded: number;
+  inProgress: number;
+  pending: number;
+  scripts: TaAllocatedScriptItem[];
 }
 
 export interface TaLiveProgressViewProps {
@@ -111,6 +139,53 @@ export function formatEtaDisplay(
   return 'ETA pending more completed grading data';
 }
 
+/**
+ * Pure helper function to calculate time per script (completedAt - claimedAt) in seconds (AE-108).
+ * Only produces a duration if status is COMPLETED and both timestamps are valid.
+ */
+export function calculateTimePerScript(
+  claimedAt?: Date | string | null,
+  completedAt?: Date | string | null,
+  status?: string
+): number | null {
+  if (status && status !== 'COMPLETED') {
+    return null;
+  }
+  if (!claimedAt || !completedAt) {
+    return null;
+  }
+  const claimedMs = new Date(claimedAt).getTime();
+  const completedMs = new Date(completedAt).getTime();
+  if (isNaN(claimedMs) || isNaN(completedMs)) {
+    return null;
+  }
+  const diffMs = completedMs - claimedMs;
+  if (diffMs < 0) {
+    return null;
+  }
+  return Math.round(diffMs / 1000);
+}
+
+/**
+ * Pure helper function to format a duration in seconds into a friendly string (e.g. "4m 12s", "45s", "1h 15m") (AE-108).
+ */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || isNaN(seconds) || seconds < 0) {
+    return '—';
+  }
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const mins = Math.floor(seconds / 60);
+  const remSecs = seconds % 60;
+  if (mins < 60) {
+    return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
+  }
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
+}
+
 export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) {
   const [progressData, setProgressData] = useState<ExamProgressData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,6 +194,12 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
   const [isLiveConnected, setIsLiveConnected] = useState(false);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // TA Drill-Down State (AE-108)
+  const [selectedTaId, setSelectedTaId] = useState<string | null>(null);
+  const [taWorkload, setTaWorkload] = useState<TaWorkloadData | null>(null);
+  const [loadingWorkload, setLoadingWorkload] = useState(false);
+  const [workloadError, setWorkloadError] = useState<string | null>(null);
 
   // Fetch baseline progress from REST API: GET /api/exams/[id]/progress
   const fetchProgress = useCallback(async (isManual = false) => {
@@ -146,6 +227,41 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
       }
     }
   }, [examId]);
+
+  // Fetch specific TA workload drilldown data: GET /api/exams/[id]/ta/[taId] (AE-108)
+  const fetchTaWorkload = useCallback(async (taId: string) => {
+    try {
+      setLoadingWorkload(true);
+      setWorkloadError(null);
+
+      const res = await fetch(`/api/exams/${examId}/ta/${taId}`);
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to fetch TA workload details');
+      }
+
+      setTaWorkload(json.data);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'An error occurred while fetching TA workload.';
+      setWorkloadError(message);
+    } finally {
+      setLoadingWorkload(false);
+    }
+  }, [examId]);
+
+  // Handle drilldown selection
+  const handleSelectTa = (taId: string) => {
+    setSelectedTaId(taId);
+    fetchTaWorkload(taId);
+  };
+
+  // Handle returning to main exam dashboard
+  const handleBackToOverview = () => {
+    setSelectedTaId(null);
+    setTaWorkload(null);
+    setWorkloadError(null);
+  };
 
   // Initial load
   useEffect(() => {
@@ -186,7 +302,6 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
         if (payload?.examProgress) {
           setProgressData(payload.examProgress);
         } else if (payload?.taProgress) {
-          // If only taProgress is present, update the specific TA in the list
           setProgressData((prev) => {
             if (!prev) return prev;
             const updatedList = prev.progress.map((ta) =>
@@ -218,7 +333,6 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
 
     es.onerror = () => {
       setIsLiveConnected(false);
-      // EventSource automatically attempts reconnection in background
     };
 
     return () => {
@@ -243,6 +357,185 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
   const overallPercentage = calculateProgressPercentage(totalGraded, totalAssigned);
   const taList = progressData?.progress || [];
 
+  // ==========================================
+  // VIEW: TA DRILL-DOWN WORKLOAD DETAIL VIEW
+  // ==========================================
+  if (selectedTaId) {
+    const selectedTaFromList = taList.find((t) => t.taId === selectedTaId);
+    const taName = taWorkload?.ta.name || selectedTaFromList?.name || 'Teaching Assistant';
+
+    return (
+      <div className="space-y-6 font-sans">
+        {/* Header with Return to Exam Dashboard navigation */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBackToOverview}
+              data-testid="back-to-overview-button"
+            >
+              <ArrowLeft className="h-4 w-4 mr-1.5" />
+              <span>Back to Exam Progress</span>
+            </Button>
+            <div>
+              <h2 className="text-xl font-bold text-slate-900" data-testid="ta-detail-title">
+                {taName} — Workload Details
+              </h2>
+              <p className="text-xs text-slate-500 font-medium">
+                Detailed script allocations and timing breakdown for this exam
+              </p>
+            </div>
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchTaWorkload(selectedTaId)}
+            isLoading={loadingWorkload}
+          >
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loadingWorkload ? 'animate-spin' : ''}`} />
+            <span>Refresh Workload</span>
+          </Button>
+        </div>
+
+        {/* Error State */}
+        {workloadError && (
+          <div
+            role="alert"
+            className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-brand p-4 text-rose-900 text-sm font-semibold"
+          >
+            <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
+            <span>{workloadError}</span>
+          </div>
+        )}
+
+        {/* Loading Spinner for Drilldown */}
+        {loadingWorkload ? (
+          <div className="min-h-[300px] flex items-center justify-center">
+            <div className="text-center space-y-3">
+              <LoadingSpinner size="lg" />
+              <p className="text-sm font-semibold text-slate-500">Loading assigned scripts...</p>
+            </div>
+          </div>
+        ) : taWorkload ? (
+          <div className="space-y-5">
+            {/* TA Workload Stats Summary Card */}
+            <Card className="border border-slate-200 bg-white p-5 shadow-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="bg-slate-50 border border-slate-200 rounded-brand p-3 space-y-0.5">
+                  <p className="text-2xs font-bold text-slate-500 uppercase">Assigned</p>
+                  <p className="text-xl font-extrabold text-slate-900">{taWorkload.total}</p>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-brand p-3 space-y-0.5">
+                  <p className="text-2xs font-bold text-emerald-700 uppercase">Graded</p>
+                  <p className="text-xl font-extrabold text-emerald-800">{taWorkload.graded}</p>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 rounded-brand p-3 space-y-0.5">
+                  <p className="text-2xs font-bold text-blue-700 uppercase">In Progress</p>
+                  <p className="text-xl font-extrabold text-blue-800">{taWorkload.inProgress}</p>
+                </div>
+                <div className="bg-amber-50 border border-amber-200 rounded-brand p-3 space-y-0.5">
+                  <p className="text-2xs font-bold text-amber-700 uppercase">Pending</p>
+                  <p className="text-xl font-extrabold text-amber-800">{taWorkload.pending}</p>
+                </div>
+              </div>
+            </Card>
+
+            {/* Assigned Scripts Table */}
+            <Card className="border border-slate-200 bg-white overflow-hidden shadow-xs">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <FileText className="h-4.5 w-4.5 text-slate-500" />
+                  <span>Assigned Answer Scripts ({taWorkload.scripts.length})</span>
+                </h3>
+              </div>
+
+              {taWorkload.scripts.length === 0 ? (
+                <div className="p-8">
+                  <EmptyState
+                    title="No scripts assigned"
+                    description="No answer scripts have been assigned to this TA for this exam."
+                    icon={FileText}
+                  />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm" data-testid="ta-scripts-table">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase tracking-wider">
+                      <tr>
+                        <th className="px-5 py-3">Script Identifier</th>
+                        <th className="px-5 py-3">Scope</th>
+                        <th className="px-5 py-3">Status</th>
+                        <th className="px-5 py-3">Claimed At</th>
+                        <th className="px-5 py-3">Completed At</th>
+                        <th className="px-5 py-3">Time Per Script</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                      {taWorkload.scripts.map((item, idx) => {
+                        const statusBadge =
+                          item.status === 'COMPLETED'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : item.status === 'IN_PROGRESS'
+                            ? 'bg-blue-50 text-blue-700 border-blue-200'
+                            : 'bg-slate-100 text-slate-700 border-slate-200';
+
+                        const durationStr = formatDuration(item.durationSeconds);
+                        const durationDisplay =
+                          item.status === 'COMPLETED'
+                            ? durationStr
+                            : item.status === 'IN_PROGRESS'
+                            ? 'In Progress'
+                            : 'Not Claimed';
+
+                        return (
+                          <tr key={item.allocationId} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="px-5 py-3.5 font-bold text-slate-900">
+                              <span className="font-mono text-xs bg-slate-100 px-2 py-0.5 rounded-sm border border-slate-200">
+                                {item.scriptId}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5 text-slate-600">
+                              {item.question !== null ? `Question ${item.question}` : 'Whole Script'}
+                            </td>
+                            <td className="px-5 py-3.5">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border ${statusBadge}`}>
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="px-5 py-3.5 text-xs text-slate-500">
+                              {item.claimedAt
+                                ? new Date(item.claimedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+                                : '—'}
+                            </td>
+                            <td className="px-5 py-3.5 text-xs text-slate-500">
+                              {item.completedAt
+                                ? new Date(item.completedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+                                : '—'}
+                            </td>
+                            <td className="px-5 py-3.5 font-bold" data-testid={`time-per-script-${idx}`}>
+                              <span className={item.durationSeconds !== null ? 'text-slate-900 font-mono' : 'text-slate-400'}>
+                                {durationDisplay}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  // ==========================================
+  // VIEW: MAIN EXAM LIVE PROGRESS OVERVIEW
+  // ==========================================
   return (
     <div className="space-y-6 font-sans">
       {/* Header and Controls */}
@@ -454,42 +747,48 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
               return (
                 <Card
                   key={ta.taId}
-                  className="border border-slate-200 hover:shadow-xs transition-shadow duration-200 p-4 bg-white"
+                  className="border border-slate-200 hover:shadow-xs transition-shadow duration-200 p-4 bg-white space-y-3 cursor-pointer"
+                  onClick={() => handleSelectTa(ta.taId)}
+                  data-testid={`ta-card-${ta.taId}`}
                 >
-                  <div className="space-y-3">
-                    {/* TA Name and Graded / Total Header */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="space-y-0.5">
-                        <p className="text-base font-bold text-slate-900" data-testid={`ta-progress-label-${ta.taId}`}>
-                          {progressLabel}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {isFinished && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
-                            Done
-                          </span>
-                        )}
-                        <span className="text-sm font-bold text-slate-700">
-                          {taPercentage}%
+                  {/* TA Name and Graded / Total Header */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <p className="text-base font-bold text-slate-900" data-testid={`ta-progress-label-${ta.taId}`}>
+                        {progressLabel}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isFinished && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
+                          Done
                         </span>
-                      </div>
+                      )}
+                      <span className="text-sm font-bold text-slate-700">
+                        {taPercentage}%
+                      </span>
                     </div>
+                  </div>
 
-                    {/* Per-TA Visual Progress Bar */}
-                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                      <div
-                        role="progressbar"
-                        aria-label={`${ta.name} progress`}
-                        aria-valuenow={taPercentage}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        className={`h-full rounded-full transition-all duration-500 ease-out ${
-                          isFinished ? 'bg-emerald-600' : 'bg-brand-primary'
-                        }`}
-                        style={{ width: `${taPercentage}%` }}
-                      />
-                    </div>
+                  {/* Per-TA Visual Progress Bar */}
+                  <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      role="progressbar"
+                      aria-label={`${ta.name} progress`}
+                      aria-valuenow={taPercentage}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      className={`h-full rounded-full transition-all duration-500 ease-out ${
+                        isFinished ? 'bg-emerald-600' : 'bg-brand-primary'
+                      }`}
+                      style={{ width: `${taPercentage}%` }}
+                    />
+                  </div>
+
+                  {/* Drill-down Click Trigger */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs font-semibold text-brand-primary">
+                    <span>Inspect Workload & Scripts</span>
+                    <ChevronRight className="h-4 w-4" />
                   </div>
                 </Card>
               );

@@ -6,6 +6,7 @@ import Exam from '../models/Exam';
 import Course, { ICourse } from '../models/Course';
 import { HttpError } from '../lib/errors';
 import AuditLog from '../models/AuditLog';
+import User from '../models/User';
 import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
 
@@ -1226,6 +1227,121 @@ export class AllocationService {
             bottlenecks
         };
     }
+
+    /**
+     * Retrieves detailed allocation workload for a specific TA within an exam (AE-108).
+     * Enforces strict scoping to both examId and taId.
+     */
+    static async getTaAllocationsForExam(examId: string, taId: string): Promise<TaExamWorkloadResult> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(taId)) {
+            throw new HttpError('Invalid TA ID format', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+        const taObjectId = new mongoose.Types.ObjectId(taId);
+
+        const exam = await Exam.findById(examObjectId).select('title isActive');
+        if (!exam || !exam.isActive) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const taUser = await User.findById(taObjectId).select('name email role isActive');
+        if (!taUser) {
+            throw new HttpError('TA not found', 404);
+        }
+
+        const allocations = await Allocation.find({
+            exam: examObjectId,
+            ta: taObjectId
+        })
+            .populate({
+                path: 'answerScript',
+                select: 'anonymousId scriptReference filename pageCount'
+            })
+            .sort({ createdAt: 1 });
+
+        const scripts: TaAllocatedScriptItem[] = allocations.map((alloc) => {
+            const answerScript = alloc.answerScript as unknown as (IAnswerScript & { scriptReference?: string; anonymousId?: string }) | null;
+            const scriptId = answerScript
+                ? (answerScript.anonymousId || answerScript.scriptReference || answerScript.filename || alloc._id.toString())
+                : alloc._id.toString();
+
+            // Time per script: completedAt - claimedAt (in ms / seconds)
+            let durationSeconds: number | null = null;
+            if (
+                alloc.status === AllocationStatus.COMPLETED &&
+                alloc.claimedAt &&
+                alloc.completedAt
+            ) {
+                const claimedMs = new Date(alloc.claimedAt).getTime();
+                const completedMs = new Date(alloc.completedAt).getTime();
+                const diffMs = completedMs - claimedMs;
+                if (diffMs >= 0) {
+                    durationSeconds = Math.round(diffMs / 1000);
+                }
+            }
+
+            return {
+                allocationId: alloc._id.toString(),
+                scriptId,
+                answerScriptId: answerScript?._id?.toString() || null,
+                question: alloc.question ?? null,
+                status: alloc.status,
+                claimedAt: alloc.claimedAt || null,
+                completedAt: alloc.completedAt || null,
+                durationSeconds
+            };
+        });
+
+        const total = scripts.length;
+        const graded = scripts.filter((s) => s.status === AllocationStatus.COMPLETED).length;
+        const inProgress = scripts.filter((s) => s.status === AllocationStatus.IN_PROGRESS).length;
+        const pending = scripts.filter((s) => s.status === AllocationStatus.PENDING).length;
+
+        return {
+            examId,
+            examTitle: exam.title,
+            ta: {
+                id: taUser._id.toString(),
+                name: taUser.name,
+                email: taUser.email
+            },
+            total,
+            graded,
+            inProgress,
+            pending,
+            scripts
+        };
+    }
+}
+
+export interface TaAllocatedScriptItem {
+    allocationId: string;
+    scriptId: string;
+    answerScriptId: string | null;
+    question: number | null;
+    status: AllocationStatus;
+    claimedAt: Date | null;
+    completedAt: Date | null;
+    durationSeconds: number | null;
+}
+
+export interface TaExamWorkloadResult {
+    examId: string;
+    examTitle: string;
+    ta: {
+        id: string;
+        name: string;
+        email: string;
+    };
+    total: number;
+    graded: number;
+    inProgress: number;
+    pending: number;
+    scripts: TaAllocatedScriptItem[];
 }
 
 export interface TaProgressResult {
