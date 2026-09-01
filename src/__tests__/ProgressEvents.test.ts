@@ -594,17 +594,185 @@ describe('AE-102: Cross-Instance Live Progress Updates', () => {
                 actingUserRole: UserRole.TA
             });
 
-            // Read streamed progress event
+            // Read events until progress is received (in standalone test env, live_updates_unavailable may precede it)
+            let combinedText = '';
+            while (!combinedText.includes('event: progress')) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+                combinedText += new TextDecoder().decode(chunk.value);
+            }
+
+            expect(combinedText).toContain('event: progress');
+            expect(combinedText).toContain(exam1._id.toString());
+            expect(combinedText).toContain(ta1._id.toString());
+            expect(combinedText).toContain('Hermione Granger');
+
+            reader.releaseLock();
+            await res.body!.cancel();
+        });
+    });
+
+    describe('3. Change Stream Degradation & Observability (AE-102 Feedback J2)', () => {
+        it('activates degraded mode when change stream initialization fails and emits degraded event', async () => {
+            const unavailablePromise = new Promise<any>((resolve) => {
+                ProgressEventService.subscribeLiveUpdatesUnavailable(resolve);
+            });
+
+            await ProgressEventService.startChangeStream();
+            const unavailableEvent = await unavailablePromise;
+
+            expect(ProgressEventService.isDegradedMode()).toBe(true);
+            expect(unavailableEvent).not.toBeNull();
+            expect(unavailableEvent.message).toBe('Live updates unavailable — refresh to see progress.');
+        });
+
+        it('degraded notification strictly contains NO student PII, TA data, or internal MongoDB errors', async () => {
+            const unavailablePromise = new Promise<any>((resolve) => {
+                ProgressEventService.subscribeLiveUpdatesUnavailable(resolve);
+            });
+
+            await ProgressEventService.startChangeStream();
+            const capturedEvent = await unavailablePromise;
+
+            expect(capturedEvent).not.toBeNull();
+            const json = JSON.stringify(capturedEvent);
+
+            expect(json).toBe('{"message":"Live updates unavailable — refresh to see progress."}');
+            expect(json).not.toContain('MongoServerError');
+            expect(json).not.toContain('replica');
+            expect(json).not.toContain('changeStream');
+            expect(json).not.toContain('Harry');
+            expect(json).not.toContain('Hermione');
+            expect(json).not.toContain('graded');
+        });
+
+        it('does not emit duplicate degraded events for multiple subscribers or repeated start calls', async () => {
+            let sub1Count = 0;
+            let sub2Count = 0;
+
+            const unsub1 = ProgressEventService.subscribeLiveUpdatesUnavailable(() => { sub1Count++; });
+            const unsub2 = ProgressEventService.subscribeLiveUpdatesUnavailable(() => { sub2Count++; });
+
+            // Trigger initial degradation
+            await ProgressEventService.startChangeStream();
+            await new Promise((resolve) => setTimeout(resolve, 50));
+
+            expect(sub1Count).toBe(1);
+            expect(sub2Count).toBe(1);
+
+            // Repeated start calls should not re-trigger degraded event
+            await ProgressEventService.startChangeStream();
+            await ProgressEventService.startChangeStream();
+            await new Promise((resolve) => setTimeout(resolve, 50));
+
+            expect(sub1Count).toBe(1);
+            expect(sub2Count).toBe(1);
+
+            unsub1();
+            unsub2();
+        });
+
+        it('SSE route forwards event: live_updates_unavailable when connected in degraded mode', async () => {
+            mockSessionUser = {
+                id: prof._id.toString(),
+                role: UserRole.PROFESSOR,
+                email: prof.email
+            };
+
+            const req = new NextRequest(`http://localhost:3000/api/exams/${exam1._id}/progress/stream`);
+            const res = await streamGET(req, {
+                params: Promise.resolve({ id: exam1._id.toString() })
+            });
+
+            expect(res.status).toBe(200);
+            const reader = res.body!.getReader();
+
+            // Read initial event
+            const initial = await reader.read();
+            const initialText = new TextDecoder().decode(initial.value);
+            expect(initialText).toContain('event: initial');
+
+            // Wait for / read live_updates_unavailable event
+            const degraded = await reader.read();
+            const degradedText = new TextDecoder().decode(degraded.value);
+            expect(degradedText).toContain('event: live_updates_unavailable');
+            expect(degradedText).toContain('Live updates unavailable — refresh to see progress.');
+            expect(degradedText).not.toContain('MongoServerError');
+
+            reader.releaseLock();
+            await res.body!.cancel();
+        });
+
+        it('allows in-process fallback events to continue working when in degraded mode', async () => {
+            mockSessionUser = {
+                id: prof._id.toString(),
+                role: UserRole.PROFESSOR,
+                email: prof.email
+            };
+
+            const req = new NextRequest(`http://localhost:3000/api/exams/${exam1._id}/progress/stream`);
+            const res = await streamGET(req, {
+                params: Promise.resolve({ id: exam1._id.toString() })
+            });
+
+            const reader = res.body!.getReader();
+
+            // Read initial event
+            const initial = await reader.read();
+            expect(new TextDecoder().decode(initial.value)).toContain('event: initial');
+
+            // Read degraded event
+            const degraded = await reader.read();
+            expect(new TextDecoder().decode(degraded.value)).toContain('event: live_updates_unavailable');
+
+            // Now perform in-process allocation completion
+            await AllocationService.markCompleted(alloc1._id.toString(), {
+                actingUserId: ta1._id.toString(),
+                actingUserRole: UserRole.TA
+            });
+
+            // Read streamed progress event (fallback still delivers local updates)
             const progress = await reader.read();
             const progressText = new TextDecoder().decode(progress.value);
-
             expect(progressText).toContain('event: progress');
             expect(progressText).toContain(exam1._id.toString());
-            expect(progressText).toContain(ta1._id.toString());
             expect(progressText).toContain('Hermione Granger');
 
             reader.releaseLock();
             await res.body!.cancel();
+        });
+
+        it('cleans up SSE listeners on stream abort/cancel', async () => {
+            mockSessionUser = {
+                id: prof._id.toString(),
+                role: UserRole.PROFESSOR,
+                email: prof.email
+            };
+
+            const controller = new AbortController();
+            const req = new NextRequest(`http://localhost:3000/api/exams/${exam1._id}/progress/stream`, {
+                signal: controller.signal
+            });
+
+            const res = await streamGET(req, {
+                params: Promise.resolve({ id: exam1._id.toString() })
+            });
+
+            const reader = res.body!.getReader();
+            await reader.read(); // initial
+
+            // Abort client connection
+            controller.abort();
+            reader.releaseLock();
+            await res.body!.cancel();
+
+            // Completing an allocation should succeed without issues
+            await expect(
+                AllocationService.markCompleted(alloc1._id.toString(), {
+                    actingUserId: ta1._id.toString(),
+                    actingUserRole: UserRole.TA
+                })
+            ).resolves.toBeDefined();
         });
     });
 });

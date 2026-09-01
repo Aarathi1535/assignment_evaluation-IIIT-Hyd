@@ -13,6 +13,14 @@ export interface ProgressUpdateEvent {
 
 export type ProgressEventListener = (event: ProgressUpdateEvent) => void;
 
+export interface LiveUpdatesUnavailableEvent {
+    message: string;
+}
+
+export type LiveUpdatesUnavailableListener = (event: LiveUpdatesUnavailableEvent) => void;
+
+export const LIVE_UPDATES_UNAVAILABLE_MESSAGE = 'Live updates unavailable — refresh to see progress.';
+
 /**
  * ProgressEventService
  *
@@ -21,24 +29,34 @@ export type ProgressEventListener = (event: ProgressUpdateEvent) => void;
  * Architecture:
  * 1. Utilizes MongoDB Change Streams on the 'allocations' collection as a shared,
  *    multi-container event bus. When any container marks an allocation COMPLETED,
- *    MongoDB Atlas pushes the change event to all running container instances.
+ *    MongoDB pushes the change event to all running container instances.
  * 2. Manages a single shared Change Stream per process/container to avoid exhausting
  *    database cursor connections.
  * 3. Dispatches received progress updates to local SSE subscribers for the affected exam.
  * 4. Transparently supports local direct dispatch for fallback and test environments.
+ * 5. Emits operational degraded notifications when Change Streams are unavailable so
+ *    connected SSE clients are informed to refresh or poll.
  */
 export class ProgressEventService {
     private static emitter = new EventEmitter();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private static changeStream: any = null;
     private static isChangeStreamInitializing = false;
+    private static isDegraded = false;
+
+    /**
+     * Returns whether the service is currently operating in degraded fallback mode.
+     */
+    static isDegradedMode(): boolean {
+        return this.isDegraded;
+    }
 
     /**
      * Initializes the MongoDB Change Stream on the allocations collection.
      * Watches only for transitions where status becomes 'COMPLETED'.
      */
     static async startChangeStream(): Promise<void> {
-        if (this.changeStream || this.isChangeStreamInitializing) {
+        if (this.changeStream || this.isChangeStreamInitializing || this.isDegraded) {
             return;
         }
 
@@ -87,15 +105,39 @@ export class ProgressEventService {
                 if (process.env.NODE_ENV !== 'test') {
                     console.warn('[ProgressEventService] Change stream error (fallback active):', error?.message || error);
                 }
-                this.stopChangeStream();
+                if (this.changeStream) {
+                    try {
+                        this.changeStream.close().catch(() => {});
+                    } catch {
+                        // ignore close error
+                    }
+                    this.changeStream = null;
+                }
+                this.isChangeStreamInitializing = false;
+                this.markDegradedAndEmit();
             });
 
-        } catch {
+        } catch (error: unknown) {
             // Standalone MongoDB (like MongoMemoryServer in tests) does not support change streams.
             // In such environments, local dispatch handles event propagation.
             this.changeStream = null;
+            if (process.env.NODE_ENV !== 'test') {
+                const errMsg = error instanceof Error ? error.message : String(error);
+                console.warn('[ProgressEventService] Change stream initialization failed (fallback active):', errMsg);
+            }
+            this.markDegradedAndEmit();
         } finally {
             this.isChangeStreamInitializing = false;
+        }
+    }
+
+    private static markDegradedAndEmit(): void {
+        if (!this.isDegraded) {
+            this.isDegraded = true;
+            const event: LiveUpdatesUnavailableEvent = {
+                message: LIVE_UPDATES_UNAVAILABLE_MESSAGE
+            };
+            this.emitter.emit('live_updates_unavailable', event);
         }
     }
 
@@ -126,6 +168,17 @@ export class ProgressEventService {
         this.emitter.on(eventKey, listener);
         return () => {
             this.emitter.off(eventKey, listener);
+        };
+    }
+
+    /**
+     * Subscribes to degraded / live updates unavailable notifications.
+     * Returns an unsubscribe cleanup function.
+     */
+    static subscribeLiveUpdatesUnavailable(listener: LiveUpdatesUnavailableListener): () => void {
+        this.emitter.on('live_updates_unavailable', listener);
+        return () => {
+            this.emitter.off('live_updates_unavailable', listener);
         };
     }
 
@@ -186,6 +239,7 @@ export class ProgressEventService {
             this.emitter.removeAllListeners(`progress:${examId}`);
         } else {
             this.emitter.removeAllListeners();
+            this.isDegraded = false;
         }
     }
 }

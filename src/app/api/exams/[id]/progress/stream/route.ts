@@ -6,7 +6,7 @@ import { Permission } from '../../../../../../constants/permissions';
 import { HttpError } from '../../../../../../lib/errors';
 import Exam from '../../../../../../models/Exam';
 import AllocationService from '../../../../../../services/AllocationService';
-import ProgressEventService from '../../../../../../services/ProgressEventService';
+import ProgressEventService, { LIVE_UPDATES_UNAVAILABLE_MESSAGE } from '../../../../../../services/ProgressEventService';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +18,7 @@ export const dynamic = 'force-dynamic';
  * - Delivers initial progress snapshot immediately upon connection.
  * - Streams live per-TA progress events when allocations are marked COMPLETED.
  * - Cross-container synchronization is backed by MongoDB Change Streams.
+ * - Notifies clients via 'live_updates_unavailable' event when running in degraded fallback mode.
  */
 export async function GET(
   req: NextRequest,
@@ -51,7 +52,8 @@ export async function GET(
     }
 
     const encoder = new TextEncoder();
-    let unsubscribe: (() => void) | null = null;
+    let unsubscribeProgress: (() => void) | null = null;
+    let unsubscribeUnavailable: (() => void) | null = null;
     let isClosed = false;
 
     const stream = new ReadableStream({
@@ -70,9 +72,19 @@ export async function GET(
           const initialProgress = await AllocationService.getProgress(id);
           safeEnqueue(`event: initial\ndata: ${JSON.stringify(initialProgress)}\n\n`);
 
+          // If already operating in degraded mode, notify client immediately
+          if (ProgressEventService.isDegradedMode()) {
+            safeEnqueue(`event: live_updates_unavailable\ndata: ${JSON.stringify({ message: LIVE_UPDATES_UNAVAILABLE_MESSAGE })}\n\n`);
+          }
+
           // Subscribe to live progress update events for this exam
-          unsubscribe = ProgressEventService.subscribe(id, (event) => {
+          unsubscribeProgress = ProgressEventService.subscribe(id, (event) => {
             safeEnqueue(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
+          });
+
+          // Subscribe to degraded/unavailable notifications
+          unsubscribeUnavailable = ProgressEventService.subscribeLiveUpdatesUnavailable((event) => {
+            safeEnqueue(`event: live_updates_unavailable\ndata: ${JSON.stringify(event)}\n\n`);
           });
         } catch {
           isClosed = true;
@@ -85,18 +97,26 @@ export async function GET(
       },
       cancel() {
         isClosed = true;
-        if (unsubscribe) {
-          unsubscribe();
-          unsubscribe = null;
+        if (unsubscribeProgress) {
+          unsubscribeProgress();
+          unsubscribeProgress = null;
+        }
+        if (unsubscribeUnavailable) {
+          unsubscribeUnavailable();
+          unsubscribeUnavailable = null;
         }
       }
     });
 
     // Listen to client abort signal to release subscriptions
     req.signal?.addEventListener('abort', () => {
-      if (unsubscribe) {
-        unsubscribe();
-        unsubscribe = null;
+      if (unsubscribeProgress) {
+        unsubscribeProgress();
+        unsubscribeProgress = null;
+      }
+      if (unsubscribeUnavailable) {
+        unsubscribeUnavailable();
+        unsubscribeUnavailable = null;
       }
     });
 
