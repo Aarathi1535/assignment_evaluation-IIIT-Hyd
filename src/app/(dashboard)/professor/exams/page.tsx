@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users } from 'lucide-react';
+import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users, Activity } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -301,6 +301,12 @@ export default function ProfessorExamsPage() {
                           <Button variant="outline" size="sm" className="w-full h-9 text-xs px-2">
                             <Users className="h-3.5 w-3.5 mr-1" />
                             <span>Allocate</span>
+                          </Button>
+                        </Link>
+                        <Link href={`/professor/exams/${exam._id}/progress`} className="flex-1 min-w-[70px]">
+                          <Button variant="outline" size="sm" className="w-full h-9 text-xs px-2">
+                            <Activity className="h-3.5 w-3.5 mr-1" />
+                            <span>Progress</span>
                           </Button>
                         </Link>
                         <Button
