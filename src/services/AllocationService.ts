@@ -715,7 +715,10 @@ export class AllocationService {
                     status: AllocationStatus.PENDING
                 },
                 {
-                    $set: { status: AllocationStatus.IN_PROGRESS }
+                    $set: {
+                        status: AllocationStatus.IN_PROGRESS,
+                        claimedAt: new Date()
+                    }
                 },
                 { new: true, session }
             );
@@ -898,7 +901,10 @@ export class AllocationService {
             const allocation = await Allocation.findOneAndUpdate(
                 query,
                 {
-                    $set: { status: AllocationStatus.COMPLETED }
+                    $set: {
+                        status: AllocationStatus.COMPLETED,
+                        completedAt: new Date()
+                    }
                 },
                 { new: true, session }
             );
