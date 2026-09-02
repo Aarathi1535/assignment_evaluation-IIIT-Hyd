@@ -14,6 +14,8 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  // Notifications are scoped to the authenticated user; ownership is enforced
+  // by recipient filtering, so role-specific permission checks are not required.
   const auth = await requireAuth();
   if (!auth.authorized) {
     return auth.response;

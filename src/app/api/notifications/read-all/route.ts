@@ -10,6 +10,8 @@ import NotificationService from '../../../../services/NotificationService';
  * Marks all unread notifications as read for the authenticated user.
  */
 export async function PATCH() {
+  // Notifications are scoped to the authenticated user; ownership is enforced
+  // by recipient filtering, so role-specific permission checks are not required.
   const auth = await requireAuth();
   if (!auth.authorized) {
     return auth.response;
