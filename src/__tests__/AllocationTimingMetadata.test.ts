@@ -318,12 +318,20 @@ describe('AE-106A — Allocation Timing Metadata Tests', () => {
         expect(claimed.claimedAt).toBeDefined();
 
         // Release succeeds IN_PROGRESS -> PENDING
+        // Release succeeds IN_PROGRESS -> PENDING and clears claimedAt (AE-110)
         const released = await AllocationService.releaseAllocation(alloc._id.toString(), ta1._id.toString());
         expect(released.status).toBe(AllocationStatus.PENDING);
+        expect(released.claimedAt).toBeUndefined();
+
+        // Verify in DB that claimedAt is completely removed
+        const dbReleased = await Allocation.findById(alloc._id);
+        expect(dbReleased!.status).toBe(AllocationStatus.PENDING);
+        expect(dbReleased!.claimedAt).toBeUndefined();
 
         // Re-claim succeeds PENDING -> IN_PROGRESS
         const reclaimed = await AllocationService.claimAllocation(alloc._id.toString(), ta1._id.toString());
         expect(reclaimed.status).toBe(AllocationStatus.IN_PROGRESS);
+        expect(reclaimed.claimedAt).toBeDefined();
 
         // Mark completed succeeds IN_PROGRESS -> COMPLETED
         const completed = await AllocationService.markCompleted(alloc._id.toString(), {
@@ -381,5 +389,49 @@ describe('AE-106A — Allocation Timing Metadata Tests', () => {
         });
         expect(completed.status).toBe(AllocationStatus.COMPLETED);
         expect(completed.completedAt).toBeDefined();
+    });
+
+    it('11. releaseAllocation clears claimedAt and subsequent reassignment does not carry stale claim timestamps (AE-110)', async () => {
+        // Step 1: Create a pending allocation
+        const alloc = await Allocation.create({
+            exam: exam._id,
+            ta: ta1._id,
+            answerScript: script._id,
+            allocatedBy: prof._id,
+            status: AllocationStatus.PENDING,
+            rule: AllocationRule.EQUAL
+        });
+
+        // Step 2: TA-1 claims allocation (receives claimedAt timestamp)
+        const claimed = await AllocationService.claimAllocation(alloc._id.toString(), ta1._id.toString());
+        expect(claimed.status).toBe(AllocationStatus.IN_PROGRESS);
+        expect(claimed.claimedAt).toBeInstanceOf(Date);
+
+        // Step 3: TA-1 releases allocation back to PENDING
+        const released = await AllocationService.releaseAllocation(alloc._id.toString(), ta1._id.toString());
+        expect(released.status).toBe(AllocationStatus.PENDING);
+        expect(released.claimedAt).toBeUndefined();
+
+        const dbAfterRelease = await Allocation.findById(alloc._id);
+        expect(dbAfterRelease!.claimedAt).toBeUndefined();
+
+        // Step 4: Professor reassigns PENDING allocation to TA-2
+        const reassigned = await AllocationService.reassignAllocation(
+            exam._id.toString(),
+            alloc._id.toString(),
+            ta2._id.toString(),
+            prof._id.toString()
+        );
+
+        // Assert: resulting allocation has TA-2, status PENDING, and no stale claimedAt or completedAt
+        expect(reassigned.ta.toString()).toBe(ta2._id.toString());
+        expect(reassigned.status).toBe(AllocationStatus.PENDING);
+        expect(reassigned.claimedAt).toBeUndefined();
+        expect(reassigned.completedAt).toBeUndefined();
+
+        const dbAfterReassign = await Allocation.findById(alloc._id);
+        expect(dbAfterReassign!.ta.toString()).toBe(ta2._id.toString());
+        expect(dbAfterReassign!.claimedAt).toBeUndefined();
+        expect(dbAfterReassign!.completedAt).toBeUndefined();
     });
 });
