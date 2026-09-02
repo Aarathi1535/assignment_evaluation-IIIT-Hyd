@@ -9,15 +9,18 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   AlertCircle, 
-  Radio,
-  Clock,
-  ChevronRight,
-  FileText
+  Radio, 
+  Clock, 
+  ChevronRight, 
+  FileText,
+  ArrowRightLeft,
+  X
 } from 'lucide-react';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { LoadingSpinner } from './ui/LoadingSpinner';
 import { EmptyState } from './ui/EmptyState';
+import ReassignModal, { EligibleTa, ReassignAllocationTarget } from './ReassignModal';
 
 export interface TaProgress {
   taId: string;
@@ -212,6 +215,12 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
   const [loadingWorkload, setLoadingWorkload] = useState(false);
   const [workloadError, setWorkloadError] = useState<string | null>(null);
 
+  // TA Reassignment State (AE-110)
+  const [reassignModalOpen, setReassignModalOpen] = useState(false);
+  const [reassignTarget, setReassignTarget] = useState<ReassignAllocationTarget | null>(null);
+  const [courseTas, setCourseTas] = useState<EligibleTa[]>([]);
+  const [reassignSuccessMsg, setReassignSuccessMsg] = useState<string | null>(null);
+
   // Fetch baseline progress from REST API: GET /api/exams/[id]/progress
   const fetchProgress = useCallback(async (isManual = false) => {
     try {
@@ -236,6 +245,19 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
       if (isManual) {
         setManualRefreshing(false);
       }
+    }
+  }, [examId]);
+
+  // Fetch course TAs for replacement selection (AE-110)
+  const fetchCourseTas = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/exams/${examId}/allocate`);
+      const json = await res.json();
+      if (res.ok && json.success && json.data?.teachingAssistants) {
+        setCourseTas(json.data.teachingAssistants);
+      }
+    } catch {
+      // Handled gracefully; fallback to progressData TAs
     }
   }, [examId]);
 
@@ -264,7 +286,9 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
   // Handle drilldown selection
   const handleSelectTa = (taId: string) => {
     setSelectedTaId(taId);
+    setReassignSuccessMsg(null);
     fetchTaWorkload(taId);
+    fetchCourseTas();
   };
 
   // Handle returning to main exam dashboard
@@ -272,13 +296,39 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
     setSelectedTaId(null);
     setTaWorkload(null);
     setWorkloadError(null);
+    setReassignSuccessMsg(null);
+    setReassignModalOpen(false);
+    setReassignTarget(null);
+  };
+
+  // Open reassignment modal for a pending allocation
+  const handleOpenReassign = (item: TaAllocatedScriptItem) => {
+    setReassignTarget({
+      allocationId: item.allocationId,
+      scriptId: item.scriptId,
+      question: item.question,
+      status: item.status,
+    });
+    setReassignModalOpen(true);
+  };
+
+  // Reassignment success callback
+  const handleReassignSuccess = (msg?: string) => {
+    if (msg) {
+      setReassignSuccessMsg(msg);
+    }
+    if (selectedTaId) {
+      fetchTaWorkload(selectedTaId);
+    }
+    fetchProgress();
   };
 
   // Initial load
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchProgress();
-  }, [fetchProgress]);
+    fetchCourseTas();
+  }, [fetchProgress, fetchCourseTas]);
 
   // Connect to SSE stream: GET /api/exams/[id]/progress/stream
   useEffect(() => {
@@ -452,6 +502,27 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
           </Button>
         </div>
 
+        {/* Reassignment Success State Banner (AE-110) */}
+        {reassignSuccessMsg && (
+          <div
+            role="status"
+            data-testid="reassign-success-banner"
+            className="flex items-center justify-between gap-3 bg-emerald-50 border border-emerald-200 rounded-brand p-4 text-emerald-800 text-sm font-semibold"
+          >
+            <div className="flex items-center gap-2.5">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+              <span>{reassignSuccessMsg}</span>
+            </div>
+            <button
+              onClick={() => setReassignSuccessMsg(null)}
+              className="text-emerald-700 hover:text-emerald-900 p-1 rounded-sm cursor-pointer"
+              aria-label="Dismiss success notification"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* Error State for Drilldown */}
         {workloadError && (
           <div
@@ -535,6 +606,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
                         <th className="px-5 py-3">Claimed At</th>
                         <th className="px-5 py-3">Completed At</th>
                         <th className="px-5 py-3">Time Per Script</th>
+                        <th className="px-5 py-3 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -584,6 +656,25 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
                                 {durationDisplay}
                               </span>
                             </td>
+                            <td className="px-5 py-3.5 text-right">
+                              {item.status === 'PENDING' ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleOpenReassign(item)}
+                                  className="text-xs px-2.5 py-1 text-brand-primary border-brand-primary/30 hover:bg-brand-primary/5 cursor-pointer"
+                                  data-testid={`reassign-button-${item.allocationId}`}
+                                >
+                                  <ArrowRightLeft className="h-3.5 w-3.5 mr-1" />
+                                  <span>Reassign</span>
+                                </Button>
+                              ) : (
+                                <span className="text-4xs font-semibold text-slate-400 uppercase">
+                                  {item.status === 'COMPLETED' ? 'Graded' : 'Locked'}
+                                </span>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
@@ -594,6 +685,30 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
             </Card>
           </div>
         ) : null}
+
+        {/* Reassignment Modal (AE-110) */}
+        <ReassignModal
+          isOpen={reassignModalOpen}
+          examId={examId}
+          allocation={reassignTarget}
+          currentTa={
+            taWorkload
+              ? { id: taWorkload.ta.id, name: taWorkload.ta.name, email: taWorkload.ta.email }
+              : selectedTaFromList
+              ? { id: selectedTaFromList.taId, name: selectedTaFromList.name }
+              : null
+          }
+          availableTas={
+            courseTas.length > 0
+              ? courseTas
+              : (progressData?.progress?.map((t) => ({ id: t.taId, name: t.name, isActive: true })) || [])
+          }
+          onClose={() => {
+            setReassignModalOpen(false);
+            setReassignTarget(null);
+          }}
+          onSuccess={handleReassignSuccess}
+        />
       </div>
     );
   }
