@@ -795,7 +795,8 @@ export class AllocationService {
             const allocation = await Allocation.findOneAndUpdate(
                 query,
                 {
-                    $set: { status: AllocationStatus.PENDING }
+                    $set: { status: AllocationStatus.PENDING },
+                    $unset: { claimedAt: 1 }
                 },
                 { new: true, session }
             );
