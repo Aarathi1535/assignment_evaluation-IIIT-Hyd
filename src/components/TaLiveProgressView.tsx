@@ -72,27 +72,36 @@ export interface TaLiveProgressViewProps {
  * Pure helper function to format the per-TA label according to AE-106 specification:
  * "TA name — graded / total" (e.g. "TA A — 45/60")
  */
-export function formatTaProgressLabel(name: string, graded: number, total: number): string {
-  return `${name} — ${graded}/${total}`;
+export function formatTaProgressLabel(name?: string | null, graded?: number | null, total?: number | null): string {
+  const safeName = (name && name.trim()) ? name.trim() : 'Teaching Assistant';
+  const safeGraded = typeof graded === 'number' && !isNaN(graded) ? Math.max(0, graded) : 0;
+  const safeTotal = typeof total === 'number' && !isNaN(total) ? Math.max(0, total) : 0;
+  return `${safeName} — ${safeGraded}/${safeTotal}`;
 }
 
 /**
  * Pure helper function to calculate the completion percentage (0-100).
  */
-export function calculateProgressPercentage(graded: number, total: number, completionRatio?: number): number {
+export function calculateProgressPercentage(
+  graded?: number | null,
+  total?: number | null,
+  completionRatio?: number | null
+): number {
   if (typeof completionRatio === 'number' && !isNaN(completionRatio)) {
     return Math.min(100, Math.max(0, Math.round(completionRatio * 100)));
   }
-  if (!total || total <= 0) return 0;
-  return Math.min(100, Math.max(0, Math.round((graded / total) * 100)));
+  const safeGraded = typeof graded === 'number' && !isNaN(graded) ? Math.max(0, graded) : 0;
+  const safeTotal = typeof total === 'number' && !isNaN(total) ? Math.max(0, total) : 0;
+  if (safeTotal <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((safeGraded / safeTotal) * 100)));
 }
 
 /**
  * Pure helper function to format overall exam grading summary metrics (AE-107).
  */
-export function formatOverallGradingSummary(graded: number, total: number) {
-  const safeTotal = Math.max(0, total);
-  const safeGraded = Math.max(0, Math.min(safeTotal, graded));
+export function formatOverallGradingSummary(graded?: number | null, total?: number | null) {
+  const safeTotal = typeof total === 'number' && !isNaN(total) ? Math.max(0, total) : 0;
+  const safeGraded = typeof graded === 'number' && !isNaN(graded) ? Math.max(0, Math.min(safeTotal, graded)) : 0;
   const remaining = Math.max(0, safeTotal - safeGraded);
   const percentage = safeTotal > 0 ? Math.round((safeGraded / safeTotal) * 100) : 0;
   return {
@@ -117,21 +126,23 @@ export function formatEtaDisplay(
   }
   if (etaAvailable && eta) {
     const dateObj = typeof eta === 'string' ? new Date(eta) : eta;
-    const dateStr = dateObj.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (!isNaN(dateObj.getTime())) {
+      const dateStr = dateObj.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-    if (typeof estimatedRemainingSeconds === 'number' && estimatedRemainingSeconds >= 0) {
-      if (estimatedRemainingSeconds < 60) {
-        return `~${estimatedRemainingSeconds}s remaining (${dateStr})`;
+      if (typeof estimatedRemainingSeconds === 'number' && estimatedRemainingSeconds >= 0) {
+        if (estimatedRemainingSeconds < 60) {
+          return `~${estimatedRemainingSeconds}s remaining (${dateStr})`;
+        }
+        const mins = Math.round(estimatedRemainingSeconds / 60);
+        if (mins < 60) {
+          return `~${mins}m remaining (${dateStr})`;
+        }
+        const hours = Math.floor(mins / 60);
+        const remMins = mins % 60;
+        return `~${hours}h ${remMins}m remaining (${dateStr})`;
       }
-      const mins = Math.round(estimatedRemainingSeconds / 60);
-      if (mins < 60) {
-        return `~${mins}m remaining (${dateStr})`;
-      }
-      const hours = Math.floor(mins / 60);
-      const remMins = mins % 60;
-      return `~${hours}h ${remMins}m remaining (${dateStr})`;
+      return `Est. ${dateStr}`;
     }
-    return `Est. ${dateStr}`;
   }
   if (etaReason === 'NO_ALLOCATIONS') {
     return 'ETA unavailable (no allocations)';
@@ -320,7 +331,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
       }
     });
 
-    // 3. Degraded mode notification
+    // 3. Degraded mode notification (AE-109 / AE-102)
     es.addEventListener('live_updates_unavailable', (event: MessageEvent) => {
       setIsLiveConnected(false);
       try {
@@ -341,6 +352,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
     };
   }, [examId]);
 
+  // Loading State (AE-109)
   if (loading) {
     return (
       <div className="min-h-[400px] flex items-center justify-center font-sans">
@@ -348,6 +360,47 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
           <LoadingSpinner size="lg" />
           <p className="text-sm font-semibold text-slate-500">Loading live grading progress...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Initial Load Failure Error State (AE-109)
+  if (!progressData && errorMsg) {
+    return (
+      <div className="space-y-6 font-sans">
+        {/* Header with Back to Exams navigation preserved */}
+        <div className="flex items-center justify-between">
+          <Link href="/professor/exams">
+            <Button variant="outline" size="sm">
+              <ArrowLeft className="h-4 w-4 mr-1.5" />
+              <span>Back to Exams</span>
+            </Button>
+          </Link>
+        </div>
+
+        {/* Dedicated error card with retry action */}
+        <Card className="border border-rose-200 bg-rose-50/50 p-8 text-center space-y-4 shadow-xs">
+          <div className="flex justify-center">
+            <div className="p-3 bg-rose-100 rounded-full text-rose-600">
+              <AlertCircle className="h-8 w-8" />
+            </div>
+          </div>
+          <div className="space-y-1 max-w-md mx-auto">
+            <h3 className="text-lg font-bold text-rose-900">Failed to load grading progress</h3>
+            <p className="text-sm text-rose-700">{errorMsg}</p>
+          </div>
+          <div className="pt-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => fetchProgress(true)}
+              isLoading={manualRefreshing}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${manualRefreshing ? 'animate-spin' : ''}`} />
+              <span>Retry Loading</span>
+            </Button>
+          </div>
+        </Card>
       </div>
     );
   }
@@ -399,14 +452,26 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
           </Button>
         </div>
 
-        {/* Error State */}
+        {/* Error State for Drilldown */}
         {workloadError && (
           <div
             role="alert"
-            className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-brand p-4 text-rose-900 text-sm font-semibold"
+            className="flex items-center justify-between gap-3 bg-rose-50 border border-rose-200 rounded-brand p-4 text-rose-900 text-sm font-semibold"
           >
-            <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-            <span>{workloadError}</span>
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
+              <span>{workloadError}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white hover:bg-rose-100 border-rose-300 text-rose-900 shrink-0"
+              onClick={() => fetchTaWorkload(selectedTaId)}
+              isLoading={loadingWorkload}
+            >
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              <span>Retry</span>
+            </Button>
           </div>
         )}
 
@@ -589,7 +654,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
         </div>
       </div>
 
-      {/* Live Updates Unavailable Banner */}
+      {/* Live Updates Unavailable Banner (AE-109 / AE-102) */}
       {liveUnavailableMsg && (
         <div
           role="alert"
@@ -612,14 +677,26 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
         </div>
       )}
 
-      {/* Error Alert */}
+      {/* Error Alert for Subsequent Refresh Failures (Preserves Dashboard Usability) */}
       {errorMsg && (
         <div
           role="alert"
-          className="flex items-center gap-3 bg-rose-50 border border-rose-200 rounded-brand p-4 text-rose-900 text-sm font-semibold"
+          className="flex items-center justify-between gap-3 bg-rose-50 border border-rose-200 rounded-brand p-4 text-rose-900 text-sm font-semibold"
         >
-          <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-          <span>{errorMsg}</span>
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white hover:bg-rose-100 border-rose-300 text-rose-900 shrink-0"
+            onClick={() => fetchProgress(true)}
+            isLoading={manualRefreshing}
+          >
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            <span>Retry</span>
+          </Button>
         </div>
       )}
 
