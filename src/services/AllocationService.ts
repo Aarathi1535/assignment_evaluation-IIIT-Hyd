@@ -10,7 +10,7 @@ import User from '../models/User';
 import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
 import Notification, { NotificationType } from '../models/Notification';
-
+import { Anonymizer } from '../lib/anonymizer';
 export class AllocationService {
     /**
      * Checks if grading has already commenced for the given exam.
@@ -1399,6 +1399,137 @@ export class AllocationService {
             scripts
         };
     }
+
+    /**
+     * Retrieves chronological reassignment history for an exam from AuditLog records (AE-113).
+     */
+    static async getReassignmentHistory(
+        examId: string,
+        viewer?: { id: string; role?: string }
+    ): Promise<ReassignmentHistoryItem[]> {
+        if (!mongoose.Types.ObjectId.isValid(examId)) {
+            throw new HttpError('Invalid Exam ID format', 400);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId);
+        const exam = await Exam.findById(examObjectId);
+        if (!exam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        // Query AuditLog records where action is ALLOCATION_REASSIGN and details.examId matches
+        const auditLogs = await AuditLog.find({
+            action: 'ALLOCATION_REASSIGN',
+            'details.examId': examId
+        })
+            .sort({ createdAt: 1, _id: 1 })
+            .lean();
+
+        if (auditLogs.length === 0) {
+            return [];
+        }
+
+        // Collect all distinct user IDs (previous TA, new TA, acting user)
+        const userIds = new Set<string>();
+        const scriptIds = new Set<string>();
+
+        for (const log of auditLogs) {
+            if (log.user) userIds.add(log.user.toString());
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const details = log.details as any;
+            if (details?.previousTaId) userIds.add(String(details.previousTaId));
+            if (details?.newTaId) userIds.add(String(details.newTaId));
+            if (details?.answerScriptId) scriptIds.add(String(details.answerScriptId));
+        }
+
+        // Batch resolve users
+        const validUserObjectIds = Array.from(userIds)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const users = await User.find({ _id: { $in: validUserObjectIds } })
+            .select('_id name email role')
+            .lean();
+
+        const userMap = new Map<string, { id: string; name: string; email: string; role?: string }>(
+            users.map(u => [u._id.toString(), { id: u._id.toString(), name: u.name, email: u.email, role: u.role }])
+        );
+
+        // Batch resolve scripts
+        const validScriptObjectIds = Array.from(scriptIds)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const rawScripts = await AnswerScript.find({ _id: { $in: validScriptObjectIds } }).lean();
+
+        // Serialize scripts using Anonymizer if viewer context is provided
+        const serializedScripts = viewer
+            ? await Anonymizer.serializeAnswerScripts(rawScripts, { id: viewer.id, role: viewer.role as UserRole })
+            : rawScripts.map(s => ({
+                _id: s._id.toString(),
+                anonymousId: s.candidateStudentId || s._id.toString(),
+                scriptReference: s.batchId ? `Script-${s.batchId}-${s.fileIndex}` : s._id.toString()
+            }));
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const scriptMap = new Map<string, Record<string, any>>(
+            serializedScripts.map(s => [s._id.toString(), s])
+        );
+
+        return auditLogs.map(log => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const details = (log.details || {}) as any;
+            const prevTaId = details.previousTaId ? String(details.previousTaId) : '';
+            const newTaId = details.newTaId ? String(details.newTaId) : '';
+            const actingUserId = log.user ? log.user.toString() : '';
+            const scriptId = details.answerScriptId ? String(details.answerScriptId) : '';
+
+            const previousTa = userMap.get(prevTaId) || { id: prevTaId, name: 'Unknown TA', email: '' };
+            const newTa = userMap.get(newTaId) || { id: newTaId, name: 'Unknown TA', email: '' };
+            const actingUser = userMap.get(actingUserId) || { id: actingUserId, name: 'Unknown User', email: '' };
+            const answerScript = scriptMap.get(scriptId) || (scriptId ? { _id: scriptId } : null);
+
+            return {
+                _id: log._id.toString(),
+                action: log.action,
+                timestamp: log.createdAt,
+                createdAt: log.createdAt,
+                allocationId: log.entityId ? log.entityId.toString() : null,
+                question: details.question !== undefined ? details.question : null,
+                answerScript,
+                previousTa,
+                newTa,
+                actingUser
+            };
+        });
+    }
+}
+
+export interface ReassignmentHistoryItem {
+    _id: string;
+    action: string;
+    timestamp: Date;
+    createdAt: Date;
+    allocationId: string | null;
+    question?: number | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    answerScript: Record<string, any> | null;
+    previousTa: {
+        id: string;
+        name: string;
+        email: string;
+    };
+    newTa: {
+        id: string;
+        name: string;
+        email: string;
+    };
+    actingUser: {
+        id: string;
+        name: string;
+        email: string;
+        role?: string;
+    };
 }
 
 export interface TaAllocatedScriptItem {
@@ -1464,7 +1595,6 @@ export interface ExamBottleneckResult extends ExamProgressResult {
 export interface ExamAbsolutePaceResult extends ExamProgressResult {
     bottlenecks: TaProgressResult[];
 }
-
 
 export interface PreviewAllocationResult {
     allocationCounts: Record<string, number>;
