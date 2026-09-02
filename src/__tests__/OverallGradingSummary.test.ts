@@ -454,6 +454,134 @@ describe('AE-107: Professor Dashboard Overall Exam Grading Summary Tests', () =>
       expect(progress.eta).toBeNull();
       expect(progress.etaReason).toBe('INSUFFICIENT_DATA');
     });
+
+    it('returns etaAvailable = false with INSUFFICIENT_INTERVAL when elapsed interval is zero', async () => {
+      const t0 = new Date('2026-09-01T10:00:00.000Z');
+
+      await Allocation.create({
+        exam: exam._id,
+        ta: ta1._id,
+        answerScript: script1._id,
+        allocatedBy: prof._id,
+        status: AllocationStatus.COMPLETED,
+        rule: AllocationRule.EQUAL,
+        completedAt: t0
+      });
+      await Allocation.create({
+        exam: exam._id,
+        ta: ta1._id,
+        answerScript: script2._id,
+        allocatedBy: prof._id,
+        status: AllocationStatus.COMPLETED,
+        rule: AllocationRule.EQUAL,
+        completedAt: t0
+      });
+      await Allocation.create({
+        exam: exam._id,
+        ta: ta2._id,
+        answerScript: script3._id,
+        allocatedBy: prof._id,
+        status: AllocationStatus.PENDING,
+        rule: AllocationRule.EQUAL
+      });
+
+      const progress = await AllocationService.getProgress(exam._id.toString());
+
+      expect(progress.total).toBe(3);
+      expect(progress.graded).toBe(2);
+      expect(progress.etaAvailable).toBe(false);
+      expect(progress.eta).toBeNull();
+      expect(progress.etaReason).toBe('INSUFFICIENT_INTERVAL');
+    });
+
+    it('returns etaAvailable = false with NO_ALLOCATIONS when exam has no allocations', async () => {
+      const emptyExam = await Exam.create({
+        title: 'Empty Exam',
+        course: course._id,
+        status: ExamStatus.PUBLISHED,
+        createdBy: prof._id,
+        examDate: new Date(),
+        totalMarks: 100,
+        numberOfQuestions: 4
+      });
+
+      const progress = await AllocationService.getProgress(emptyExam._id.toString());
+
+      expect(progress.total).toBe(0);
+      expect(progress.graded).toBe(0);
+      expect(progress.etaAvailable).toBe(false);
+      expect(progress.eta).toBeNull();
+      expect(progress.etaReason).toBe('NO_ALLOCATIONS');
+    });
+
+    it('retrieves timing statistics via MongoDB aggregation pipeline instead of loading all completed documents', async () => {
+      const aggregateSpy = vi.spyOn(Allocation, 'aggregate');
+      const findSpy = vi.spyOn(Allocation, 'find');
+
+      const t0 = new Date('2026-09-01T10:00:00.000Z');
+      const t1 = new Date('2026-09-01T10:05:00.000Z');
+      const t2 = new Date('2026-09-01T10:10:00.000Z');
+
+      await Allocation.create([
+        {
+          exam: exam._id,
+          ta: ta1._id,
+          answerScript: script1._id,
+          allocatedBy: prof._id,
+          status: AllocationStatus.COMPLETED,
+          rule: AllocationRule.EQUAL,
+          completedAt: t0
+        },
+        {
+          exam: exam._id,
+          ta: ta1._id,
+          answerScript: script2._id,
+          allocatedBy: prof._id,
+          status: AllocationStatus.COMPLETED,
+          rule: AllocationRule.EQUAL,
+          completedAt: t1
+        },
+        {
+          exam: exam._id,
+          ta: ta2._id,
+          answerScript: script3._id,
+          allocatedBy: prof._id,
+          status: AllocationStatus.COMPLETED,
+          rule: AllocationRule.EQUAL,
+          completedAt: t2
+        },
+        {
+          exam: exam._id,
+          ta: ta2._id,
+          answerScript: script4._id,
+          allocatedBy: prof._id,
+          status: AllocationStatus.PENDING,
+          rule: AllocationRule.EQUAL
+        }
+      ]);
+
+      const progress = await AllocationService.getProgress(exam._id.toString());
+
+      expect(progress.etaAvailable).toBe(true);
+      expect(progress.estimatedRemainingSeconds).toBe(300); // 1 remaining * (600s / 2) = 300s
+
+      // Verify Allocation.find was NOT called to fetch completedAt documents for ETA
+      const completedAtFindCalls = findSpy.mock.calls.filter(call => {
+        const query = call[0] as any;
+        return query && query.status === AllocationStatus.COMPLETED;
+      });
+      expect(completedAtFindCalls.length).toBe(0);
+
+      // Verify aggregate was called with $group containing first ($min), last ($max), and count ($sum: 1)
+      const etaAggregateCalls = aggregateSpy.mock.calls.filter(call => {
+        const pipeline = call[0] as any[];
+        return Array.isArray(pipeline) && pipeline.some(stage => stage.$group && stage.$group.first && stage.$group.last && stage.$group.count);
+      });
+      expect(etaAggregateCalls.length).toBe(1);
+
+      aggregateSpy.mockRestore();
+      findSpy.mockRestore();
+    });
   });
 
   describe('4. Authorization Preservation', () => {

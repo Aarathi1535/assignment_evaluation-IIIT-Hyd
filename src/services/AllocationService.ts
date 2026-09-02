@@ -1144,22 +1144,37 @@ export class AllocationService {
                 .select('completedAt');
             eta = latestCompleted?.completedAt || new Date();
         } else {
-            const completedTimestamps = await Allocation.find({
-                exam: examObjectId,
-                status: AllocationStatus.COMPLETED,
-                completedAt: { $exists: true, $ne: null }
-            })
-                .sort({ completedAt: 1 })
-                .select('completedAt');
+            const [timingStats] = await Allocation.aggregate<{
+                _id: null;
+                first: Date;
+                last: Date;
+                count: number;
+            }>([
+                {
+                    $match: {
+                        exam: examObjectId,
+                        status: AllocationStatus.COMPLETED,
+                        completedAt: { $exists: true, $ne: null }
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        first: { $min: '$completedAt' },
+                        last: { $max: '$completedAt' },
+                        count: { $sum: 1 }
+                    }
+                }
+            ]);
 
-            const completedCount = completedTimestamps.length;
+            const completedCount = timingStats?.count || 0;
 
             if (completedCount < 2) {
                 etaAvailable = false;
                 etaReason = 'INSUFFICIENT_DATA';
             } else {
-                const firstCompletedMs = new Date(completedTimestamps[0].completedAt!).getTime();
-                const lastCompletedMs = new Date(completedTimestamps[completedCount - 1].completedAt!).getTime();
+                const firstCompletedMs = new Date(timingStats.first).getTime();
+                const lastCompletedMs = new Date(timingStats.last).getTime();
                 const elapsedMs = lastCompletedMs - firstCompletedMs;
 
                 if (elapsedMs <= 0) {
