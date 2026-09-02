@@ -1405,8 +1405,9 @@ export class AllocationService {
      */
     static async getReassignmentHistory(
         examId: string,
-        viewer?: { id: string; role?: string }
-    ): Promise<ReassignmentHistoryItem[]> {
+        viewer?: { id: string; role?: string },
+        options?: GetReassignmentHistoryOptions
+    ): Promise<ReassignmentHistoryResult> {
         if (!mongoose.Types.ObjectId.isValid(examId)) {
             throw new HttpError('Invalid Exam ID format', 400);
         }
@@ -1417,19 +1418,46 @@ export class AllocationService {
             throw new HttpError('Exam not found', 404);
         }
 
-        // Query AuditLog records where action is ALLOCATION_REASSIGN and details.examId matches
-        const auditLogs = await AuditLog.find({
+        const page = Math.max(1, options?.page || 1);
+        const limit = Math.min(100, Math.max(1, options?.limit || 20));
+        const skip = (page - 1) * limit;
+
+        const filter = {
             action: 'ALLOCATION_REASSIGN',
             'details.examId': examId
-        })
-            .sort({ createdAt: 1, _id: 1 })
-            .lean();
+        };
+
+        // Query total count and paginated audit logs in parallel
+        const [total, auditLogs] = await Promise.all([
+            AuditLog.countDocuments(filter),
+            AuditLog.find(filter)
+                .sort({ createdAt: 1, _id: 1 })
+                .skip(skip)
+                .limit(limit)
+                .lean()
+        ]);
+
+        const totalPages = Math.ceil(total / limit);
+        const hasNextPage = page < totalPages;
+        const hasPreviousPage = page > 1 && totalPages > 0;
+
+        const pagination = {
+            page,
+            limit,
+            total,
+            totalPages,
+            hasNextPage,
+            hasPreviousPage
+        };
 
         if (auditLogs.length === 0) {
-            return [];
+            return {
+                history: [],
+                pagination
+            };
         }
 
-        // Collect all distinct user IDs (previous TA, new TA, acting user)
+        // Collect all distinct user IDs ONLY for the current page
         const userIds = new Set<string>();
         const scriptIds = new Set<string>();
 
@@ -1476,7 +1504,7 @@ export class AllocationService {
             serializedScripts.map(s => [s._id.toString(), s])
         );
 
-        return auditLogs.map(log => {
+        const history = auditLogs.map(log => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const details = (log.details || {}) as any;
             const prevTaId = details.previousTaId ? String(details.previousTaId) : '';
@@ -1502,7 +1530,29 @@ export class AllocationService {
                 actingUser
             };
         });
+
+        return {
+            history,
+            pagination
+        };
     }
+}
+
+export interface GetReassignmentHistoryOptions {
+    page?: number;
+    limit?: number;
+}
+
+export interface ReassignmentHistoryResult {
+    history: ReassignmentHistoryItem[];
+    pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+        hasNextPage: boolean;
+        hasPreviousPage: boolean;
+    };
 }
 
 export interface ReassignmentHistoryItem {

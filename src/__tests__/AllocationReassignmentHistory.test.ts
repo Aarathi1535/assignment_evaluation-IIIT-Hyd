@@ -189,6 +189,14 @@ describe('AE-113: Reassignment History API & Service', () => {
       expect(json.success).toBe(true);
       expect(json.data.examId).toBe(examAId.toString());
       expect(json.data.history).toHaveLength(1);
+      expect(json.data.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      });
 
       const item = json.data.history[0];
       expect(item.action).toBe('ALLOCATION_REASSIGN');
@@ -275,6 +283,7 @@ describe('AE-113: Reassignment History API & Service', () => {
       expect(jsonA.data.history).toHaveLength(1);
       expect(jsonA.data.history[0].allocationId).toBe(alloc1.toString());
       expect(jsonA.data.history[0].newTa.id).toBe(taId2.toString());
+      expect(jsonA.data.pagination.total).toBe(1);
 
       // Query Exam B history
       const reqB = makeRequest(`http://localhost:3000/api/exams/${examBId}/allocate/reassign/history`);
@@ -285,6 +294,7 @@ describe('AE-113: Reassignment History API & Service', () => {
       expect(jsonB.data.history).toHaveLength(1);
       expect(jsonB.data.history[0].allocationId).toBe(alloc2.toString());
       expect(jsonB.data.history[0].newTa.id).toBe(taId3.toString());
+      expect(jsonB.data.pagination.total).toBe(1);
     });
   });
 
@@ -325,6 +335,7 @@ describe('AE-113: Reassignment History API & Service', () => {
 
       const json = await res.json();
       expect(json.data.history).toHaveLength(3);
+      expect(json.data.pagination.total).toBe(3);
 
       // Verify oldest first: time1 -> time2 -> time3
       expect(new Date(json.data.history[0].timestamp).getTime()).toBe(time1.getTime());
@@ -336,8 +347,138 @@ describe('AE-113: Reassignment History API & Service', () => {
     });
   });
 
-  describe('4. Graceful Fallbacks & Edge Cases', () => {
-    it('returns empty array when exam has no reassignment events', async () => {
+  describe('4. Pagination & Query Bounds (Mentor Improvement)', () => {
+    beforeEach(async () => {
+      // Create 5 reassignment records with known chronological timestamps
+      for (let i = 1; i <= 5; i++) {
+        await AuditLog.create({
+          user: professorId,
+          action: 'ALLOCATION_REASSIGN',
+          outcome: 'SUCCESS',
+          entityId: new mongoose.Types.ObjectId(),
+          entityType: 'Allocation',
+          details: {
+            examId: examAId.toString(),
+            answerScriptId: scriptId1.toString(),
+            question: i,
+            previousTaId: taId1.toString(),
+            newTaId: taId2.toString(),
+          },
+          createdAt: new Date(`2026-09-02T10:0${i}:00.000Z`),
+        });
+      }
+    });
+
+    it('paginates with default page=1 and limit=20', async () => {
+      const req = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history`);
+      const res = await historyGET(req, makeContext(examAId.toString()));
+      expect(res.status).toBe(200);
+
+      const json = await res.json();
+      expect(json.data.history).toHaveLength(5);
+      expect(json.data.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 5,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      });
+    });
+
+    it('handles explicit page and limit with correct skip and slice', async () => {
+      // Page 1 with limit 2 -> items 1, 2
+      const req1 = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history?page=1&limit=2`);
+      const res1 = await historyGET(req1, makeContext(examAId.toString()));
+      expect(res1.status).toBe(200);
+      const json1 = await res1.json();
+
+      expect(json1.data.history).toHaveLength(2);
+      expect(json1.data.history[0].question).toBe(1);
+      expect(json1.data.history[1].question).toBe(2);
+      expect(json1.data.pagination).toEqual({
+        page: 1,
+        limit: 2,
+        total: 5,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: false,
+      });
+
+      // Page 2 with limit 2 -> items 3, 4
+      const req2 = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history?page=2&limit=2`);
+      const res2 = await historyGET(req2, makeContext(examAId.toString()));
+      expect(res2.status).toBe(200);
+      const json2 = await res2.json();
+
+      expect(json2.data.history).toHaveLength(2);
+      expect(json2.data.history[0].question).toBe(3);
+      expect(json2.data.history[1].question).toBe(4);
+      expect(json2.data.pagination).toEqual({
+        page: 2,
+        limit: 2,
+        total: 5,
+        totalPages: 3,
+        hasNextPage: true,
+        hasPreviousPage: true,
+      });
+
+      // Page 3 with limit 2 -> item 5
+      const req3 = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history?page=3&limit=2`);
+      const res3 = await historyGET(req3, makeContext(examAId.toString()));
+      expect(res3.status).toBe(200);
+      const json3 = await res3.json();
+
+      expect(json3.data.history).toHaveLength(1);
+      expect(json3.data.history[0].question).toBe(5);
+      expect(json3.data.pagination).toEqual({
+        page: 3,
+        limit: 2,
+        total: 5,
+        totalPages: 3,
+        hasNextPage: false,
+        hasPreviousPage: true,
+      });
+    });
+
+    it('enforces maximum limit cap of 100', async () => {
+      const req = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history?page=1&limit=150`);
+      const res = await historyGET(req, makeContext(examAId.toString()));
+      expect(res.status).toBe(200);
+
+      const json = await res.json();
+      expect(json.data.pagination.limit).toBe(100);
+    });
+
+    it('rejects invalid page parameters with 400 Bad Request', async () => {
+      const invalidPages = ['0', '-1', 'abc', '1.5'];
+      for (const p of invalidPages) {
+        const req = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history?page=${p}`);
+        const res = await historyGET(req, makeContext(examAId.toString()));
+        expect(res.status).toBe(400);
+
+        const json = await res.json();
+        expect(json.success).toBe(false);
+        expect(json.message).toContain('Invalid page parameter');
+      }
+    });
+
+    it('rejects invalid limit parameters with 400 Bad Request', async () => {
+      const invalidLimits = ['0', '-5', 'xyz', '2.5'];
+      for (const l of invalidLimits) {
+        const req = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history?limit=${l}`);
+        const res = await historyGET(req, makeContext(examAId.toString()));
+        expect(res.status).toBe(400);
+
+        const json = await res.json();
+        expect(json.success).toBe(false);
+        expect(json.message).toContain('Invalid limit parameter');
+      }
+    });
+  });
+
+  describe('5. Graceful Fallbacks & Edge Cases', () => {
+    it('returns empty array with correct pagination when exam has no reassignment events', async () => {
       const req = makeRequest(`http://localhost:3000/api/exams/${examAId}/allocate/reassign/history`);
       const res = await historyGET(req, makeContext(examAId.toString()));
       expect(res.status).toBe(200);
@@ -345,6 +486,14 @@ describe('AE-113: Reassignment History API & Service', () => {
       const json = await res.json();
       expect(json.success).toBe(true);
       expect(json.data.history).toEqual([]);
+      expect(json.data.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      });
     });
 
     it('gracefully handles missing or deleted TA user without dropping the record', async () => {
@@ -394,7 +543,7 @@ describe('AE-113: Reassignment History API & Service', () => {
     });
   });
 
-  describe('5. Authorization & Read-Only Safety', () => {
+  describe('6. Authorization & Read-Only Safety', () => {
     it('rejects unauthorized TA requests with 403 Forbidden', async () => {
       mockSessionUser = {
         id: taId1.toString(),

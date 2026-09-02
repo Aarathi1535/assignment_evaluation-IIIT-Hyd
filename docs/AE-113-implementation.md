@@ -35,35 +35,48 @@ Allow authorized users (Professors and Admins) to retrieve reassignment history 
 - Matches the security level of the reassignment endpoint `PUT /api/exams/[id]/allocate/reassign`.
 - Unauthorized TAs and Students receive 403 Forbidden.
 
-## AuditLog query/filter
+## AuditLog query, filter & pagination
 
 In `AllocationService.getReassignmentHistory`:
 ```ts
-const auditLogs = await AuditLog.find({
+const page = Math.max(1, options?.page || 1);
+const limit = Math.min(100, Math.max(1, options?.limit || 20));
+const skip = (page - 1) * limit;
+
+const filter = {
     action: 'ALLOCATION_REASSIGN',
     'details.examId': examId
-})
-.sort({ createdAt: 1, _id: 1 })
-.lean();
+};
+
+// Query total count and paginated audit logs in parallel
+const [total, auditLogs] = await Promise.all([
+    AuditLog.countDocuments(filter),
+    AuditLog.find(filter)
+        .sort({ createdAt: 1, _id: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+]);
 ```
 - **Action Filter**: Exclusively queries `action: 'ALLOCATION_REASSIGN'`. Unrelated audit logs are filtered out at the database level.
 - **Exam Filter**: Strictly filters to the requested `examId` inside `details.examId`. Logs from other exams are excluded.
+- **Pagination**: Default `page = 1`, default `limit = 20`, maximum `limit = 100`. Database-level `.skip()` and `.limit()` ensure unbounded queries are prevented.
 
 ## Chronological ordering
 
 - Audit logs are sorted using `.sort({ createdAt: 1, _id: 1 })`.
-- Ensures oldest reassignment events appear first ($T_1 \rightarrow T_2 \rightarrow T_3$).
+- Ensures oldest reassignment events appear first ($T_1 \rightarrow T_2 \rightarrow T_3$) across paginated slices.
 
-## TA resolution
+## Current-page TA & user resolution
 
-- Collects all distinct `previousTaId` and `newTaId` strings from the matching audit records.
+- Collects distinct `previousTaId`, `newTaId`, and `actingUserId` strings **only for the records returned on the current page**.
 - Batch queries the `User` collection (`User.find({ _id: { $in: validUserObjectIds } }).select('_id name email role')`).
 - Resolves each TA ID to `{ id, name, email }`.
 - **Graceful Fallback**: If a referenced TA user has been removed or cannot be found, the record is preserved with `{ id: taId, name: 'Unknown TA', email: '' }` rather than dropping the history entry.
 
 ## Acting-user resolution
 
-- Resolves `log.user` (the professor or admin who triggered the reassignment) from the batch user query.
+- Resolves `log.user` (the professor or admin who triggered the reassignment) from the current-page batch user query.
 - Returns `{ id, name, email }` without leaking passwords or sensitive tokens.
 - Gracefully falls back to `{ id: userId, name: 'Unknown User', email: '' }` if unresolvable.
 
@@ -104,30 +117,43 @@ const auditLogs = await AuditLog.find({
           "email": "prof@iiit.ac.in"
         }
       }
-    ]
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 1,
+      "totalPages": 1,
+      "hasNextPage": false,
+      "hasPreviousPage": false
+    }
   }
 }
 ```
 
 ## Tests
 
-Created `src/__tests__/AllocationReassignmentHistory.test.ts` (10 automated tests):
+Updated `src/__tests__/AllocationReassignmentHistory.test.ts` (15 automated tests):
 1. `retrieves reassignment history for an exam with resolved TAs, script info, and acting user` (PASS)
 2. `filters out non-reassignment actions and logs from other exams` (PASS)
 3. `returns reassignment entries in chronological order using audit event timestamps` (PASS)
-4. `returns empty array when exam has no reassignment events` (PASS)
-5. `gracefully handles missing or deleted TA user without dropping the record` (PASS)
-6. `returns 400 for invalid exam ID format` (PASS)
-7. `returns 404 for non-existent exam ID` (PASS)
-8. `rejects unauthorized TA requests with 403 Forbidden` (PASS)
-9. `rejects unauthenticated requests with 401 Unauthorized` (PASS)
-10. `retrieving history is strictly read-only and creates no allocations or audit logs` (PASS)
+4. `paginates with default page=1 and limit=20` (PASS)
+5. `handles explicit page and limit with correct skip and slice` (PASS)
+6. `enforces maximum limit cap of 100` (PASS)
+7. `rejects invalid page parameters with 400 Bad Request` (PASS)
+8. `rejects invalid limit parameters with 400 Bad Request` (PASS)
+9. `returns empty array with correct pagination when exam has no reassignment events` (PASS)
+10. `gracefully handles missing or deleted TA user without dropping the record` (PASS)
+11. `returns 400 for invalid exam ID format` (PASS)
+12. `returns 404 for non-existent exam ID` (PASS)
+13. `rejects unauthorized TA requests with 403 Forbidden` (PASS)
+14. `rejects unauthenticated requests with 401 Unauthorized` (PASS)
+15. `retrieving history is strictly read-only and creates no allocations or audit logs` (PASS)
 
 ## Validation results
 
 - **Targeted Vitest Suite**:
   - `npx vitest run src/__tests__/AllocationReassignmentHistory.test.ts src/__tests__/AllocationReassignment.test.ts src/__tests__/AllocationTimingMetadata.test.ts src/__tests__/TaClaimReleaseApi.test.ts`
-  - **Result: 4 test files, 46 tests passed, 0 failures**.
+  - **Result: 4 test files, 51 tests passed, 0 failures**.
 - **ESLint**:
   - `npm run lint`
   - **Result: 0 errors**.
@@ -145,7 +171,8 @@ Created `src/__tests__/AllocationReassignmentHistory.test.ts` (10 automated test
 - [x] **AC 9**: Previous and new TA IDs are resolved to displayable name/email.
 - [x] **AC 10**: Protected by `Permission.ALLOCATE_SCRIPTS`.
 - [x] **AC 11**: Unauthorized users receive 403 Forbidden and cannot access history.
-- [x] **AC 12**: Automated tests cover retrieval, filtering, ordering, resolution, and security.
+- [x] **AC 12**: Automated tests cover retrieval, filtering, ordering, resolution, pagination, and security.
+- [x] **AC 13**: Standard pagination (page, limit, total, totalPages, maxLimit 100) integrated.
 
 ## Out of scope
 
@@ -156,5 +183,7 @@ Created `src/__tests__/AllocationReassignmentHistory.test.ts` (10 automated test
 
 ## Risks / design decisions
 
-- Batch user and script lookups avoid N+1 query overhead for exams with extensive reassignment history.
+- Database-level pagination (`.skip()` and `.limit()`) prevents memory bloat and unbounded query hazards.
+- Batch user and script lookups execute **only for records on the requested page**, ensuring high query performance.
 - Missing user accounts fall back to placeholder structures with original IDs preserved.
+
