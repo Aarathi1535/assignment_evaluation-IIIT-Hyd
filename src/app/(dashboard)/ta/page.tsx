@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight } from 'lucide-react';
+import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight, Bell } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Card } from '@/components/ui/Card';
+import NotificationPanel from '@/components/NotificationPanel';
 import Link from 'next/link';
 
 interface AnswerScript {
@@ -42,6 +43,8 @@ export default function TaDashboardPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
 
   const fetchAllocations = async (pageToFetch: number) => {
     setIsLoading(true);
@@ -52,6 +55,7 @@ export default function TaDashboardPage() {
       if (res.ok) {
         setAllocations(data.data?.allocations || []);
         setPagination(data.data?.pagination || null);
+        setUnreadNotificationCount(data.data?.unreadNotificationCount || 0);
         setCurrentPage(pageToFetch);
       } else {
         setError(data.message || 'Failed to retrieve allocations');
@@ -115,12 +119,31 @@ export default function TaDashboardPage() {
   ];
 
   const quickActions = (
-    <>
-      <Button variant="outline" size="md" onClick={() => fetchAllocations(currentPage)}>
+    <div className="flex items-center gap-2.5">
+      <Button
+        type="button"
+        variant="outline"
+        size="md"
+        onClick={() => setIsNotificationPanelOpen(true)}
+        className="relative cursor-pointer"
+        data-testid="notifications-button"
+      >
+        <Bell className="h-4 w-4 text-slate-500" />
+        <span>Notifications</span>
+        {unreadNotificationCount > 0 && (
+          <span
+            className="ml-1 px-1.5 py-0.5 text-3xs font-extrabold bg-brand-primary text-white rounded-full"
+            data-testid="unread-notification-badge"
+          >
+            {unreadNotificationCount}
+          </span>
+        )}
+      </Button>
+      <Button type="button" variant="outline" size="md" onClick={() => fetchAllocations(currentPage)}>
         <Clock className="h-4 w-4 text-slate-500" />
         <span>Refresh Queue</span>
       </Button>
-    </>
+    </div>
   );
 
   const getStatusBadge = (status: Allocation['status']) => {
@@ -144,6 +167,36 @@ export default function TaDashboardPage() {
       quickActions={quickActions}
     >
       <div className="space-y-6">
+        {/* In-app Notification Alert Banner (AE-111) */}
+        {unreadNotificationCount > 0 && (
+          <div
+            data-testid="new-assignment-notification-banner"
+            className="p-4 rounded-brand bg-brand-primary/10 border border-brand-primary/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm shadow-xs"
+          >
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-full bg-brand-primary text-white flex items-center justify-center shrink-0">
+                <Bell className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-900">New Assignment Notifications</p>
+                <p className="text-xs text-slate-600 font-medium">
+                  You have {unreadNotificationCount} unread script assignment notification{unreadNotificationCount === 1 ? '' : 's'}.
+                </p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => setIsNotificationPanelOpen(true)}
+              className="cursor-pointer shrink-0"
+              data-testid="view-notifications-banner-btn"
+            >
+              <span>View Notifications</span>
+            </Button>
+          </div>
+        )}
+
         {/* Error State Banner */}
         {error && (
           <div className="p-4 rounded-brand bg-rose-50 border border-rose-100 flex gap-3 text-sm text-rose-700 font-medium shadow-xs">
@@ -297,6 +350,13 @@ export default function TaDashboardPage() {
           )}
         </Card>
       </div>
+
+      {/* Notification Panel Modal (AE-111) */}
+      <NotificationPanel
+        isOpen={isNotificationPanelOpen}
+        onClose={() => setIsNotificationPanelOpen(false)}
+        onNotificationsUpdated={(count) => setUnreadNotificationCount(count)}
+      />
     </DashboardLayout>
   );
 }

@@ -9,6 +9,7 @@ import AuditLog from '../models/AuditLog';
 import User from '../models/User';
 import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
+import Notification, { NotificationType } from '../models/Notification';
 
 export class AllocationService {
     /**
@@ -197,6 +198,23 @@ export class AllocationService {
 
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+
+            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
+            const notificationsToCreate = createdAllocations.map(alloc => ({
+                recipient: alloc.ta,
+                type: NotificationType.ASSIGNMENT,
+                title: 'New Script Assigned',
+                message: alloc.question !== undefined && alloc.question !== null
+                    ? `You have been assigned question ${alloc.question} of an answer script for grading.`
+                    : 'You have been assigned a new answer script for grading.',
+                allocation: alloc._id,
+                exam: examObjectId,
+                answerScript: alloc.answerScript,
+                question: alloc.question,
+                read: false
+            }));
+            await Notification.create(notificationsToCreate, { session });
+
             return createdAllocations;
         });
     }
@@ -268,6 +286,23 @@ export class AllocationService {
 
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+
+            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
+            const notificationsToCreate = createdAllocations.map(alloc => ({
+                recipient: alloc.ta,
+                type: NotificationType.ASSIGNMENT,
+                title: 'New Script Assigned',
+                message: alloc.question !== undefined && alloc.question !== null
+                    ? `You have been assigned question ${alloc.question} of an answer script for grading.`
+                    : 'You have been assigned a new answer script for grading.',
+                allocation: alloc._id,
+                exam: examObjectId,
+                answerScript: alloc.answerScript,
+                question: alloc.question,
+                read: false
+            }));
+            await Notification.create(notificationsToCreate, { session });
+
             return createdAllocations;
         });
     }
@@ -339,6 +374,23 @@ export class AllocationService {
 
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+
+            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
+            const notificationsToCreate = createdAllocations.map(alloc => ({
+                recipient: alloc.ta,
+                type: NotificationType.ASSIGNMENT,
+                title: 'New Script Assigned',
+                message: alloc.question !== undefined && alloc.question !== null
+                    ? `You have been assigned question ${alloc.question} of an answer script for grading.`
+                    : 'You have been assigned a new answer script for grading.',
+                allocation: alloc._id,
+                exam: examObjectId,
+                answerScript: alloc.answerScript,
+                question: alloc.question,
+                read: false
+            }));
+            await Notification.create(notificationsToCreate, { session });
+
             return createdAllocations;
         });
     }
@@ -643,6 +695,21 @@ export class AllocationService {
                     previousTaId,
                     newTaId: targetTaId
                 }
+            }], { session });
+
+            // 9. Create persistent notification for target TA (TA-B) only, within the same transaction (AE-111)
+            await Notification.create([{
+                recipient: targetTaObjectId,
+                type: NotificationType.ASSIGNMENT,
+                title: 'Script Reassigned to You',
+                message: allocation.question !== undefined && allocation.question !== null
+                    ? `Question ${allocation.question} of an answer script has been reassigned to you for grading.`
+                    : 'An answer script has been reassigned to you for grading.',
+                allocation: allocation._id,
+                exam: exam._id,
+                answerScript: allocation.answerScript,
+                question: allocation.question,
+                read: false
             }], { session });
 
             return allocation;

@@ -5,6 +5,7 @@ import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
 import Allocation, { AllocationStatus } from '../../../models/Allocation';
+import Notification from '../../../models/Notification';
 import { Anonymizer } from '../../../lib/anonymizer';
 
 /**
@@ -141,6 +142,11 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const unreadNotificationCount = await Notification.countDocuments({
+      recipient: new mongoose.Types.ObjectId(auth.user.id),
+      read: false
+    });
+
     return NextResponse.json({
       success: true,
       message: 'Allocations retrieved successfully',
@@ -153,7 +159,8 @@ export async function GET(req: NextRequest) {
           totalPages,
           hasNextPage,
           hasPreviousPage
-        }
+        },
+        unreadNotificationCount
       }
     }, { status: 200 });
 
