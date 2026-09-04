@@ -34,8 +34,8 @@ export class AllocationService {
             );
         }
 
-        // Also check if any Grade document exists for the exam's scripts
-        const scripts = await AnswerScript.find({ exam: examObjectId, isActive: true })
+        // Also check if any Grade document exists for the exam's scripts (including inactive scripts)
+        const scripts = await AnswerScript.find({ exam: examObjectId })
             .select('_id')
             .session(session ?? null);
         const scriptIds = scripts.map(s => s._id);
@@ -70,6 +70,9 @@ export class AllocationService {
 
         // Safe to clear existing allocations
         await Allocation.deleteMany({ exam: examObjectId }, { session });
+
+        // Clean up uncommenced assignment notifications for this exam to prevent orphaned records and inflated unread counts
+        await Notification.deleteMany({ exam: examObjectId, type: NotificationType.ASSIGNMENT }, { session });
     }
 
     /**
@@ -663,12 +666,28 @@ export class AllocationService {
             }
 
             // 6. Check unique index constraint manually to prevent duplicate allocation conflicts
-            const conflictExists = await Allocation.exists({
+            const conflictQuery: {
+                ta: mongoose.Types.ObjectId;
+                answerScript: mongoose.Types.ObjectId;
+                _id: { $ne: mongoose.Types.ObjectId };
+                question?: number;
+                $or?: Array<{ question: null } | { question: { $exists: false } }>;
+            } = {
                 ta: targetTaObjectId,
                 answerScript: allocation.answerScript,
-                question: allocation.question,
                 _id: { $ne: allocationObjectId }
-            }).session(session || null);
+            };
+
+            if (allocation.question !== undefined && allocation.question !== null) {
+                conflictQuery.question = allocation.question;
+            } else {
+                conflictQuery.$or = [
+                    { question: null },
+                    { question: { $exists: false } }
+                ];
+            }
+
+            const conflictExists = await Allocation.exists(conflictQuery).session(session || null);
 
             if (conflictExists) {
                 throw new HttpError('Reassignment conflict: The target TA is already allocated to this script/question.', 400);
