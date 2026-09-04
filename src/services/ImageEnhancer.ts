@@ -64,18 +64,18 @@ export class DefaultImageEnhancer implements IImageEnhancer {
                     return { buffer, deskewAngle: 0, orientation: 0, applied: false };
                 }
 
-                if (vVar > hVar * 2.0) {
+                if (vVar > hVar * 1.1) {
                     const leftSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'left');
                     const rightSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'right');
                     // Original top margin (which has more ink) moves to the right when rotated 90 degrees clockwise.
-                    orientation = rightSum > leftSum * 1.2 ? 90 : 270;
+                    orientation = rightSum >= leftSum ? 90 : 270;
                     hVar = vVar;
                 } else {
                     const topSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'top');
                     const bottomSum = this.getMarginDensity(aCtx, sWidth, sHeight, 'bottom');
                     // Normal text has more ink at the top (header) and empty space at the bottom.
                     // If bottom has significantly more ink than top, it's upside down.
-                    if (bottomSum > topSum * 2.0) {
+                    if (bottomSum > topSum * 1.5) {
                         orientation = 180;
                     }
                 }
@@ -167,23 +167,24 @@ export class DefaultImageEnhancer implements IImageEnhancer {
     }
 
     private getProjectionVariance(ctx: import('@napi-rs/canvas').SKRSContext2D, width: number, height: number, angleDeg: number): number {
-        const tempCanvas = createCanvas(width, height);
+        const dim = Math.max(width, height);
+        const tempCanvas = createCanvas(dim, dim);
         const tCtx = tempCanvas.getContext('2d');
         tCtx.fillStyle = '#FFFFFF';
-        tCtx.fillRect(0, 0, width, height);
+        tCtx.fillRect(0, 0, dim, dim);
 
-        tCtx.translate(width / 2, height / 2);
+        tCtx.translate(dim / 2, dim / 2);
         tCtx.rotate(angleDeg * Math.PI / 180);
         tCtx.drawImage(ctx.canvas, -width / 2, -height / 2);
 
-        const imgData = tCtx.getImageData(0, 0, width, height).data;
-        const rowSums = new Float64Array(height);
+        const imgData = tCtx.getImageData(0, 0, dim, dim).data;
+        const rowSums = new Float64Array(dim);
 
         let sum = 0;
-        for (let y = 0; y < height; y++) {
+        for (let y = 0; y < dim; y++) {
             let rowSum = 0;
-            for (let x = 0; x < width; x++) {
-                const idx = (y * width + x) * 4;
+            for (let x = 0; x < dim; x++) {
+                const idx = (y * dim + x) * 4;
                 const luma = 255 - (0.299 * imgData[idx] + 0.587 * imgData[idx+1] + 0.114 * imgData[idx+2]);
                 rowSum += luma;
             }
@@ -191,14 +192,14 @@ export class DefaultImageEnhancer implements IImageEnhancer {
             sum += rowSum;
         }
 
-        const mean = sum / height;
+        const mean = sum / dim;
         let variance = 0;
-        for (let y = 0; y < height; y++) {
+        for (let y = 0; y < dim; y++) {
             const diff = rowSums[y] - mean;
             variance += diff * diff;
         }
 
-        return variance / height;
+        return variance / dim;
     }
 
     private getMarginDensity(ctx: import('@napi-rs/canvas').SKRSContext2D, width: number, height: number, edge: 'top'|'bottom'|'left'|'right'): number {
