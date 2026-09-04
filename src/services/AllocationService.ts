@@ -11,6 +11,7 @@ import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
 import Notification, { NotificationType } from '../models/Notification';
 import { Anonymizer } from '../lib/anonymizer';
+import { renderNotificationTemplate } from '../templates/notificationTemplates';
 export class AllocationService {
     /**
      * Checks if grading has already commenced for the given exam.
@@ -199,20 +200,27 @@ export class AllocationService {
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
 
-            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
-            const notificationsToCreate = createdAllocations.map(alloc => ({
-                recipient: alloc.ta,
-                type: NotificationType.ASSIGNMENT,
-                title: 'New Script Assigned',
-                message: alloc.question !== undefined && alloc.question !== null
-                    ? `You have been assigned question ${alloc.question} of an answer script for grading.`
-                    : 'You have been assigned a new answer script for grading.',
-                allocation: alloc._id,
-                exam: examObjectId,
-                answerScript: alloc.answerScript,
-                question: alloc.question,
-                read: false
-            }));
+            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111, AE-117)
+            const notificationsToCreate = createdAllocations.map(alloc => {
+                const rendered = renderNotificationTemplate(NotificationType.ASSIGNMENT, {
+                    exam: examObjectId,
+                    allocation: alloc._id,
+                    answerScript: alloc.answerScript,
+                    question: alloc.question,
+                    recipient: alloc.ta
+                });
+                return {
+                    recipient: alloc.ta,
+                    type: rendered.type,
+                    title: rendered.title,
+                    message: rendered.message,
+                    allocation: alloc._id,
+                    exam: examObjectId,
+                    answerScript: alloc.answerScript,
+                    question: alloc.question,
+                    read: false
+                };
+            });
             await Notification.create(notificationsToCreate, { session });
 
             return createdAllocations;
@@ -287,20 +295,27 @@ export class AllocationService {
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
 
-            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
-            const notificationsToCreate = createdAllocations.map(alloc => ({
-                recipient: alloc.ta,
-                type: NotificationType.ASSIGNMENT,
-                title: 'New Script Assigned',
-                message: alloc.question !== undefined && alloc.question !== null
-                    ? `You have been assigned question ${alloc.question} of an answer script for grading.`
-                    : 'You have been assigned a new answer script for grading.',
-                allocation: alloc._id,
-                exam: examObjectId,
-                answerScript: alloc.answerScript,
-                question: alloc.question,
-                read: false
-            }));
+            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111, AE-117)
+            const notificationsToCreate = createdAllocations.map(alloc => {
+                const rendered = renderNotificationTemplate(NotificationType.ASSIGNMENT, {
+                    exam: examObjectId,
+                    allocation: alloc._id,
+                    answerScript: alloc.answerScript,
+                    question: alloc.question,
+                    recipient: alloc.ta
+                });
+                return {
+                    recipient: alloc.ta,
+                    type: rendered.type,
+                    title: rendered.title,
+                    message: rendered.message,
+                    allocation: alloc._id,
+                    exam: examObjectId,
+                    answerScript: alloc.answerScript,
+                    question: alloc.question,
+                    read: false
+                };
+            });
             await Notification.create(notificationsToCreate, { session });
 
             return createdAllocations;
@@ -375,20 +390,27 @@ export class AllocationService {
             // Save allocations and return them
             const createdAllocations = await Allocation.create(allocationsToCreate, { session });
 
-            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
-            const notificationsToCreate = createdAllocations.map(alloc => ({
-                recipient: alloc.ta,
-                type: NotificationType.ASSIGNMENT,
-                title: 'New Script Assigned',
-                message: alloc.question !== undefined && alloc.question !== null
-                    ? `You have been assigned question ${alloc.question} of an answer script for grading.`
-                    : 'You have been assigned a new answer script for grading.',
-                allocation: alloc._id,
-                exam: examObjectId,
-                answerScript: alloc.answerScript,
-                question: alloc.question,
-                read: false
-            }));
+            // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111, AE-117)
+            const notificationsToCreate = createdAllocations.map(alloc => {
+                const rendered = renderNotificationTemplate(NotificationType.ASSIGNMENT, {
+                    exam: examObjectId,
+                    allocation: alloc._id,
+                    answerScript: alloc.answerScript,
+                    question: alloc.question,
+                    recipient: alloc.ta
+                });
+                return {
+                    recipient: alloc.ta,
+                    type: rendered.type,
+                    title: rendered.title,
+                    message: rendered.message,
+                    allocation: alloc._id,
+                    exam: examObjectId,
+                    answerScript: alloc.answerScript,
+                    question: alloc.question,
+                    read: false
+                };
+            });
             await Notification.create(notificationsToCreate, { session });
 
             return createdAllocations;
@@ -697,14 +719,22 @@ export class AllocationService {
                 }
             }], { session });
 
-            // 9. Create persistent notification for target TA (TA-B) only, within the same transaction (AE-111)
+            // 9. Create persistent notification for target TA (TA-B) only, within the same transaction (AE-111, AE-117)
+            const renderedNotif = renderNotificationTemplate(NotificationType.REASSIGNMENT, {
+                exam: exam._id,
+                allocation: allocation._id,
+                answerScript: allocation.answerScript,
+                question: allocation.question,
+                previousTaId,
+                newTaId: targetTaId,
+                recipient: targetTaObjectId
+            });
+
             await Notification.create([{
                 recipient: targetTaObjectId,
-                type: NotificationType.ASSIGNMENT,
-                title: 'Script Reassigned to You',
-                message: allocation.question !== undefined && allocation.question !== null
-                    ? `Question ${allocation.question} of an answer script has been reassigned to you for grading.`
-                    : 'An answer script has been reassigned to you for grading.',
+                type: renderedNotif.type,
+                title: renderedNotif.title,
+                message: renderedNotif.message,
                 allocation: allocation._id,
                 exam: exam._id,
                 answerScript: allocation.answerScript,
