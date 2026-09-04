@@ -65,6 +65,18 @@ export default function NotificationPanel({
     }
   }, [isOpen, fetchNotifications]);
 
+  // Keyboard accessibility: Dismiss modal on Escape key press (WCAG 2.1.2)
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   const handleMarkAsRead = async (notificationId: string) => {
     setMarkingId(notificationId);
     try {

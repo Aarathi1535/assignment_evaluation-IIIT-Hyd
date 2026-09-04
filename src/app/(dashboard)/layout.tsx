@@ -151,11 +151,19 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Skip to Main Content Link for Keyboard Navigation */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-brand-primary focus:text-white focus:rounded-brand focus:shadow-lg focus:outline-none"
+      >
+        Skip to main content
+      </a>
+
       {/* Desktop Sidebar */}
-      <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 bg-white border-r border-slate-200 z-20">
+      <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 bg-white border-r border-slate-200 z-20" aria-label="Desktop Sidebar Navigation">
         {/* Sidebar Header */}
         <div className="h-16 flex items-center gap-3 px-6 border-b border-slate-200 bg-white select-none">
-          <div className="h-9 w-9 rounded-brand bg-brand-primary flex items-center justify-center text-white">
+          <div className="h-9 w-9 rounded-brand bg-brand-primary flex items-center justify-center text-white" aria-hidden="true">
             <GraduationCap className="h-5 w-5" />
           </div>
           <div>
@@ -179,7 +187,7 @@ export default function DashboardLayout({
       {/* Mobile Top Header */}
       <header className="lg:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
         <div className="flex items-center gap-2.5 select-none">
-          <div className="h-8 w-8 rounded bg-brand-primary flex items-center justify-center text-white">
+          <div className="h-8 w-8 rounded bg-brand-primary flex items-center justify-center text-white" aria-hidden="true">
             <GraduationCap className="h-4.5 w-4.5" />
           </div>
           <div>
@@ -189,7 +197,7 @@ export default function DashboardLayout({
         </div>
         <button
           onClick={() => setIsMobileMenuOpen(true)}
-          className="p-1.5 rounded-brand hover:bg-slate-100 text-slate-600 cursor-pointer"
+          className="p-1.5 rounded-brand hover:bg-slate-100 text-slate-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
           aria-label="Open menu"
         >
           <Menu className="h-6 w-6" />
@@ -203,14 +211,20 @@ export default function DashboardLayout({
           <div 
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40 transition-opacity duration-300"
             onClick={() => setIsMobileMenuOpen(false)}
+            aria-hidden="true"
           />
           
           {/* Drawer Menu */}
-          <div className="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300">
+          <div
+            className="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl z-50 flex flex-col transition-transform duration-300"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile Navigation"
+          >
             {/* Drawer Header */}
             <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200">
               <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded bg-brand-primary flex items-center justify-center text-white">
+                <div className="h-8 w-8 rounded bg-brand-primary flex items-center justify-center text-white" aria-hidden="true">
                   <GraduationCap className="h-4.5 w-4.5" />
                 </div>
                 <div>
@@ -220,7 +234,7 @@ export default function DashboardLayout({
               </div>
               <button
                 onClick={() => setIsMobileMenuOpen(false)}
-                className="p-1.5 rounded hover:bg-slate-100 text-slate-600 cursor-pointer"
+                className="p-1.5 rounded hover:bg-slate-100 text-slate-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
                 aria-label="Close menu"
               >
                 <X className="h-5 w-5" />
@@ -247,7 +261,7 @@ export default function DashboardLayout({
 
       {/* Main Content Area */}
       <div className="lg:pl-64 flex flex-col min-h-screen">
-        <main className="flex-1">
+        <main id="main-content" tabIndex={-1} className="flex-1 outline-none">
           {children}
         </main>
       </div>

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
+import { LoadingSpinner } from './ui/LoadingSpinner';
 import Link from 'next/link';
 
 interface AllocationViewProps {
@@ -278,23 +279,25 @@ export default function AllocationView({ examId }: AllocationViewProps) {
           {/* Rule Selection Card */}
           <Card className="p-5 border border-slate-200 shadow-3xs space-y-4">
             <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-              <Settings className="h-4 w-4 text-brand-primary" />
-              <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Allocation Method</h3>
+              <Settings className="h-4 w-4 text-brand-primary" aria-hidden="true" />
+              <h3 id="allocation-method-label" className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Allocation Method</h3>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-3" role="radiogroup" aria-labelledby="allocation-method-label">
               {(['EQUAL', 'QUESTION', 'RANDOM'] as const).map((r) => {
                 const isSelected = rule === r;
                 return (
                   <button
                     key={r}
                     type="button"
+                    role="radio"
+                    aria-checked={isSelected}
                     disabled={!isApproved}
                     onClick={() => {
                       setRule(r);
                       setPreviewData(null);
                     }}
-                    className={`border-2 rounded-brand p-3 text-center flex flex-col items-center justify-center gap-2 cursor-pointer transition-all duration-150 select-none outline-none ${
+                    className={`border-2 rounded-brand p-3 text-center flex flex-col items-center justify-center gap-2 cursor-pointer transition-all duration-150 select-none outline-none focus:ring-2 focus:ring-brand-primary/40 ${
                       !isApproved ? 'opacity-40 cursor-not-allowed' : ''
                     } ${
                       isSelected
@@ -362,15 +365,15 @@ export default function AllocationView({ examId }: AllocationViewProps) {
           <Card className="p-5 border border-slate-200 shadow-3xs space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-brand-primary" />
-                <h3 className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Selected TAs</h3>
+                <Users className="h-4 w-4 text-brand-primary" aria-hidden="true" />
+                <h3 id="ta-selection-label" className="font-extrabold text-sm text-slate-800 uppercase tracking-wider">Selected TAs</h3>
               </div>
               {isApproved && tas.length > 0 && (
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={handleSelectAllTAs}
-                    className="text-4xs font-extrabold uppercase text-brand-primary hover:underline cursor-pointer"
+                    className="text-4xs font-extrabold uppercase text-brand-primary hover:underline cursor-pointer focus:outline-none focus:ring-1 focus:ring-brand-primary"
                   >
                     Select All
                   </button>
@@ -378,7 +381,7 @@ export default function AllocationView({ examId }: AllocationViewProps) {
                   <button
                     type="button"
                     onClick={handleClearAllTAs}
-                    className="text-4xs font-extrabold uppercase text-slate-500 hover:underline cursor-pointer"
+                    className="text-4xs font-extrabold uppercase text-slate-500 hover:underline cursor-pointer focus:outline-none focus:ring-1 focus:ring-slate-400"
                   >
                     Clear All
                   </button>
@@ -391,16 +394,19 @@ export default function AllocationView({ examId }: AllocationViewProps) {
                 No teaching assistants are enrolled in the course. Enroll TAs in Course settings first.
               </div>
             ) : (
-              <div className="grid sm:grid-cols-2 gap-3">
+              <div className="grid sm:grid-cols-2 gap-3" role="group" aria-labelledby="ta-selection-label">
                 {tas.map((ta) => {
                   const isChecked = selectedTaIds.includes(ta._id);
                   return (
                     <button
                       key={ta._id}
                       type="button"
+                      role="checkbox"
+                      aria-checked={isChecked}
+                      aria-label={`${ta.name} (${ta.email})`}
                       disabled={!isApproved || !ta.isActive}
                       onClick={() => handleTaToggle(ta._id)}
-                      className={`border-2 rounded-brand p-3 text-left transition-all duration-150 flex items-center justify-between cursor-pointer outline-none select-none ${
+                      className={`border-2 rounded-brand p-3 text-left transition-all duration-150 flex items-center justify-between cursor-pointer outline-none select-none focus:ring-2 focus:ring-brand-primary/40 ${
                         !isApproved || !ta.isActive ? 'opacity-40 cursor-not-allowed' : ''
                       } ${
                         isChecked 
@@ -418,7 +424,7 @@ export default function AllocationView({ examId }: AllocationViewProps) {
                           : 'border-slate-300 bg-white'
                       }`}>
                         {isChecked && (
-                          <svg className="w-3 h-3 fill-current" viewBox="0 0 20 20">
+                          <svg className="w-3 h-3 fill-current" viewBox="0 0 20 20" aria-hidden="true">
                             <path d="M0 11l2-2 5 5L18 3l2 2L7 18z" />
                           </svg>
                         )}
@@ -527,8 +533,8 @@ export default function AllocationView({ examId }: AllocationViewProps) {
                 <table className="min-w-full divide-y divide-slate-200">
                   <thead className="bg-slate-50">
                     <tr>
-                      <th className="px-4 py-2 text-left text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Teaching Assistant</th>
-                      <th className="px-4 py-2 text-right text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Allocated Count</th>
+                      <th scope="col" className="px-4 py-2 text-left text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Teaching Assistant</th>
+                      <th scope="col" className="px-4 py-2 text-right text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Allocated Count</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-slate-150">
@@ -564,8 +570,8 @@ export default function AllocationView({ examId }: AllocationViewProps) {
                   <table className="min-w-full divide-y divide-slate-200">
                     <thead className="bg-slate-50">
                       <tr>
-                        <th className="px-4 py-2 text-left text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Exclusion Reason</th>
-                        <th className="px-4 py-2 text-right text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Count</th>
+                        <th scope="col" className="px-4 py-2 text-left text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Exclusion Reason</th>
+                        <th scope="col" className="px-4 py-2 text-right text-5xs font-extrabold text-slate-500 uppercase tracking-wider">Count</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-slate-150">
@@ -590,21 +596,5 @@ export default function AllocationView({ examId }: AllocationViewProps) {
         </Card>
       )}
     </div>
-  );
-}
-
-interface LoadingSpinnerProps {
-  size?: 'sm' | 'md' | 'lg';
-}
-
-function LoadingSpinner({ size = 'md' }: LoadingSpinnerProps) {
-  const sizeClasses = {
-    sm: 'h-4 w-4 border-2',
-    md: 'h-8 w-8 border-3',
-    lg: 'h-12 w-12 border-4',
-  };
-
-  return (
-    <div className={`animate-spin rounded-full border-t-transparent border-brand-primary ${sizeClasses[size]}`} />
   );
 }

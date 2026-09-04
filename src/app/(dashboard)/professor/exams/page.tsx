@@ -61,6 +61,18 @@ export default function ProfessorExamsPage() {
     loadData();
   }, []);
 
+  // Keyboard accessibility: Dismiss modal on Escape key press (WCAG 2.1.2)
+  useEffect(() => {
+    if (!deleteConfirmId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !deleting) {
+        setDeleteConfirmId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [deleteConfirmId, deleting]);
+
   const courseMap = React.useMemo(() => {
     return new Map(courses.map(c => [c._id, c]));
   }, [courses]);
@@ -313,9 +325,10 @@ export default function ProfessorExamsPage() {
                           variant="destructive"
                           size="sm"
                           className="h-9 px-3"
+                          aria-label={`Delete exam ${exam.title}`}
                           onClick={(e) => handleDeleteClick(exam._id, e)}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
                         </Button>
                       </div>
                     </Card>
@@ -328,9 +341,14 @@ export default function ProfessorExamsPage() {
 
         {/* Delete Confirmation Modal */}
         {deleteConfirmId && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50">
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-exam-modal-title"
+          >
             <div className="bg-white rounded-brand-lg p-6 max-w-sm w-full mx-4 shadow-xl border border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">Delete Exam</h3>
+              <h3 id="delete-exam-modal-title" className="text-lg font-bold text-slate-900">Delete Exam</h3>
               <p className="text-sm text-slate-600 mt-2 font-medium">
                 Are you sure you want to delete this exam? This action cannot be undone and will delete related submissions.
               </p>

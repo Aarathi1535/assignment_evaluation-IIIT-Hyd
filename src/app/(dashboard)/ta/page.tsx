@@ -127,20 +127,22 @@ export default function TaDashboardPage() {
         onClick={() => setIsNotificationPanelOpen(true)}
         className="relative cursor-pointer"
         data-testid="notifications-button"
+        aria-label={unreadNotificationCount > 0 ? `Notifications (${unreadNotificationCount} unread)` : 'Notifications'}
       >
-        <Bell className="h-4 w-4 text-slate-500" />
+        <Bell className="h-4 w-4 text-slate-500" aria-hidden="true" />
         <span>Notifications</span>
         {unreadNotificationCount > 0 && (
           <span
             className="ml-1 px-1.5 py-0.5 text-3xs font-extrabold bg-brand-primary text-white rounded-full"
             data-testid="unread-notification-badge"
+            aria-hidden="true"
           >
             {unreadNotificationCount}
           </span>
         )}
       </Button>
       <Button type="button" variant="outline" size="md" onClick={() => fetchAllocations(currentPage)}>
-        <Clock className="h-4 w-4 text-slate-500" />
+        <Clock className="h-4 w-4 text-slate-500" aria-hidden="true" />
         <span>Refresh Queue</span>
       </Button>
     </div>
@@ -170,11 +172,13 @@ export default function TaDashboardPage() {
         {/* In-app Notification Alert Banner (AE-111) */}
         {unreadNotificationCount > 0 && (
           <div
+            role="status"
+            aria-live="polite"
             data-testid="new-assignment-notification-banner"
             className="p-4 rounded-brand bg-brand-primary/10 border border-brand-primary/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm shadow-xs"
           >
             <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-full bg-brand-primary text-white flex items-center justify-center shrink-0">
+              <div className="h-9 w-9 rounded-full bg-brand-primary text-white flex items-center justify-center shrink-0" aria-hidden="true">
                 <Bell className="h-5 w-5" />
               </div>
               <div>
@@ -199,7 +203,7 @@ export default function TaDashboardPage() {
 
         {/* Error State Banner */}
         {error && (
-          <div className="p-4 rounded-brand bg-rose-50 border border-rose-100 flex gap-3 text-sm text-rose-700 font-medium shadow-xs">
+          <div role="alert" aria-live="assertive" className="p-4 rounded-brand bg-rose-50 border border-rose-100 flex gap-3 text-sm text-rose-700 font-medium shadow-xs">
             <AlertCircle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>
@@ -218,12 +222,12 @@ export default function TaDashboardPage() {
           </div>
 
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center p-12 bg-white">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-brand-primary" />
+            <div className="flex flex-col items-center justify-center p-12 bg-white" role="status">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-brand-primary" aria-hidden="true" />
               <span className="text-sm font-semibold text-slate-500 mt-3">Loading queue...</span>
             </div>
           ) : error ? (
-            <div className="p-12 text-center bg-white flex flex-col items-center justify-center">
+            <div className="p-12 text-center bg-white flex flex-col items-center justify-center" role="alert">
               <AlertCircle className="h-10 w-10 text-rose-500 mb-3" />
               <span className="text-sm font-semibold text-slate-750">{error}</span>
             </div>
@@ -241,11 +245,11 @@ export default function TaDashboardPage() {
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500 text-2xs uppercase tracking-wider font-extrabold select-none">
-                      <th className="px-6 py-4">Script Reference / Anonymous ID</th>
-                      <th className="px-6 py-4">Exam Context</th>
-                      <th className="px-6 py-4">Grading Mode / Context</th>
-                      <th className="px-6 py-4 text-center">Status</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
+                      <th scope="col" className="px-6 py-4">Script Reference / Anonymous ID</th>
+                      <th scope="col" className="px-6 py-4">Exam Context</th>
+                      <th scope="col" className="px-6 py-4">Grading Mode / Context</th>
+                      <th scope="col" className="px-6 py-4 text-center">Status</th>
+                      <th scope="col" className="px-6 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
