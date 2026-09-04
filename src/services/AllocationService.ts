@@ -1536,6 +1536,316 @@ export class AllocationService {
             pagination
         };
     }
+
+    /**
+     * Retrieves the most recent grading-related activities from existing AuditLog records (AE-116).
+     * Returns activities in deterministic newest-first order with database-level limiting.
+     */
+    static async getActivityFeed(
+        viewer?: { id: string; role?: string },
+        options?: GetActivityFeedOptions
+    ): Promise<ActivityFeedResult> {
+        const limit = Math.min(100, Math.max(1, options?.limit || 10));
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const filter: Record<string, any> = {
+            action: { $in: GRADING_ACTIVITY_ACTIONS },
+            outcome: { $ne: 'FAILURE' }
+        };
+
+        if (options?.examId) {
+            if (!mongoose.Types.ObjectId.isValid(options.examId)) {
+                throw new HttpError('Invalid Exam ID format', 400);
+            }
+            const examObjId = new mongoose.Types.ObjectId(options.examId);
+            filter.$or = [
+                { 'details.examId': options.examId },
+                { entityId: examObjId }
+            ];
+        }
+
+        const [total, auditLogs] = await Promise.all([
+            AuditLog.countDocuments(filter),
+            AuditLog.find(filter)
+                .sort({ createdAt: -1, _id: -1 })
+                .limit(limit)
+                .lean()
+        ]);
+
+        if (auditLogs.length === 0) {
+            return {
+                activities: [],
+                total: 0
+            };
+        }
+
+        // Collect distinct IDs for batch lookup ONLY for the current page
+        const userIds = new Set<string>();
+        const examIds = new Set<string>();
+        const scriptIds = new Set<string>();
+
+        for (const log of auditLogs) {
+            if (log.user) userIds.add(log.user.toString());
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const details = (log.details || {}) as Record<string, any>;
+            if (details.previousTaId) userIds.add(String(details.previousTaId));
+            if (details.newTaId) userIds.add(String(details.newTaId));
+            if (details.taId) userIds.add(String(details.taId));
+            if (details.owningTaId) userIds.add(String(details.owningTaId));
+            if (details.actingUserId) userIds.add(String(details.actingUserId));
+
+            if (details.examId && mongoose.Types.ObjectId.isValid(String(details.examId))) {
+                examIds.add(String(details.examId));
+            } else if (log.entityId && (log.entityType === 'Exam' || ['INGESTION_APPROVED', 'INGESTION_APPROVAL_REVOKED', 'EXAM_BLIND_GRADING_TOGGLED'].includes(log.action))) {
+                examIds.add(log.entityId.toString());
+            }
+
+            if (details.answerScriptId && mongoose.Types.ObjectId.isValid(String(details.answerScriptId))) {
+                scriptIds.add(String(details.answerScriptId));
+            } else if (log.entityId && (log.entityType === 'AnswerScript' || ['ANSWERSCRIPT_IDENTIFIED', 'SCRIPT_REMAP', 'SCRIPT_MERGE'].includes(log.action))) {
+                scriptIds.add(log.entityId.toString());
+            }
+        }
+
+        // Batch resolve users
+        const validUserObjectIds = Array.from(userIds)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const users = await User.find({ _id: { $in: validUserObjectIds } })
+            .select('_id name email role')
+            .lean();
+
+        const userMap = new Map<string, { id: string; name: string; email: string; role?: string }>(
+            users.map(u => [u._id.toString(), { id: u._id.toString(), name: u.name, email: u.email, role: u.role }])
+        );
+
+        // Batch resolve exams
+        const validExamObjectIds = Array.from(examIds)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const exams = await Exam.find({ _id: { $in: validExamObjectIds } })
+            .select('_id title course')
+            .lean();
+
+        // Batch resolve courses for exams
+        const courseIds = new Set<string>();
+        exams.forEach(e => {
+            if (e.course) courseIds.add(e.course.toString());
+        });
+        const validCourseObjectIds = Array.from(courseIds)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const courses = await Course.find({ _id: { $in: validCourseObjectIds } })
+            .select('_id courseCode courseName')
+            .lean();
+        const courseMap = new Map<string, { id: string; courseCode: string; courseName: string }>(
+            courses.map(c => [c._id.toString(), { id: c._id.toString(), courseCode: c.courseCode, courseName: c.courseName }])
+        );
+
+        const examMap = new Map<string, { id: string; title: string; courseCode?: string }>(
+            exams.map(e => {
+                const course = e.course ? courseMap.get(e.course.toString()) : undefined;
+                return [
+                    e._id.toString(),
+                    {
+                        id: e._id.toString(),
+                        title: e.title,
+                        courseCode: course?.courseCode
+                    }
+                ];
+            })
+        );
+
+        // Batch resolve answer scripts
+        const validScriptObjectIds = Array.from(scriptIds)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const rawScripts = await AnswerScript.find({ _id: { $in: validScriptObjectIds } }).lean();
+
+        // Serialize scripts using Anonymizer if viewer context is provided
+        const serializedScripts = viewer
+            ? await Anonymizer.serializeAnswerScripts(rawScripts, { id: viewer.id, role: viewer.role as UserRole })
+            : rawScripts.map(s => ({
+                _id: s._id.toString(),
+                anonymousId: s.candidateStudentId || s._id.toString(),
+                scriptReference: s.batchId ? `Script-${s.batchId}-${s.fileIndex}` : s._id.toString()
+            }));
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const scriptMap = new Map<string, Record<string, any>>(
+            serializedScripts.map(s => [s._id.toString(), s])
+        );
+
+        const activities: ActivityFeedItem[] = auditLogs.map(log => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const details = (log.details || {}) as Record<string, any>;
+            const actingUserId = log.user ? log.user.toString() : '';
+            const actingUser = userMap.get(actingUserId) || { id: actingUserId, name: 'Unknown User', email: '' };
+
+            const prevTaId = details.previousTaId ? String(details.previousTaId) : '';
+            const newTaId = details.newTaId ? String(details.newTaId) : '';
+            const taId = details.taId ? String(details.taId) : (details.owningTaId ? String(details.owningTaId) : '');
+
+            const previousTa = prevTaId ? (userMap.get(prevTaId) || { id: prevTaId, name: 'Unknown TA', email: '' }) : undefined;
+            const newTa = newTaId ? (userMap.get(newTaId) || { id: newTaId, name: 'Unknown TA', email: '' }) : undefined;
+            const ta = taId ? (userMap.get(taId) || { id: taId, name: 'Unknown TA', email: '' }) : undefined;
+
+            let resolvedExamId = details.examId ? String(details.examId) : '';
+            if (!resolvedExamId && log.entityId && (log.entityType === 'Exam' || ['INGESTION_APPROVED', 'INGESTION_APPROVAL_REVOKED', 'EXAM_BLIND_GRADING_TOGGLED'].includes(log.action))) {
+                resolvedExamId = log.entityId.toString();
+            }
+            const examInfo = resolvedExamId ? (examMap.get(resolvedExamId) || { id: resolvedExamId, title: 'Exam' }) : null;
+
+            let resolvedScriptId = details.answerScriptId ? String(details.answerScriptId) : '';
+            if (!resolvedScriptId && log.entityId && (log.entityType === 'AnswerScript' || ['ANSWERSCRIPT_IDENTIFIED', 'SCRIPT_REMAP', 'SCRIPT_MERGE'].includes(log.action))) {
+                resolvedScriptId = log.entityId.toString();
+            }
+            const scriptInfo = resolvedScriptId
+                ? (scriptMap.get(resolvedScriptId) || { _id: resolvedScriptId, anonymousId: resolvedScriptId })
+                : null;
+
+            const question = details.question !== undefined ? details.question : null;
+            const description = buildActivityDescription(log.action, details, userMap);
+
+            return {
+                _id: log._id.toString(),
+                action: log.action,
+                description,
+                timestamp: log.createdAt,
+                createdAt: log.createdAt,
+                outcome: log.outcome,
+                allocationId: log.entityId && log.entityType === 'Allocation' ? log.entityId.toString() : null,
+                question,
+                exam: examInfo,
+                answerScript: scriptInfo ? {
+                    id: scriptInfo._id?.toString() || resolvedScriptId,
+                    anonymousId: scriptInfo.anonymousId || scriptInfo.candidateStudentId || resolvedScriptId,
+                    scriptReference: scriptInfo.scriptReference
+                } : null,
+                actingUser,
+                details: {
+                    ...(previousTa ? { previousTa } : {}),
+                    ...(newTa ? { newTa } : {}),
+                    ...(ta ? { ta } : {}),
+                    ...(details.isBlindGrading !== undefined ? { isBlindGrading: details.isBlindGrading } : {})
+                }
+            };
+        });
+
+        return {
+            activities,
+            total
+        };
+    }
+}
+
+export const GRADING_ACTIVITY_ACTIONS = [
+    'ALLOCATION_REASSIGN',
+    'ALLOCATION_CLAIM',
+    'ALLOCATION_RELEASE',
+    'ALLOCATION_COMPLETE',
+    'ANSWERSCRIPT_IDENTIFIED',
+    'SCRIPT_REMAP',
+    'SCRIPT_MERGE',
+    'GRADE_PUBLISHED',
+    'EXAM_BLIND_GRADING_TOGGLED',
+    'INGESTION_APPROVED',
+    'INGESTION_APPROVAL_REVOKED'
+];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildActivityDescription(action: string, details: Record<string, any>, userMap: Map<string, any>): string {
+    const questionText = details.question !== undefined && details.question !== null ? `Question ${details.question}` : 'answer script';
+    switch (action) {
+        case 'ALLOCATION_REASSIGN': {
+            const newTa = userMap.get(String(details.newTaId));
+            const newTaName = newTa?.name || 'TA';
+            return `Reassigned ${questionText} to ${newTaName}`;
+        }
+        case 'ALLOCATION_CLAIM': {
+            const ta = userMap.get(String(details.taId));
+            const taName = ta?.name || 'TA';
+            return `${taName} claimed ${questionText} for grading`;
+        }
+        case 'ALLOCATION_RELEASE': {
+            return `Released ${questionText} from grading`;
+        }
+        case 'ALLOCATION_COMPLETE': {
+            return `Completed grading for ${questionText}`;
+        }
+        case 'ANSWERSCRIPT_IDENTIFIED': {
+            return 'Answer script identified and linked to student';
+        }
+        case 'EXAM_BLIND_GRADING_TOGGLED': {
+            return details.isBlindGrading !== undefined
+                ? `Blind grading ${details.isBlindGrading ? 'enabled' : 'disabled'}`
+                : 'Blind grading toggled';
+        }
+        case 'INGESTION_APPROVED': {
+            return 'Exam ingestion approved';
+        }
+        case 'INGESTION_APPROVAL_REVOKED': {
+            return 'Exam ingestion approval revoked';
+        }
+        case 'SCRIPT_REMAP': {
+            return 'Answer script pages remapped';
+        }
+        case 'SCRIPT_MERGE': {
+            return 'Answer scripts merged';
+        }
+        case 'GRADE_PUBLISHED': {
+            return 'Grades published';
+        }
+        default:
+            return action.replace(/_/g, ' ').toLowerCase();
+    }
+}
+
+export interface GetActivityFeedOptions {
+    limit?: number;
+    examId?: string;
+}
+
+export interface ActivityFeedItem {
+    _id: string;
+    action: string;
+    description: string;
+    timestamp: Date;
+    createdAt: Date;
+    outcome?: 'SUCCESS' | 'FAILURE';
+    allocationId?: string | null;
+    question?: number | null;
+    exam?: {
+        id: string;
+        title: string;
+        courseCode?: string;
+    } | null;
+    answerScript?: {
+        id: string;
+        anonymousId?: string;
+        scriptReference?: string;
+    } | null;
+    actingUser?: {
+        id: string;
+        name: string;
+        email: string;
+        role?: string;
+    };
+    details?: {
+        previousTa?: { id: string; name: string; email: string };
+        newTa?: { id: string; name: string; email: string };
+        ta?: { id: string; name: string; email: string };
+        [key: string]: unknown;
+    };
+}
+
+export interface ActivityFeedResult {
+    activities: ActivityFeedItem[];
+    total: number;
 }
 
 export interface GetReassignmentHistoryOptions {
