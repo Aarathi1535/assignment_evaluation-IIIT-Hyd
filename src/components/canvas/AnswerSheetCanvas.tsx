@@ -44,10 +44,26 @@ export function AnswerSheetCanvas({
   onLoad,
   onError,
 }: AnswerSheetCanvasProps) {
-  const [isLoading, setIsLoading] = useState<boolean>(Boolean(src));
+  const [prevSrc, setPrevSrc] = useState<string | null | undefined>(src);
+  const [isLoading, setIsLoading] = useState<boolean>(Boolean(src !== null));
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [renderedBounds, setRenderedBounds] = useState<RenderedImageBounds | null>(null);
+
+  // Synchronize loading/error state when src prop changes
+  if (prevSrc !== src) {
+    setPrevSrc(src);
+    if (src === null) {
+      setIsLoading(false);
+      setHasError(false);
+      setErrorMessage('');
+      setRenderedBounds(null);
+    } else {
+      setIsLoading(true);
+      setHasError(false);
+      setErrorMessage('');
+    }
+  }
 
   const handleImageLoad = useCallback(
     (_img: HTMLImageElement, bounds: RenderedImageBounds) => {

@@ -72,6 +72,7 @@ export async function GET(
           pageNumber: p.pageNumber,
           fileIndex: p.fileIndex,
           thumbnailUrl: `/api/ingest/${batchId}/pages/${p._id}/thumbnail`,
+          imageUrl: `/api/ingest/${batchId}/pages/${p._id}/image`,
           width: p.width,
           height: p.height,
           nearBlank: p.nearBlank,
