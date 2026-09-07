@@ -1,5 +1,6 @@
 import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
+import type { PanZoomTransform } from '@/lib/panZoom';
 
 export interface CanvasDimensions {
   width: number;
@@ -30,10 +31,20 @@ export interface PageImageLayerProps {
   alt?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */
   fitMode?: ImageFitMode;
+  /** Current pan/zoom transform */
+  transform?: PanZoomTransform;
   /** Callback fired when image is successfully loaded and rendered */
-  onImageLoad?: (image: HTMLImageElement, bounds: RenderedImageBounds) => void;
+  onImageLoad?: (image: HTMLImageElement, baseBounds: RenderedImageBounds) => void;
   /** Callback fired if image loading fails */
   onImageError?: (error: Error) => void;
+  /** Callback fired when transform updates (e.g. from gestures) */
+  onTransformChange?: (transform: PanZoomTransform) => void;
+  /** Minimum zoom factor (default 1.0) */
+  minZoom?: number;
+  /** Maximum zoom factor (default 4.0) */
+  maxZoom?: number;
+  /** Whether interactive pan/zoom is enabled (default true) */
+  enablePanZoom?: boolean;
   /** Parent Konva stage instance */
   stage?: Konva.Stage | null;
 }
@@ -53,10 +64,20 @@ export interface AnswerSheetCanvasProps {
   className?: string;
   /** Stage background color (default '#f8fafc' / slate-50) */
   backgroundColor?: string;
+  /** Minimum zoom level (default 1.0 = 100%) */
+  minZoom?: number;
+  /** Maximum zoom level (default 4.0 = 400%) */
+  maxZoom?: number;
+  /** Whether pan and zoom gestures are enabled (default true) */
+  enablePanZoom?: boolean;
+  /** Whether to show the floating zoom toolbar controls (default true) */
+  showZoomControls?: boolean;
   /** Custom fallback component on load error */
   fallback?: React.ReactNode;
   /** Callback fired when image is loaded and rendered with measured bounds */
   onLoad?: (bounds: RenderedImageBounds) => void;
   /** Callback fired if image fails to load */
   onError?: (error: Error) => void;
+  /** Callback fired when zoom/pan transform changes */
+  onTransformChange?: (transform: PanZoomTransform) => void;
 }
