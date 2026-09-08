@@ -28,6 +28,7 @@ export function PageImageLayer({
   minZoom = MIN_ZOOM_LEVEL,
   maxZoom = MAX_ZOOM_LEVEL,
   enablePanZoom = true,
+  isPenActive = false,
   stage: propStage,
 }: PageImageLayerProps) {
   const { stage: contextStage, dimensions } = useCanvasStage();
@@ -288,7 +289,8 @@ export function PageImageLayer({
 
     // Drag / Pan handlers
     const handleMouseDown = (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
-      // Ignore if not primary button on mouse
+      // Ignore if pen is active or not primary button on mouse
+      if (isPenActive) return;
       if ('button' in e.evt && e.evt.button !== 0) return;
 
       const pointer = stage.getPointerPosition();
@@ -307,6 +309,7 @@ export function PageImageLayer({
     };
 
     const handleMouseMove = () => {
+      if (isPenActive) return;
       const current = activeTransformRef.current;
 
       // Update hover cursor
@@ -413,7 +416,7 @@ export function PageImageLayer({
       domContainer.removeEventListener('touchmove', handleTouchMove);
       domContainer.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [stage, enablePanZoom, minZoom, maxZoom, onTransformChange]);
+  }, [stage, enablePanZoom, isPenActive, minZoom, maxZoom, onTransformChange]);
 
   return null;
 }

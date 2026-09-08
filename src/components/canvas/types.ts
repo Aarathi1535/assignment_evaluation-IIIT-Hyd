@@ -2,8 +2,9 @@ import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
 import type { PanZoomTransform } from '@/lib/panZoom';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
+import type { FreehandStroke, StrokePoint } from '@/lib/penTool';
 
-export type { AnswerSheetPage };
+export type { AnswerSheetPage, FreehandStroke, StrokePoint };
 
 export interface CanvasDimensions {
   width: number;
@@ -48,6 +49,8 @@ export interface PageImageLayerProps {
   maxZoom?: number;
   /** Whether interactive pan/zoom is enabled (default true) */
   enablePanZoom?: boolean;
+  /** Whether freehand pen tool mode is currently active (disables drag-pan in favor of drawing) */
+  isPenActive?: boolean;
   /** Parent Konva stage instance */
   stage?: Konva.Stage | null;
 }
@@ -85,6 +88,22 @@ export interface AnswerSheetCanvasProps {
   enablePanZoom?: boolean;
   /** Whether to show the floating zoom toolbar controls (default true) */
   showZoomControls?: boolean;
+  /** Whether the freehand pen tool feature is enabled (default true, AE-126) */
+  enablePenTool?: boolean;
+  /** Uncontrolled initial pen active state (default false, AE-126) */
+  initialPenActive?: boolean;
+  /** Controlled pen active state (AE-126) */
+  isPenActive?: boolean;
+  /** Callback fired when pen active state is toggled (AE-126) */
+  onPenActiveChange?: (active: boolean) => void;
+  /** In-memory freehand strokes for the canvas or session */
+  strokes?: FreehandStroke[];
+  /** Callback fired when strokes change or new stroke is completed */
+  onStrokesChange?: (strokes: FreehandStroke[]) => void;
+  /** Default pen stroke color (default '#e11d48') */
+  defaultStrokeColor?: string;
+  /** Default pen stroke width (default 3) */
+  defaultStrokeWidth?: number;
   /** Custom fallback component on load error */
   fallback?: React.ReactNode;
   /** Callback fired when image is loaded and rendered with measured bounds */

@@ -1,7 +1,9 @@
 export * from './types';
 export { CanvasStage, useCanvasStage } from './CanvasStage';
 export { PageImageLayer } from './PageImageLayer';
+export { PenLayer } from './PenLayer';
 export { AnswerSheetCanvas, SAMPLE_ANSWER_SHEET_DATA_URI } from './AnswerSheetCanvas';
 export * from '@/lib/annotations';
 export * from '@/lib/panZoom';
 export * from '@/lib/pageNavigation';
+export * from '@/lib/penTool';

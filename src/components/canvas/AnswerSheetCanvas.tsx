@@ -10,9 +10,11 @@ import {
   RotateCcw,
   ChevronLeft,
   ChevronRight,
+  Pen,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
+import { PenLayer } from './PenLayer';
 import type { AnswerSheetCanvasProps } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
@@ -33,6 +35,12 @@ import {
   formatPageIndicator,
   getPageImageUrl,
 } from '@/lib/pageNavigation';
+import {
+  FreehandStroke,
+  DEFAULT_PEN_COLOR,
+  DEFAULT_PEN_WIDTH,
+  filterStrokesByPage,
+} from '@/lib/penTool';
 
 /**
  * Deterministic sample SVG data-URI for canvas testing, demonstration, and empty-state fallback.
@@ -75,6 +83,14 @@ export function AnswerSheetCanvas({
   maxZoom = MAX_ZOOM_LEVEL,
   enablePanZoom = true,
   showZoomControls = true,
+  enablePenTool = true,
+  initialPenActive = false,
+  isPenActive: propIsPenActive,
+  onPenActiveChange,
+  strokes: propStrokes,
+  onStrokesChange,
+  defaultStrokeColor = DEFAULT_PEN_COLOR,
+  defaultStrokeWidth = DEFAULT_PEN_WIDTH,
   fallback,
   onLoad,
   onError,
@@ -105,6 +121,41 @@ export function AnswerSheetCanvas({
     if (!isMultiPageMode || totalPages === 0) return null;
     return sortedPages[activePageIndex] || null;
   }, [isMultiPageMode, sortedPages, totalPages, activePageIndex]);
+
+  // Key used to strictly isolate strokes per page
+  const currentPageKey = useMemo(() => {
+    if (currentPage?._id) return String(currentPage._id);
+    if (currentPage?.id) return String(currentPage.id);
+    return String(activePageIndex);
+  }, [currentPage, activePageIndex]);
+
+  // Pen tool state (controlled vs uncontrolled)
+  const [internalPenActive, setInternalPenActive] = useState<boolean>(initialPenActive);
+  const activePenMode = propIsPenActive !== undefined ? propIsPenActive : internalPenActive;
+
+  // In-memory freehand strokes state (session level)
+  const [internalStrokes, setInternalStrokes] = useState<FreehandStroke[]>([]);
+  const allStrokes = propStrokes !== undefined ? propStrokes : internalStrokes;
+
+  // Filter strokes strictly belonging to the currently displayed page
+  const currentPageStrokes = useMemo(() => {
+    return filterStrokesByPage(allStrokes, currentPageKey);
+  }, [allStrokes, currentPageKey]);
+
+  const handleTogglePen = useCallback(() => {
+    const nextActive = !activePenMode;
+    setInternalPenActive(nextActive);
+    onPenActiveChange?.(nextActive);
+  }, [activePenMode, onPenActiveChange]);
+
+  const handleStrokeComplete = useCallback(
+    (newStroke: FreehandStroke) => {
+      const updated = [...allStrokes, newStroke];
+      setInternalStrokes(updated);
+      onStrokesChange?.(updated);
+    },
+    [allStrokes, onStrokesChange]
+  );
 
   // Determine effective image source
   const effectiveSrc = useMemo(() => {
@@ -354,20 +405,54 @@ export function AnswerSheetCanvas({
           minZoom={minZoom}
           maxZoom={maxZoom}
           enablePanZoom={enablePanZoom}
+          isPenActive={activePenMode}
           onImageLoad={handleImageLoad}
           onImageError={handleImageError}
           onTransformChange={handleTransformChange}
         />
+
+        {/* Freehand Pen Drawing Layer (AE-126) */}
+        <PenLayer
+          transform={transform}
+          pageKey={currentPageKey}
+          isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
+          strokes={currentPageStrokes}
+          onStrokeComplete={handleStrokeComplete}
+          color={defaultStrokeColor}
+          strokeWidth={defaultStrokeWidth}
+        />
       </CanvasStage>
 
-      {/* Floating Zoom Controls Toolbar */}
+      {/* Floating Toolbar: Zoom Controls & Pen Toggle */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
           data-testid="canvas-zoom-controls"
           role="toolbar"
-          aria-label="Canvas Zoom Controls"
+          aria-label="Canvas Zoom and Pen Controls"
         >
+          {/* Pen Tool Toggle Button (AE-126) */}
+          {enablePenTool && (
+            <>
+              <button
+                type="button"
+                onClick={handleTogglePen}
+                className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                  activePenMode
+                    ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+                aria-pressed={activePenMode}
+                aria-label="Toggle Freehand Pen Tool"
+                title={activePenMode ? 'Pen Tool Active (Click to Disable)' : 'Enable Freehand Pen Tool'}
+                data-testid="canvas-pen-toggle"
+              >
+                <Pen className="h-4 w-4" />
+              </button>
+              <div className="h-4 w-px bg-slate-200 mx-0.5" />
+            </>
+          )}
+
           <button
             type="button"
             onClick={handleZoomOut}
