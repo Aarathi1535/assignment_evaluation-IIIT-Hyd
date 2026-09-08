@@ -9,10 +9,62 @@
 
 import type { PanZoomTransform } from './panZoom';
 
+export type PenColorId = 'red' | 'blue' | 'green';
+export type PenWidthId = 'thin' | 'thick';
+
+export interface PenColorOption {
+  id: PenColorId;
+  label: string;
+  value: string;
+}
+
+export interface PenWidthOption {
+  id: PenWidthId;
+  label: string;
+  value: number;
+}
+
+export const PEN_COLORS: Record<PenColorId, PenColorOption> = {
+  red: { id: 'red', label: 'Red', value: '#e11d48' },
+  blue: { id: 'blue', label: 'Blue', value: '#2563eb' },
+  green: { id: 'green', label: 'Green', value: '#16a34a' },
+};
+
+export const PEN_WIDTHS: Record<PenWidthId, PenWidthOption> = {
+  thin: { id: 'thin', label: 'Thin', value: 2 },
+  thick: { id: 'thick', label: 'Thick', value: 5 },
+};
+
+export const DEFAULT_PEN_COLOR_ID: PenColorId = 'red';
+export const DEFAULT_PEN_WIDTH_ID: PenWidthId = 'thin';
+
 export const DEFAULT_PEN_COLOR = '#e11d48'; // Standard grading red pen
 export const DEFAULT_PEN_WIDTH = 3;
 export const MIN_PRESSURE_WIDTH_MULTIPLIER = 0.5;
 export const MAX_PRESSURE_WIDTH_MULTIPLIER = 1.75;
+
+/**
+ * Resolves a color ID or hex code to a concrete hex color string.
+ */
+export function resolvePenColor(color: PenColorId | string = DEFAULT_PEN_COLOR_ID): string {
+  if (color in PEN_COLORS) {
+    return PEN_COLORS[color as PenColorId].value;
+  }
+  return color || DEFAULT_PEN_COLOR;
+}
+
+/**
+ * Resolves a width ID ('thin' | 'thick') or number to a concrete base pixel stroke width.
+ */
+export function resolvePenWidth(width: PenWidthId | number = DEFAULT_PEN_WIDTH_ID): number {
+  if (typeof width === 'string' && width in PEN_WIDTHS) {
+    return PEN_WIDTHS[width as PenWidthId].value;
+  }
+  if (typeof width === 'number' && !Number.isNaN(width) && width > 0) {
+    return width;
+  }
+  return PEN_WIDTHS.thin.value;
+}
 
 export interface StrokePoint {
   x: number;

@@ -2,9 +2,24 @@ import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
 import type { PanZoomTransform } from '@/lib/panZoom';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
-import type { FreehandStroke, StrokePoint } from '@/lib/penTool';
+import type {
+  FreehandStroke,
+  StrokePoint,
+  PenColorId,
+  PenWidthId,
+  PenColorOption,
+  PenWidthOption,
+} from '@/lib/penTool';
 
-export type { AnswerSheetPage, FreehandStroke, StrokePoint };
+export type {
+  AnswerSheetPage,
+  FreehandStroke,
+  StrokePoint,
+  PenColorId,
+  PenWidthId,
+  PenColorOption,
+  PenWidthOption,
+};
 
 export interface CanvasDimensions {
   width: number;
@@ -96,13 +111,25 @@ export interface AnswerSheetCanvasProps {
   isPenActive?: boolean;
   /** Callback fired when pen active state is toggled (AE-126) */
   onPenActiveChange?: (active: boolean) => void;
+  /** Controlled selected pen color ('red' | 'blue' | 'green', AE-127) */
+  selectedPenColor?: PenColorId;
+  /** Uncontrolled initial pen color (default 'red', AE-127) */
+  initialPenColor?: PenColorId;
+  /** Callback fired when pen color changes (AE-127) */
+  onPenColorChange?: (color: PenColorId) => void;
+  /** Controlled selected pen stroke width ('thin' | 'thick', AE-127) */
+  selectedPenWidth?: PenWidthId;
+  /** Uncontrolled initial pen stroke width (default 'thin', AE-127) */
+  initialPenWidth?: PenWidthId;
+  /** Callback fired when pen stroke width changes (AE-127) */
+  onPenWidthChange?: (width: PenWidthId) => void;
   /** In-memory freehand strokes for the canvas or session */
   strokes?: FreehandStroke[];
   /** Callback fired when strokes change or new stroke is completed */
   onStrokesChange?: (strokes: FreehandStroke[]) => void;
-  /** Default pen stroke color (default '#e11d48') */
+  /** Default pen stroke color fallback (default '#e11d48') */
   defaultStrokeColor?: string;
-  /** Default pen stroke width (default 3) */
+  /** Default pen stroke width fallback (default 2) */
   defaultStrokeWidth?: number;
   /** Custom fallback component on load error */
   fallback?: React.ReactNode;

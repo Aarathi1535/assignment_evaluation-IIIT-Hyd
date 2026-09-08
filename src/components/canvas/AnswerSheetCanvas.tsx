@@ -39,8 +39,15 @@ import {
   FreehandStroke,
   DEFAULT_PEN_COLOR,
   DEFAULT_PEN_WIDTH,
+  DEFAULT_PEN_COLOR_ID,
+  DEFAULT_PEN_WIDTH_ID,
+  PenColorId,
+  PenWidthId,
+  resolvePenColor,
+  resolvePenWidth,
   filterStrokesByPage,
 } from '@/lib/penTool';
+import { PenStyleSelector } from './PenStyleSelector';
 
 /**
  * Deterministic sample SVG data-URI for canvas testing, demonstration, and empty-state fallback.
@@ -87,6 +94,12 @@ export function AnswerSheetCanvas({
   initialPenActive = false,
   isPenActive: propIsPenActive,
   onPenActiveChange,
+  selectedPenColor: propSelectedPenColor,
+  initialPenColor = DEFAULT_PEN_COLOR_ID,
+  onPenColorChange,
+  selectedPenWidth: propSelectedPenWidth,
+  initialPenWidth = DEFAULT_PEN_WIDTH_ID,
+  onPenWidthChange,
   strokes: propStrokes,
   onStrokesChange,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
@@ -133,6 +146,35 @@ export function AnswerSheetCanvas({
   const [internalPenActive, setInternalPenActive] = useState<boolean>(initialPenActive);
   const activePenMode = propIsPenActive !== undefined ? propIsPenActive : internalPenActive;
 
+  // Pen style state: color & stroke width (controlled vs uncontrolled, AE-127)
+  const [internalPenColor, setInternalPenColor] = useState<PenColorId>(initialPenColor);
+  const activePenColor = propSelectedPenColor !== undefined ? propSelectedPenColor : internalPenColor;
+
+  const [internalPenWidth, setInternalPenWidth] = useState<PenWidthId>(initialPenWidth);
+  const activePenWidth = propSelectedPenWidth !== undefined ? propSelectedPenWidth : internalPenWidth;
+
+  const handleTogglePen = useCallback(() => {
+    const nextActive = !activePenMode;
+    setInternalPenActive(nextActive);
+    onPenActiveChange?.(nextActive);
+  }, [activePenMode, onPenActiveChange]);
+
+  const handleColorChange = useCallback(
+    (color: PenColorId) => {
+      setInternalPenColor(color);
+      onPenColorChange?.(color);
+    },
+    [onPenColorChange]
+  );
+
+  const handleWidthChange = useCallback(
+    (width: PenWidthId) => {
+      setInternalPenWidth(width);
+      onPenWidthChange?.(width);
+    },
+    [onPenWidthChange]
+  );
+
   // In-memory freehand strokes state (session level)
   const [internalStrokes, setInternalStrokes] = useState<FreehandStroke[]>([]);
   const allStrokes = propStrokes !== undefined ? propStrokes : internalStrokes;
@@ -142,12 +184,6 @@ export function AnswerSheetCanvas({
     return filterStrokesByPage(allStrokes, currentPageKey);
   }, [allStrokes, currentPageKey]);
 
-  const handleTogglePen = useCallback(() => {
-    const nextActive = !activePenMode;
-    setInternalPenActive(nextActive);
-    onPenActiveChange?.(nextActive);
-  }, [activePenMode, onPenActiveChange]);
-
   const handleStrokeComplete = useCallback(
     (newStroke: FreehandStroke) => {
       const updated = [...allStrokes, newStroke];
@@ -156,6 +192,15 @@ export function AnswerSheetCanvas({
     },
     [allStrokes, onStrokesChange]
   );
+
+  // Concrete color & width passed into PenLayer for new strokes
+  const effectiveStrokeColor = useMemo(() => {
+    return resolvePenColor(activePenColor) || defaultStrokeColor;
+  }, [activePenColor, defaultStrokeColor]);
+
+  const effectiveStrokeWidth = useMemo(() => {
+    return resolvePenWidth(activePenWidth) || defaultStrokeWidth;
+  }, [activePenWidth, defaultStrokeWidth]);
 
   // Determine effective image source
   const effectiveSrc = useMemo(() => {
@@ -418,12 +463,12 @@ export function AnswerSheetCanvas({
           isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           strokes={currentPageStrokes}
           onStrokeComplete={handleStrokeComplete}
-          color={defaultStrokeColor}
-          strokeWidth={defaultStrokeWidth}
+          color={effectiveStrokeColor}
+          strokeWidth={effectiveStrokeWidth}
         />
       </CanvasStage>
 
-      {/* Floating Toolbar: Zoom Controls & Pen Toggle */}
+      {/* Floating Toolbar: Zoom Controls & Pen / Style Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
@@ -431,7 +476,7 @@ export function AnswerSheetCanvas({
           role="toolbar"
           aria-label="Canvas Zoom and Pen Controls"
         >
-          {/* Pen Tool Toggle Button (AE-126) */}
+          {/* Pen Tool Toggle & Style Selector (AE-126 / AE-127) */}
           {enablePenTool && (
             <>
               <button
@@ -449,6 +494,20 @@ export function AnswerSheetCanvas({
               >
                 <Pen className="h-4 w-4" />
               </button>
+
+              {/* Color & Stroke-Width Selector (AE-127) */}
+              {activePenMode && (
+                <>
+                  <div className="h-4 w-px bg-slate-200 mx-0.5" />
+                  <PenStyleSelector
+                    selectedColor={activePenColor}
+                    onColorChange={handleColorChange}
+                    selectedWidth={activePenWidth}
+                    onWidthChange={handleWidthChange}
+                  />
+                </>
+              )}
+
               <div className="h-4 w-px bg-slate-200 mx-0.5" />
             </>
           )}
