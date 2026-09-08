@@ -8,3 +8,5 @@ export * from '@/lib/annotations';
 export * from '@/lib/panZoom';
 export * from '@/lib/pageNavigation';
 export * from '@/lib/penTool';
+export * from '@/lib/eraserTool';
+export * from '@/lib/annotationHistory';

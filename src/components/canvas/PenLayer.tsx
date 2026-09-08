@@ -11,6 +11,10 @@ import {
   createStroke,
   appendPointToStroke,
 } from '@/lib/penTool';
+import {
+  DEFAULT_ERASER_RADIUS,
+  findIntersectingStrokes,
+} from '@/lib/eraserTool';
 import type { PanZoomTransform } from '@/lib/panZoom';
 
 export interface PenLayerProps {
@@ -22,10 +26,16 @@ export interface PenLayerProps {
   pageKey: string | number;
   /** Whether pen tool is currently active */
   isPenActive: boolean;
+  /** Whether eraser tool is currently active (AE-128) */
+  isEraserActive?: boolean;
   /** Existing finalized strokes belonging to this page */
   strokes: FreehandStroke[];
   /** Callback fired when a new stroke is drawn and completed */
   onStrokeComplete?: (stroke: FreehandStroke) => void;
+  /** Callback fired when one or more strokes are erased in a gesture (AE-128) */
+  onStrokesErased?: (erasedStrokes: FreehandStroke[]) => void;
+  /** Eraser radius in invariant image coordinates */
+  eraserRadius?: number;
   /** Default pen stroke color */
   color?: string;
   /** Default pen stroke width */
@@ -37,8 +47,11 @@ export function PenLayer({
   transform,
   pageKey,
   isPenActive,
+  isEraserActive = false,
   strokes,
   onStrokeComplete,
+  onStrokesErased,
+  eraserRadius = DEFAULT_ERASER_RADIUS,
   color = DEFAULT_PEN_COLOR,
   strokeWidth = DEFAULT_PEN_WIDTH,
 }: PenLayerProps) {
@@ -54,11 +67,19 @@ export function PenLayer({
   const activeStrokeRef = useRef<FreehandStroke | null>(null);
   const activeLineNodeRef = useRef<Konva.Line | null>(null);
 
+  // Active erasing tracking refs (AE-128)
+  const isErasingRef = useRef(false);
+  const erasedInGestureRef = useRef<Map<string, FreehandStroke>>(new Map());
+
   // Latest props refs to avoid stale closures in native listeners
   const transformRef = useRef(transform);
   const pageKeyRef = useRef(pageKey);
   const isPenActiveRef = useRef(isPenActive);
+  const isEraserActiveRef = useRef(isEraserActive);
+  const strokesRef = useRef(strokes);
   const onStrokeCompleteRef = useRef(onStrokeComplete);
+  const onStrokesErasedRef = useRef(onStrokesErased);
+  const eraserRadiusRef = useRef(eraserRadius);
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
 
@@ -66,10 +87,25 @@ export function PenLayer({
     transformRef.current = transform;
     pageKeyRef.current = pageKey;
     isPenActiveRef.current = isPenActive;
+    isEraserActiveRef.current = isEraserActive;
+    strokesRef.current = strokes;
     onStrokeCompleteRef.current = onStrokeComplete;
+    onStrokesErasedRef.current = onStrokesErased;
+    eraserRadiusRef.current = eraserRadius;
     colorRef.current = color;
     strokeWidthRef.current = strokeWidth;
-  }, [transform, pageKey, isPenActive, onStrokeComplete, color, strokeWidth]);
+  }, [
+    transform,
+    pageKey,
+    isPenActive,
+    isEraserActive,
+    strokes,
+    onStrokeComplete,
+    onStrokesErased,
+    eraserRadius,
+    color,
+    strokeWidth,
+  ]);
 
   // Initialize Layer and Group
   useEffect(() => {
@@ -177,9 +213,19 @@ export function PenLayer({
     const container = stage.container();
     if (!container) return;
 
+    const finalizeErasingGesture = () => {
+      if (!isErasingRef.current) return;
+      isErasingRef.current = false;
+
+      if (erasedInGestureRef.current.size > 0) {
+        const erasedList = Array.from(erasedInGestureRef.current.values());
+        erasedInGestureRef.current.clear();
+        onStrokesErasedRef.current?.(erasedList);
+      }
+    };
+
     const handlePointerDown = (e: PointerEvent) => {
-      if (!isPenActiveRef.current) return;
-      // Only draw on primary pointer button (left click or stylus tip or touch)
+      // Only draw/erase on primary pointer button (left click or stylus tip or touch)
       if (e.button !== 0 && e.buttons !== 1 && e.pointerType === 'mouse') return;
 
       const rect = container.getBoundingClientRect();
@@ -188,6 +234,31 @@ export function PenLayer({
 
       const currentTransform = transformRef.current;
       const imagePoint = screenToImageCoordinates(screenX, screenY, currentTransform);
+
+      if (isEraserActiveRef.current) {
+        isErasingRef.current = true;
+        erasedInGestureRef.current.clear();
+
+        const hitStrokes = findIntersectingStrokes(
+          strokesRef.current,
+          imagePoint,
+          eraserRadiusRef.current
+        );
+
+        if (hitStrokes.length > 0) {
+          for (const hit of hitStrokes) {
+            erasedInGestureRef.current.set(hit.id, hit);
+            const node = linesMapRef.current.get(hit.id);
+            if (node) {
+              node.visible(false);
+            }
+          }
+          layerRef.current?.batchDraw();
+        }
+        return;
+      }
+
+      if (!isPenActiveRef.current) return;
 
       const newStroke = createStroke(pageKeyRef.current, imagePoint, {
         color: colorRef.current,
@@ -218,14 +289,37 @@ export function PenLayer({
     };
 
     const handlePointerMove = (e: PointerEvent) => {
-      if (!isPenActiveRef.current || !isDrawingRef.current || !activeStrokeRef.current) return;
-
       const rect = container.getBoundingClientRect();
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
 
       const currentTransform = transformRef.current;
       const nextPoint = screenToImageCoordinates(screenX, screenY, currentTransform);
+
+      if (isEraserActiveRef.current && isErasingRef.current) {
+        const remaining = strokesRef.current.filter(
+          (s) => !erasedInGestureRef.current.has(s.id)
+        );
+        const hitStrokes = findIntersectingStrokes(
+          remaining,
+          nextPoint,
+          eraserRadiusRef.current
+        );
+
+        if (hitStrokes.length > 0) {
+          for (const hit of hitStrokes) {
+            erasedInGestureRef.current.set(hit.id, hit);
+            const node = linesMapRef.current.get(hit.id);
+            if (node) {
+              node.visible(false);
+            }
+          }
+          layerRef.current?.batchDraw();
+        }
+        return;
+      }
+
+      if (!isPenActiveRef.current || !isDrawingRef.current || !activeStrokeRef.current) return;
 
       // Append point to active stroke state
       const updated = appendPointToStroke(activeStrokeRef.current, nextPoint);
@@ -239,19 +333,27 @@ export function PenLayer({
     };
 
     const handlePointerUp = () => {
+      if (isErasingRef.current) {
+        finalizeErasingGesture();
+      }
       if (isDrawingRef.current) {
         finalizeActiveStroke();
       }
     };
 
     const handlePointerCancel = () => {
+      if (isErasingRef.current) {
+        finalizeErasingGesture();
+      }
       if (isDrawingRef.current) {
         finalizeActiveStroke();
       }
     };
 
-    // Update container cursor when pen is active
-    if (isPenActive) {
+    // Update container cursor
+    if (isEraserActive) {
+      container.style.cursor = 'cell';
+    } else if (isPenActive) {
       container.style.cursor = 'crosshair';
     }
 
@@ -266,7 +368,7 @@ export function PenLayer({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [stage, isPenActive, finalizeActiveStroke]);
+  }, [stage, isPenActive, isEraserActive, finalizeActiveStroke]);
 
   return null;
 }

@@ -10,6 +10,9 @@ import type {
   PenColorOption,
   PenWidthOption,
 } from '@/lib/penTool';
+import type { AnnotationAction, PageHistory } from '@/lib/annotationHistory';
+
+export type CanvasTool = 'none' | 'pen' | 'eraser';
 
 export type {
   AnswerSheetPage,
@@ -19,6 +22,8 @@ export type {
   PenWidthId,
   PenColorOption,
   PenWidthOption,
+  AnnotationAction,
+  PageHistory,
 };
 
 export interface CanvasDimensions {
@@ -111,6 +116,14 @@ export interface AnswerSheetCanvasProps {
   isPenActive?: boolean;
   /** Callback fired when pen active state is toggled (AE-126) */
   onPenActiveChange?: (active: boolean) => void;
+  /** Whether the eraser tool is enabled (default true, AE-128) */
+  enableEraserTool?: boolean;
+  /** Whether the undo/redo feature is enabled (default true, AE-128) */
+  enableUndoRedo?: boolean;
+  /** Controlled active tool ('none' | 'pen' | 'eraser', AE-128) */
+  activeTool?: CanvasTool;
+  /** Callback fired when active tool changes (AE-128) */
+  onToolChange?: (tool: CanvasTool) => void;
   /** Controlled selected pen color ('red' | 'blue' | 'green', AE-127) */
   selectedPenColor?: PenColorId;
   /** Uncontrolled initial pen color (default 'red', AE-127) */
@@ -125,8 +138,12 @@ export interface AnswerSheetCanvasProps {
   onPenWidthChange?: (width: PenWidthId) => void;
   /** In-memory freehand strokes for the canvas or session */
   strokes?: FreehandStroke[];
-  /** Callback fired when strokes change or new stroke is completed */
+  /** Callback fired when strokes change or new stroke is completed/erased */
   onStrokesChange?: (strokes: FreehandStroke[]) => void;
+  /** Callback fired after an undo operation */
+  onUndo?: () => void;
+  /** Callback fired after a redo operation */
+  onRedo?: () => void;
   /** Default pen stroke color fallback (default '#e11d48') */
   defaultStrokeColor?: string;
   /** Default pen stroke width fallback (default 2) */

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   Loader2,
   AlertCircle,
@@ -11,11 +11,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Pen,
+  Eraser,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
-import type { AnswerSheetCanvasProps } from './types';
+import type { AnswerSheetCanvasProps, CanvasTool } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
   calculateStepZoom,
@@ -47,6 +50,16 @@ import {
   resolvePenWidth,
   filterStrokesByPage,
 } from '@/lib/penTool';
+import {
+  PageHistory,
+  createInitialHistory,
+  recordAddStroke,
+  recordEraseStrokes,
+  applyUndo,
+  applyRedo,
+  canUndo,
+  canRedo,
+} from '@/lib/annotationHistory';
 import { PenStyleSelector } from './PenStyleSelector';
 
 /**
@@ -94,6 +107,10 @@ export function AnswerSheetCanvas({
   initialPenActive = false,
   isPenActive: propIsPenActive,
   onPenActiveChange,
+  enableEraserTool = true,
+  enableUndoRedo = true,
+  activeTool: propActiveTool,
+  onToolChange,
   selectedPenColor: propSelectedPenColor,
   initialPenColor = DEFAULT_PEN_COLOR_ID,
   onPenColorChange,
@@ -102,6 +119,8 @@ export function AnswerSheetCanvas({
   onPenWidthChange,
   strokes: propStrokes,
   onStrokesChange,
+  onUndo,
+  onRedo,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
   defaultStrokeWidth = DEFAULT_PEN_WIDTH,
   fallback,
@@ -142,9 +161,36 @@ export function AnswerSheetCanvas({
     return String(activePageIndex);
   }, [currentPage, activePageIndex]);
 
-  // Pen tool state (controlled vs uncontrolled)
-  const [internalPenActive, setInternalPenActive] = useState<boolean>(initialPenActive);
-  const activePenMode = propIsPenActive !== undefined ? propIsPenActive : internalPenActive;
+  // Active Tool state: 'none' | 'pen' | 'eraser' (AE-128)
+  const [internalTool, setInternalTool] = useState<CanvasTool>(() =>
+    initialPenActive ? 'pen' : 'none'
+  );
+
+  const activeTool = useMemo<CanvasTool>(() => {
+    if (propActiveTool !== undefined) return propActiveTool;
+    if (propIsPenActive !== undefined) return propIsPenActive ? 'pen' : 'none';
+    return internalTool;
+  }, [propActiveTool, propIsPenActive, internalTool]);
+
+  const activePenMode = activeTool === 'pen';
+  const activeEraserMode = activeTool === 'eraser';
+
+  const setTool = useCallback(
+    (nextTool: CanvasTool) => {
+      setInternalTool(nextTool);
+      onToolChange?.(nextTool);
+      onPenActiveChange?.(nextTool === 'pen');
+    },
+    [onToolChange, onPenActiveChange]
+  );
+
+  const handleTogglePen = useCallback(() => {
+    setTool(activePenMode ? 'none' : 'pen');
+  }, [activePenMode, setTool]);
+
+  const handleToggleEraser = useCallback(() => {
+    setTool(activeEraserMode ? 'none' : 'eraser');
+  }, [activeEraserMode, setTool]);
 
   // Pen style state: color & stroke width (controlled vs uncontrolled, AE-127)
   const [internalPenColor, setInternalPenColor] = useState<PenColorId>(initialPenColor);
@@ -152,12 +198,6 @@ export function AnswerSheetCanvas({
 
   const [internalPenWidth, setInternalPenWidth] = useState<PenWidthId>(initialPenWidth);
   const activePenWidth = propSelectedPenWidth !== undefined ? propSelectedPenWidth : internalPenWidth;
-
-  const handleTogglePen = useCallback(() => {
-    const nextActive = !activePenMode;
-    setInternalPenActive(nextActive);
-    onPenActiveChange?.(nextActive);
-  }, [activePenMode, onPenActiveChange]);
 
   const handleColorChange = useCallback(
     (color: PenColorId) => {
@@ -184,14 +224,129 @@ export function AnswerSheetCanvas({
     return filterStrokesByPage(allStrokes, currentPageKey);
   }, [allStrokes, currentPageKey]);
 
+  // Per-page undo/redo history state (AE-128)
+  const [pageHistoryMap, setPageHistoryMap] = useState<Record<string, PageHistory>>({});
+  const currentPageHistory = useMemo(() => {
+    return pageHistoryMap[currentPageKey] || createInitialHistory();
+  }, [pageHistoryMap, currentPageKey]);
+
+  const canUndoActive = useMemo(() => {
+    return enableUndoRedo && canUndo(currentPageHistory);
+  }, [enableUndoRedo, currentPageHistory]);
+
+  const canRedoActive = useMemo(() => {
+    return enableUndoRedo && canRedo(currentPageHistory);
+  }, [enableUndoRedo, currentPageHistory]);
+
   const handleStrokeComplete = useCallback(
     (newStroke: FreehandStroke) => {
       const updated = [...allStrokes, newStroke];
+      const newHistory = recordAddStroke(currentPageHistory, newStroke);
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
       setInternalStrokes(updated);
       onStrokesChange?.(updated);
     },
-    [allStrokes, onStrokesChange]
+    [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
   );
+
+  const handleStrokesErased = useCallback(
+    (erasedStrokes: FreehandStroke[]) => {
+      if (!erasedStrokes || erasedStrokes.length === 0) return;
+      const erasedIds = new Set(erasedStrokes.map((s) => s.id));
+      const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
+      const newHistory = recordEraseStrokes(currentPageHistory, erasedStrokes, pageStrokesBefore);
+      const updated = allStrokes.filter((s) => !erasedIds.has(s.id));
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalStrokes(updated);
+      onStrokesChange?.(updated);
+    },
+    [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
+  );
+
+  const handleUndo = useCallback(() => {
+    if (!enableUndoRedo || !canUndo(currentPageHistory)) return;
+    const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
+    const { history: newHistory, strokes: newPageStrokes } = applyUndo(
+      currentPageHistory,
+      pageStrokesBefore
+    );
+
+    const otherPagesStrokes = allStrokes.filter(
+      (s) => String(s.pageKey) !== String(currentPageKey)
+    );
+    const updated = [...otherPagesStrokes, ...newPageStrokes];
+
+    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+    setInternalStrokes(updated);
+    onStrokesChange?.(updated);
+    onUndo?.();
+  }, [enableUndoRedo, currentPageHistory, allStrokes, currentPageKey, onStrokesChange, onUndo]);
+
+  const handleRedo = useCallback(() => {
+    if (!enableUndoRedo || !canRedo(currentPageHistory)) return;
+    const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
+    const { history: newHistory, strokes: newPageStrokes } = applyRedo(
+      currentPageHistory,
+      pageStrokesBefore
+    );
+
+    const otherPagesStrokes = allStrokes.filter(
+      (s) => String(s.pageKey) !== String(currentPageKey)
+    );
+    const updated = [...otherPagesStrokes, ...newPageStrokes];
+
+    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+    setInternalStrokes(updated);
+    onStrokesChange?.(updated);
+    onRedo?.();
+  }, [enableUndoRedo, currentPageHistory, allStrokes, currentPageKey, onStrokesChange, onRedo]);
+
+  // Global / Canvas Keyboard Shortcuts: Ctrl+Z / Cmd+Z -> Undo, Ctrl+Y / Cmd+Shift+Z -> Redo
+  useEffect(() => {
+    if (!enableUndoRedo) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrCmd) return;
+
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        if (e.shiftKey) {
+          if (canRedo(currentPageHistory)) {
+            e.preventDefault();
+            handleRedo();
+          }
+        } else {
+          if (canUndo(currentPageHistory)) {
+            e.preventDefault();
+            handleUndo();
+          }
+        }
+      } else if (key === 'y') {
+        if (canRedo(currentPageHistory)) {
+          e.preventDefault();
+          handleRedo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [enableUndoRedo, currentPageHistory, handleUndo, handleRedo]);
 
   // Concrete color & width passed into PenLayer for new strokes
   const effectiveStrokeColor = useMemo(() => {
@@ -450,25 +605,27 @@ export function AnswerSheetCanvas({
           minZoom={minZoom}
           maxZoom={maxZoom}
           enablePanZoom={enablePanZoom}
-          isPenActive={activePenMode}
+          isPenActive={activePenMode || activeEraserMode}
           onImageLoad={handleImageLoad}
           onImageError={handleImageError}
           onTransformChange={handleTransformChange}
         />
 
-        {/* Freehand Pen Drawing Layer (AE-126) */}
+        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128) */}
         <PenLayer
           transform={transform}
           pageKey={currentPageKey}
           isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
+          isEraserActive={activeEraserMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           strokes={currentPageStrokes}
           onStrokeComplete={handleStrokeComplete}
+          onStrokesErased={handleStrokesErased}
           color={effectiveStrokeColor}
           strokeWidth={effectiveStrokeWidth}
         />
       </CanvasStage>
 
-      {/* Floating Toolbar: Zoom Controls & Pen / Style Controls */}
+      {/* Floating Toolbar: Zoom Controls & Pen / Style / Eraser / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
@@ -507,10 +664,59 @@ export function AnswerSheetCanvas({
                   />
                 </>
               )}
-
-              <div className="h-4 w-px bg-slate-200 mx-0.5" />
             </>
           )}
+
+          {/* Eraser Tool Toggle (AE-128) */}
+          {enableEraserTool && (
+            <button
+              type="button"
+              onClick={handleToggleEraser}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeEraserMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeEraserMode}
+              aria-label="Toggle Eraser Tool"
+              title={activeEraserMode ? 'Eraser Tool Active (Click to Disable)' : 'Enable Eraser Tool'}
+              data-testid="canvas-eraser-toggle"
+            >
+              <Eraser className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Undo / Redo Controls (AE-128) */}
+          {enableUndoRedo && (
+            <>
+              <div className="h-4 w-px bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={!canUndoActive}
+                className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-35 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                aria-label="Undo Annotation"
+                title="Undo (Ctrl+Z)"
+                data-testid="canvas-undo-button"
+              >
+                <Undo2 className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRedo}
+                disabled={!canRedoActive}
+                className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-35 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                aria-label="Redo Annotation"
+                title="Redo (Ctrl+Y / Ctrl+Shift+Z)"
+                data-testid="canvas-redo-button"
+              >
+                <Redo2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
+
+          <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
           <button
             type="button"
