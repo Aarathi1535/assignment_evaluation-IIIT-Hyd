@@ -9,12 +9,16 @@ import {
   DEFAULT_PEN_WIDTH,
   screenToImageCoordinates,
   createStroke,
-  appendPointToStroke,
 } from '@/lib/penTool';
 import {
   DEFAULT_ERASER_RADIUS,
   findIntersectingStrokes,
 } from '@/lib/eraserTool';
+import {
+  appendSmoothedPointToStroke,
+  finalizeSmoothedStroke,
+  type SmoothingOptions,
+} from '@/lib/strokeSmoothing';
 import type { PanZoomTransform } from '@/lib/panZoom';
 
 export interface PenLayerProps {
@@ -36,6 +40,8 @@ export interface PenLayerProps {
   onStrokesErased?: (erasedStrokes: FreehandStroke[]) => void;
   /** Eraser radius in invariant image coordinates */
   eraserRadius?: number;
+  /** Optional stroke smoothing options (AE-129) */
+  smoothingOptions?: SmoothingOptions;
   /** Default pen stroke color */
   color?: string;
   /** Default pen stroke width */
@@ -52,6 +58,7 @@ export function PenLayer({
   onStrokeComplete,
   onStrokesErased,
   eraserRadius = DEFAULT_ERASER_RADIUS,
+  smoothingOptions,
   color = DEFAULT_PEN_COLOR,
   strokeWidth = DEFAULT_PEN_WIDTH,
 }: PenLayerProps) {
@@ -80,6 +87,7 @@ export function PenLayer({
   const onStrokeCompleteRef = useRef(onStrokeComplete);
   const onStrokesErasedRef = useRef(onStrokesErased);
   const eraserRadiusRef = useRef(eraserRadius);
+  const smoothingOptionsRef = useRef(smoothingOptions);
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
 
@@ -92,6 +100,7 @@ export function PenLayer({
     onStrokeCompleteRef.current = onStrokeComplete;
     onStrokesErasedRef.current = onStrokesErased;
     eraserRadiusRef.current = eraserRadius;
+    smoothingOptionsRef.current = smoothingOptions;
     colorRef.current = color;
     strokeWidthRef.current = strokeWidth;
   }, [
@@ -103,6 +112,7 @@ export function PenLayer({
     onStrokeComplete,
     onStrokesErased,
     eraserRadius,
+    smoothingOptions,
     color,
     strokeWidth,
   ]);
@@ -199,7 +209,12 @@ export function PenLayer({
 
     const completed = activeStrokeRef.current;
     if (completed && completed.points.length >= 2) {
-      onStrokeCompleteRef.current?.(completed);
+      const smoothed = finalizeSmoothedStroke(completed, smoothingOptionsRef.current);
+      if (activeLineNodeRef.current && layerRef.current) {
+        activeLineNodeRef.current.points(smoothed.points);
+        layerRef.current.batchDraw();
+      }
+      onStrokeCompleteRef.current?.(smoothed);
     }
 
     activeStrokeRef.current = null;
@@ -321,14 +336,21 @@ export function PenLayer({
 
       if (!isPenActiveRef.current || !isDrawingRef.current || !activeStrokeRef.current) return;
 
-      // Append point to active stroke state
-      const updated = appendPointToStroke(activeStrokeRef.current, nextPoint);
-      activeStrokeRef.current = updated;
+      // Append smoothed point to active stroke state
+      const updated = appendSmoothedPointToStroke(
+        activeStrokeRef.current,
+        nextPoint,
+        smoothingOptionsRef.current
+      );
 
-      // Update live Konva Line node
-      if (activeLineNodeRef.current && layerRef.current) {
-        activeLineNodeRef.current.points(updated.points);
-        layerRef.current.batchDraw();
+      if (updated !== activeStrokeRef.current) {
+        activeStrokeRef.current = updated;
+
+        // Update live Konva Line node
+        if (activeLineNodeRef.current && layerRef.current) {
+          activeLineNodeRef.current.points(updated.points);
+          layerRef.current.batchDraw();
+        }
       }
     };
 

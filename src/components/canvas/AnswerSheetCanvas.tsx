@@ -117,6 +117,7 @@ export function AnswerSheetCanvas({
   selectedPenWidth: propSelectedPenWidth,
   initialPenWidth = DEFAULT_PEN_WIDTH_ID,
   onPenWidthChange,
+  smoothingOptions,
   strokes: propStrokes,
   onStrokesChange,
   onUndo,
@@ -611,7 +612,7 @@ export function AnswerSheetCanvas({
           onTransformChange={handleTransformChange}
         />
 
-        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128) */}
+        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129) */}
         <PenLayer
           transform={transform}
           pageKey={currentPageKey}
@@ -620,6 +621,7 @@ export function AnswerSheetCanvas({
           strokes={currentPageStrokes}
           onStrokeComplete={handleStrokeComplete}
           onStrokesErased={handleStrokesErased}
+          smoothingOptions={smoothingOptions}
           color={effectiveStrokeColor}
           strokeWidth={effectiveStrokeWidth}
         />

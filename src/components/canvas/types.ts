@@ -11,6 +11,7 @@ import type {
   PenWidthOption,
 } from '@/lib/penTool';
 import type { AnnotationAction, PageHistory } from '@/lib/annotationHistory';
+import type { SmoothingOptions } from '@/lib/strokeSmoothing';
 
 export type CanvasTool = 'none' | 'pen' | 'eraser';
 
@@ -24,6 +25,7 @@ export type {
   PenWidthOption,
   AnnotationAction,
   PageHistory,
+  SmoothingOptions,
 };
 
 export interface CanvasDimensions {
@@ -136,6 +138,8 @@ export interface AnswerSheetCanvasProps {
   initialPenWidth?: PenWidthId;
   /** Callback fired when pen stroke width changes (AE-127) */
   onPenWidthChange?: (width: PenWidthId) => void;
+  /** Optional stroke smoothing options (AE-129) */
+  smoothingOptions?: SmoothingOptions;
   /** In-memory freehand strokes for the canvas or session */
   strokes?: FreehandStroke[];
   /** Callback fired when strokes change or new stroke is completed/erased */
