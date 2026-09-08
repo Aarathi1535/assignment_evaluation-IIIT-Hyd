@@ -1,6 +1,9 @@
 import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
 import type { PanZoomTransform } from '@/lib/panZoom';
+import type { AnswerSheetPage } from '@/lib/pageNavigation';
+
+export type { AnswerSheetPage };
 
 export interface CanvasDimensions {
   width: number;
@@ -50,8 +53,18 @@ export interface PageImageLayerProps {
 }
 
 export interface AnswerSheetCanvasProps {
-  /** URL, API endpoint, or data URI of the answer-sheet page image */
+  /** Single image URL, API endpoint, or data URI (used when pages array is not provided) */
   src?: string | null;
+  /** List of pages belonging to the answer script (AE-125) */
+  pages?: AnswerSheetPage[];
+  /** Controlled active page index (0-based) */
+  currentPageIndex?: number;
+  /** Uncontrolled initial active page index (default 0) */
+  initialPageIndex?: number;
+  /** Callback fired when active page changes */
+  onPageChange?: (pageIndex: number, page: AnswerSheetPage) => void;
+  /** Whether to render the multi-page navigation toolbar (default true when pages is present) */
+  showPageNavigation?: boolean;
   /** Page number or label for display/accessibility */
   pageLabel?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */

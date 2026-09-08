@@ -1,7 +1,16 @@
 'use client';
 
-import React, { useState, useCallback, useRef } from 'react';
-import { Loader2, AlertCircle, FileImage, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
+import {
+  Loader2,
+  AlertCircle,
+  FileImage,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import type { AnswerSheetCanvasProps } from './types';
@@ -14,6 +23,16 @@ import {
   DEFAULT_ZOOM_STEP,
   PanZoomTransform,
 } from '@/lib/panZoom';
+import {
+  sortScriptPages,
+  clampPageIndex,
+  getNextPageIndex,
+  getPrevPageIndex,
+  canGoNext,
+  canGoPrev,
+  formatPageIndicator,
+  getPageImageUrl,
+} from '@/lib/pageNavigation';
 
 /**
  * Deterministic sample SVG data-URI for canvas testing, demonstration, and empty-state fallback.
@@ -41,6 +60,11 @@ export const SAMPLE_ANSWER_SHEET_DATA_URI =
 
 export function AnswerSheetCanvas({
   src,
+  pages,
+  currentPageIndex,
+  initialPageIndex = 0,
+  onPageChange,
+  showPageNavigation = true,
   pageLabel,
   fitMode = 'contain',
   width = 'auto',
@@ -56,13 +80,48 @@ export function AnswerSheetCanvas({
   onError,
   onTransformChange,
 }: AnswerSheetCanvasProps) {
-  const [prevSrc, setPrevSrc] = useState<string | null | undefined>(src);
-  const [isLoading, setIsLoading] = useState<boolean>(Boolean(src !== null));
+  // Deterministically sort pages if a multi-page list is supplied
+  const sortedPages = useMemo(() => {
+    return pages ? sortScriptPages(pages) : null;
+  }, [pages]);
+
+  const totalPages = sortedPages ? sortedPages.length : 0;
+  const isMultiPageMode = sortedPages !== null;
+  const isPagesEmpty = isMultiPageMode && totalPages === 0;
+
+  // Uncontrolled page index state
+  const [internalPageIndex, setInternalPageIndex] = useState<number>(() =>
+    sortedPages && totalPages > 0 ? clampPageIndex(initialPageIndex, totalPages) : 0
+  );
+
+  // Active page index (controlled vs uncontrolled)
+  const activePageIndex = useMemo(() => {
+    if (!isMultiPageMode || totalPages === 0) return 0;
+    const target = currentPageIndex !== undefined ? currentPageIndex : internalPageIndex;
+    return clampPageIndex(target, totalPages);
+  }, [isMultiPageMode, totalPages, currentPageIndex, internalPageIndex]);
+
+  const currentPage = useMemo(() => {
+    if (!isMultiPageMode || totalPages === 0) return null;
+    return sortedPages[activePageIndex] || null;
+  }, [isMultiPageMode, sortedPages, totalPages, activePageIndex]);
+
+  // Determine effective image source
+  const effectiveSrc = useMemo(() => {
+    if (isMultiPageMode) {
+      if (totalPages === 0) return null;
+      return getPageImageUrl(currentPage);
+    }
+    return src !== undefined ? src : SAMPLE_ANSWER_SHEET_DATA_URI;
+  }, [isMultiPageMode, totalPages, currentPage, src]);
+
+  const [prevEffectiveSrc, setPrevEffectiveSrc] = useState<string | null | undefined>(effectiveSrc);
+  const [isLoading, setIsLoading] = useState<boolean>(Boolean(effectiveSrc !== null));
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [baseBounds, setBaseBounds] = useState<RenderedImageBounds | null>(null);
 
-  // Controlled/tracked transform
+  // Controlled/tracked transform (pan and zoom)
   const [transform, setTransform] = useState<PanZoomTransform>({
     x: 0,
     y: 0,
@@ -71,10 +130,10 @@ export function AnswerSheetCanvas({
 
   const stageDimensionsRef = useRef({ width: 800, height: 600 });
 
-  // Synchronize loading/error state when src prop changes
-  if (prevSrc !== src) {
-    setPrevSrc(src);
-    if (src === null) {
+  // Synchronize loading/error state when effectiveSrc changes
+  if (prevEffectiveSrc !== effectiveSrc) {
+    setPrevEffectiveSrc(effectiveSrc);
+    if (effectiveSrc === null) {
       setIsLoading(false);
       setHasError(false);
       setErrorMessage('');
@@ -84,8 +143,42 @@ export function AnswerSheetCanvas({
       setIsLoading(true);
       setHasError(false);
       setErrorMessage('');
+      setBaseBounds(null);
+      setTransform({ x: 0, y: 0, zoom: 1.0 });
     }
   }
+
+  // Handle page change navigation
+  const navigateToPage = useCallback(
+    (targetIndex: number) => {
+      if (!sortedPages || totalPages <= 0) return;
+      const clamped = clampPageIndex(targetIndex, totalPages);
+      if (clamped === activePageIndex) return;
+
+      setInternalPageIndex(clamped);
+      setTransform({ x: 0, y: 0, zoom: 1.0 });
+      setIsLoading(true);
+      setHasError(false);
+      setErrorMessage('');
+
+      if (sortedPages[clamped]) {
+        onPageChange?.(clamped, sortedPages[clamped]);
+      }
+    },
+    [sortedPages, totalPages, activePageIndex, onPageChange]
+  );
+
+  const handlePrevPage = useCallback(() => {
+    if (!sortedPages || totalPages <= 0) return;
+    const prevIdx = getPrevPageIndex(activePageIndex, totalPages);
+    navigateToPage(prevIdx);
+  }, [sortedPages, totalPages, activePageIndex, navigateToPage]);
+
+  const handleNextPage = useCallback(() => {
+    if (!sortedPages || totalPages <= 0) return;
+    const nextIdx = getNextPageIndex(activePageIndex, totalPages);
+    navigateToPage(nextIdx);
+  }, [sortedPages, totalPages, activePageIndex, navigateToPage]);
 
   const handleImageLoad = useCallback(
     (_img: HTMLImageElement, bounds: RenderedImageBounds) => {
@@ -182,8 +275,16 @@ export function AnswerSheetCanvas({
     onTransformChange?.(resetTransform);
   }, [baseBounds, onTransformChange]);
 
-  const effectiveSrc = src !== undefined ? src : SAMPLE_ANSWER_SHEET_DATA_URI;
   const zoomPercent = Math.round(transform.zoom * 100);
+
+  // Accessible active page label
+  const effectivePageLabel = useMemo(() => {
+    if (pageLabel) return pageLabel;
+    if (isMultiPageMode && totalPages > 0) {
+      return formatPageIndicator(activePageIndex, totalPages);
+    }
+    return 'Answer sheet page';
+  }, [pageLabel, isMultiPageMode, totalPages, activePageIndex]);
 
   return (
     <div
@@ -194,6 +295,49 @@ export function AnswerSheetCanvas({
       }}
       data-testid="answer-sheet-canvas-wrapper"
     >
+      {/* Top Multi-Page Navigation Bar */}
+      {isMultiPageMode && showPageNavigation && totalPages > 0 && (
+        <nav
+          className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center bg-white/95 backdrop-blur-xs border border-slate-200/90 rounded-lg shadow-md px-2 py-1 gap-2 z-20 transition-all select-none"
+          data-testid="page-navigation-controls"
+          role="navigation"
+          aria-label="Answer Sheet Page Navigation"
+        >
+          <button
+            type="button"
+            onClick={handlePrevPage}
+            disabled={!canGoPrev(activePageIndex, totalPages)}
+            className="p-1 rounded-md hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+            aria-label="Previous Page"
+            title="Previous Page"
+            data-testid="prev-page-button"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+
+          <div
+            className="text-xs font-semibold font-mono text-slate-700 px-2 min-w-[5.5rem] text-center"
+            data-testid="page-indicator"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {formatPageIndicator(activePageIndex, totalPages)}
+          </div>
+
+          <button
+            type="button"
+            onClick={handleNextPage}
+            disabled={!canGoNext(activePageIndex, totalPages)}
+            className="p-1 rounded-md hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+            aria-label="Next Page"
+            title="Next Page"
+            data-testid="next-page-button"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </nav>
+      )}
+
       {/* Canvas Stage */}
       <CanvasStage
         width={width}
@@ -204,7 +348,7 @@ export function AnswerSheetCanvas({
       >
         <PageImageLayer
           src={effectiveSrc}
-          alt={pageLabel || 'Answer sheet page'}
+          alt={effectivePageLabel}
           fitMode={fitMode}
           transform={transform}
           minZoom={minZoom}
@@ -271,7 +415,7 @@ export function AnswerSheetCanvas({
       )}
 
       {/* Loading Overlay */}
-      {isLoading && (
+      {isLoading && !isPagesEmpty && (
         <div
           className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50/80 backdrop-blur-xs z-10 transition-opacity"
           data-testid="canvas-loading-overlay"
@@ -297,22 +441,28 @@ export function AnswerSheetCanvas({
         </div>
       )}
 
-      {/* Empty State when no source provided */}
-      {!effectiveSrc && !isLoading && !hasError && (
+      {/* Empty State when no source provided or pages list is empty */}
+      {(!effectiveSrc || isPagesEmpty) && !isLoading && !hasError && (
         <div
           className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 p-6 text-center z-10"
           data-testid="canvas-empty-overlay"
         >
           <FileImage className="h-10 w-10 text-slate-300 mb-2 shrink-0" />
-          <h4 className="text-sm font-semibold text-slate-700">No page image selected</h4>
-          <p className="text-xs text-slate-400">Select an answer-sheet page to view.</p>
+          <h4 className="text-sm font-semibold text-slate-700">
+            {isPagesEmpty ? 'No pages in answer script' : 'No page image selected'}
+          </h4>
+          <p className="text-xs text-slate-400">
+            {isPagesEmpty
+              ? 'This answer script contains no pages to display.'
+              : 'Select an answer-sheet page to view.'}
+          </p>
         </div>
       )}
 
-      {/* Optional Debug/Info Badge if pageLabel is present */}
-      {pageLabel && !isLoading && !hasError && baseBounds && (
+      {/* Optional Debug/Info Badge if pageLabel or effectivePageLabel is present */}
+      {effectivePageLabel && !isLoading && !hasError && baseBounds && (
         <div className="absolute bottom-3 left-3 px-2 py-1 bg-slate-900/70 backdrop-blur-xs text-white text-3xs font-mono rounded shadow pointer-events-none z-10">
-          {pageLabel} ({Math.round(baseBounds.width * transform.zoom)} × {Math.round(baseBounds.height * transform.zoom)}px · {zoomPercent}%)
+          {effectivePageLabel} ({Math.round(baseBounds.width * transform.zoom)} × {Math.round(baseBounds.height * transform.zoom)}px · {zoomPercent}%)
         </div>
       )}
     </div>
