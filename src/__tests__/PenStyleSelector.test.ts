@@ -1,3 +1,4 @@
+import { describe, it, expect } from 'vitest';
 import {
   PEN_COLORS,
   PEN_WIDTHS,
