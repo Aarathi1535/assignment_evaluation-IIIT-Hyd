@@ -42,6 +42,8 @@ export interface PenLayerProps {
   eraserRadius?: number;
   /** Optional stroke smoothing options (AE-129) */
   smoothingOptions?: SmoothingOptions;
+  /** Whether the pen overlay layer is visible (default true, AE-133) */
+  visible?: boolean;
   /** Default pen stroke color */
   color?: string;
   /** Default pen stroke width */
@@ -59,6 +61,7 @@ export function PenLayer({
   onStrokesErased,
   eraserRadius = DEFAULT_ERASER_RADIUS,
   smoothingOptions,
+  visible = true,
   color = DEFAULT_PEN_COLOR,
   strokeWidth = DEFAULT_PEN_WIDTH,
 }: PenLayerProps) {
@@ -88,6 +91,7 @@ export function PenLayer({
   const onStrokesErasedRef = useRef(onStrokesErased);
   const eraserRadiusRef = useRef(eraserRadius);
   const smoothingOptionsRef = useRef(smoothingOptions);
+  const visibleRef = useRef(visible);
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
 
@@ -101,6 +105,7 @@ export function PenLayer({
     onStrokesErasedRef.current = onStrokesErased;
     eraserRadiusRef.current = eraserRadius;
     smoothingOptionsRef.current = smoothingOptions;
+    visibleRef.current = visible;
     colorRef.current = color;
     strokeWidthRef.current = strokeWidth;
   }, [
@@ -113,6 +118,7 @@ export function PenLayer({
     onStrokesErased,
     eraserRadius,
     smoothingOptions,
+    visible,
     color,
     strokeWidth,
   ]);
@@ -124,6 +130,7 @@ export function PenLayer({
     const layer = new Konva.Layer({
       name: 'pen-stroke-layer',
       listening: false,
+      visible,
     });
 
     const group = new Konva.Group({
@@ -133,11 +140,14 @@ export function PenLayer({
       scaleX: transform.zoom,
       scaleY: transform.zoom,
       listening: false,
+      visible,
     });
 
     layer.add(group);
     stage.add(layer);
 
+    layerRef.current = layer;
+    groupRef.current = group;
     const linesMap = linesMapRef.current;
 
     return () => {
@@ -147,7 +157,15 @@ export function PenLayer({
       layerRef.current = null;
       groupRef.current = null;
     };
-  }, [stage, transform.x, transform.y, transform.zoom]);
+  }, [stage, transform.x, transform.y, transform.zoom, visible]);
+
+  // Synchronize visibility changes
+  useEffect(() => {
+    if (!layerRef.current || !groupRef.current) return;
+    layerRef.current.visible(visible);
+    groupRef.current.visible(visible);
+    layerRef.current.batchDraw();
+  }, [visible]);
 
   // Synchronize group transform with pan/zoom
   useEffect(() => {
@@ -240,6 +258,9 @@ export function PenLayer({
     };
 
     const handlePointerDown = (e: PointerEvent) => {
+      // If overlay is hidden, ignore all pen/eraser pointer interactions
+      if (!visibleRef.current) return;
+
       // Only draw/erase on primary pointer button (left click or stylus tip or touch)
       if (e.button !== 0 && e.buttons !== 1 && e.pointerType === 'mouse') return;
 
@@ -373,7 +394,9 @@ export function PenLayer({
     };
 
     // Update container cursor
-    if (isEraserActive) {
+    if (!visible) {
+      container.style.cursor = 'default';
+    } else if (isEraserActive) {
       container.style.cursor = 'cell';
     } else if (isPenActive) {
       container.style.cursor = 'crosshair';
@@ -390,7 +413,7 @@ export function PenLayer({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [stage, isPenActive, isEraserActive, finalizeActiveStroke]);
+  }, [stage, isPenActive, isEraserActive, visible, finalizeActiveStroke]);
 
   return null;
 }

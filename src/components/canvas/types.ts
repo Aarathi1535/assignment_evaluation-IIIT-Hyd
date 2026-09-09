@@ -188,6 +188,14 @@ export interface AnswerSheetCanvasProps {
   onUndo?: () => void;
   /** Callback fired after a redo operation */
   onRedo?: () => void;
+  /** Whether the overlay visibility toggle button is enabled in the toolbar (default true, AE-133) */
+  enableOverlayToggle?: boolean;
+  /** Controlled overlay visibility state (AE-133) */
+  isOverlayVisible?: boolean;
+  /** Uncontrolled initial overlay visibility state (default true, AE-133) */
+  initialOverlayVisible?: boolean;
+  /** Callback fired when overlay visibility is toggled (AE-133) */
+  onOverlayVisibilityChange?: (visible: boolean) => void;
   /** Default pen stroke color fallback (default '#e11d48') */
   defaultStrokeColor?: string;
   /** Default pen stroke width fallback (default 2) */

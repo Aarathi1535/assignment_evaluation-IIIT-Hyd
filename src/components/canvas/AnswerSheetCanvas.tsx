@@ -20,6 +20,8 @@ import {
   Trash2,
   Undo2,
   Redo2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
@@ -151,6 +153,10 @@ export function AnswerSheetCanvas({
   onAnnotationComplete,
   onUndo,
   onRedo,
+  enableOverlayToggle = true,
+  isOverlayVisible: propIsOverlayVisible,
+  initialOverlayVisible = true,
+  onOverlayVisibilityChange,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
   defaultStrokeWidth = DEFAULT_PEN_WIDTH,
   fallback,
@@ -272,6 +278,21 @@ export function AnswerSheetCanvas({
   const handleToggleEraser = useCallback(() => {
     setTool(activeEraserMode ? 'none' : 'eraser');
   }, [activeEraserMode, setTool]);
+
+  // Overlay visibility state (AE-133)
+  const [internalOverlayVisible, setInternalOverlayVisible] = useState<boolean>(initialOverlayVisible);
+  const isOverlayVisible = propIsOverlayVisible !== undefined ? propIsOverlayVisible : internalOverlayVisible;
+
+  const handleToggleOverlayVisibility = useCallback(() => {
+    const nextVisible = !isOverlayVisible;
+    if (!nextVisible) {
+      // Clear selection when hiding overlay
+      setInternalSelectedId(null);
+      onSelectAnnotation?.(null);
+    }
+    setInternalOverlayVisible(nextVisible);
+    onOverlayVisibilityChange?.(nextVisible);
+  }, [isOverlayVisible, onOverlayVisibilityChange, onSelectAnnotation]);
 
   // Pen style state: color & stroke width (controlled vs uncontrolled, AE-127)
   const [internalPenColor, setInternalPenColor] = useState<PenColorId>(initialPenColor);
@@ -856,13 +877,14 @@ export function AnswerSheetCanvas({
           onTransformChange={handleTransformChange}
         />
 
-        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129) */}
+        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129 / AE-133) */}
         <PenLayer
           transform={transform}
           pageKey={currentPageKey}
           isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           isEraserActive={activeEraserMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           strokes={currentPageStrokes}
+          visible={isOverlayVisible}
           onStrokeComplete={handleStrokeComplete}
           onStrokesErased={handleStrokesErased}
           smoothingOptions={smoothingOptions}
@@ -870,13 +892,14 @@ export function AnswerSheetCanvas({
           strokeWidth={effectiveStrokeWidth}
         />
 
-        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132) */}
+        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132 / AE-133) */}
         <MarkLayer
           transform={transform}
           pageKey={currentPageKey}
           activeTool={activeTool}
           annotations={currentPageAnnotations}
           selectedAnnotationId={selectedAnnotationId}
+          visible={isOverlayVisible}
           onSelectAnnotation={handleSelectAnnotation}
           onAnnotationMove={handleAnnotationMove}
           onAnnotationComplete={handleAnnotationComplete}
@@ -889,7 +912,7 @@ export function AnswerSheetCanvas({
       {activeTextEditor && !isLoading && !hasError && Boolean(effectiveSrc) && (
         <TextNoteEditor
           x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).x}
-          y={imageToScreenCoordinates(activeTextEditor.imagePoint.y, activeTextEditor.imagePoint.y, transform).y}
+          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).y}
           onConfirm={handleConfirmTextNote}
           onCancel={handleCancelTextNote}
         />
@@ -1092,6 +1115,36 @@ export function AnswerSheetCanvas({
                 data-testid="canvas-redo-button"
               >
                 <Redo2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
+
+          {/* Annotation Overlay Visibility Toggle (AE-133) */}
+          {enableOverlayToggle && (
+            <>
+              <div className="h-4 w-px bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={handleToggleOverlayVisibility}
+                className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                  !isOverlayVisible
+                    ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+                aria-pressed={isOverlayVisible}
+                aria-label="Toggle Annotation Overlay Visibility"
+                title={
+                  isOverlayVisible
+                    ? 'Hide Annotation Overlay (Eye)'
+                    : 'Show Annotation Overlay (EyeOff)'
+                }
+                data-testid="canvas-overlay-toggle"
+              >
+                {isOverlayVisible ? (
+                  <Eye className="h-4 w-4" />
+                ) : (
+                  <EyeOff className="h-4 w-4 text-amber-700" />
+                )}
               </button>
             </>
           )}

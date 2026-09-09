@@ -55,6 +55,8 @@ export interface MarkLayerProps {
     imagePoint: { x: number; y: number },
     screenPoint: { x: number; y: number }
   ) => void;
+  /** Whether the mark overlay layer is visible (default true, AE-133) */
+  visible?: boolean;
   /** Whether the layer interactions are disabled (e.g. image loading or error) */
   disabled?: boolean;
 }
@@ -70,6 +72,7 @@ export function MarkLayer({
   onAnnotationMove,
   onAnnotationComplete,
   onTextNoteClick,
+  visible = true,
   disabled = false,
 }: MarkLayerProps) {
   const { stage: contextStage } = useCanvasStage();
@@ -94,6 +97,7 @@ export function MarkLayer({
   const onAnnotationMoveRef = useRef(onAnnotationMove);
   const onAnnotationCompleteRef = useRef(onAnnotationComplete);
   const onTextNoteClickRef = useRef(onTextNoteClick);
+  const visibleRef = useRef(visible);
   const disabledRef = useRef(disabled);
 
   useEffect(() => {
@@ -105,6 +109,7 @@ export function MarkLayer({
     onAnnotationMoveRef.current = onAnnotationMove;
     onAnnotationCompleteRef.current = onAnnotationComplete;
     onTextNoteClickRef.current = onTextNoteClick;
+    visibleRef.current = visible;
     disabledRef.current = disabled;
   }, [
     transform,
@@ -115,6 +120,7 @@ export function MarkLayer({
     onAnnotationMove,
     onAnnotationComplete,
     onTextNoteClick,
+    visible,
     disabled,
   ]);
 
@@ -125,6 +131,7 @@ export function MarkLayer({
     const layer = new Konva.Layer({
       name: 'mark-annotation-layer',
       listening: false,
+      visible,
     });
 
     const group = new Konva.Group({
@@ -134,6 +141,7 @@ export function MarkLayer({
       scaleX: transform.zoom,
       scaleY: transform.zoom,
       listening: false,
+      visible,
     });
 
     layer.add(group);
@@ -150,7 +158,15 @@ export function MarkLayer({
       layerRef.current = null;
       groupRef.current = null;
     };
-  }, [stage, transform.x, transform.y, transform.zoom]);
+  }, [stage, transform.x, transform.y, transform.zoom, visible]);
+
+  // Synchronize visibility changes
+  useEffect(() => {
+    if (!layerRef.current || !groupRef.current) return;
+    layerRef.current.visible(visible);
+    groupRef.current.visible(visible);
+    layerRef.current.batchDraw();
+  }, [visible]);
 
   // Synchronize group transform with pan/zoom
   useEffect(() => {
@@ -167,7 +183,7 @@ export function MarkLayer({
 
     const group = groupRef.current;
     const currentNodes = nodesMapRef.current;
-    const isSelectMode = activeTool === 'select' && !disabled;
+    const isSelectMode = activeTool === 'select' && !disabled && visible;
 
     // Enable/disable group-level listening based on select mode
     group.listening(isSelectMode);
@@ -183,8 +199,8 @@ export function MarkLayer({
       }
     }
 
-    // Add or update annotation nodes
-    for (const ann of annotations) {
+    // Add or update annotation nodes with deterministic z-index order
+    annotations.forEach((ann, index) => {
       let annGroup = currentNodes.get(ann.id);
       const isSelected = selectedAnnotationId === ann.id;
 
@@ -200,6 +216,9 @@ export function MarkLayer({
       } else {
         annGroup.position({ x: ann.x, y: ann.y });
       }
+
+      // Enforce deterministic array-order zIndex (AE-133)
+      annGroup.zIndex(index);
 
       annGroup.draggable(isSelectMode);
       annGroup.listening(isSelectMode);
@@ -472,10 +491,10 @@ export function MarkLayer({
           indicator.destroy();
         }
       }
-    }
+    });
 
     layerRef.current.batchDraw();
-  }, [annotations, selectedAnnotationId, activeTool, disabled, pageKey, stage]);
+  }, [annotations, selectedAnnotationId, activeTool, visible, disabled, pageKey, stage]);
 
   // Pointer event handlers for placing Check, Cross, Highlight, Text annotations, and Clearing Selection
   useEffect(() => {
@@ -484,9 +503,10 @@ export function MarkLayer({
     const container = stage.container();
     if (!container) return;
 
-    const isSelectTool = activeTool === 'select' && !disabled;
+    const isSelectTool = activeTool === 'select' && !disabled && visible;
     const isMarkTool =
       !disabled &&
+      visible &&
       (activeTool === 'check' ||
         activeTool === 'cross' ||
         activeTool === 'highlight' ||
@@ -501,6 +521,7 @@ export function MarkLayer({
     }
 
     const handlePointerDown = (e: PointerEvent) => {
+      if (!visibleRef.current) return;
       if (e.button !== 0 && e.buttons !== 1 && e.pointerType === 'mouse') return;
       if (disabledRef.current) return;
 
@@ -637,7 +658,7 @@ export function MarkLayer({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerCancel);
     };
-  }, [stage, activeTool, disabled]);
+  }, [stage, activeTool, visible, disabled]);
 
   return null;
 }
