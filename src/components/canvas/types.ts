@@ -21,7 +21,7 @@ import type {
   StampType,
 } from '@/lib/stampTool';
 
-export type CanvasTool = 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
+export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
 
 export type {
   AnswerSheetPage,
@@ -124,6 +124,20 @@ export interface AnswerSheetCanvasProps {
   enablePanZoom?: boolean;
   /** Whether to show the floating zoom toolbar controls (default true) */
   showZoomControls?: boolean;
+  /** Whether the select / move / delete tool is enabled (default true, AE-132) */
+  enableSelect?: boolean;
+  /** Controlled selected annotation ID (AE-132) */
+  selectedAnnotationId?: string | null;
+  /** Callback fired when an annotation is selected or deselected (AE-132) */
+  onSelectAnnotation?: (id: string | null) => void;
+  /** Callback fired when an annotation is moved (AE-132) */
+  onAnnotationMove?: (
+    id: string,
+    newPosition: { x: number; y: number },
+    previousPosition: { x: number; y: number }
+  ) => void;
+  /** Callback fired when an annotation is deleted (AE-132) */
+  onAnnotationDelete?: (annotation: MarkAnnotation) => void;
   /** Whether the freehand pen tool feature is enabled (default true, AE-126) */
   enablePenTool?: boolean;
   /** Uncontrolled initial pen active state (default false, AE-126) */

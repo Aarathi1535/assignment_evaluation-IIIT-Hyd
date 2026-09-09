@@ -38,6 +38,16 @@ export interface MarkLayerProps {
   activeTool: CanvasTool;
   /** Existing finalized mark annotations belonging to this page */
   annotations: MarkAnnotation[];
+  /** Controlled selected annotation ID (AE-132) */
+  selectedAnnotationId?: string | null;
+  /** Callback fired when an annotation is selected or deselected (AE-132) */
+  onSelectAnnotation?: (id: string | null) => void;
+  /** Callback fired when an annotation is moved (AE-132) */
+  onAnnotationMove?: (
+    id: string,
+    newPosition: { x: number; y: number },
+    previousPosition: { x: number; y: number }
+  ) => void;
   /** Callback fired when a new check, cross, or highlight annotation is completed */
   onAnnotationComplete?: (annotation: MarkAnnotation) => void;
   /** Callback fired when the canvas is clicked with the Text Note tool active (AE-131) */
@@ -55,6 +65,9 @@ export function MarkLayer({
   pageKey,
   activeTool,
   annotations,
+  selectedAnnotationId = null,
+  onSelectAnnotation,
+  onAnnotationMove,
   onAnnotationComplete,
   onTextNoteClick,
   disabled = false,
@@ -64,17 +77,21 @@ export function MarkLayer({
 
   const layerRef = useRef<Konva.Layer | null>(null);
   const groupRef = useRef<Konva.Group | null>(null);
-  const nodesMapRef = useRef<Map<string, Konva.Node>>(new Map());
+  const nodesMapRef = useRef<Map<string, Konva.Group>>(new Map());
 
   // Active highlight preview refs
   const isHighlightingRef = useRef(false);
   const startPointRef = useRef<{ x: number; y: number } | null>(null);
   const livePreviewRectRef = useRef<Konva.Rect | null>(null);
+  const isDraggingAnnotationRef = useRef(false);
 
   // Latest props refs to avoid stale closures in event listeners
   const transformRef = useRef(transform);
   const pageKeyRef = useRef(pageKey);
   const activeToolRef = useRef(activeTool);
+  const selectedAnnotationIdRef = useRef(selectedAnnotationId);
+  const onSelectAnnotationRef = useRef(onSelectAnnotation);
+  const onAnnotationMoveRef = useRef(onAnnotationMove);
   const onAnnotationCompleteRef = useRef(onAnnotationComplete);
   const onTextNoteClickRef = useRef(onTextNoteClick);
   const disabledRef = useRef(disabled);
@@ -83,10 +100,23 @@ export function MarkLayer({
     transformRef.current = transform;
     pageKeyRef.current = pageKey;
     activeToolRef.current = activeTool;
+    selectedAnnotationIdRef.current = selectedAnnotationId;
+    onSelectAnnotationRef.current = onSelectAnnotation;
+    onAnnotationMoveRef.current = onAnnotationMove;
     onAnnotationCompleteRef.current = onAnnotationComplete;
     onTextNoteClickRef.current = onTextNoteClick;
     disabledRef.current = disabled;
-  }, [transform, pageKey, activeTool, onAnnotationComplete, onTextNoteClick, disabled]);
+  }, [
+    transform,
+    pageKey,
+    activeTool,
+    selectedAnnotationId,
+    onSelectAnnotation,
+    onAnnotationMove,
+    onAnnotationComplete,
+    onTextNoteClick,
+    disabled,
+  ]);
 
   // Initialize Layer and Group
   useEffect(() => {
@@ -131,12 +161,16 @@ export function MarkLayer({
     layerRef.current.batchDraw();
   }, [transform.x, transform.y, transform.zoom]);
 
-  // Re-render committed annotations when annotations list or page changes
+  // Re-render committed annotations when annotations list, selection, or page changes
   useEffect(() => {
     if (!groupRef.current || !layerRef.current) return;
 
     const group = groupRef.current;
     const currentNodes = nodesMapRef.current;
+    const isSelectMode = activeTool === 'select' && !disabled;
+
+    // Enable/disable group-level listening based on select mode
+    group.listening(isSelectMode);
 
     // Track active IDs
     const annotationIdSet = new Set(annotations.map((a) => a.id));
@@ -151,23 +185,82 @@ export function MarkLayer({
 
     // Add or update annotation nodes
     for (const ann of annotations) {
-      const existingNode = currentNodes.get(ann.id);
+      let annGroup = currentNodes.get(ann.id);
+      const isSelected = selectedAnnotationId === ann.id;
 
+      if (!annGroup) {
+        annGroup = new Konva.Group({
+          id: ann.id,
+          x: ann.x,
+          y: ann.y,
+          name: 'annotation-group',
+        });
+        group.add(annGroup);
+        currentNodes.set(ann.id, annGroup);
+      } else {
+        annGroup.position({ x: ann.x, y: ann.y });
+      }
+
+      annGroup.draggable(isSelectMode);
+      annGroup.listening(isSelectMode);
+
+      // Attach selection & drag handlers
+      annGroup.off('pointerdown.select dragstart.select dragend.select mouseenter.select mouseleave.select');
+      if (isSelectMode) {
+        let dragStartPos = { x: ann.x, y: ann.y };
+
+        annGroup.on('pointerdown.select', (e) => {
+          e.cancelBubble = true;
+          onSelectAnnotationRef.current?.(ann.id);
+        });
+
+        annGroup.on('dragstart.select', (e) => {
+          e.cancelBubble = true;
+          isDraggingAnnotationRef.current = true;
+          dragStartPos = { x: annGroup!.x(), y: annGroup!.y() };
+          onSelectAnnotationRef.current?.(ann.id);
+        });
+
+        annGroup.on('dragend.select', (e) => {
+          e.cancelBubble = true;
+          isDraggingAnnotationRef.current = false;
+          const newX = Math.round(annGroup!.x());
+          const newY = Math.round(annGroup!.y());
+          if (newX !== dragStartPos.x || newY !== dragStartPos.y) {
+            onAnnotationMoveRef.current?.(ann.id, { x: newX, y: newY }, dragStartPos);
+          }
+        });
+
+        annGroup.on('mouseenter.select', () => {
+          if (stage?.container()) {
+            stage.container().style.cursor = 'move';
+          }
+        });
+
+        annGroup.on('mouseleave.select', () => {
+          if (stage?.container() && activeToolRef.current === 'select') {
+            stage.container().style.cursor = 'default';
+          }
+        });
+      }
+
+      // Render shape content inside annGroup
       if (ann.type === 'check') {
         const check = ann as CheckAnnotation;
         const S = check.size || DEFAULT_STAMP_SIZE;
         const points = [
-          check.x - S * 0.35,
-          check.y + S * 0.05,
-          check.x - S * 0.05,
-          check.y + S * 0.35,
-          check.x + S * 0.45,
-          check.y - S * 0.35,
+          -S * 0.35,
+          S * 0.05,
+          -S * 0.05,
+          S * 0.35,
+          S * 0.45,
+          -S * 0.35,
         ];
 
-        if (!existingNode) {
-          const lineNode = new Konva.Line({
-            id: check.id,
+        let lineNode = annGroup.findOne<Konva.Line>('.check-line');
+        if (!lineNode) {
+          lineNode = new Konva.Line({
+            name: 'check-line',
             points,
             stroke: check.color || DEFAULT_CHECK_COLOR,
             strokeWidth: 3.5,
@@ -175,20 +268,47 @@ export function MarkLayer({
             lineJoin: 'round',
             listening: false,
           });
-          group.add(lineNode);
-          currentNodes.set(check.id, lineNode);
-        } else if (existingNode instanceof Konva.Line) {
-          existingNode.points(points);
-          existingNode.stroke(check.color || DEFAULT_CHECK_COLOR);
+          annGroup.add(lineNode);
+        } else {
+          lineNode.points(points);
+          lineNode.stroke(check.color || DEFAULT_CHECK_COLOR);
+        }
+
+        // Selection indicator
+        const bounds = { x: -S * 0.5 - 2, y: -S * 0.5 - 2, width: S + 4, height: S + 4 };
+        let indicator = annGroup.findOne<Konva.Rect>('.selection-indicator');
+        if (isSelected) {
+          if (!indicator) {
+            indicator = new Konva.Rect({
+              name: 'selection-indicator',
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+              stroke: '#2563eb',
+              strokeWidth: 1.5,
+              dash: [4, 4],
+              cornerRadius: 3,
+              fill: 'rgba(37, 99, 235, 0.08)',
+              listening: false,
+            });
+            annGroup.add(indicator);
+          } else {
+            indicator.position({ x: bounds.x, y: bounds.y });
+            indicator.size({ width: bounds.width, height: bounds.height });
+          }
+        } else if (indicator) {
+          indicator.destroy();
         }
       } else if (ann.type === 'cross') {
         const cross = ann as CrossAnnotation;
         const S = cross.size || DEFAULT_STAMP_SIZE;
-        const pathData = `M ${cross.x - S * 0.35} ${cross.y - S * 0.35} L ${cross.x + S * 0.35} ${cross.y + S * 0.35} M ${cross.x + S * 0.35} ${cross.y - S * 0.35} L ${cross.x - S * 0.35} ${cross.y + S * 0.35}`;
+        const pathData = `M ${-S * 0.35} ${-S * 0.35} L ${S * 0.35} ${S * 0.35} M ${S * 0.35} ${-S * 0.35} L ${-S * 0.35} ${S * 0.35}`;
 
-        if (!existingNode) {
-          const pathNode = new Konva.Path({
-            id: cross.id,
+        let pathNode = annGroup.findOne<Konva.Path>('.cross-path');
+        if (!pathNode) {
+          pathNode = new Konva.Path({
+            name: 'cross-path',
             data: pathData,
             stroke: cross.color || DEFAULT_CROSS_COLOR,
             strokeWidth: 3.5,
@@ -196,20 +316,47 @@ export function MarkLayer({
             lineJoin: 'round',
             listening: false,
           });
-          group.add(pathNode);
-          currentNodes.set(cross.id, pathNode);
-        } else if (existingNode instanceof Konva.Path) {
-          existingNode.data(pathData);
-          existingNode.stroke(cross.color || DEFAULT_CROSS_COLOR);
+          annGroup.add(pathNode);
+        } else {
+          pathNode.data(pathData);
+          pathNode.stroke(cross.color || DEFAULT_CROSS_COLOR);
+        }
+
+        // Selection indicator
+        const bounds = { x: -S * 0.5 - 2, y: -S * 0.5 - 2, width: S + 4, height: S + 4 };
+        let indicator = annGroup.findOne<Konva.Rect>('.selection-indicator');
+        if (isSelected) {
+          if (!indicator) {
+            indicator = new Konva.Rect({
+              name: 'selection-indicator',
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+              stroke: '#2563eb',
+              strokeWidth: 1.5,
+              dash: [4, 4],
+              cornerRadius: 3,
+              fill: 'rgba(37, 99, 235, 0.08)',
+              listening: false,
+            });
+            annGroup.add(indicator);
+          } else {
+            indicator.position({ x: bounds.x, y: bounds.y });
+            indicator.size({ width: bounds.width, height: bounds.height });
+          }
+        } else if (indicator) {
+          indicator.destroy();
         }
       } else if (ann.type === 'highlight') {
         const hl = ann as HighlightAnnotation;
 
-        if (!existingNode) {
-          const rectNode = new Konva.Rect({
-            id: hl.id,
-            x: hl.x,
-            y: hl.y,
+        let rectNode = annGroup.findOne<Konva.Rect>('.highlight-rect');
+        if (!rectNode) {
+          rectNode = new Konva.Rect({
+            name: 'highlight-rect',
+            x: 0,
+            y: 0,
             width: hl.width,
             height: hl.height,
             fill: hl.color || DEFAULT_HIGHLIGHT_COLOR,
@@ -219,26 +366,48 @@ export function MarkLayer({
             cornerRadius: 2,
             listening: false,
           });
-          group.add(rectNode);
-          currentNodes.set(hl.id, rectNode);
-        } else if (existingNode instanceof Konva.Rect) {
-          existingNode.position({ x: hl.x, y: hl.y });
-          existingNode.size({ width: hl.width, height: hl.height });
-          existingNode.fill(hl.color || DEFAULT_HIGHLIGHT_COLOR);
-          existingNode.opacity(hl.opacity ?? DEFAULT_HIGHLIGHT_OPACITY);
+          annGroup.add(rectNode);
+        } else {
+          rectNode.size({ width: hl.width, height: hl.height });
+          rectNode.fill(hl.color || DEFAULT_HIGHLIGHT_COLOR);
+          rectNode.opacity(hl.opacity ?? DEFAULT_HIGHLIGHT_OPACITY);
+        }
+
+        // Selection indicator
+        const bounds = { x: -2, y: -2, width: hl.width + 4, height: hl.height + 4 };
+        let indicator = annGroup.findOne<Konva.Rect>('.selection-indicator');
+        if (isSelected) {
+          if (!indicator) {
+            indicator = new Konva.Rect({
+              name: 'selection-indicator',
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+              stroke: '#2563eb',
+              strokeWidth: 1.5,
+              dash: [4, 4],
+              cornerRadius: 3,
+              fill: 'rgba(37, 99, 235, 0.08)',
+              listening: false,
+            });
+            annGroup.add(indicator);
+          } else {
+            indicator.position({ x: bounds.x, y: bounds.y });
+            indicator.size({ width: bounds.width, height: bounds.height });
+          }
+        } else if (indicator) {
+          indicator.destroy();
         }
       } else if (ann.type === 'text') {
         const note = ann as TextNoteAnnotation;
 
-        if (!existingNode) {
-          const noteGroup = new Konva.Group({
-            id: note.id,
-            x: note.x,
-            y: note.y,
-            listening: false,
-          });
+        let noteText = annGroup.findOne<Konva.Text>('.note-text');
+        let noteBg = annGroup.findOne<Konva.Rect>('.note-bg');
 
-          const noteText = new Konva.Text({
+        if (!noteText || !noteBg) {
+          noteText = new Konva.Text({
+            name: 'note-text',
             text: note.text,
             fontSize: note.fontSize || DEFAULT_TEXT_FONT_SIZE,
             fontFamily: 'sans-serif',
@@ -247,7 +416,8 @@ export function MarkLayer({
             listening: false,
           });
 
-          const noteBg = new Konva.Rect({
+          noteBg = new Konva.Rect({
+            name: 'note-bg',
             width: noteText.width(),
             height: noteText.height(),
             fill: note.backgroundColor || DEFAULT_TEXT_BG_COLOR,
@@ -261,39 +431,60 @@ export function MarkLayer({
             listening: false,
           });
 
-          noteGroup.add(noteBg);
-          noteGroup.add(noteText);
-          group.add(noteGroup);
-          currentNodes.set(note.id, noteGroup);
-        } else if (existingNode instanceof Konva.Group) {
-          existingNode.position({ x: note.x, y: note.y });
-          const textNode = existingNode.findOne<Konva.Text>('Text');
-          const rectNode = existingNode.findOne<Konva.Rect>('Rect');
-          if (textNode) {
-            textNode.text(note.text);
-            textNode.fontSize(note.fontSize || DEFAULT_TEXT_FONT_SIZE);
-            textNode.fill(note.color || DEFAULT_TEXT_COLOR);
-            if (rectNode) {
-              rectNode.width(textNode.width());
-              rectNode.height(textNode.height());
-              rectNode.fill(note.backgroundColor || DEFAULT_TEXT_BG_COLOR);
-              rectNode.stroke(note.borderColor || DEFAULT_TEXT_BORDER_COLOR);
-            }
+          annGroup.add(noteBg);
+          annGroup.add(noteText);
+        } else {
+          noteText.text(note.text);
+          noteText.fontSize(note.fontSize || DEFAULT_TEXT_FONT_SIZE);
+          noteText.fill(note.color || DEFAULT_TEXT_COLOR);
+          noteBg.width(noteText.width());
+          noteBg.height(noteText.height());
+          noteBg.fill(note.backgroundColor || DEFAULT_TEXT_BG_COLOR);
+          noteBg.stroke(note.borderColor || DEFAULT_TEXT_BORDER_COLOR);
+        }
+
+        // Selection indicator
+        const textWidth = noteText.width();
+        const textHeight = noteText.height();
+        const bounds = { x: -2, y: -2, width: textWidth + 4, height: textHeight + 4 };
+        let indicator = annGroup.findOne<Konva.Rect>('.selection-indicator');
+        if (isSelected) {
+          if (!indicator) {
+            indicator = new Konva.Rect({
+              name: 'selection-indicator',
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+              stroke: '#2563eb',
+              strokeWidth: 1.5,
+              dash: [4, 4],
+              cornerRadius: 5,
+              fill: 'rgba(37, 99, 235, 0.08)',
+              listening: false,
+            });
+            annGroup.add(indicator);
+          } else {
+            indicator.position({ x: bounds.x, y: bounds.y });
+            indicator.size({ width: bounds.width, height: bounds.height });
           }
+        } else if (indicator) {
+          indicator.destroy();
         }
       }
     }
 
     layerRef.current.batchDraw();
-  }, [annotations, pageKey]);
+  }, [annotations, selectedAnnotationId, activeTool, disabled, pageKey, stage]);
 
-  // Pointer event handlers for placing Check, Cross, Highlight, and Text annotations
+  // Pointer event handlers for placing Check, Cross, Highlight, Text annotations, and Clearing Selection
   useEffect(() => {
     if (!stage) return;
 
     const container = stage.container();
     if (!container) return;
 
+    const isSelectTool = activeTool === 'select' && !disabled;
     const isMarkTool =
       !disabled &&
       (activeTool === 'check' ||
@@ -301,15 +492,28 @@ export function MarkLayer({
         activeTool === 'highlight' ||
         activeTool === 'text');
 
-    if (!isMarkTool) return;
+    if (!isMarkTool && !isSelectTool) return;
 
-    container.style.cursor = activeTool === 'text' ? 'text' : 'crosshair';
+    if (isSelectTool) {
+      container.style.cursor = 'default';
+    } else {
+      container.style.cursor = activeTool === 'text' ? 'text' : 'crosshair';
+    }
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button !== 0 && e.buttons !== 1 && e.pointerType === 'mouse') return;
       if (disabledRef.current) return;
 
       const currentTool = activeToolRef.current;
+
+      // In select mode, clicking empty space clears selection
+      if (currentTool === 'select') {
+        if (!isDraggingAnnotationRef.current) {
+          onSelectAnnotationRef.current?.(null);
+        }
+        return;
+      }
+
       if (
         currentTool !== 'check' &&
         currentTool !== 'cross' &&

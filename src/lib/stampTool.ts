@@ -218,3 +218,88 @@ export function filterAnnotationsByPage<T extends MarkAnnotation>(
   }
   return annotations.filter((a) => String(a.pageKey) === String(pageKey));
 }
+
+/**
+ * Returns a new annotation object with updated invariant (x, y) coordinates,
+ * preserving all other properties (ID, type, colors, dimensions, text, etc.).
+ */
+export function moveAnnotation<T extends MarkAnnotation>(
+  annotation: T,
+  newPosition: { x: number; y: number }
+): T {
+  return {
+    ...annotation,
+    x: newPosition.x,
+    y: newPosition.y,
+  };
+}
+
+/**
+ * Calculates the bounding rectangle for any MarkAnnotation in invariant image space.
+ */
+export function getAnnotationBounds(
+  annotation: MarkAnnotation
+): { x: number; y: number; width: number; height: number } {
+  if (annotation.type === 'check') {
+    const size = annotation.size || DEFAULT_STAMP_SIZE;
+    return {
+      x: annotation.x - size * 0.5,
+      y: annotation.y - size * 0.5,
+      width: size,
+      height: size,
+    };
+  }
+
+  if (annotation.type === 'cross') {
+    const size = annotation.size || DEFAULT_STAMP_SIZE;
+    return {
+      x: annotation.x - size * 0.5,
+      y: annotation.y - size * 0.5,
+      width: size,
+      height: size,
+    };
+  }
+
+  if (annotation.type === 'highlight') {
+    return {
+      x: annotation.x,
+      y: annotation.y,
+      width: Math.max(0, annotation.width),
+      height: Math.max(0, annotation.height),
+    };
+  }
+
+  if (annotation.type === 'text') {
+    const fontSize = annotation.fontSize || DEFAULT_TEXT_FONT_SIZE;
+    const lines = (annotation.text || '').split('\n');
+    const maxLineLength = Math.max(...lines.map((l) => l.length), 1);
+    const estimatedWidth = Math.max(40, maxLineLength * fontSize * 0.65 + 16);
+    const estimatedHeight = Math.max(24, lines.length * (fontSize * 1.3) + 14);
+
+    return {
+      x: annotation.x,
+      y: annotation.y,
+      width: estimatedWidth,
+      height: estimatedHeight,
+    };
+  }
+
+  return { x: 0, y: 0, width: 0, height: 0 };
+}
+
+/**
+ * Checks if a given point in invariant image space lies within or near the bounding box of an annotation.
+ */
+export function isPointInsideAnnotation(
+  annotation: MarkAnnotation,
+  point: { x: number; y: number },
+  hitTolerance: number = 4
+): boolean {
+  const bounds = getAnnotationBounds(annotation);
+  return (
+    point.x >= bounds.x - hitTolerance &&
+    point.x <= bounds.x + bounds.width + hitTolerance &&
+    point.y >= bounds.y - hitTolerance &&
+    point.y <= bounds.y + bounds.height + hitTolerance
+  );
+}

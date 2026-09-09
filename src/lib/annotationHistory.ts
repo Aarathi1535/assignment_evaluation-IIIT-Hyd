@@ -30,6 +30,12 @@ export type AnnotationAction =
       annotations: MarkAnnotation[];
       /** Indices where the annotations were located in the array prior to erasure */
       originalIndices: { id: string; index: number }[];
+    }
+  | {
+      type: 'move-annotation';
+      annotationId: string;
+      previousPosition: { x: number; y: number };
+      newPosition: { x: number; y: number };
     };
 
 export interface PageHistory {
@@ -156,6 +162,35 @@ export function recordEraseAnnotations(
 }
 
 /**
+ * Pushes a 'move-annotation' action to history. Clears the redo stack.
+ */
+export function recordMoveAnnotation(
+  history: PageHistory,
+  annotationId: string,
+  previousPosition: { x: number; y: number },
+  newPosition: { x: number; y: number }
+): PageHistory {
+  if (
+    previousPosition.x === newPosition.x &&
+    previousPosition.y === newPosition.y
+  ) {
+    return history;
+  }
+
+  const action: AnnotationAction = {
+    type: 'move-annotation',
+    annotationId,
+    previousPosition,
+    newPosition,
+  };
+
+  return {
+    past: [...history.past, action],
+    future: [], // New action clears redo stack
+  };
+}
+
+/**
  * Performs an undo operation.
  * Returns the updated history and the resulting page strokes and annotations.
  */
@@ -249,6 +284,13 @@ export function applyUndo(
     }
 
     nextAnnotations = reconstructed.filter((a): a is MarkAnnotation => a !== null);
+  } else if (lastAction.type === 'move-annotation') {
+    // Undo moving an annotation -> restore previous position
+    nextAnnotations = nextAnnotations.map((a) =>
+      a.id === lastAction.annotationId
+        ? ({ ...a, x: lastAction.previousPosition.x, y: lastAction.previousPosition.y } as MarkAnnotation)
+        : a
+    );
   }
 
   return {
@@ -302,6 +344,13 @@ export function applyRedo(
     // Redo erasing annotations -> remove the erased annotations
     const erasedIds = new Set(nextAction.annotations.map((a) => a.id));
     nextAnnotations = nextAnnotations.filter((a) => !erasedIds.has(a.id));
+  } else if (nextAction.type === 'move-annotation') {
+    // Redo moving an annotation -> apply new position
+    nextAnnotations = nextAnnotations.map((a) =>
+      a.id === nextAction.annotationId
+        ? ({ ...a, x: nextAction.newPosition.x, y: nextAction.newPosition.y } as MarkAnnotation)
+        : a
+    );
   }
 
   return {

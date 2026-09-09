@@ -16,6 +16,8 @@ import {
   X,
   Highlighter,
   Type,
+  MousePointer,
+  Trash2,
   Undo2,
   Redo2,
 } from 'lucide-react';
@@ -61,6 +63,7 @@ import {
   MarkAnnotation,
   filterAnnotationsByPage,
   createTextNoteAnnotation,
+  moveAnnotation,
 } from '@/lib/stampTool';
 import {
   PageHistory,
@@ -68,6 +71,8 @@ import {
   recordAddStroke,
   recordEraseStrokes,
   recordAddAnnotation,
+  recordEraseAnnotations,
+  recordMoveAnnotation,
   applyUndo,
   applyRedo,
   canUndo,
@@ -116,6 +121,11 @@ export function AnswerSheetCanvas({
   maxZoom = MAX_ZOOM_LEVEL,
   enablePanZoom = true,
   showZoomControls = true,
+  enableSelect = true,
+  selectedAnnotationId: propSelectedAnnotationId,
+  onSelectAnnotation,
+  onAnnotationMove,
+  onAnnotationDelete,
   enablePenTool = true,
   initialPenActive = false,
   isPenActive: propIsPenActive,
@@ -181,7 +191,7 @@ export function AnswerSheetCanvas({
     return String(activePageIndex);
   }, [currentPage, activePageIndex]);
 
-  // Active Tool state: 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' (AE-128 / AE-130 / AE-131)
+  // Active Tool state: 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' (AE-128 / AE-130 / AE-131 / AE-132)
   const [internalTool, setInternalTool] = useState<CanvasTool>(() =>
     initialPenActive ? 'pen' : 'none'
   );
@@ -192,13 +202,19 @@ export function AnswerSheetCanvas({
     return internalTool;
   }, [propActiveTool, propIsPenActive, internalTool]);
 
+  // Selection state (AE-132)
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+  const selectedAnnotationId =
+    propSelectedAnnotationId !== undefined ? propSelectedAnnotationId : internalSelectedId;
+
+  const activeSelectMode = activeTool === 'select';
   const activePenMode = activeTool === 'pen';
   const activeCheckMode = activeTool === 'check';
   const activeCrossMode = activeTool === 'cross';
   const activeHighlightMode = activeTool === 'highlight';
   const activeTextMode = activeTool === 'text';
   const activeEraserMode = activeTool === 'eraser';
-  const isDrawingToolActive = activeTool !== 'none';
+  const isDrawingToolActive = activeTool !== 'none' && activeTool !== 'select';
 
   // Active in-place text note editor anchor state (AE-131)
   const [activeTextEditor, setActiveTextEditor] = useState<{
@@ -210,11 +226,27 @@ export function AnswerSheetCanvas({
       if (nextTool !== 'text') {
         setActiveTextEditor(null);
       }
+      if (nextTool !== 'select') {
+        setInternalSelectedId(null);
+        onSelectAnnotation?.(null);
+      }
       setInternalTool(nextTool);
       onToolChange?.(nextTool);
       onPenActiveChange?.(nextTool === 'pen');
     },
-    [onToolChange, onPenActiveChange]
+    [onToolChange, onPenActiveChange, onSelectAnnotation]
+  );
+
+  const handleToggleSelect = useCallback(() => {
+    setTool(activeSelectMode ? 'none' : 'select');
+  }, [activeSelectMode, setTool]);
+
+  const handleSelectAnnotation = useCallback(
+    (id: string | null) => {
+      setInternalSelectedId(id);
+      onSelectAnnotation?.(id);
+    },
+    [onSelectAnnotation]
   );
 
   const handleTogglePen = useCallback(() => {
@@ -346,6 +378,68 @@ export function AnswerSheetCanvas({
     setActiveTextEditor(null);
   }, []);
 
+  const handleAnnotationMove = useCallback(
+    (
+      id: string,
+      newPosition: { x: number; y: number },
+      previousPosition: { x: number; y: number }
+    ) => {
+      const updated = allAnnotations.map((a) =>
+        a.id === id ? moveAnnotation(a, newPosition) : a
+      );
+      const newHistory = recordMoveAnnotation(
+        currentPageHistory,
+        id,
+        previousPosition,
+        newPosition
+      );
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalAnnotations(updated);
+      onAnnotationsChange?.(updated);
+      onAnnotationMove?.(id, newPosition, previousPosition);
+    },
+    [
+      allAnnotations,
+      currentPageHistory,
+      currentPageKey,
+      onAnnotationsChange,
+      onAnnotationMove,
+    ]
+  );
+
+  const handleDeleteSelected = useCallback(() => {
+    if (!selectedAnnotationId) return;
+    const target = allAnnotations.find((a) => a.id === selectedAnnotationId);
+    if (!target) return;
+
+    const pageAnnotationsBefore = filterAnnotationsByPage(
+      allAnnotations,
+      currentPageKey
+    );
+    const newHistory = recordEraseAnnotations(
+      currentPageHistory,
+      [target],
+      pageAnnotationsBefore
+    );
+    const updated = allAnnotations.filter((a) => a.id !== selectedAnnotationId);
+
+    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+    setInternalAnnotations(updated);
+    setInternalSelectedId(null);
+    onSelectAnnotation?.(null);
+    onAnnotationsChange?.(updated);
+    onAnnotationDelete?.(target);
+  }, [
+    selectedAnnotationId,
+    allAnnotations,
+    currentPageHistory,
+    currentPageKey,
+    onAnnotationsChange,
+    onAnnotationDelete,
+    onSelectAnnotation,
+  ]);
+
   const handleStrokesErased = useCallback(
     (erasedStrokes: FreehandStroke[]) => {
       if (!erasedStrokes || erasedStrokes.length === 0) return;
@@ -437,10 +531,8 @@ export function AnswerSheetCanvas({
     onRedo,
   ]);
 
-  // Global / Canvas Keyboard Shortcuts: Ctrl+Z / Cmd+Z -> Undo, Ctrl+Y / Cmd+Shift+Z -> Redo
+  // Global / Canvas Keyboard Shortcuts: Delete/Backspace -> Delete selected annotation, Ctrl+Z -> Undo, Ctrl+Y -> Redo
   useEffect(() => {
-    if (!enableUndoRedo) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
@@ -451,6 +543,16 @@ export function AnswerSheetCanvas({
       ) {
         return;
       }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedAnnotationId) {
+          e.preventDefault();
+          handleDeleteSelected();
+          return;
+        }
+      }
+
+      if (!enableUndoRedo) return;
 
       const isCtrlOrCmd = e.ctrlKey || e.metaKey;
       if (!isCtrlOrCmd) return;
@@ -480,7 +582,14 @@ export function AnswerSheetCanvas({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [enableUndoRedo, currentPageHistory, handleUndo, handleRedo]);
+  }, [
+    enableUndoRedo,
+    currentPageHistory,
+    handleUndo,
+    handleRedo,
+    selectedAnnotationId,
+    handleDeleteSelected,
+  ]);
 
   // Concrete color & width passed into PenLayer for new strokes
   const effectiveStrokeColor = useMemo(() => {
@@ -540,6 +649,8 @@ export function AnswerSheetCanvas({
       const clamped = clampPageIndex(targetIndex, totalPages);
       if (clamped === activePageIndex) return;
 
+      setInternalSelectedId(null);
+      onSelectAnnotation?.(null);
       setInternalPageIndex(clamped);
       setTransform({ x: 0, y: 0, zoom: 1.0 });
       setIsLoading(true);
@@ -550,7 +661,7 @@ export function AnswerSheetCanvas({
         onPageChange?.(clamped, sortedPages[clamped]);
       }
     },
-    [sortedPages, totalPages, activePageIndex, onPageChange]
+    [sortedPages, totalPages, activePageIndex, onPageChange, onSelectAnnotation]
   );
 
   const handlePrevPage = useCallback(() => {
@@ -759,12 +870,15 @@ export function AnswerSheetCanvas({
           strokeWidth={effectiveStrokeWidth}
         />
 
-        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131) */}
+        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132) */}
         <MarkLayer
           transform={transform}
           pageKey={currentPageKey}
           activeTool={activeTool}
           annotations={currentPageAnnotations}
+          selectedAnnotationId={selectedAnnotationId}
+          onSelectAnnotation={handleSelectAnnotation}
+          onAnnotationMove={handleAnnotationMove}
           onAnnotationComplete={handleAnnotationComplete}
           onTextNoteClick={handleTextNoteClick}
           disabled={isLoading || hasError || !effectiveSrc}
@@ -775,13 +889,13 @@ export function AnswerSheetCanvas({
       {activeTextEditor && !isLoading && !hasError && Boolean(effectiveSrc) && (
         <TextNoteEditor
           x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).x}
-          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).y}
+          y={imageToScreenCoordinates(activeTextEditor.imagePoint.y, activeTextEditor.imagePoint.y, transform).y}
           onConfirm={handleConfirmTextNote}
           onCancel={handleCancelTextNote}
         />
       )}
 
-      {/* Floating Toolbar: Zoom Controls & Pen / Style / Stamps / Highlight / Text / Eraser / Undo / Redo Controls */}
+      {/* Floating Toolbar: Zoom Controls & Select / Pen / Style / Stamps / Highlight / Text / Eraser / Delete / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
@@ -789,6 +903,40 @@ export function AnswerSheetCanvas({
           role="toolbar"
           aria-label="Canvas Zoom and Pen Controls"
         >
+          {/* Select Tool Toggle (AE-132) */}
+          {enableSelect && (
+            <button
+              type="button"
+              onClick={handleToggleSelect}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeSelectMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeSelectMode}
+              aria-label="Toggle Select Tool"
+              title={activeSelectMode ? 'Select Tool Active (Click to Disable)' : 'Enable Select Tool (Move / Delete)'}
+              data-testid="canvas-select-toggle"
+            >
+              <MousePointer className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Delete Selected Annotation Button (AE-132) */}
+          {enableSelect && (
+            <button
+              type="button"
+              onClick={handleDeleteSelected}
+              disabled={!selectedAnnotationId}
+              className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-35 disabled:hover:bg-transparent text-rose-600 transition-colors focus:outline-hidden focus:ring-2 focus:ring-rose-500"
+              aria-label="Delete Selected Annotation"
+              title="Delete Selected Annotation (Delete / Backspace)"
+              data-testid="canvas-delete-button"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+
           {/* Pen Tool Toggle & Style Selector (AE-126 / AE-127) */}
           {enablePenTool && (
             <>
