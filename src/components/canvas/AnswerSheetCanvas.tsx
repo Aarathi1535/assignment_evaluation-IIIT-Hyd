@@ -12,12 +12,16 @@ import {
   ChevronRight,
   Pen,
   Eraser,
+  Check,
+  X,
+  Highlighter,
   Undo2,
   Redo2,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
+import { MarkLayer } from './MarkLayer';
 import type { AnswerSheetCanvasProps, CanvasTool } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
@@ -51,10 +55,15 @@ import {
   filterStrokesByPage,
 } from '@/lib/penTool';
 import {
+  MarkAnnotation,
+  filterAnnotationsByPage,
+} from '@/lib/stampTool';
+import {
   PageHistory,
   createInitialHistory,
   recordAddStroke,
   recordEraseStrokes,
+  recordAddAnnotation,
   applyUndo,
   applyRedo,
   canUndo,
@@ -108,6 +117,8 @@ export function AnswerSheetCanvas({
   isPenActive: propIsPenActive,
   onPenActiveChange,
   enableEraserTool = true,
+  enableStamps = true,
+  enableHighlight = true,
   enableUndoRedo = true,
   activeTool: propActiveTool,
   onToolChange,
@@ -120,6 +131,9 @@ export function AnswerSheetCanvas({
   smoothingOptions,
   strokes: propStrokes,
   onStrokesChange,
+  annotations: propAnnotations,
+  onAnnotationsChange,
+  onAnnotationComplete,
   onUndo,
   onRedo,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
@@ -155,14 +169,14 @@ export function AnswerSheetCanvas({
     return sortedPages[activePageIndex] || null;
   }, [isMultiPageMode, sortedPages, totalPages, activePageIndex]);
 
-  // Key used to strictly isolate strokes per page
+  // Key used to strictly isolate strokes and annotations per page
   const currentPageKey = useMemo(() => {
     if (currentPage?._id) return String(currentPage._id);
     if (currentPage?.id) return String(currentPage.id);
     return String(activePageIndex);
   }, [currentPage, activePageIndex]);
 
-  // Active Tool state: 'none' | 'pen' | 'eraser' (AE-128)
+  // Active Tool state: 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'eraser' (AE-128 / AE-130)
   const [internalTool, setInternalTool] = useState<CanvasTool>(() =>
     initialPenActive ? 'pen' : 'none'
   );
@@ -174,7 +188,11 @@ export function AnswerSheetCanvas({
   }, [propActiveTool, propIsPenActive, internalTool]);
 
   const activePenMode = activeTool === 'pen';
+  const activeCheckMode = activeTool === 'check';
+  const activeCrossMode = activeTool === 'cross';
+  const activeHighlightMode = activeTool === 'highlight';
   const activeEraserMode = activeTool === 'eraser';
+  const isDrawingToolActive = activeTool !== 'none';
 
   const setTool = useCallback(
     (nextTool: CanvasTool) => {
@@ -188,6 +206,18 @@ export function AnswerSheetCanvas({
   const handleTogglePen = useCallback(() => {
     setTool(activePenMode ? 'none' : 'pen');
   }, [activePenMode, setTool]);
+
+  const handleToggleCheck = useCallback(() => {
+    setTool(activeCheckMode ? 'none' : 'check');
+  }, [activeCheckMode, setTool]);
+
+  const handleToggleCross = useCallback(() => {
+    setTool(activeCrossMode ? 'none' : 'cross');
+  }, [activeCrossMode, setTool]);
+
+  const handleToggleHighlight = useCallback(() => {
+    setTool(activeHighlightMode ? 'none' : 'highlight');
+  }, [activeHighlightMode, setTool]);
 
   const handleToggleEraser = useCallback(() => {
     setTool(activeEraserMode ? 'none' : 'eraser');
@@ -225,7 +255,16 @@ export function AnswerSheetCanvas({
     return filterStrokesByPage(allStrokes, currentPageKey);
   }, [allStrokes, currentPageKey]);
 
-  // Per-page undo/redo history state (AE-128)
+  // In-memory check, cross, and highlight annotations state (session level, AE-130)
+  const [internalAnnotations, setInternalAnnotations] = useState<MarkAnnotation[]>([]);
+  const allAnnotations = propAnnotations !== undefined ? propAnnotations : internalAnnotations;
+
+  // Filter annotations strictly belonging to the currently displayed page
+  const currentPageAnnotations = useMemo(() => {
+    return filterAnnotationsByPage(allAnnotations, currentPageKey);
+  }, [allAnnotations, currentPageKey]);
+
+  // Per-page undo/redo history state (AE-128 / AE-130)
   const [pageHistoryMap, setPageHistoryMap] = useState<Record<string, PageHistory>>({});
   const currentPageHistory = useMemo(() => {
     return pageHistoryMap[currentPageKey] || createInitialHistory();
@@ -251,6 +290,19 @@ export function AnswerSheetCanvas({
     [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
   );
 
+  const handleAnnotationComplete = useCallback(
+    (newAnnotation: MarkAnnotation) => {
+      const updated = [...allAnnotations, newAnnotation];
+      const newHistory = recordAddAnnotation(currentPageHistory, newAnnotation);
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalAnnotations(updated);
+      onAnnotationsChange?.(updated);
+      onAnnotationComplete?.(newAnnotation);
+    },
+    [allAnnotations, currentPageHistory, currentPageKey, onAnnotationsChange, onAnnotationComplete]
+  );
+
   const handleStrokesErased = useCallback(
     (erasedStrokes: FreehandStroke[]) => {
       if (!erasedStrokes || erasedStrokes.length === 0) return;
@@ -269,40 +321,78 @@ export function AnswerSheetCanvas({
   const handleUndo = useCallback(() => {
     if (!enableUndoRedo || !canUndo(currentPageHistory)) return;
     const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
-    const { history: newHistory, strokes: newPageStrokes } = applyUndo(
-      currentPageHistory,
-      pageStrokesBefore
-    );
+    const pageAnnotationsBefore = filterAnnotationsByPage(allAnnotations, currentPageKey);
+
+    const {
+      history: newHistory,
+      strokes: newPageStrokes,
+      annotations: newPageAnnotations,
+    } = applyUndo(currentPageHistory, pageStrokesBefore, pageAnnotationsBefore);
 
     const otherPagesStrokes = allStrokes.filter(
       (s) => String(s.pageKey) !== String(currentPageKey)
     );
-    const updated = [...otherPagesStrokes, ...newPageStrokes];
+    const updatedStrokes = [...otherPagesStrokes, ...newPageStrokes];
+
+    const otherPagesAnnotations = allAnnotations.filter(
+      (a) => String(a.pageKey) !== String(currentPageKey)
+    );
+    const updatedAnnotations = [...otherPagesAnnotations, ...newPageAnnotations];
 
     setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-    setInternalStrokes(updated);
-    onStrokesChange?.(updated);
+    setInternalStrokes(updatedStrokes);
+    setInternalAnnotations(updatedAnnotations);
+    onStrokesChange?.(updatedStrokes);
+    onAnnotationsChange?.(updatedAnnotations);
     onUndo?.();
-  }, [enableUndoRedo, currentPageHistory, allStrokes, currentPageKey, onStrokesChange, onUndo]);
+  }, [
+    enableUndoRedo,
+    currentPageHistory,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    onStrokesChange,
+    onAnnotationsChange,
+    onUndo,
+  ]);
 
   const handleRedo = useCallback(() => {
     if (!enableUndoRedo || !canRedo(currentPageHistory)) return;
     const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
-    const { history: newHistory, strokes: newPageStrokes } = applyRedo(
-      currentPageHistory,
-      pageStrokesBefore
-    );
+    const pageAnnotationsBefore = filterAnnotationsByPage(allAnnotations, currentPageKey);
+
+    const {
+      history: newHistory,
+      strokes: newPageStrokes,
+      annotations: newPageAnnotations,
+    } = applyRedo(currentPageHistory, pageStrokesBefore, pageAnnotationsBefore);
 
     const otherPagesStrokes = allStrokes.filter(
       (s) => String(s.pageKey) !== String(currentPageKey)
     );
-    const updated = [...otherPagesStrokes, ...newPageStrokes];
+    const updatedStrokes = [...otherPagesStrokes, ...newPageStrokes];
+
+    const otherPagesAnnotations = allAnnotations.filter(
+      (a) => String(a.pageKey) !== String(currentPageKey)
+    );
+    const updatedAnnotations = [...otherPagesAnnotations, ...newPageAnnotations];
 
     setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-    setInternalStrokes(updated);
-    onStrokesChange?.(updated);
+    setInternalStrokes(updatedStrokes);
+    setInternalAnnotations(updatedAnnotations);
+    onStrokesChange?.(updatedStrokes);
+    onAnnotationsChange?.(updatedAnnotations);
     onRedo?.();
-  }, [enableUndoRedo, currentPageHistory, allStrokes, currentPageKey, onStrokesChange, onRedo]);
+  }, [
+    enableUndoRedo,
+    currentPageHistory,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    onStrokesChange,
+    onAnnotationsChange,
+    onRedo,
+  ]);
 
   // Global / Canvas Keyboard Shortcuts: Ctrl+Z / Cmd+Z -> Undo, Ctrl+Y / Cmd+Shift+Z -> Redo
   useEffect(() => {
@@ -606,7 +696,7 @@ export function AnswerSheetCanvas({
           minZoom={minZoom}
           maxZoom={maxZoom}
           enablePanZoom={enablePanZoom}
-          isPenActive={activePenMode || activeEraserMode}
+          isPenActive={isDrawingToolActive}
           onImageLoad={handleImageLoad}
           onImageError={handleImageError}
           onTransformChange={handleTransformChange}
@@ -625,9 +715,19 @@ export function AnswerSheetCanvas({
           color={effectiveStrokeColor}
           strokeWidth={effectiveStrokeWidth}
         />
+
+        {/* Check, Cross & Highlight Marks Layer (AE-130) */}
+        <MarkLayer
+          transform={transform}
+          pageKey={currentPageKey}
+          activeTool={activeTool}
+          annotations={currentPageAnnotations}
+          onAnnotationComplete={handleAnnotationComplete}
+          disabled={isLoading || hasError || !effectiveSrc}
+        />
       </CanvasStage>
 
-      {/* Floating Toolbar: Zoom Controls & Pen / Style / Eraser / Undo / Redo Controls */}
+      {/* Floating Toolbar: Zoom Controls & Pen / Style / Stamps / Highlight / Eraser / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
@@ -667,6 +767,63 @@ export function AnswerSheetCanvas({
                 </>
               )}
             </>
+          )}
+
+          {/* Check Stamp Tool Toggle (AE-130) */}
+          {enableStamps && (
+            <button
+              type="button"
+              onClick={handleToggleCheck}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeCheckMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeCheckMode}
+              aria-label="Toggle Check Stamp Tool"
+              title={activeCheckMode ? 'Check Tool Active (Click to Disable)' : 'Enable Check Stamp Tool (✓)'}
+              data-testid="canvas-check-toggle"
+            >
+              <Check className={`h-4 w-4 ${activeCheckMode ? 'text-white' : 'text-emerald-600'}`} />
+            </button>
+          )}
+
+          {/* Cross Stamp Tool Toggle (AE-130) */}
+          {enableStamps && (
+            <button
+              type="button"
+              onClick={handleToggleCross}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeCrossMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeCrossMode}
+              aria-label="Toggle Cross Stamp Tool"
+              title={activeCrossMode ? 'Cross Tool Active (Click to Disable)' : 'Enable Cross Stamp Tool (✗)'}
+              data-testid="canvas-cross-toggle"
+            >
+              <X className={`h-4 w-4 ${activeCrossMode ? 'text-white' : 'text-rose-600'}`} />
+            </button>
+          )}
+
+          {/* Highlight Tool Toggle (AE-130) */}
+          {enableHighlight && (
+            <button
+              type="button"
+              onClick={handleToggleHighlight}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeHighlightMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeHighlightMode}
+              aria-label="Toggle Highlight Tool"
+              title={activeHighlightMode ? 'Highlight Tool Active (Click to Disable)' : 'Enable Highlight Tool'}
+              data-testid="canvas-highlight-toggle"
+            >
+              <Highlighter className={`h-4 w-4 ${activeHighlightMode ? 'text-white' : 'text-amber-500'}`} />
+            </button>
           )}
 
           {/* Eraser Tool Toggle (AE-128) */}

@@ -12,8 +12,15 @@ import type {
 } from '@/lib/penTool';
 import type { AnnotationAction, PageHistory } from '@/lib/annotationHistory';
 import type { SmoothingOptions } from '@/lib/strokeSmoothing';
+import type {
+  CheckAnnotation,
+  CrossAnnotation,
+  HighlightAnnotation,
+  MarkAnnotation,
+  StampType,
+} from '@/lib/stampTool';
 
-export type CanvasTool = 'none' | 'pen' | 'eraser';
+export type CanvasTool = 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'eraser';
 
 export type {
   AnswerSheetPage,
@@ -26,6 +33,11 @@ export type {
   AnnotationAction,
   PageHistory,
   SmoothingOptions,
+  CheckAnnotation,
+  CrossAnnotation,
+  HighlightAnnotation,
+  MarkAnnotation,
+  StampType,
 };
 
 export interface CanvasDimensions {
@@ -120,11 +132,15 @@ export interface AnswerSheetCanvasProps {
   onPenActiveChange?: (active: boolean) => void;
   /** Whether the eraser tool is enabled (default true, AE-128) */
   enableEraserTool?: boolean;
+  /** Whether the stamp tools (check, cross) are enabled (default true, AE-130) */
+  enableStamps?: boolean;
+  /** Whether the highlight tool is enabled (default true, AE-130) */
+  enableHighlight?: boolean;
   /** Whether the undo/redo feature is enabled (default true, AE-128) */
   enableUndoRedo?: boolean;
-  /** Controlled active tool ('none' | 'pen' | 'eraser', AE-128) */
+  /** Controlled active tool ('none' | 'pen' | 'check' | 'cross' | 'highlight' | 'eraser', AE-128 / AE-130) */
   activeTool?: CanvasTool;
-  /** Callback fired when active tool changes (AE-128) */
+  /** Callback fired when active tool changes (AE-128 / AE-130) */
   onToolChange?: (tool: CanvasTool) => void;
   /** Controlled selected pen color ('red' | 'blue' | 'green', AE-127) */
   selectedPenColor?: PenColorId;
@@ -144,6 +160,12 @@ export interface AnswerSheetCanvasProps {
   strokes?: FreehandStroke[];
   /** Callback fired when strokes change or new stroke is completed/erased */
   onStrokesChange?: (strokes: FreehandStroke[]) => void;
+  /** In-memory check, cross, and highlight annotations for the canvas or session (AE-130) */
+  annotations?: MarkAnnotation[];
+  /** Callback fired when annotations change or new annotation is placed/erased (AE-130) */
+  onAnnotationsChange?: (annotations: MarkAnnotation[]) => void;
+  /** Callback fired when a new annotation (check, cross, highlight) is completed (AE-130) */
+  onAnnotationComplete?: (annotation: MarkAnnotation) => void;
   /** Callback fired after an undo operation */
   onUndo?: () => void;
   /** Callback fired after a redo operation */
