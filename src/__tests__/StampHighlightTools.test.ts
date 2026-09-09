@@ -352,7 +352,7 @@ describe('AE-130: Check (✓), Cross (✗), and Highlight Tools', () => {
       const a2 = createCrossAnnotation('page-1', { x: 20, y: 20 });
       const a3 = createHighlightAnnotation('page-1', { x: 30, y: 30, width: 20, height: 20 });
 
-      let annotations = [a1, a2, a3];
+      let annotations: MarkAnnotation[] = [a1, a2, a3];
 
       // Erase a2 (middle annotation)
       history = recordEraseAnnotations(history, [a2], annotations);
