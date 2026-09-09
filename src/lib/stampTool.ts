@@ -45,13 +45,36 @@ export interface HighlightAnnotation {
   createdAt: number;
 }
 
-export type MarkAnnotation = CheckAnnotation | CrossAnnotation | HighlightAnnotation;
+export interface TextNoteAnnotation {
+  id: string;
+  pageKey: string | number;
+  type: 'text';
+  x: number;
+  y: number;
+  text: string;
+  fontSize?: number;
+  color?: string;
+  backgroundColor?: string;
+  borderColor?: string;
+  createdAt: number;
+}
+
+export type MarkAnnotation =
+  | CheckAnnotation
+  | CrossAnnotation
+  | HighlightAnnotation
+  | TextNoteAnnotation;
 
 export const DEFAULT_CHECK_COLOR = '#16a34a'; // Standard green
 export const DEFAULT_CROSS_COLOR = '#dc2626'; // Standard red
 export const DEFAULT_HIGHLIGHT_COLOR = '#fde047'; // Vibrant highlighter yellow
 export const DEFAULT_HIGHLIGHT_OPACITY = 0.35;
 export const DEFAULT_STAMP_SIZE = 28; // Invariant image pixels
+
+export const DEFAULT_TEXT_FONT_SIZE = 14; // Invariant font size
+export const DEFAULT_TEXT_COLOR = '#0f172a'; // Slate 900
+export const DEFAULT_TEXT_BG_COLOR = '#fef9c3'; // Light yellow / sticky note
+export const DEFAULT_TEXT_BORDER_COLOR = '#fde047'; // Border yellow
 
 let annotationCounter = 0;
 
@@ -149,6 +172,36 @@ export function createHighlightAnnotation(
     height: Math.max(0, rect.height),
     color: options?.color || DEFAULT_HIGHLIGHT_COLOR,
     opacity: options?.opacity !== undefined ? options.opacity : DEFAULT_HIGHLIGHT_OPACITY,
+    createdAt: Date.now(),
+  };
+}
+
+/**
+ * Creates a Text Note annotation in invariant image space.
+ */
+export function createTextNoteAnnotation(
+  pageKey: string | number,
+  imagePoint: { x: number; y: number },
+  text: string,
+  options?: {
+    fontSize?: number;
+    color?: string;
+    backgroundColor?: string;
+    borderColor?: string;
+    customId?: string;
+  }
+): TextNoteAnnotation {
+  return {
+    id: options?.customId || generateAnnotationId('text'),
+    pageKey,
+    type: 'text',
+    x: imagePoint.x,
+    y: imagePoint.y,
+    text,
+    fontSize: options?.fontSize || DEFAULT_TEXT_FONT_SIZE,
+    color: options?.color || DEFAULT_TEXT_COLOR,
+    backgroundColor: options?.backgroundColor || DEFAULT_TEXT_BG_COLOR,
+    borderColor: options?.borderColor || DEFAULT_TEXT_BORDER_COLOR,
     createdAt: Date.now(),
   };
 }

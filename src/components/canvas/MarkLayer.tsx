@@ -7,6 +7,7 @@ import {
   CheckAnnotation,
   CrossAnnotation,
   HighlightAnnotation,
+  TextNoteAnnotation,
   MarkAnnotation,
   createCheckAnnotation,
   createCrossAnnotation,
@@ -17,6 +18,10 @@ import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_HIGHLIGHT_OPACITY,
   DEFAULT_STAMP_SIZE,
+  DEFAULT_TEXT_FONT_SIZE,
+  DEFAULT_TEXT_COLOR,
+  DEFAULT_TEXT_BG_COLOR,
+  DEFAULT_TEXT_BORDER_COLOR,
 } from '@/lib/stampTool';
 import { screenToImageCoordinates } from '@/lib/penTool';
 import type { PanZoomTransform } from '@/lib/panZoom';
@@ -35,6 +40,11 @@ export interface MarkLayerProps {
   annotations: MarkAnnotation[];
   /** Callback fired when a new check, cross, or highlight annotation is completed */
   onAnnotationComplete?: (annotation: MarkAnnotation) => void;
+  /** Callback fired when the canvas is clicked with the Text Note tool active (AE-131) */
+  onTextNoteClick?: (
+    imagePoint: { x: number; y: number },
+    screenPoint: { x: number; y: number }
+  ) => void;
   /** Whether the layer interactions are disabled (e.g. image loading or error) */
   disabled?: boolean;
 }
@@ -46,6 +56,7 @@ export function MarkLayer({
   activeTool,
   annotations,
   onAnnotationComplete,
+  onTextNoteClick,
   disabled = false,
 }: MarkLayerProps) {
   const { stage: contextStage } = useCanvasStage();
@@ -65,6 +76,7 @@ export function MarkLayer({
   const pageKeyRef = useRef(pageKey);
   const activeToolRef = useRef(activeTool);
   const onAnnotationCompleteRef = useRef(onAnnotationComplete);
+  const onTextNoteClickRef = useRef(onTextNoteClick);
   const disabledRef = useRef(disabled);
 
   useEffect(() => {
@@ -72,8 +84,9 @@ export function MarkLayer({
     pageKeyRef.current = pageKey;
     activeToolRef.current = activeTool;
     onAnnotationCompleteRef.current = onAnnotationComplete;
+    onTextNoteClickRef.current = onTextNoteClick;
     disabledRef.current = disabled;
-  }, [transform, pageKey, activeTool, onAnnotationComplete, disabled]);
+  }, [transform, pageKey, activeTool, onAnnotationComplete, onTextNoteClick, disabled]);
 
   // Initialize Layer and Group
   useEffect(() => {
@@ -214,13 +227,67 @@ export function MarkLayer({
           existingNode.fill(hl.color || DEFAULT_HIGHLIGHT_COLOR);
           existingNode.opacity(hl.opacity ?? DEFAULT_HIGHLIGHT_OPACITY);
         }
+      } else if (ann.type === 'text') {
+        const note = ann as TextNoteAnnotation;
+
+        if (!existingNode) {
+          const noteGroup = new Konva.Group({
+            id: note.id,
+            x: note.x,
+            y: note.y,
+            listening: false,
+          });
+
+          const noteText = new Konva.Text({
+            text: note.text,
+            fontSize: note.fontSize || DEFAULT_TEXT_FONT_SIZE,
+            fontFamily: 'sans-serif',
+            fill: note.color || DEFAULT_TEXT_COLOR,
+            padding: 6,
+            listening: false,
+          });
+
+          const noteBg = new Konva.Rect({
+            width: noteText.width(),
+            height: noteText.height(),
+            fill: note.backgroundColor || DEFAULT_TEXT_BG_COLOR,
+            stroke: note.borderColor || DEFAULT_TEXT_BORDER_COLOR,
+            strokeWidth: 1,
+            cornerRadius: 4,
+            shadowColor: 'rgba(0, 0, 0, 0.15)',
+            shadowBlur: 3,
+            shadowOffset: { x: 1, y: 1 },
+            shadowOpacity: 0.8,
+            listening: false,
+          });
+
+          noteGroup.add(noteBg);
+          noteGroup.add(noteText);
+          group.add(noteGroup);
+          currentNodes.set(note.id, noteGroup);
+        } else if (existingNode instanceof Konva.Group) {
+          existingNode.position({ x: note.x, y: note.y });
+          const textNode = existingNode.findOne<Konva.Text>('Text');
+          const rectNode = existingNode.findOne<Konva.Rect>('Rect');
+          if (textNode) {
+            textNode.text(note.text);
+            textNode.fontSize(note.fontSize || DEFAULT_TEXT_FONT_SIZE);
+            textNode.fill(note.color || DEFAULT_TEXT_COLOR);
+            if (rectNode) {
+              rectNode.width(textNode.width());
+              rectNode.height(textNode.height());
+              rectNode.fill(note.backgroundColor || DEFAULT_TEXT_BG_COLOR);
+              rectNode.stroke(note.borderColor || DEFAULT_TEXT_BORDER_COLOR);
+            }
+          }
+        }
       }
     }
 
     layerRef.current.batchDraw();
   }, [annotations, pageKey]);
 
-  // Pointer event handlers for placing Check, Cross, and Highlight annotations
+  // Pointer event handlers for placing Check, Cross, Highlight, and Text annotations
   useEffect(() => {
     if (!stage) return;
 
@@ -229,18 +296,26 @@ export function MarkLayer({
 
     const isMarkTool =
       !disabled &&
-      (activeTool === 'check' || activeTool === 'cross' || activeTool === 'highlight');
+      (activeTool === 'check' ||
+        activeTool === 'cross' ||
+        activeTool === 'highlight' ||
+        activeTool === 'text');
 
     if (!isMarkTool) return;
 
-    container.style.cursor = 'crosshair';
+    container.style.cursor = activeTool === 'text' ? 'text' : 'crosshair';
 
     const handlePointerDown = (e: PointerEvent) => {
       if (e.button !== 0 && e.buttons !== 1 && e.pointerType === 'mouse') return;
       if (disabledRef.current) return;
 
       const currentTool = activeToolRef.current;
-      if (currentTool !== 'check' && currentTool !== 'cross' && currentTool !== 'highlight') {
+      if (
+        currentTool !== 'check' &&
+        currentTool !== 'cross' &&
+        currentTool !== 'highlight' &&
+        currentTool !== 'text'
+      ) {
         return;
       }
 
@@ -248,6 +323,11 @@ export function MarkLayer({
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
       const imagePoint = screenToImageCoordinates(screenX, screenY, transformRef.current);
+
+      if (currentTool === 'text') {
+        onTextNoteClickRef.current?.(imagePoint, { x: screenX, y: screenY });
+        return;
+      }
 
       if (currentTool === 'check') {
         const check = createCheckAnnotation(pageKeyRef.current, imagePoint);

@@ -15,6 +15,7 @@ import {
   Check,
   X,
   Highlighter,
+  Type,
   Undo2,
   Redo2,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
 import { MarkLayer } from './MarkLayer';
+import { TextNoteEditor } from './TextNoteEditor';
 import type { AnswerSheetCanvasProps, CanvasTool } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
@@ -53,10 +55,12 @@ import {
   resolvePenColor,
   resolvePenWidth,
   filterStrokesByPage,
+  imageToScreenCoordinates,
 } from '@/lib/penTool';
 import {
   MarkAnnotation,
   filterAnnotationsByPage,
+  createTextNoteAnnotation,
 } from '@/lib/stampTool';
 import {
   PageHistory,
@@ -119,6 +123,7 @@ export function AnswerSheetCanvas({
   enableEraserTool = true,
   enableStamps = true,
   enableHighlight = true,
+  enableTextNote = true,
   enableUndoRedo = true,
   activeTool: propActiveTool,
   onToolChange,
@@ -176,7 +181,7 @@ export function AnswerSheetCanvas({
     return String(activePageIndex);
   }, [currentPage, activePageIndex]);
 
-  // Active Tool state: 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'eraser' (AE-128 / AE-130)
+  // Active Tool state: 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' (AE-128 / AE-130 / AE-131)
   const [internalTool, setInternalTool] = useState<CanvasTool>(() =>
     initialPenActive ? 'pen' : 'none'
   );
@@ -191,11 +196,20 @@ export function AnswerSheetCanvas({
   const activeCheckMode = activeTool === 'check';
   const activeCrossMode = activeTool === 'cross';
   const activeHighlightMode = activeTool === 'highlight';
+  const activeTextMode = activeTool === 'text';
   const activeEraserMode = activeTool === 'eraser';
   const isDrawingToolActive = activeTool !== 'none';
 
+  // Active in-place text note editor anchor state (AE-131)
+  const [activeTextEditor, setActiveTextEditor] = useState<{
+    imagePoint: { x: number; y: number };
+  } | null>(null);
+
   const setTool = useCallback(
     (nextTool: CanvasTool) => {
+      if (nextTool !== 'text') {
+        setActiveTextEditor(null);
+      }
       setInternalTool(nextTool);
       onToolChange?.(nextTool);
       onPenActiveChange?.(nextTool === 'pen');
@@ -218,6 +232,10 @@ export function AnswerSheetCanvas({
   const handleToggleHighlight = useCallback(() => {
     setTool(activeHighlightMode ? 'none' : 'highlight');
   }, [activeHighlightMode, setTool]);
+
+  const handleToggleText = useCallback(() => {
+    setTool(activeTextMode ? 'none' : 'text');
+  }, [activeTextMode, setTool]);
 
   const handleToggleEraser = useCallback(() => {
     setTool(activeEraserMode ? 'none' : 'eraser');
@@ -302,6 +320,31 @@ export function AnswerSheetCanvas({
     },
     [allAnnotations, currentPageHistory, currentPageKey, onAnnotationsChange, onAnnotationComplete]
   );
+
+  const handleTextNoteClick = useCallback(
+    (imagePoint: { x: number; y: number }) => {
+      setActiveTextEditor({ imagePoint });
+    },
+    []
+  );
+
+  const handleConfirmTextNote = useCallback(
+    (text: string) => {
+      if (!activeTextEditor) return;
+      const newNote = createTextNoteAnnotation(
+        currentPageKey,
+        activeTextEditor.imagePoint,
+        text
+      );
+      handleAnnotationComplete(newNote);
+      setActiveTextEditor(null);
+    },
+    [activeTextEditor, currentPageKey, handleAnnotationComplete]
+  );
+
+  const handleCancelTextNote = useCallback(() => {
+    setActiveTextEditor(null);
+  }, []);
 
   const handleStrokesErased = useCallback(
     (erasedStrokes: FreehandStroke[]) => {
@@ -716,18 +759,29 @@ export function AnswerSheetCanvas({
           strokeWidth={effectiveStrokeWidth}
         />
 
-        {/* Check, Cross & Highlight Marks Layer (AE-130) */}
+        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131) */}
         <MarkLayer
           transform={transform}
           pageKey={currentPageKey}
           activeTool={activeTool}
           annotations={currentPageAnnotations}
           onAnnotationComplete={handleAnnotationComplete}
+          onTextNoteClick={handleTextNoteClick}
           disabled={isLoading || hasError || !effectiveSrc}
         />
       </CanvasStage>
 
-      {/* Floating Toolbar: Zoom Controls & Pen / Style / Stamps / Highlight / Eraser / Undo / Redo Controls */}
+      {/* In-Place Text Note Editor Overlay (AE-131) */}
+      {activeTextEditor && !isLoading && !hasError && Boolean(effectiveSrc) && (
+        <TextNoteEditor
+          x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).x}
+          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).y}
+          onConfirm={handleConfirmTextNote}
+          onCancel={handleCancelTextNote}
+        />
+      )}
+
+      {/* Floating Toolbar: Zoom Controls & Pen / Style / Stamps / Highlight / Text / Eraser / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
@@ -823,6 +877,25 @@ export function AnswerSheetCanvas({
               data-testid="canvas-highlight-toggle"
             >
               <Highlighter className={`h-4 w-4 ${activeHighlightMode ? 'text-white' : 'text-amber-500'}`} />
+            </button>
+          )}
+
+          {/* Text Note Tool Toggle (AE-131) */}
+          {enableTextNote && (
+            <button
+              type="button"
+              onClick={handleToggleText}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeTextMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeTextMode}
+              aria-label="Toggle Text Note Tool"
+              title={activeTextMode ? 'Text Note Tool Active (Click to Disable)' : 'Enable Text Note Tool (T)'}
+              data-testid="canvas-text-toggle"
+            >
+              <Type className={`h-4 w-4 ${activeTextMode ? 'text-white' : 'text-slate-700'}`} />
             </button>
           )}
 

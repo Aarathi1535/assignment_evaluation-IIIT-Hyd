@@ -16,11 +16,12 @@ import type {
   CheckAnnotation,
   CrossAnnotation,
   HighlightAnnotation,
+  TextNoteAnnotation,
   MarkAnnotation,
   StampType,
 } from '@/lib/stampTool';
 
-export type CanvasTool = 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'eraser';
+export type CanvasTool = 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
 
 export type {
   AnswerSheetPage,
@@ -36,6 +37,7 @@ export type {
   CheckAnnotation,
   CrossAnnotation,
   HighlightAnnotation,
+  TextNoteAnnotation,
   MarkAnnotation,
   StampType,
 };
@@ -136,9 +138,11 @@ export interface AnswerSheetCanvasProps {
   enableStamps?: boolean;
   /** Whether the highlight tool is enabled (default true, AE-130) */
   enableHighlight?: boolean;
+  /** Whether the text-note annotation tool is enabled (default true, AE-131) */
+  enableTextNote?: boolean;
   /** Whether the undo/redo feature is enabled (default true, AE-128) */
   enableUndoRedo?: boolean;
-  /** Controlled active tool ('none' | 'pen' | 'check' | 'cross' | 'highlight' | 'eraser', AE-128 / AE-130) */
+  /** Controlled active tool ('none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser', AE-128 / AE-130 / AE-131) */
   activeTool?: CanvasTool;
   /** Callback fired when active tool changes (AE-128 / AE-130) */
   onToolChange?: (tool: CanvasTool) => void;
