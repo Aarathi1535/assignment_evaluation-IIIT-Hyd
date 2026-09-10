@@ -20,6 +20,13 @@ import type {
   MarkAnnotation,
   StampType,
 } from '@/lib/stampTool';
+import type {
+  SerializedPageAnnotations,
+  SerializedAnnotationDocument,
+  SerializeCanvasOptions,
+  ValidationResult,
+  DeserializationResult,
+} from '@/lib/annotationSerialization';
 
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
 
@@ -40,6 +47,11 @@ export type {
   TextNoteAnnotation,
   MarkAnnotation,
   StampType,
+  SerializedPageAnnotations,
+  SerializedAnnotationDocument,
+  SerializeCanvasOptions,
+  ValidationResult,
+  DeserializationResult,
 };
 
 export interface CanvasDimensions {
