@@ -28,7 +28,8 @@ import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
 import { MarkLayer } from './MarkLayer';
 import { TextNoteEditor } from './TextNoteEditor';
-import type { AnswerSheetCanvasProps, CanvasTool } from './types';
+import { SaveStatusIndicator } from './SaveStatusIndicator';
+import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
   calculateStepZoom,
@@ -80,7 +81,10 @@ import {
   canUndo,
   canRedo,
 } from '@/lib/annotationHistory';
-import { deserializePageAnnotations } from '@/lib/annotationSerialization';
+import {
+  deserializePageAnnotations,
+  serializePageAnnotations,
+} from '@/lib/annotationSerialization';
 import { PenStyleSelector } from './PenStyleSelector';
 
 /**
@@ -170,6 +174,13 @@ export function AnswerSheetCanvas({
   fetchAnnotations,
   onAnnotationsLoaded,
   onAnnotationsLoadError,
+  enableAutosave = true,
+  debounceDelayMs = 800,
+  saveAnnotationsUrl,
+  saveAnnotations,
+  onSaveStatusChange,
+  onSaveSuccess,
+  onSaveError,
 }: AnswerSheetCanvasProps) {
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
@@ -364,6 +375,262 @@ export function AnswerSheetCanvas({
     return pageHistoryMap[currentPageKey] || createInitialHistory();
   }, [pageHistoryMap, currentPageKey]);
 
+  // Concrete color & width passed into PenLayer for new strokes
+  const effectiveStrokeColor = useMemo(() => {
+    return resolvePenColor(activePenColor) || defaultStrokeColor;
+  }, [activePenColor, defaultStrokeColor]);
+
+  const effectiveStrokeWidth = useMemo(() => {
+    return resolvePenWidth(activePenWidth) || defaultStrokeWidth;
+  }, [activePenWidth, defaultStrokeWidth]);
+
+  // Determine effective image source
+  const effectiveSrc = useMemo(() => {
+    if (isMultiPageMode) {
+      if (totalPages === 0) return null;
+      return getPageImageUrl(currentPage);
+    }
+    return src !== undefined ? src : SAMPLE_ANSWER_SHEET_DATA_URI;
+  }, [isMultiPageMode, totalPages, currentPage, src]);
+
+  const [prevEffectiveSrc, setPrevEffectiveSrc] = useState<string | null | undefined>(effectiveSrc);
+  const [isLoading, setIsLoading] = useState<boolean>(Boolean(effectiveSrc !== null));
+  const [hasError, setHasError] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [baseBounds, setBaseBounds] = useState<RenderedImageBounds | null>(null);
+
+  // Controlled/tracked transform (pan and zoom)
+  const [transform, setTransform] = useState<PanZoomTransform>({
+    x: 0,
+    y: 0,
+    zoom: 1.0,
+  });
+
+  const stageDimensionsRef = useRef({ width: 800, height: 600 });
+
+  // Synchronize loading/error state when effectiveSrc changes
+  if (prevEffectiveSrc !== effectiveSrc) {
+    setPrevEffectiveSrc(effectiveSrc);
+    if (effectiveSrc === null) {
+      setIsLoading(false);
+      setHasError(false);
+      setErrorMessage('');
+      setBaseBounds(null);
+      setTransform({ x: 0, y: 0, zoom: 1.0 });
+    } else {
+      setIsLoading(true);
+      setHasError(false);
+      setErrorMessage('');
+      setBaseBounds(null);
+      setTransform({ x: 0, y: 0, zoom: 1.0 });
+    }
+  }
+
+  // Autosave state & references (AE-137)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string>('');
+  const pendingSaveRef = useRef<{
+    pageKey: string;
+    pageNumber: number;
+    strokes: FreehandStroke[];
+    annotations: MarkAnnotation[];
+    imageBounds?: RenderedImageBounds | null;
+  } | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSeqRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
+
+  // Keep latest callback refs to prevent stale closures while preserving stable identities
+  const onSaveStatusChangeRef = useRef(onSaveStatusChange);
+  const onSaveSuccessRef = useRef(onSaveSuccess);
+  const onSaveErrorRef = useRef(onSaveError);
+
+  useEffect(() => {
+    onSaveStatusChangeRef.current = onSaveStatusChange;
+    onSaveSuccessRef.current = onSaveSuccess;
+    onSaveErrorRef.current = onSaveError;
+  }, [onSaveStatusChange, onSaveSuccess, onSaveError]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const executeSave = useCallback(
+    async (payloadToSave: {
+      pageKey: string;
+      pageNumber: number;
+      strokes: FreehandStroke[];
+      annotations: MarkAnnotation[];
+      imageBounds?: RenderedImageBounds | null;
+    }) => {
+      if (!scriptId) return;
+
+      saveSeqRef.current += 1;
+      const currentSaveSeq = saveSeqRef.current;
+
+      setSaveStatus('saving');
+      onSaveStatusChangeRef.current?.('saving');
+      setSaveErrorMessage('');
+
+      try {
+        const serialized = serializePageAnnotations(
+          payloadToSave.pageKey,
+          payloadToSave.annotations,
+          payloadToSave.strokes
+        );
+
+        let result: { success: boolean; error?: string } = { success: true };
+
+        if (saveAnnotations) {
+          result = await saveAnnotations({
+            scriptId,
+            pageNumber: payloadToSave.pageNumber,
+            data: serialized,
+          });
+        } else {
+          const url = saveAnnotationsUrl
+            ? saveAnnotationsUrl(scriptId, payloadToSave.pageNumber)
+            : `/api/scripts/${encodeURIComponent(scriptId)}/pages/${encodeURIComponent(String(payloadToSave.pageNumber))}/annotations`;
+
+          const res = await fetch(url, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify(serialized),
+          });
+
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => null);
+            const msg = errJson?.message || `Failed to save annotations (${res.status})`;
+            throw new Error(msg);
+          }
+          result = { success: true };
+        }
+
+        if (!isMountedRef.current || saveSeqRef.current !== currentSaveSeq) {
+          return;
+        }
+
+        if (result.success) {
+          setSaveStatus('saved');
+          onSaveStatusChangeRef.current?.('saved');
+          onSaveSuccessRef.current?.(payloadToSave.pageNumber);
+        } else {
+          throw new Error(result.error || 'Failed to save annotations');
+        }
+      } catch (err: unknown) {
+        if (!isMountedRef.current || saveSeqRef.current !== currentSaveSeq) {
+          return;
+        }
+        const errorObj = err instanceof Error ? err : new Error(String(err));
+        setSaveStatus('error');
+        setSaveErrorMessage(errorObj.message);
+        onSaveStatusChangeRef.current?.('error');
+        onSaveErrorRef.current?.(payloadToSave.pageNumber, errorObj);
+      }
+    },
+    [scriptId, saveAnnotations, saveAnnotationsUrl]
+  );
+
+  const scheduleAutosave = useCallback(
+    (targetStrokes: FreehandStroke[], targetAnnotations: MarkAnnotation[]) => {
+      if (!enableAutosave || !scriptId) return;
+
+      const targetPageNumber =
+        typeof currentPage?.pageNumber === 'number'
+          ? currentPage.pageNumber
+          : activePageIndex + 1;
+      const pageStrokes = filterStrokesByPage(targetStrokes, currentPageKey);
+      const pageAnnotations = filterAnnotationsByPage(
+        targetAnnotations,
+        currentPageKey
+      );
+
+      const pendingData = {
+        pageKey: currentPageKey,
+        pageNumber: targetPageNumber,
+        strokes: pageStrokes,
+        annotations: pageAnnotations,
+        imageBounds: baseBounds,
+      };
+
+      pendingSaveRef.current = pendingData;
+
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        if (pendingSaveRef.current) {
+          const toSave = pendingSaveRef.current;
+          pendingSaveRef.current = null;
+          executeSave(toSave);
+        }
+      }, debounceDelayMs);
+    },
+    [
+      enableAutosave,
+      scriptId,
+      currentPage,
+      activePageIndex,
+      currentPageKey,
+      baseBounds,
+      debounceDelayMs,
+      executeSave,
+    ]
+  );
+
+  const flushPendingSave = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (pendingSaveRef.current) {
+      const toSave = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      executeSave(toSave);
+    }
+  }, [executeSave]);
+
+  const handleRetrySave = useCallback(() => {
+    const targetPageNumber =
+      typeof currentPage?.pageNumber === 'number'
+        ? currentPage.pageNumber
+        : activePageIndex + 1;
+    const pageStrokes = filterStrokesByPage(allStrokes, currentPageKey);
+    const pageAnnotations = filterAnnotationsByPage(
+      allAnnotations,
+      currentPageKey
+    );
+
+    const retryData = {
+      pageKey: currentPageKey,
+      pageNumber: targetPageNumber,
+      strokes: pageStrokes,
+      annotations: pageAnnotations,
+      imageBounds: baseBounds,
+    };
+    executeSave(retryData);
+  }, [
+    currentPage,
+    activePageIndex,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    baseBounds,
+    executeSave,
+  ]);
+
   // Annotation Hydration Lifecycle (AE-136)
   useEffect(() => {
     // If annotation loading is disabled, no scriptId, or already loaded during this session, return
@@ -517,8 +784,9 @@ export function AnswerSheetCanvas({
       setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
       setInternalStrokes(updated);
       onStrokesChange?.(updated);
+      scheduleAutosave(updated, allAnnotations);
     },
-    [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
+    [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
   );
 
   const handleAnnotationComplete = useCallback(
@@ -530,8 +798,9 @@ export function AnswerSheetCanvas({
       setInternalAnnotations(updated);
       onAnnotationsChange?.(updated);
       onAnnotationComplete?.(newAnnotation);
+      scheduleAutosave(allStrokes, updated);
     },
-    [allAnnotations, currentPageHistory, currentPageKey, onAnnotationsChange, onAnnotationComplete]
+    [allAnnotations, allStrokes, currentPageHistory, currentPageKey, onAnnotationsChange, onAnnotationComplete, scheduleAutosave]
   );
 
   const handleTextNoteClick = useCallback(
@@ -579,13 +848,16 @@ export function AnswerSheetCanvas({
       setInternalAnnotations(updated);
       onAnnotationsChange?.(updated);
       onAnnotationMove?.(id, newPosition, previousPosition);
+      scheduleAutosave(allStrokes, updated);
     },
     [
       allAnnotations,
+      allStrokes,
       currentPageHistory,
       currentPageKey,
       onAnnotationsChange,
       onAnnotationMove,
+      scheduleAutosave,
     ]
   );
 
@@ -611,14 +883,17 @@ export function AnswerSheetCanvas({
     onSelectAnnotation?.(null);
     onAnnotationsChange?.(updated);
     onAnnotationDelete?.(target);
+    scheduleAutosave(allStrokes, updated);
   }, [
     selectedAnnotationId,
     allAnnotations,
+    allStrokes,
     currentPageHistory,
     currentPageKey,
     onAnnotationsChange,
     onAnnotationDelete,
     onSelectAnnotation,
+    scheduleAutosave,
   ]);
 
   const handleStrokesErased = useCallback(
@@ -632,8 +907,9 @@ export function AnswerSheetCanvas({
       setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
       setInternalStrokes(updated);
       onStrokesChange?.(updated);
+      scheduleAutosave(updated, allAnnotations);
     },
-    [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
+    [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
   );
 
   const handleUndo = useCallback(() => {
@@ -663,6 +939,7 @@ export function AnswerSheetCanvas({
     onStrokesChange?.(updatedStrokes);
     onAnnotationsChange?.(updatedAnnotations);
     onUndo?.();
+    scheduleAutosave(updatedStrokes, updatedAnnotations);
   }, [
     enableUndoRedo,
     currentPageHistory,
@@ -672,6 +949,7 @@ export function AnswerSheetCanvas({
     onStrokesChange,
     onAnnotationsChange,
     onUndo,
+    scheduleAutosave,
   ]);
 
   const handleRedo = useCallback(() => {
@@ -701,6 +979,7 @@ export function AnswerSheetCanvas({
     onStrokesChange?.(updatedStrokes);
     onAnnotationsChange?.(updatedAnnotations);
     onRedo?.();
+    scheduleAutosave(updatedStrokes, updatedAnnotations);
   }, [
     enableUndoRedo,
     currentPageHistory,
@@ -710,6 +989,7 @@ export function AnswerSheetCanvas({
     onStrokesChange,
     onAnnotationsChange,
     onRedo,
+    scheduleAutosave,
   ]);
 
   // Global / Canvas Keyboard Shortcuts: Delete/Backspace -> Delete selected annotation, Ctrl+Z -> Undo, Ctrl+Y -> Redo
@@ -772,63 +1052,15 @@ export function AnswerSheetCanvas({
     handleDeleteSelected,
   ]);
 
-  // Concrete color & width passed into PenLayer for new strokes
-  const effectiveStrokeColor = useMemo(() => {
-    return resolvePenColor(activePenColor) || defaultStrokeColor;
-  }, [activePenColor, defaultStrokeColor]);
-
-  const effectiveStrokeWidth = useMemo(() => {
-    return resolvePenWidth(activePenWidth) || defaultStrokeWidth;
-  }, [activePenWidth, defaultStrokeWidth]);
-
-  // Determine effective image source
-  const effectiveSrc = useMemo(() => {
-    if (isMultiPageMode) {
-      if (totalPages === 0) return null;
-      return getPageImageUrl(currentPage);
-    }
-    return src !== undefined ? src : SAMPLE_ANSWER_SHEET_DATA_URI;
-  }, [isMultiPageMode, totalPages, currentPage, src]);
-
-  const [prevEffectiveSrc, setPrevEffectiveSrc] = useState<string | null | undefined>(effectiveSrc);
-  const [isLoading, setIsLoading] = useState<boolean>(Boolean(effectiveSrc !== null));
-  const [hasError, setHasError] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string>('');
-  const [baseBounds, setBaseBounds] = useState<RenderedImageBounds | null>(null);
-
-  // Controlled/tracked transform (pan and zoom)
-  const [transform, setTransform] = useState<PanZoomTransform>({
-    x: 0,
-    y: 0,
-    zoom: 1.0,
-  });
-
-  const stageDimensionsRef = useRef({ width: 800, height: 600 });
-
-  // Synchronize loading/error state when effectiveSrc changes
-  if (prevEffectiveSrc !== effectiveSrc) {
-    setPrevEffectiveSrc(effectiveSrc);
-    if (effectiveSrc === null) {
-      setIsLoading(false);
-      setHasError(false);
-      setErrorMessage('');
-      setBaseBounds(null);
-      setTransform({ x: 0, y: 0, zoom: 1.0 });
-    } else {
-      setIsLoading(true);
-      setHasError(false);
-      setErrorMessage('');
-      setBaseBounds(null);
-      setTransform({ x: 0, y: 0, zoom: 1.0 });
-    }
-  }
-
   // Handle page change navigation
   const navigateToPage = useCallback(
     (targetIndex: number) => {
       if (!sortedPages || totalPages <= 0) return;
       const clamped = clampPageIndex(targetIndex, totalPages);
       if (clamped === activePageIndex) return;
+
+      // Flush any pending debounced autosave immediately before leaving current page
+      flushPendingSave();
 
       setInternalSelectedId(null);
       onSelectAnnotation?.(null);
@@ -842,7 +1074,7 @@ export function AnswerSheetCanvas({
         onPageChange?.(clamped, sortedPages[clamped]);
       }
     },
-    [sortedPages, totalPages, activePageIndex, onPageChange, onSelectAnnotation]
+    [sortedPages, totalPages, activePageIndex, flushPendingSave, onPageChange, onSelectAnnotation]
   );
 
   const handlePrevPage = useCallback(() => {
@@ -1013,6 +1245,17 @@ export function AnswerSheetCanvas({
             <ChevronRight className="h-4 w-4" />
           </button>
         </nav>
+      )}
+
+      {/* Autosave Status Indicator (AE-137) */}
+      {enableAutosave && Boolean(scriptId) && (
+        <div className="absolute top-3 right-3 z-20" data-testid="autosave-status-wrapper">
+          <SaveStatusIndicator
+            status={saveStatus}
+            onRetry={handleRetrySave}
+            errorMessage={saveErrorMessage}
+          />
+        </div>
       )}
 
       {/* Canvas Stage */}

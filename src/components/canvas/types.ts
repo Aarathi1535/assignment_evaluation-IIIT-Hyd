@@ -30,6 +30,8 @@ import type {
 
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
 
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
 export type {
   AnswerSheetPage,
   FreehandStroke,
@@ -242,4 +244,22 @@ export interface AnswerSheetCanvasProps {
   }) => void;
   /** Callback fired when loading page annotations fails (AE-136) */
   onAnnotationsLoadError?: (error: Error, pageIdentifier: string | number) => void;
+  /** Whether debounced autosave to backend is enabled (default true when scriptId is present, AE-137) */
+  enableAutosave?: boolean;
+  /** Debounce delay in milliseconds before triggering autosave (default 800ms, AE-137) */
+  debounceDelayMs?: number;
+  /** Custom URL builder for saving page annotations (AE-137) */
+  saveAnnotationsUrl?: (scriptId: string, pageNumber: number) => string;
+  /** Custom saver function for sending serialized page annotations (AE-137) */
+  saveAnnotations?: (params: {
+    scriptId: string;
+    pageNumber: number;
+    data: SerializedPageAnnotations;
+  }) => Promise<{ success: boolean; error?: string }>;
+  /** Callback fired when save status changes ('idle' | 'saving' | 'saved' | 'error', AE-137) */
+  onSaveStatusChange?: (status: SaveStatus) => void;
+  /** Callback fired when autosave succeeds (AE-137) */
+  onSaveSuccess?: (pageNumber: number) => void;
+  /** Callback fired when autosave fails (AE-137) */
+  onSaveError?: (pageNumber: number, error: Error) => void;
 }
