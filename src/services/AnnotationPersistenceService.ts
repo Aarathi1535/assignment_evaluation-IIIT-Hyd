@@ -43,7 +43,182 @@ export interface SavePageAnnotationsResult {
   savedAt: string;
 }
 
+export interface GetPageAnnotationsOptions {
+  scriptId: string;
+  pageIdentifier: string;
+  userId: string;
+  userRole: string;
+}
+
+export interface GetPageAnnotationsResult {
+  scriptId: string;
+  pageId: string;
+  pageNumber: number;
+  annotations: MarkAnnotation[];
+  strokes: FreehandStroke[];
+  totalAnnotations: number;
+  totalStrokes: number;
+  annotatedBy?: string | null;
+  updatedAt?: string;
+}
+
 export class AnnotationPersistenceService {
+  /**
+   * Retrieves vector annotations for a specific answer script page directly from Page.annotations (single source of truth).
+   */
+  async getPageAnnotations(
+    options: GetPageAnnotationsOptions
+  ): Promise<GetPageAnnotationsResult> {
+    const { scriptId, pageIdentifier, userId, userRole } = options;
+
+    // 1. Validate AnswerScript ID format
+    if (!scriptId || !mongoose.Types.ObjectId.isValid(scriptId)) {
+      throw new HttpError('Invalid AnswerScript ID format', 400);
+    }
+
+    // 2. Validate Page identifier format (must be valid ObjectId or positive integer)
+    const isObjectId = mongoose.Types.ObjectId.isValid(pageIdentifier);
+    const isNumericPage =
+      !isNaN(Number(pageIdentifier)) &&
+      Number.isInteger(Number(pageIdentifier)) &&
+      Number(pageIdentifier) > 0;
+
+    if (!isObjectId && !isNumericPage) {
+      throw new HttpError('Invalid page identifier format', 400);
+    }
+
+    // 3. Retrieve AnswerScript and verify active status
+    const script = await AnswerScript.findOne({ _id: scriptId, isActive: true });
+    if (!script) {
+      throw new HttpError('AnswerScript not found', 404);
+    }
+
+    // 4. Verify user has authorized access to the exam
+    const exam = await ExamRepository.getExamById(script.exam.toString(), userId, userRole);
+    if (!exam) {
+      throw new HttpError('Forbidden: Access denied to the exam for this answer script', 403);
+    }
+
+    // 5. Resolve target Page and verify it belongs to this AnswerScript
+    let targetPageId: mongoose.Types.ObjectId;
+    let targetPageNumber: number;
+    let rawAnnotations: SerializedPageAnnotations | null | undefined = null;
+    let annotatedBy: string | null = null;
+    let updatedAt: string | undefined = undefined;
+
+    if (isObjectId) {
+      const pageIdObj = new mongoose.Types.ObjectId(pageIdentifier);
+
+      const pageDoc = await Page.findOne({ _id: pageIdObj, isActive: true });
+      if (pageDoc) {
+        if (pageDoc.answerScript.toString() !== script._id.toString()) {
+          throw new HttpError('Page does not belong to the requested answer script', 400);
+        }
+        targetPageId = pageDoc._id;
+        targetPageNumber = pageDoc.pageNumber;
+        rawAnnotations = pageDoc.annotations;
+        annotatedBy = pageDoc.annotatedBy?.toString() || null;
+        updatedAt = pageDoc.updatedAt?.toISOString();
+      } else {
+        const ingestionDoc = await IngestionPage.findById(pageIdObj);
+        if (ingestionDoc) {
+          if (
+            !ingestionDoc.answerScript ||
+            ingestionDoc.answerScript.toString() !== script._id.toString()
+          ) {
+            throw new HttpError('Page does not belong to the requested answer script', 400);
+          }
+          targetPageId = ingestionDoc._id;
+          targetPageNumber = ingestionDoc.pageNumber;
+          rawAnnotations = ingestionDoc.metadata?.annotations as SerializedPageAnnotations;
+          annotatedBy = (ingestionDoc.metadata?.annotatedBy as string) || null;
+          updatedAt = ingestionDoc.updatedAt?.toISOString();
+        } else {
+          throw new HttpError('Page not found', 404);
+        }
+      }
+    } else {
+      const pageNum = Number(pageIdentifier);
+
+      const pageDoc = await Page.findOne({
+        answerScript: script._id,
+        pageNumber: pageNum,
+        isActive: true,
+      });
+
+      if (pageDoc) {
+        targetPageId = pageDoc._id;
+        targetPageNumber = pageDoc.pageNumber;
+        rawAnnotations = pageDoc.annotations;
+        annotatedBy = pageDoc.annotatedBy?.toString() || null;
+        updatedAt = pageDoc.updatedAt?.toISOString();
+      } else {
+        const ingestionDoc = await IngestionPage.findOne({
+          answerScript: script._id,
+          pageNumber: pageNum,
+        });
+
+        if (ingestionDoc) {
+          targetPageId = ingestionDoc._id;
+          targetPageNumber = ingestionDoc.pageNumber;
+          rawAnnotations = ingestionDoc.metadata?.annotations as SerializedPageAnnotations;
+          annotatedBy = (ingestionDoc.metadata?.annotatedBy as string) || null;
+          updatedAt = ingestionDoc.updatedAt?.toISOString();
+        } else {
+          throw new HttpError(`Page ${pageNum} not found for this answer script`, 404);
+        }
+      }
+    }
+
+    // 6. If no annotations exist on the Page document, return clean empty collection
+    if (!rawAnnotations) {
+      return {
+        scriptId: script._id.toString(),
+        pageId: targetPageId.toString(),
+        pageNumber: targetPageNumber,
+        annotations: [],
+        strokes: [],
+        totalAnnotations: 0,
+        totalStrokes: 0,
+        annotatedBy: null,
+        updatedAt,
+      };
+    }
+
+    // 7. Validate and normalize stored payload safely (fail-safe on corrupt data)
+    try {
+      const normalized = this.validateAndNormalizePayload(
+        rawAnnotations,
+        targetPageId.toString()
+      );
+
+      return {
+        scriptId: script._id.toString(),
+        pageId: targetPageId.toString(),
+        pageNumber: targetPageNumber,
+        annotations: normalized.annotations,
+        strokes: normalized.strokes,
+        totalAnnotations: normalized.annotations.length,
+        totalStrokes: normalized.strokes.length,
+        annotatedBy,
+        updatedAt,
+      };
+    } catch {
+      // Corrupt or malformed payload in database falls back safely to empty state
+      return {
+        scriptId: script._id.toString(),
+        pageId: targetPageId.toString(),
+        pageNumber: targetPageNumber,
+        annotations: [],
+        strokes: [],
+        totalAnnotations: 0,
+        totalStrokes: 0,
+        annotatedBy,
+        updatedAt,
+      };
+    }
+  }
+
   /**
    * Saves and deterministically replaces vector annotations for a specific answer script page.
    * Persists directly to Page.annotations as the single source of truth.

@@ -220,4 +220,26 @@ export interface AnswerSheetCanvasProps {
   onError?: (error: Error) => void;
   /** Callback fired when zoom/pan transform changes */
   onTransformChange?: (transform: PanZoomTransform) => void;
+  /** Answer script ID used for loading page annotations (AE-136) */
+  scriptId?: string;
+  /** Whether automatic annotation retrieval from backend is enabled (default true when scriptId is present, AE-136) */
+  enableAnnotationLoading?: boolean;
+  /** Custom URL builder for fetching page annotations (AE-136) */
+  loadAnnotationsUrl?: (scriptId: string, pageIdentifier: string | number) => string;
+  /** Custom fetcher function for retrieving page annotations (AE-136) */
+  fetchAnnotations?: (
+    scriptId: string,
+    pageIdentifier: string | number,
+    signal?: AbortSignal
+  ) => Promise<{ annotations: MarkAnnotation[]; strokes: FreehandStroke[] } | null>;
+  /** Callback fired when page annotations are successfully loaded and hydrated (AE-136) */
+  onAnnotationsLoaded?: (result: {
+    scriptId?: string;
+    pageId?: string;
+    pageNumber?: number;
+    annotations: MarkAnnotation[];
+    strokes: FreehandStroke[];
+  }) => void;
+  /** Callback fired when loading page annotations fails (AE-136) */
+  onAnnotationsLoadError?: (error: Error, pageIdentifier: string | number) => void;
 }

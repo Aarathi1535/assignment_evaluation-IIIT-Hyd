@@ -80,6 +80,7 @@ import {
   canUndo,
   canRedo,
 } from '@/lib/annotationHistory';
+import { deserializePageAnnotations } from '@/lib/annotationSerialization';
 import { PenStyleSelector } from './PenStyleSelector';
 
 /**
@@ -163,6 +164,12 @@ export function AnswerSheetCanvas({
   onLoad,
   onError,
   onTransformChange,
+  scriptId,
+  enableAnnotationLoading = true,
+  loadAnnotationsUrl,
+  fetchAnnotations,
+  onAnnotationsLoaded,
+  onAnnotationsLoadError,
 }: AnswerSheetCanvasProps) {
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
@@ -197,6 +204,14 @@ export function AnswerSheetCanvas({
     return String(activePageIndex);
   }, [currentPage, activePageIndex]);
 
+  // Effective page identifier for loading (AE-136)
+  const effectivePageIdentifier = useMemo(() => {
+    if (currentPage?._id) return String(currentPage._id);
+    if (currentPage?.id) return String(currentPage.id);
+    if (typeof currentPage?.pageNumber === 'number') return currentPage.pageNumber;
+    return activePageIndex + 1;
+  }, [currentPage, activePageIndex]);
+
   // Active Tool state: 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' (AE-128 / AE-130 / AE-131 / AE-132)
   const [internalTool, setInternalTool] = useState<CanvasTool>(() =>
     initialPenActive ? 'pen' : 'none'
@@ -226,6 +241,14 @@ export function AnswerSheetCanvas({
   const [activeTextEditor, setActiveTextEditor] = useState<{
     imagePoint: { x: number; y: number };
   } | null>(null);
+
+  // In-memory session cache & request sequence tracking for annotation hydration (AE-136)
+  const loadedPagesCacheRef = useRef<Set<string>>(new Set());
+  const activeRequestSeqRef = useRef<number>(0);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+
+  const [, setIsAnnotationsLoading] = useState<boolean>(false);
+  const [, setAnnotationsLoadError] = useState<string | null>(null);
 
   const setTool = useCallback(
     (nextTool: CanvasTool) => {
@@ -340,6 +363,143 @@ export function AnswerSheetCanvas({
   const currentPageHistory = useMemo(() => {
     return pageHistoryMap[currentPageKey] || createInitialHistory();
   }, [pageHistoryMap, currentPageKey]);
+
+  // Annotation Hydration Lifecycle (AE-136)
+  useEffect(() => {
+    // If annotation loading is disabled, no scriptId, or already loaded during this session, return
+    if (!enableAnnotationLoading || !scriptId) return;
+
+    const targetKey = currentPageKey;
+    const targetIdentifier = effectivePageIdentifier;
+
+    if (loadedPagesCacheRef.current.has(targetKey)) {
+      return;
+    }
+
+    // Fetch annotations from backend
+    activeRequestSeqRef.current += 1;
+    const currentSeq = activeRequestSeqRef.current;
+
+    // Abort previous in-flight request to prevent race conditions
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    activeAbortControllerRef.current = abortController;
+
+    setIsAnnotationsLoading(true);
+    setAnnotationsLoadError(null);
+
+    const executeFetch = async () => {
+      try {
+        let loadedData: { annotations: MarkAnnotation[]; strokes: FreehandStroke[] } | null = null;
+
+        if (fetchAnnotations) {
+          loadedData = await fetchAnnotations(
+            scriptId,
+            targetIdentifier,
+            abortController.signal
+          );
+        } else {
+          const url = loadAnnotationsUrl
+            ? loadAnnotationsUrl(scriptId, targetIdentifier)
+            : `/api/scripts/${encodeURIComponent(scriptId)}/pages/${encodeURIComponent(String(targetIdentifier))}/annotations`;
+
+          const res = await fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: abortController.signal,
+          });
+
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => null);
+            const msg = errJson?.message || `Failed to load annotations (${res.status})`;
+            throw new Error(msg);
+          }
+
+          const json = await res.json();
+          const rawPayload = json?.data || json;
+          loadedData = deserializePageAnnotations(rawPayload, targetKey);
+        }
+
+        // Verify request is still current
+        if (
+          abortController.signal.aborted ||
+          activeRequestSeqRef.current !== currentSeq
+        ) {
+          return;
+        }
+
+        const safeAnnotations = (loadedData?.annotations || []).map((a) => ({
+          ...a,
+          pageKey: targetKey,
+        }));
+        const safeStrokes = (loadedData?.strokes || []).map((s) => ({
+          ...s,
+          pageKey: targetKey,
+        }));
+
+        setInternalStrokes((prev) => {
+          const others = prev.filter((s) => String(s.pageKey) !== String(targetKey));
+          const next = [...others, ...safeStrokes];
+          onStrokesChange?.(next);
+          return next;
+        });
+
+        setInternalAnnotations((prev) => {
+          const others = prev.filter((a) => String(a.pageKey) !== String(targetKey));
+          const next = [...others, ...safeAnnotations];
+          onAnnotationsChange?.(next);
+          return next;
+        });
+
+        // Initialize clean undo/redo history (0 actions)
+        setPageHistoryMap((prev) => ({
+          ...prev,
+          [targetKey]: createInitialHistory(),
+        }));
+
+        loadedPagesCacheRef.current.add(targetKey);
+        setIsAnnotationsLoading(false);
+        setAnnotationsLoadError(null);
+
+        onAnnotationsLoaded?.({
+          scriptId,
+          pageId: String(currentPage?._id || currentPage?.id || ''),
+          pageNumber: currentPage?.pageNumber || activePageIndex + 1,
+          annotations: safeAnnotations,
+          strokes: safeStrokes,
+        });
+      } catch (err: unknown) {
+        if (abortController.signal.aborted) return;
+        if (activeRequestSeqRef.current !== currentSeq) return;
+
+        const errorObj = err instanceof Error ? err : new Error(String(err));
+        setIsAnnotationsLoading(false);
+        setAnnotationsLoadError(errorObj.message);
+        onAnnotationsLoadError?.(errorObj, targetIdentifier);
+      }
+    };
+
+    executeFetch();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [
+    enableAnnotationLoading,
+    scriptId,
+    currentPageKey,
+    effectivePageIdentifier,
+    currentPage,
+    activePageIndex,
+    fetchAnnotations,
+    loadAnnotationsUrl,
+    onAnnotationsLoaded,
+    onAnnotationsLoadError,
+    onStrokesChange,
+    onAnnotationsChange,
+  ]);
 
   const canUndoActive = useMemo(() => {
     return enableUndoRedo && canUndo(currentPageHistory);

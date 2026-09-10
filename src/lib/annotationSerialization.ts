@@ -477,3 +477,51 @@ export function extractPageAnnotations(
     strokes: Array.isArray(page.strokes) ? page.strokes.map(cloneFreehandStroke) : [],
   };
 }
+
+/**
+ * Safely deserializes unknown single-page or multi-page payload into a normalized
+ * { annotations: MarkAnnotation[]; strokes: FreehandStroke[] } without throwing.
+ */
+export function deserializePageAnnotations(
+  payload: unknown,
+  pageKey: string | number = 'page-1'
+): { annotations: MarkAnnotation[]; strokes: FreehandStroke[] } {
+  if (!payload || typeof payload !== 'object') {
+    return { annotations: [], strokes: [] };
+  }
+
+  const raw = payload as Record<string, unknown>;
+
+  // Case A: Full SerializedAnnotationDocument
+  if (typeof raw.version === 'number' && raw.pages && typeof raw.pages === 'object') {
+    const res = deserializeAnnotationDocument(raw);
+    if (!res.success || !res.data) {
+      return { annotations: [], strokes: [] };
+    }
+    const extracted = extractPageAnnotations(res.data, pageKey);
+    if (extracted.annotations.length > 0 || extracted.strokes.length > 0) {
+      return extracted;
+    }
+    // Fallback to first available page if specific key wasn't matched
+    const firstPageKey = Object.keys(res.data.pages)[0];
+    return firstPageKey ? extractPageAnnotations(res.data, firstPageKey) : { annotations: [], strokes: [] };
+  }
+
+  // Case B: Single-page payload `{ annotations?: [...], strokes?: [...] }`
+  const singlePageDoc: SerializedAnnotationDocument = {
+    version: ANNOTATION_FORMAT_VERSION,
+    pages: {
+      [String(pageKey)]: {
+        annotations: (Array.isArray(raw.annotations) ? raw.annotations : []) as MarkAnnotation[],
+        strokes: (Array.isArray(raw.strokes) ? raw.strokes : []) as FreehandStroke[],
+      },
+    },
+  };
+
+  const res = deserializeAnnotationDocument(singlePageDoc);
+  if (!res.success || !res.data) {
+    return { annotations: [], strokes: [] };
+  }
+
+  return extractPageAnnotations(res.data, pageKey);
+}
