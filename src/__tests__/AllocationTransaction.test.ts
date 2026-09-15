@@ -21,11 +21,11 @@ describe('Allocation Transaction Safety Tests', () => {
         }
 
         replSet = await MongoMemoryReplSet.create({
-            replSet: { storageEngine: 'wiredTiger' }
+            replSet: { count: 1, storageEngine: 'wiredTiger' }
         });
         const uri = replSet.getUri();
         await mongoose.connect(uri);
-    });
+    }, 60000);
 
     afterAll(async () => {
         await mongoose.disconnect();
@@ -39,7 +39,7 @@ describe('Allocation Transaction Safety Tests', () => {
         } catch {
             // ignore
         }
-    });
+    }, 60000);
 
     beforeEach(async () => {
         await Course.deleteMany({});
@@ -140,5 +140,47 @@ describe('Allocation Transaction Safety Tests', () => {
         const savedAlloc = await Allocation.findOne({ exam: testExamId });
         expect(savedAlloc?.answerScript.toString()).not.toBe(scriptId.toString());
         expect(savedAlloc?.answerScript.toString()).toBe(testScriptId.toString());
+    });
+
+    it('3. should successfully allocate multiple answer scripts to multiple TAs inside a transaction with ordered: true', async () => {
+        const taId2 = new mongoose.Types.ObjectId().toString();
+
+        // Add second TA to course
+        await Course.updateOne(
+            { _id: testCourseId },
+            { $push: { teachingAssistants: new mongoose.Types.ObjectId(taId2) } }
+        );
+
+        // Create 2 more eligible answer scripts (total 3 scripts)
+        const script2 = await AnswerScript.create({
+            exam: testExamId,
+            student: new mongoose.Types.ObjectId(),
+            needsManualId: false,
+            isActive: true
+        });
+        const script3 = await AnswerScript.create({
+            exam: testExamId,
+            student: new mongoose.Types.ObjectId(),
+            needsManualId: false,
+            isActive: true
+        });
+
+        // Run multi-document allocation across 2 TAs (creates 3 allocations and 3 notifications in a transaction)
+        const createdAllocations = await AllocationService.allocateEqual(
+            testExamId.toString(),
+            [taId, taId2],
+            professorId
+        );
+
+        expect(createdAllocations.length).toBe(3);
+
+        const totalCount = await Allocation.countDocuments({ exam: testExamId });
+        expect(totalCount).toBe(3);
+
+        // Verify all 3 scripts are allocated
+        const allocatedScriptIds = createdAllocations.map(a => a.answerScript.toString());
+        expect(allocatedScriptIds).toContain(testScriptId.toString());
+        expect(allocatedScriptIds).toContain(script2._id.toString());
+        expect(allocatedScriptIds).toContain(script3._id.toString());
     });
 });

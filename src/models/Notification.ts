@@ -1,7 +1,9 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export enum NotificationType {
-    ASSIGNMENT = 'ASSIGNMENT'
+    ASSIGNMENT = 'ASSIGNMENT',
+    REASSIGNMENT = 'REASSIGNMENT',
+    PUBLISH = 'PUBLISH'
 }
 
 export interface INotification extends Document {
