@@ -16,11 +16,11 @@ function createSyntheticTestImage(skewDeg: number, orientationDeg: number = 0, t
     // Draw text lines
     const drawTextLines = () => {
         ctx.fillStyle = textColor;
-        ctx.font = '30px Arial';
+        ctx.font = '24px Arial';
         // Add left margin, draw multiple lines
-        for (let i = 100; i < 750; i += 60) {
-            ctx.fillText('This is a synthetic line of text for testing deskew and orientation algorithms.', 50, i);
-            ctx.fillText('It simulates a scanned document page with a standard layout.', 50, i + 30);
+        for (let i = 120; i < 700; i += 50) {
+            ctx.fillText('This is a synthetic line of text for testing deskew and orientation algorithms.', 60, i);
+            ctx.fillText('It simulates a scanned document page with a standard layout.', 60, i + 24);
         }
     };
 
@@ -94,6 +94,13 @@ describe('ImageEnhancer', () => {
         const result = await defaultImageEnhancer.enhancePage(buffer);
 
         expect(result.orientation).toBe(180);
+    });
+
+    it('should detect 270 degree orientation', async () => {
+        const buffer = createSyntheticTestImage(0, 270);
+        const result = await defaultImageEnhancer.enhancePage(buffer);
+
+        expect(result.orientation).toBe(270);
     });
 
     it('should correctly process combined orientation and skew', async () => {
