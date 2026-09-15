@@ -23,11 +23,8 @@ export interface ReassignmentTemplatePayload {
     examTitle?: string | null;
     allocation?: string | mongoose.Types.ObjectId;
     answerScript?: string | mongoose.Types.ObjectId;
-    scriptReference?: string | null;
-    anonymousId?: string | null;
     question?: number | null;
     previousTaId?: string | mongoose.Types.ObjectId | null;
-    previousTaName?: string | null;
     newTaId?: string | mongoose.Types.ObjectId | null;
     newTaName?: string | null;
     recipient?: string | mongoose.Types.ObjectId;
@@ -78,6 +75,10 @@ export function renderAssignmentTemplate(payload?: AssignmentTemplatePayload | n
 
 /**
  * Renders the notification title and message for reassigned scripts.
+ * 
+ * Note: The returned notification type remains NotificationType.ASSIGNMENT to preserve
+ * compatibility with the existing assignment notification flow/type while AE-119 / related
+ * cleanup can later distinguish the semantic reassignment type.
  */
 export function renderReassignmentTemplate(payload?: ReassignmentTemplatePayload | null): RenderedNotification {
     const q = extractValidQuestion(payload?.question);
