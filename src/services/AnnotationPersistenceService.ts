@@ -11,6 +11,8 @@ import AnswerScript from '../models/AnswerScript';
 import Page, { type IPage } from '../models/Page';
 import IngestionPage, { type IIngestionPage } from '../models/IngestionPage';
 import ExamRepository from '../repositories/ExamRepository';
+import AllocationService from './AllocationService';
+import { UserRole } from '../constants/permissions';
 import {
   validateAnnotationDocument,
   cloneMarkAnnotation,
@@ -29,6 +31,7 @@ export interface SavePageAnnotationsOptions {
   payload: unknown;
   userId: string;
   userRole: string;
+  question?: number | null;
   ipAddress?: string;
 }
 
@@ -48,6 +51,7 @@ export interface GetPageAnnotationsOptions {
   pageIdentifier: string;
   userId: string;
   userRole: string;
+  question?: number | null;
 }
 
 export interface GetPageAnnotationsResult {
@@ -97,6 +101,22 @@ export class AnnotationPersistenceService {
     const exam = await ExamRepository.getExamById(script.exam.toString(), userId, userRole);
     if (!exam) {
       throw new HttpError('Forbidden: Access denied to the exam for this answer script', 403);
+    }
+
+    // 5. Enforce allocation-scoped authorization for TA callers (AE-135/AE-136 P2)
+    const isProfessorOrAdmin =
+      userRole?.toUpperCase() === UserRole.PROFESSOR ||
+      userRole?.toUpperCase() === UserRole.ADMIN;
+
+    if (!isProfessorOrAdmin) {
+      const allocation = await AllocationService.verifyTaAllocation(
+        script._id,
+        userId,
+        options.question
+      );
+      if (!allocation) {
+        throw new HttpError('Forbidden: You are not allocated to grade this answer script', 403);
+      }
     }
 
     // 5. Resolve target Page and verify it belongs to this AnswerScript
@@ -256,7 +276,23 @@ export class AnnotationPersistenceService {
       throw new HttpError('Forbidden: Access denied to the exam for this answer script', 403);
     }
 
-    // 5. Resolve the target Page and verify it belongs to this AnswerScript
+    // 5. Enforce allocation-scoped authorization for TA callers (AE-135/AE-136 P2)
+    const isProfessorOrAdmin =
+      userRole?.toUpperCase() === UserRole.PROFESSOR ||
+      userRole?.toUpperCase() === UserRole.ADMIN;
+
+    if (!isProfessorOrAdmin) {
+      const allocation = await AllocationService.verifyTaAllocation(
+        script._id,
+        userId,
+        options.question
+      );
+      if (!allocation) {
+        throw new HttpError('Forbidden: You are not allocated to grade this answer script', 403);
+      }
+    }
+
+    // 6. Resolve the target Page and verify it belongs to this AnswerScript
     let targetPageId: mongoose.Types.ObjectId;
     let targetPageNumber: number;
     let pageDoc: IPage | null = null;

@@ -7,6 +7,7 @@ import Exam from '../models/Exam';
 import AnswerScript from '../models/AnswerScript';
 import Page from '../models/Page';
 import Annotation from '../models/Annotation';
+import Allocation, { AllocationStatus, AllocationRule } from '../models/Allocation';
 import {
   createCheckAnnotation,
   createCrossAnnotation,
@@ -60,6 +61,7 @@ describe('AE-136: GET /scripts/[id]/pages/[p]/annotations (Load Annotations API)
     await AnswerScript.deleteMany({});
     await Page.deleteMany({});
     await Annotation.deleteMany({});
+    await Allocation.deleteMany({});
 
     // 1. Create Users
     prof = await User.create({
@@ -146,6 +148,25 @@ describe('AE-136: GET /scripts/[id]/pages/[p]/annotations (Load Annotations API)
       pageNumber: 1,
       imagePath: '/storage/images/exam2_p1.png',
       isActive: true,
+    });
+
+    // 5. Create allocations for TA
+    await Allocation.create({
+      exam: exam._id,
+      ta: ta._id,
+      answerScript: answerScript._id,
+      allocatedBy: prof._id,
+      status: AllocationStatus.PENDING,
+      rule: AllocationRule.EQUAL,
+    });
+
+    await Allocation.create({
+      exam: exam._id,
+      ta: ta._id,
+      answerScript: otherScript._id,
+      allocatedBy: prof._id,
+      status: AllocationStatus.PENDING,
+      rule: AllocationRule.EQUAL,
     });
 
     // Default to TA session

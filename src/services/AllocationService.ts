@@ -1536,6 +1536,35 @@ export class AllocationService {
             pagination
         };
     }
+
+    /**
+     * Verifies whether a given TA has an active allocation for the specified answer script (AE-135/AE-136 P2).
+     * - If a specific question is provided, verifies that an allocation exists for that question.
+     * - If no question is provided, verifies that the TA owns at least one allocation for this script
+     *   (either a whole-script allocation or any question-wise allocation).
+     *
+     * Returns the matching Allocation document, or null if no matching allocation exists.
+     */
+    static async verifyTaAllocation(
+        scriptId: string | mongoose.Types.ObjectId,
+        taId: string | mongoose.Types.ObjectId,
+        question?: number | null
+    ): Promise<IAllocation | null> {
+        if (!mongoose.Types.ObjectId.isValid(scriptId) || !mongoose.Types.ObjectId.isValid(taId)) {
+            return null;
+        }
+
+        const query: Record<string, unknown> = {
+            answerScript: new mongoose.Types.ObjectId(scriptId),
+            ta: new mongoose.Types.ObjectId(taId),
+        };
+
+        if (question !== undefined && question !== null) {
+            query.question = question;
+        }
+
+        return await Allocation.findOne(query);
+    }
 }
 
 export interface GetReassignmentHistoryOptions {

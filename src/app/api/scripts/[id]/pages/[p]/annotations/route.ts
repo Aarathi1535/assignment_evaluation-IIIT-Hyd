@@ -10,7 +10,7 @@ import annotationPersistenceService from '../../../../../../../services/Annotati
  * Retrieves saved vector annotations for a specific answer script page from Page.annotations (single source of truth).
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ id: string; p: string }> }
 ) {
   // 1. Authenticate and enforce grading / exam permissions
@@ -25,11 +25,16 @@ export async function GET(
   try {
     await connectDB();
 
+    const { searchParams } = new URL(req.url);
+    const questionParam = searchParams.get('question') || searchParams.get('q');
+    const question = questionParam && !isNaN(Number(questionParam)) ? Number(questionParam) : undefined;
+
     const result = await annotationPersistenceService.getPageAnnotations({
       scriptId: id,
       pageIdentifier: p,
       userId: user.id,
       userRole: user.role,
+      question,
     });
 
     return NextResponse.json(
@@ -89,14 +94,22 @@ export async function PUT(
       );
     }
 
+    const { searchParams } = new URL(req.url);
+    const questionParam = searchParams.get('question') || searchParams.get('q');
+    let question = questionParam && !isNaN(Number(questionParam)) ? Number(questionParam) : undefined;
+    if (question === undefined && body && typeof body === 'object' && typeof (body as Record<string, unknown>).question === 'number') {
+      question = (body as Record<string, unknown>).question as number;
+    }
+
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
     const result = await annotationPersistenceService.savePageAnnotations({
       scriptId: id,
       pageIdentifier: p,
       payload: body,
-      userId: user!.id,
-      userRole: user!.role,
+      userId: user.id,
+      userRole: user.role,
+      question,
       ipAddress,
     });
 
