@@ -102,6 +102,18 @@ export default function ReassignModal({
     }
   }, [isOpen, allocation]);
 
+  // Keyboard accessibility: Dismiss modal on Escape key press (WCAG 2.1.2)
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isSubmitting, onClose]);
+
   if (!isOpen || !allocation || !currentTa) return null;
 
   const isReassignable = isAllocationReassignable(allocation.status);

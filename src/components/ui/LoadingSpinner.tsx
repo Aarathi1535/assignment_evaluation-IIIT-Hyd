@@ -14,8 +14,9 @@ export const LoadingSpinner = ({ className = '', size = 'md' }: LoadingSpinnerPr
   };
 
   return (
-    <div className={`flex justify-center items-center ${className}`}>
-      <Loader2 className={`${sizeClasses[size]} animate-spin text-brand-primary`} />
+    <div className={`flex justify-center items-center ${className}`} role="status">
+      <Loader2 className={`${sizeClasses[size]} animate-spin text-brand-primary`} aria-hidden="true" />
+      <span className="sr-only">Loading...</span>
     </div>
   );
 };

@@ -506,6 +506,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
         {reassignSuccessMsg && (
           <div
             role="status"
+            aria-live="polite"
             data-testid="reassign-success-banner"
             className="flex items-center justify-between gap-3 bg-emerald-50 border border-emerald-200 rounded-brand p-4 text-emerald-800 text-sm font-semibold"
           >
@@ -515,7 +516,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
             </div>
             <button
               onClick={() => setReassignSuccessMsg(null)}
-              className="text-emerald-700 hover:text-emerald-900 p-1 rounded-sm cursor-pointer"
+              className="text-emerald-700 hover:text-emerald-900 p-1 rounded-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-400"
               aria-label="Dismiss success notification"
             >
               <X className="h-4 w-4" />
@@ -527,6 +528,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
         {workloadError && (
           <div
             role="alert"
+            aria-live="assertive"
             className="flex items-center justify-between gap-3 bg-rose-50 border border-rose-200 rounded-brand p-4 text-rose-900 text-sm font-semibold"
           >
             <div className="flex items-center gap-2.5">
@@ -600,13 +602,13 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
                   <table className="w-full text-left text-sm" data-testid="ta-scripts-table">
                     <thead className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase tracking-wider">
                       <tr>
-                        <th className="px-5 py-3">Script Identifier</th>
-                        <th className="px-5 py-3">Scope</th>
-                        <th className="px-5 py-3">Status</th>
-                        <th className="px-5 py-3">Claimed At</th>
-                        <th className="px-5 py-3">Completed At</th>
-                        <th className="px-5 py-3">Time Per Script</th>
-                        <th className="px-5 py-3 text-right">Actions</th>
+                        <th scope="col" className="px-5 py-3">Script Identifier</th>
+                        <th scope="col" className="px-5 py-3">Scope</th>
+                        <th scope="col" className="px-5 py-3">Status</th>
+                        <th scope="col" className="px-5 py-3">Claimed At</th>
+                        <th scope="col" className="px-5 py-3">Completed At</th>
+                        <th scope="col" className="px-5 py-3">Time Per Script</th>
+                        <th scope="col" className="px-5 py-3 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -939,8 +941,17 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
               return (
                 <Card
                   key={ta.taId}
-                  className="border border-slate-200 hover:shadow-xs transition-shadow duration-200 p-4 bg-white space-y-3 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Inspect workload and scripts for ${ta.name}`}
+                  className="border border-slate-200 hover:shadow-xs transition-shadow duration-200 p-4 bg-white space-y-3 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-primary/40 focus:border-brand-primary"
                   onClick={() => handleSelectTa(ta.taId)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleSelectTa(ta.taId);
+                    }
+                  }}
                   data-testid={`ta-card-${ta.taId}`}
                 >
                   {/* TA Name and Graded / Total Header */}
