@@ -1,3 +1,13 @@
+/**
+ * AE-118: Concurrency-Correctness & High-Concurrency Regression Test (20 TAs)
+ * 
+ * Note: This test suite runs against an in-memory MongoDB replica set (MongoMemoryReplSet)
+ * to validate transactional correctness, data consistency, isolation, and absence of race
+ * conditions under high concurrency (20 TAs, 1,000 scripts).
+ * Local/in-memory timings do NOT represent production performance numbers or SLAs;
+ * deployed-environment benchmarks are required for production throughput and latency evaluation.
+ */
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -24,7 +34,7 @@ vi.mock('next-auth', async (importOriginal) => {
   };
 });
 
-describe('AE-118: Load-Test Progress Updates (20 TAs)', () => {
+describe('AE-118: Concurrency-Correctness Progress Updates (20 TAs)', () => {
   let progressGET: any;
   let streamGET: any;
 
@@ -429,7 +439,7 @@ describe('AE-118: Load-Test Progress Updates (20 TAs)', () => {
   // =========================================================================
   // Test 6: High-Concurrency REST API Load & Stream Endpoint
   // =========================================================================
-  it('6. Handles high-concurrency REST API requests with sub-100ms response times and consistent data', async () => {
+  it('6. Handles high-concurrency REST API requests with consistent data across parallel queries', async () => {
     await seedAnswerScripts(400);
     const taIdStrings = tas.map((t) => t._id.toString());
     await AllocationService.allocateEqual(exam._id.toString(), taIdStrings, prof._id.toString());

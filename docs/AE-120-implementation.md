@@ -14,7 +14,7 @@ The accessibility pass preserved all previous completed features and behaviors w
 - **AE-110 / AE-112 / AE-113**: Reassignment modal and controls, restriction to pending scripts, and audit history.
 - **AE-111 / AE-117**: TA notifications, unread badges, mark-as-read/mark-all-as-read actions, and templates.
 - **AE-116**: Professor activity feed.
-- **AE-118**: 20-TA load test stability.
+- **AE-118**: 20-TA concurrency-correctness and stability.
 - **AE-119**: Allocation bug hardening.
 
 ---
