@@ -1602,14 +1602,45 @@ export class AllocationService {
             outcome: { $ne: 'FAILURE' }
         };
 
+        const isAdmin = viewer?.role?.toUpperCase() === UserRole.ADMIN;
+        let allowedExamIds: mongoose.Types.ObjectId[] = [];
+
+        if (!isAdmin && viewer?.id && mongoose.Types.ObjectId.isValid(viewer.id)) {
+            allowedExamIds = await Exam.find({ createdBy: new mongoose.Types.ObjectId(viewer.id) }).distinct('_id');
+            if (allowedExamIds.length === 0) {
+                return {
+                    activities: [],
+                    total: 0
+                };
+            }
+        }
+
         if (options?.examId) {
             if (!mongoose.Types.ObjectId.isValid(options.examId)) {
                 throw new HttpError('Invalid Exam ID format', 400);
             }
             const examObjId = new mongoose.Types.ObjectId(options.examId);
+
+            if (!isAdmin && viewer?.id && mongoose.Types.ObjectId.isValid(viewer.id)) {
+                const isOwned = allowedExamIds.some(id => id.equals(examObjId));
+                if (!isOwned) {
+                    return {
+                        activities: [],
+                        total: 0
+                    };
+                }
+            }
+
             filter.$or = [
                 { 'details.examId': options.examId },
+                { 'details.examId': examObjId },
                 { entityId: examObjId }
+            ];
+        } else if (!isAdmin && viewer?.id && mongoose.Types.ObjectId.isValid(viewer.id)) {
+            const allowedExamStringIds = allowedExamIds.map(id => id.toString());
+            filter.$or = [
+                { 'details.examId': { $in: [...allowedExamIds, ...allowedExamStringIds] } },
+                { entityId: { $in: allowedExamIds } }
             ];
         }
 
@@ -1651,6 +1682,12 @@ export class AllocationService {
 
             if (details.answerScriptId && mongoose.Types.ObjectId.isValid(String(details.answerScriptId))) {
                 scriptIds.add(String(details.answerScriptId));
+            } else if (details.targetScriptId && mongoose.Types.ObjectId.isValid(String(details.targetScriptId))) {
+                scriptIds.add(String(details.targetScriptId));
+            } else if (details.newScriptId && mongoose.Types.ObjectId.isValid(String(details.newScriptId))) {
+                scriptIds.add(String(details.newScriptId));
+            } else if (details.sourceScriptId && mongoose.Types.ObjectId.isValid(String(details.sourceScriptId))) {
+                scriptIds.add(String(details.sourceScriptId));
             } else if (log.entityId && (log.entityType === 'AnswerScript' || ['ANSWERSCRIPT_IDENTIFIED', 'SCRIPT_REMAP', 'SCRIPT_MERGE'].includes(log.action))) {
                 scriptIds.add(log.entityId.toString());
             }
@@ -1749,7 +1786,15 @@ export class AllocationService {
             }
             const examInfo = resolvedExamId ? (examMap.get(resolvedExamId) || { id: resolvedExamId, title: 'Exam' }) : null;
 
-            let resolvedScriptId = details.answerScriptId ? String(details.answerScriptId) : '';
+            let resolvedScriptId = details.answerScriptId
+                ? String(details.answerScriptId)
+                : details.targetScriptId
+                ? String(details.targetScriptId)
+                : details.newScriptId
+                ? String(details.newScriptId)
+                : details.sourceScriptId
+                ? String(details.sourceScriptId)
+                : '';
             if (!resolvedScriptId && log.entityId && (log.entityType === 'AnswerScript' || ['ANSWERSCRIPT_IDENTIFIED', 'SCRIPT_REMAP', 'SCRIPT_MERGE'].includes(log.action))) {
                 resolvedScriptId = log.entityId.toString();
             }

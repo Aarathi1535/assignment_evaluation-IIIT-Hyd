@@ -475,4 +475,270 @@ describe('AE-116: Activity Feed on Professor Dashboard', () => {
       expect(result.activities[0].details?.newTa?.name).toBe('Ron Weasley');
     });
   });
+
+  describe('9. Mentor P2 Fix: Professor Scoping, Cross-Professor Isolation, & SCRIPT_REMAP/MERGE Audit Context', () => {
+    let profBId: mongoose.Types.ObjectId;
+    let courseBId: mongoose.Types.ObjectId;
+    let examBId: mongoose.Types.ObjectId;
+    let scriptBId: mongoose.Types.ObjectId;
+
+    beforeEach(async () => {
+      profBId = new mongoose.Types.ObjectId('000000000000000000000599');
+      await new User({
+        _id: profBId,
+        name: 'Prof. Severus Snape',
+        email: 'snape@iiit.ac.in',
+        role: UserRole.PROFESSOR,
+        password: 'password123',
+        isActive: true,
+      }).save();
+
+      const courseB = await new Course({
+        courseCode: 'CS301',
+        courseName: 'Algorithms',
+        semester: 2,
+        academicYear: '2026-2027',
+        professor: profBId,
+        teachingAssistants: [taId1],
+        enrolledStudents: [studentId],
+        isActive: true,
+      }).save();
+      courseBId = courseB._id as mongoose.Types.ObjectId;
+
+      const examB = await new Exam({
+        title: 'Algorithms Final Exam',
+        course: courseBId,
+        createdBy: profBId,
+        examDate: new Date('2026-09-20T09:00:00.000Z'),
+        totalMarks: 100,
+        numberOfQuestions: 5,
+        status: 'PUBLISHED',
+        ingestionApprovalStatus: 'APPROVED',
+        isActive: true,
+      }).save();
+      examBId = examB._id as mongoose.Types.ObjectId;
+
+      const scriptB = await new AnswerScript({
+        exam: examBId,
+        student: studentId,
+        batchId: 'batch-b-1',
+        fileIndex: 0,
+        startPageNumber: 1,
+        endPageNumber: 3,
+        pageCount: 3,
+        isActive: true,
+      }).save();
+      scriptBId = scriptB._id as mongoose.Types.ObjectId;
+    });
+
+    it('A. restricts Professor A activity feed strictly to Professor A exams and excludes Professor B exams (Cross-Professor Isolation)', async () => {
+      // Event for Prof A exam
+      await AuditLog.create({
+        user: professorId,
+        action: 'ALLOCATION_REASSIGN',
+        outcome: 'SUCCESS',
+        details: {
+          examId: testExamId.toString(),
+          answerScriptId: scriptId.toString(),
+          question: 1,
+          newTaId: taId1.toString(),
+        },
+        createdAt: new Date('2026-09-10T10:00:00.000Z'),
+      });
+
+      // Event for Prof B exam
+      await AuditLog.create({
+        user: profBId,
+        action: 'ALLOCATION_CLAIM',
+        outcome: 'SUCCESS',
+        details: {
+          examId: examBId.toString(),
+          answerScriptId: scriptBId.toString(),
+          question: 1,
+          taId: taId1.toString(),
+        },
+        createdAt: new Date('2026-09-10T11:00:00.000Z'),
+      });
+
+      // 1. Professor A requests activity feed
+      mockSessionUser = {
+        id: professorId.toString(),
+        role: UserRole.PROFESSOR,
+        email: 'prof@iiit.ac.in',
+        name: 'Prof. McGonagall',
+      };
+
+      const reqA = makeRequest('http://localhost:3000/api/professor/activity');
+      const resA = await activityGET(reqA);
+      expect(resA.status).toBe(200);
+      const jsonA = await resA.json();
+      expect(jsonA.data.total).toBe(1);
+      expect(jsonA.data.activities).toHaveLength(1);
+      expect(jsonA.data.activities[0].exam.id).toBe(testExamId.toString());
+      expect(jsonA.data.activities[0].action).toBe('ALLOCATION_REASSIGN');
+
+      // 2. Professor B requests activity feed
+      mockSessionUser = {
+        id: profBId.toString(),
+        role: UserRole.PROFESSOR,
+        email: 'snape@iiit.ac.in',
+        name: 'Prof. Severus Snape',
+      };
+
+      const reqB = makeRequest('http://localhost:3000/api/professor/activity');
+      const resB = await activityGET(reqB);
+      expect(resB.status).toBe(200);
+      const jsonB = await resB.json();
+      expect(jsonB.data.total).toBe(1);
+      expect(jsonB.data.activities).toHaveLength(1);
+      expect(jsonB.data.activities[0].exam.id).toBe(examBId.toString());
+      expect(jsonB.data.activities[0].action).toBe('ALLOCATION_CLAIM');
+    });
+
+    it('B. returns requested exam for owner, but returns empty result (no leak) when Professor A requests Professor B examId', async () => {
+      await AuditLog.create({
+        user: profBId,
+        action: 'ALLOCATION_COMPLETE',
+        outcome: 'SUCCESS',
+        details: {
+          examId: examBId.toString(),
+          answerScriptId: scriptBId.toString(),
+          question: 2,
+        },
+        createdAt: new Date('2026-09-10T12:00:00.000Z'),
+      });
+
+      // Professor A requests Professor B's examId
+      mockSessionUser = {
+        id: professorId.toString(),
+        role: UserRole.PROFESSOR,
+        email: 'prof@iiit.ac.in',
+        name: 'Prof. McGonagall',
+      };
+
+      const req = makeRequest(`http://localhost:3000/api/professor/activity?examId=${examBId.toString()}`);
+      const res = await activityGET(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data.total).toBe(0);
+      expect(json.data.activities).toHaveLength(0);
+    });
+
+    it('C. returns SCRIPT_REMAP and SCRIPT_MERGE audit logs containing details.examId in the scoped feed', async () => {
+      // SCRIPT_REMAP log
+      const remapPageId = new mongoose.Types.ObjectId();
+      await AuditLog.create({
+        user: professorId,
+        action: 'SCRIPT_REMAP',
+        outcome: 'SUCCESS',
+        entityId: remapPageId,
+        entityType: 'IngestionPage',
+        details: {
+          batchId: 'batch-1',
+          examId: testExamId.toString(),
+          pageId: remapPageId.toString(),
+          pageNumber: 2,
+          previousScriptId: scriptId.toString(),
+          newScriptId: scriptId.toString(),
+        },
+        createdAt: new Date('2026-09-10T14:00:00.000Z'),
+      });
+
+      // SCRIPT_MERGE log
+      await AuditLog.create({
+        user: professorId,
+        action: 'SCRIPT_MERGE',
+        outcome: 'SUCCESS',
+        entityId: scriptId,
+        entityType: 'AnswerScript',
+        details: {
+          batchId: 'batch-1',
+          examId: testExamId.toString(),
+          sourceScriptId: scriptId.toString(),
+          targetScriptId: scriptId.toString(),
+        },
+        createdAt: new Date('2026-09-10T15:00:00.000Z'),
+      });
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        role: UserRole.PROFESSOR,
+        email: 'prof@iiit.ac.in',
+        name: 'Prof. McGonagall',
+      };
+
+      const req = makeRequest('http://localhost:3000/api/professor/activity');
+      const res = await activityGET(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.data.total).toBe(2);
+      expect(json.data.activities).toHaveLength(2);
+
+      const actions = json.data.activities.map((a: any) => a.action);
+      expect(actions).toContain('SCRIPT_MERGE');
+      expect(actions).toContain('SCRIPT_REMAP');
+      expect(json.data.activities[0].exam.id).toBe(testExamId.toString());
+      expect(json.data.activities[1].exam.id).toBe(testExamId.toString());
+    });
+
+    it('D. returns empty activity feed for a professor who has created zero exams', async () => {
+      const newProfId = new mongoose.Types.ObjectId();
+      await new User({
+        _id: newProfId,
+        name: 'Prof. Filius Flitwick',
+        email: 'flitwick@iiit.ac.in',
+        role: UserRole.PROFESSOR,
+        password: 'password123',
+        isActive: true,
+      }).save();
+
+      mockSessionUser = {
+        id: newProfId.toString(),
+        role: UserRole.PROFESSOR,
+        email: 'flitwick@iiit.ac.in',
+        name: 'Prof. Filius Flitwick',
+      };
+
+      const req = makeRequest('http://localhost:3000/api/professor/activity');
+      const res = await activityGET(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.data.total).toBe(0);
+      expect(json.data.activities).toHaveLength(0);
+    });
+
+    it('E. allows Admin to view activities across multiple professors and exams', async () => {
+      await AuditLog.create({
+        user: professorId,
+        action: 'ALLOCATION_REASSIGN',
+        outcome: 'SUCCESS',
+        details: { examId: testExamId.toString(), question: 1 },
+        createdAt: new Date('2026-09-10T10:00:00.000Z'),
+      });
+
+      await AuditLog.create({
+        user: profBId,
+        action: 'ALLOCATION_CLAIM',
+        outcome: 'SUCCESS',
+        details: { examId: examBId.toString(), question: 2 },
+        createdAt: new Date('2026-09-10T11:00:00.000Z'),
+      });
+
+      const adminId = new mongoose.Types.ObjectId();
+      mockSessionUser = {
+        id: adminId.toString(),
+        role: UserRole.ADMIN,
+        email: 'admin@iiit.ac.in',
+        name: 'Admin Dumbledore',
+      };
+
+      const req = makeRequest('http://localhost:3000/api/professor/activity');
+      const res = await activityGET(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.data.total).toBe(2);
+      expect(json.data.activities).toHaveLength(2);
+    });
+  });
 });

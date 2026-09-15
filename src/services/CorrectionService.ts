@@ -305,6 +305,7 @@ class CorrectionService {
                 entityType: 'IngestionPage',
                 details: {
                     batchId,
+                    examId: freshTarget.exam ? freshTarget.exam.toString() : (freshSource.exam ? freshSource.exam.toString() : undefined),
                     pageId: finalPage._id.toString(),
                     pageNumber: finalPage.pageNumber,
                     previousScriptId: freshSource._id.toString(),
@@ -566,6 +567,7 @@ class CorrectionService {
                 entityType: 'AnswerScript',
                 details: {
                     batchId,
+                    examId: freshTarget.exam ? freshTarget.exam.toString() : (freshSource.exam ? freshSource.exam.toString() : undefined),
                     sourceScriptId: freshSource._id.toString(),
                     targetScriptId: freshTarget._id.toString(),
                     previousSourceState: {
