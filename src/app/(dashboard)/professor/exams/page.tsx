@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users, Activity } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 
 interface ExamItem {
   _id: string;
@@ -36,6 +37,17 @@ export default function ProfessorExamsPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+  const cancelBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Dialog focus management: moves focus to Cancel button on mount, returns focus to trigger on close (WCAG 2.4.3)
+  useDialogFocus({
+    isOpen: Boolean(deleteConfirmId),
+    initialFocusRef: cancelBtnRef,
+    containerRef: deleteDialogRef,
+    onClose: deleting ? undefined : () => setDeleteConfirmId(null),
+  });
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -60,18 +72,6 @@ export default function ProfessorExamsPage() {
     }
     loadData();
   }, []);
-
-  // Keyboard accessibility: Dismiss modal on Escape key press (WCAG 2.1.2)
-  useEffect(() => {
-    if (!deleteConfirmId) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !deleting) {
-        setDeleteConfirmId(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteConfirmId, deleting]);
 
   const courseMap = React.useMemo(() => {
     return new Map(courses.map(c => [c._id, c]));
@@ -342,18 +342,30 @@ export default function ProfessorExamsPage() {
         {/* Delete Confirmation Modal */}
         {deleteConfirmId && (
           <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-exam-modal-title"
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-sans"
+            data-testid="delete-exam-modal-backdrop"
           >
-            <div className="bg-white rounded-brand-lg p-6 max-w-sm w-full mx-4 shadow-xl border border-slate-200">
+            <div
+              ref={deleteDialogRef}
+              tabIndex={-1}
+              className="bg-white rounded-brand-lg p-6 max-w-sm w-full mx-4 shadow-xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200 focus:outline-none"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-exam-modal-title"
+            >
               <h3 id="delete-exam-modal-title" className="text-lg font-bold text-slate-900">Delete Exam</h3>
               <p className="text-sm text-slate-600 mt-2 font-medium">
                 Are you sure you want to delete this exam? This action cannot be undone and will delete related submissions.
               </p>
               <div className="flex justify-end gap-3 mt-6">
-                <Button variant="outline" size="sm" onClick={() => setDeleteConfirmId(null)}>
+                <Button
+                  ref={cancelBtnRef}
+                  variant="outline"
+                  size="sm"
+                  disabled={deleting}
+                  onClick={() => setDeleteConfirmId(null)}
+                  data-testid="cancel-delete-btn"
+                >
                   Cancel
                 </Button>
                 <Button
@@ -361,6 +373,7 @@ export default function ProfessorExamsPage() {
                   size="sm"
                   isLoading={deleting}
                   onClick={handleDeleteConfirm}
+                  data-testid="confirm-delete-btn"
                 >
                   Delete
                 </Button>

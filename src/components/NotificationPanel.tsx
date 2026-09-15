@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Bell, X, CheckCheck, Check, Clock, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 
 export interface NotificationItem {
   _id: string;
@@ -37,6 +38,18 @@ export default function NotificationPanel({
   const [markingId, setMarkingId] = useState<string | null>(null);
   const [isMarkingAll, setIsMarkingAll] = useState(false);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const markAllBtnRef = useRef<HTMLButtonElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Dialog focus management: moves focus to Mark All / Close on mount, returns focus to trigger on close (WCAG 2.4.3)
+  useDialogFocus({
+    isOpen,
+    initialFocusRef: unreadCount > 0 ? markAllBtnRef : closeBtnRef,
+    containerRef: dialogRef,
+    onClose,
+  });
+
   const fetchNotifications = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -64,18 +77,6 @@ export default function NotificationPanel({
       fetchNotifications();
     }
   }, [isOpen, fetchNotifications]);
-
-  // Keyboard accessibility: Dismiss modal on Escape key press (WCAG 2.1.2)
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
 
   const handleMarkAsRead = async (notificationId: string) => {
     setMarkingId(notificationId);
@@ -132,7 +133,9 @@ export default function NotificationPanel({
       data-testid="notification-panel-backdrop"
     >
       <div
-        className="bg-white rounded-brand-lg max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden relative flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white rounded-brand-lg max-w-lg w-full border border-slate-200 shadow-xl overflow-hidden relative flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-200 focus:outline-none"
         role="dialog"
         aria-modal="true"
         aria-labelledby="notifications-panel-title"
@@ -158,12 +161,13 @@ export default function NotificationPanel({
           <div className="flex items-center gap-2">
             {unreadCount > 0 && (
               <Button
+                ref={markAllBtnRef}
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={handleMarkAllAsRead}
                 isLoading={isMarkingAll}
-                className="text-xs py-1 px-2.5 cursor-pointer"
+                className="text-xs py-1 px-2.5 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
                 data-testid="mark-all-read-btn"
               >
                 <CheckCheck className="h-3.5 w-3.5 mr-1" />
@@ -171,8 +175,9 @@ export default function NotificationPanel({
               </Button>
             )}
             <button
+              ref={closeBtnRef}
               onClick={onClose}
-              className="text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-brand hover:bg-slate-100 cursor-pointer"
+              className="text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-brand hover:bg-slate-100 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
               aria-label="Close dialog"
               data-testid="notification-panel-close"
             >

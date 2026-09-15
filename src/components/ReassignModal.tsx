@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import { X, ArrowRightLeft, AlertCircle, CheckCircle2, User, FileText } from 'lucide-react';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 
 export interface EligibleTa {
   _id?: string;
@@ -88,8 +89,20 @@ export default function ReassignModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+
   // Filter eligible replacement TAs
   const eligibleTas = filterEligibleReplacementTas(availableTas, currentTa?.id);
+
+  // Dialog focus management: moves focus to select/close on mount, returns focus to trigger on close (WCAG 2.4.3)
+  useDialogFocus({
+    isOpen: isOpen && Boolean(allocation) && Boolean(currentTa),
+    initialFocusRef: eligibleTas.length > 0 ? selectRef : closeBtnRef,
+    containerRef: dialogRef,
+    onClose: isSubmitting ? undefined : onClose,
+  });
 
   // Reset state when opening or changing allocation
   useEffect(() => {
@@ -101,18 +114,6 @@ export default function ReassignModal({
       setIsSubmitting(false);
     }
   }, [isOpen, allocation]);
-
-  // Keyboard accessibility: Dismiss modal on Escape key press (WCAG 2.1.2)
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSubmitting) {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isSubmitting, onClose]);
 
   if (!isOpen || !allocation || !currentTa) return null;
 
@@ -175,16 +176,19 @@ export default function ReassignModal({
       data-testid="reassign-modal-backdrop"
     >
       <div
-        className="bg-white rounded-brand-lg max-w-md w-full border border-slate-200 shadow-xl overflow-hidden p-6 relative animate-in fade-in zoom-in-95 duration-200 space-y-5"
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white rounded-brand-lg max-w-md w-full border border-slate-200 shadow-xl overflow-hidden p-6 relative animate-in fade-in zoom-in-95 duration-200 space-y-5 focus:outline-none"
         role="dialog"
         aria-modal="true"
         aria-labelledby="reassign-modal-title"
       >
         {/* Close Button */}
         <button
+          ref={closeBtnRef}
           onClick={onClose}
           disabled={isSubmitting}
-          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-brand hover:bg-slate-50 cursor-pointer disabled:opacity-40"
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-brand hover:bg-slate-50 cursor-pointer disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
           aria-label="Close dialog"
           data-testid="reassign-modal-close"
         >
@@ -284,6 +288,7 @@ export default function ReassignModal({
             </div>
           ) : (
             <select
+              ref={selectRef}
               id="target-ta-select"
               data-testid="target-ta-select"
               value={selectedTargetTaId}
