@@ -8,6 +8,7 @@ import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
 import Exam from '../models/Exam';
 import AnswerScript from '../models/AnswerScript';
+import IngestionJob from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import GradingPage from '../app/(dashboard)/grading/[scriptId]/page';
