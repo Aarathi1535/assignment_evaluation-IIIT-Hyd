@@ -6,6 +6,7 @@ export { MarkLayer } from './MarkLayer';
 export { PenStyleSelector } from './PenStyleSelector';
 export { AnswerSheetCanvas, SAMPLE_ANSWER_SHEET_DATA_URI } from './AnswerSheetCanvas';
 export { TextNoteEditor } from './TextNoteEditor';
+export { SaveStatusIndicator } from './SaveStatusIndicator';
 export * from '@/lib/annotations';
 export * from '@/lib/panZoom';
 export * from '@/lib/pageNavigation';

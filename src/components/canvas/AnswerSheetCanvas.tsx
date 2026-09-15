@@ -16,15 +16,20 @@ import {
   X,
   Highlighter,
   Type,
+  MousePointer,
+  Trash2,
   Undo2,
   Redo2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
 import { MarkLayer } from './MarkLayer';
 import { TextNoteEditor } from './TextNoteEditor';
-import type { AnswerSheetCanvasProps, CanvasTool } from './types';
+import { SaveStatusIndicator } from './SaveStatusIndicator';
+import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
   calculateStepZoom,
@@ -61,6 +66,7 @@ import {
   MarkAnnotation,
   filterAnnotationsByPage,
   createTextNoteAnnotation,
+  moveAnnotation,
 } from '@/lib/stampTool';
 import {
   PageHistory,
@@ -68,11 +74,17 @@ import {
   recordAddStroke,
   recordEraseStrokes,
   recordAddAnnotation,
+  recordEraseAnnotations,
+  recordMoveAnnotation,
   applyUndo,
   applyRedo,
   canUndo,
   canRedo,
 } from '@/lib/annotationHistory';
+import {
+  deserializePageAnnotations,
+  serializePageAnnotations,
+} from '@/lib/annotationSerialization';
 import { PenStyleSelector } from './PenStyleSelector';
 
 /**
@@ -116,6 +128,11 @@ export function AnswerSheetCanvas({
   maxZoom = MAX_ZOOM_LEVEL,
   enablePanZoom = true,
   showZoomControls = true,
+  enableSelect = true,
+  selectedAnnotationId: propSelectedAnnotationId,
+  onSelectAnnotation,
+  onAnnotationMove,
+  onAnnotationDelete,
   enablePenTool = true,
   initialPenActive = false,
   isPenActive: propIsPenActive,
@@ -141,12 +158,29 @@ export function AnswerSheetCanvas({
   onAnnotationComplete,
   onUndo,
   onRedo,
+  enableOverlayToggle = true,
+  isOverlayVisible: propIsOverlayVisible,
+  initialOverlayVisible = true,
+  onOverlayVisibilityChange,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
   defaultStrokeWidth = DEFAULT_PEN_WIDTH,
   fallback,
   onLoad,
   onError,
   onTransformChange,
+  scriptId,
+  enableAnnotationLoading = true,
+  loadAnnotationsUrl,
+  fetchAnnotations,
+  onAnnotationsLoaded,
+  onAnnotationsLoadError,
+  enableAutosave = true,
+  debounceDelayMs = 800,
+  saveAnnotationsUrl,
+  saveAnnotations,
+  onSaveStatusChange,
+  onSaveSuccess,
+  onSaveError,
 }: AnswerSheetCanvasProps) {
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
@@ -181,7 +215,15 @@ export function AnswerSheetCanvas({
     return String(activePageIndex);
   }, [currentPage, activePageIndex]);
 
-  // Active Tool state: 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' (AE-128 / AE-130 / AE-131)
+  // Effective page identifier for loading (AE-136)
+  const effectivePageIdentifier = useMemo(() => {
+    if (currentPage?._id) return String(currentPage._id);
+    if (currentPage?.id) return String(currentPage.id);
+    if (typeof currentPage?.pageNumber === 'number') return currentPage.pageNumber;
+    return activePageIndex + 1;
+  }, [currentPage, activePageIndex]);
+
+  // Active Tool state: 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' (AE-128 / AE-130 / AE-131 / AE-132)
   const [internalTool, setInternalTool] = useState<CanvasTool>(() =>
     initialPenActive ? 'pen' : 'none'
   );
@@ -192,29 +234,59 @@ export function AnswerSheetCanvas({
     return internalTool;
   }, [propActiveTool, propIsPenActive, internalTool]);
 
+  // Selection state (AE-132)
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
+  const selectedAnnotationId =
+    propSelectedAnnotationId !== undefined ? propSelectedAnnotationId : internalSelectedId;
+
+  const activeSelectMode = activeTool === 'select';
   const activePenMode = activeTool === 'pen';
   const activeCheckMode = activeTool === 'check';
   const activeCrossMode = activeTool === 'cross';
   const activeHighlightMode = activeTool === 'highlight';
   const activeTextMode = activeTool === 'text';
   const activeEraserMode = activeTool === 'eraser';
-  const isDrawingToolActive = activeTool !== 'none';
+  const isDrawingToolActive = activeTool !== 'none' && activeTool !== 'select';
 
   // Active in-place text note editor anchor state (AE-131)
   const [activeTextEditor, setActiveTextEditor] = useState<{
     imagePoint: { x: number; y: number };
   } | null>(null);
 
+  // In-memory session cache & request sequence tracking for annotation hydration (AE-136)
+  const loadedPagesCacheRef = useRef<Set<string>>(new Set());
+  const activeRequestSeqRef = useRef<number>(0);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+
+  const [, setIsAnnotationsLoading] = useState<boolean>(false);
+  const [, setAnnotationsLoadError] = useState<string | null>(null);
+
   const setTool = useCallback(
     (nextTool: CanvasTool) => {
       if (nextTool !== 'text') {
         setActiveTextEditor(null);
       }
+      if (nextTool !== 'select') {
+        setInternalSelectedId(null);
+        onSelectAnnotation?.(null);
+      }
       setInternalTool(nextTool);
       onToolChange?.(nextTool);
       onPenActiveChange?.(nextTool === 'pen');
     },
-    [onToolChange, onPenActiveChange]
+    [onToolChange, onPenActiveChange, onSelectAnnotation]
+  );
+
+  const handleToggleSelect = useCallback(() => {
+    setTool(activeSelectMode ? 'none' : 'select');
+  }, [activeSelectMode, setTool]);
+
+  const handleSelectAnnotation = useCallback(
+    (id: string | null) => {
+      setInternalSelectedId(id);
+      onSelectAnnotation?.(id);
+    },
+    [onSelectAnnotation]
   );
 
   const handleTogglePen = useCallback(() => {
@@ -240,6 +312,21 @@ export function AnswerSheetCanvas({
   const handleToggleEraser = useCallback(() => {
     setTool(activeEraserMode ? 'none' : 'eraser');
   }, [activeEraserMode, setTool]);
+
+  // Overlay visibility state (AE-133)
+  const [internalOverlayVisible, setInternalOverlayVisible] = useState<boolean>(initialOverlayVisible);
+  const isOverlayVisible = propIsOverlayVisible !== undefined ? propIsOverlayVisible : internalOverlayVisible;
+
+  const handleToggleOverlayVisibility = useCallback(() => {
+    const nextVisible = !isOverlayVisible;
+    if (!nextVisible) {
+      // Clear selection when hiding overlay
+      setInternalSelectedId(null);
+      onSelectAnnotation?.(null);
+    }
+    setInternalOverlayVisible(nextVisible);
+    onOverlayVisibilityChange?.(nextVisible);
+  }, [isOverlayVisible, onOverlayVisibilityChange, onSelectAnnotation]);
 
   // Pen style state: color & stroke width (controlled vs uncontrolled, AE-127)
   const [internalPenColor, setInternalPenColor] = useState<PenColorId>(initialPenColor);
@@ -287,200 +374,6 @@ export function AnswerSheetCanvas({
   const currentPageHistory = useMemo(() => {
     return pageHistoryMap[currentPageKey] || createInitialHistory();
   }, [pageHistoryMap, currentPageKey]);
-
-  const canUndoActive = useMemo(() => {
-    return enableUndoRedo && canUndo(currentPageHistory);
-  }, [enableUndoRedo, currentPageHistory]);
-
-  const canRedoActive = useMemo(() => {
-    return enableUndoRedo && canRedo(currentPageHistory);
-  }, [enableUndoRedo, currentPageHistory]);
-
-  const handleStrokeComplete = useCallback(
-    (newStroke: FreehandStroke) => {
-      const updated = [...allStrokes, newStroke];
-      const newHistory = recordAddStroke(currentPageHistory, newStroke);
-
-      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-      setInternalStrokes(updated);
-      onStrokesChange?.(updated);
-    },
-    [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
-  );
-
-  const handleAnnotationComplete = useCallback(
-    (newAnnotation: MarkAnnotation) => {
-      const updated = [...allAnnotations, newAnnotation];
-      const newHistory = recordAddAnnotation(currentPageHistory, newAnnotation);
-
-      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-      setInternalAnnotations(updated);
-      onAnnotationsChange?.(updated);
-      onAnnotationComplete?.(newAnnotation);
-    },
-    [allAnnotations, currentPageHistory, currentPageKey, onAnnotationsChange, onAnnotationComplete]
-  );
-
-  const handleTextNoteClick = useCallback(
-    (imagePoint: { x: number; y: number }) => {
-      setActiveTextEditor({ imagePoint });
-    },
-    []
-  );
-
-  const handleConfirmTextNote = useCallback(
-    (text: string) => {
-      if (!activeTextEditor) return;
-      const newNote = createTextNoteAnnotation(
-        currentPageKey,
-        activeTextEditor.imagePoint,
-        text
-      );
-      handleAnnotationComplete(newNote);
-      setActiveTextEditor(null);
-    },
-    [activeTextEditor, currentPageKey, handleAnnotationComplete]
-  );
-
-  const handleCancelTextNote = useCallback(() => {
-    setActiveTextEditor(null);
-  }, []);
-
-  const handleStrokesErased = useCallback(
-    (erasedStrokes: FreehandStroke[]) => {
-      if (!erasedStrokes || erasedStrokes.length === 0) return;
-      const erasedIds = new Set(erasedStrokes.map((s) => s.id));
-      const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
-      const newHistory = recordEraseStrokes(currentPageHistory, erasedStrokes, pageStrokesBefore);
-      const updated = allStrokes.filter((s) => !erasedIds.has(s.id));
-
-      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-      setInternalStrokes(updated);
-      onStrokesChange?.(updated);
-    },
-    [allStrokes, currentPageHistory, currentPageKey, onStrokesChange]
-  );
-
-  const handleUndo = useCallback(() => {
-    if (!enableUndoRedo || !canUndo(currentPageHistory)) return;
-    const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
-    const pageAnnotationsBefore = filterAnnotationsByPage(allAnnotations, currentPageKey);
-
-    const {
-      history: newHistory,
-      strokes: newPageStrokes,
-      annotations: newPageAnnotations,
-    } = applyUndo(currentPageHistory, pageStrokesBefore, pageAnnotationsBefore);
-
-    const otherPagesStrokes = allStrokes.filter(
-      (s) => String(s.pageKey) !== String(currentPageKey)
-    );
-    const updatedStrokes = [...otherPagesStrokes, ...newPageStrokes];
-
-    const otherPagesAnnotations = allAnnotations.filter(
-      (a) => String(a.pageKey) !== String(currentPageKey)
-    );
-    const updatedAnnotations = [...otherPagesAnnotations, ...newPageAnnotations];
-
-    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-    setInternalStrokes(updatedStrokes);
-    setInternalAnnotations(updatedAnnotations);
-    onStrokesChange?.(updatedStrokes);
-    onAnnotationsChange?.(updatedAnnotations);
-    onUndo?.();
-  }, [
-    enableUndoRedo,
-    currentPageHistory,
-    allStrokes,
-    allAnnotations,
-    currentPageKey,
-    onStrokesChange,
-    onAnnotationsChange,
-    onUndo,
-  ]);
-
-  const handleRedo = useCallback(() => {
-    if (!enableUndoRedo || !canRedo(currentPageHistory)) return;
-    const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
-    const pageAnnotationsBefore = filterAnnotationsByPage(allAnnotations, currentPageKey);
-
-    const {
-      history: newHistory,
-      strokes: newPageStrokes,
-      annotations: newPageAnnotations,
-    } = applyRedo(currentPageHistory, pageStrokesBefore, pageAnnotationsBefore);
-
-    const otherPagesStrokes = allStrokes.filter(
-      (s) => String(s.pageKey) !== String(currentPageKey)
-    );
-    const updatedStrokes = [...otherPagesStrokes, ...newPageStrokes];
-
-    const otherPagesAnnotations = allAnnotations.filter(
-      (a) => String(a.pageKey) !== String(currentPageKey)
-    );
-    const updatedAnnotations = [...otherPagesAnnotations, ...newPageAnnotations];
-
-    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
-    setInternalStrokes(updatedStrokes);
-    setInternalAnnotations(updatedAnnotations);
-    onStrokesChange?.(updatedStrokes);
-    onAnnotationsChange?.(updatedAnnotations);
-    onRedo?.();
-  }, [
-    enableUndoRedo,
-    currentPageHistory,
-    allStrokes,
-    allAnnotations,
-    currentPageKey,
-    onStrokesChange,
-    onAnnotationsChange,
-    onRedo,
-  ]);
-
-  // Global / Canvas Keyboard Shortcuts: Ctrl+Z / Cmd+Z -> Undo, Ctrl+Y / Cmd+Shift+Z -> Redo
-  useEffect(() => {
-    if (!enableUndoRedo) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-      if (!isCtrlOrCmd) return;
-
-      const key = e.key.toLowerCase();
-      if (key === 'z') {
-        if (e.shiftKey) {
-          if (canRedo(currentPageHistory)) {
-            e.preventDefault();
-            handleRedo();
-          }
-        } else {
-          if (canUndo(currentPageHistory)) {
-            e.preventDefault();
-            handleUndo();
-          }
-        }
-      } else if (key === 'y') {
-        if (canRedo(currentPageHistory)) {
-          e.preventDefault();
-          handleRedo();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [enableUndoRedo, currentPageHistory, handleUndo, handleRedo]);
 
   // Concrete color & width passed into PenLayer for new strokes
   const effectiveStrokeColor = useMemo(() => {
@@ -533,6 +426,632 @@ export function AnswerSheetCanvas({
     }
   }
 
+  // Autosave state & references (AE-137)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string>('');
+  const pendingSaveRef = useRef<{
+    pageKey: string;
+    pageNumber: number;
+    strokes: FreehandStroke[];
+    annotations: MarkAnnotation[];
+    imageBounds?: RenderedImageBounds | null;
+  } | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSeqRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
+
+  // Keep latest callback refs to prevent stale closures while preserving stable identities
+  const onSaveStatusChangeRef = useRef(onSaveStatusChange);
+  const onSaveSuccessRef = useRef(onSaveSuccess);
+  const onSaveErrorRef = useRef(onSaveError);
+
+  useEffect(() => {
+    onSaveStatusChangeRef.current = onSaveStatusChange;
+    onSaveSuccessRef.current = onSaveSuccess;
+    onSaveErrorRef.current = onSaveError;
+  }, [onSaveStatusChange, onSaveSuccess, onSaveError]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const executeSave = useCallback(
+    async (payloadToSave: {
+      pageKey: string;
+      pageNumber: number;
+      strokes: FreehandStroke[];
+      annotations: MarkAnnotation[];
+      imageBounds?: RenderedImageBounds | null;
+    }) => {
+      if (!scriptId) return;
+
+      saveSeqRef.current += 1;
+      const currentSaveSeq = saveSeqRef.current;
+
+      setSaveStatus('saving');
+      onSaveStatusChangeRef.current?.('saving');
+      setSaveErrorMessage('');
+
+      try {
+        const serialized = serializePageAnnotations(
+          payloadToSave.pageKey,
+          payloadToSave.annotations,
+          payloadToSave.strokes
+        );
+
+        let result: { success: boolean; error?: string } = { success: true };
+
+        if (saveAnnotations) {
+          result = await saveAnnotations({
+            scriptId,
+            pageNumber: payloadToSave.pageNumber,
+            data: serialized,
+          });
+        } else {
+          const url = saveAnnotationsUrl
+            ? saveAnnotationsUrl(scriptId, payloadToSave.pageNumber)
+            : `/api/scripts/${encodeURIComponent(scriptId)}/pages/${encodeURIComponent(String(payloadToSave.pageNumber))}/annotations`;
+
+          const res = await fetch(url, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify(serialized),
+          });
+
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => null);
+            const msg = errJson?.message || `Failed to save annotations (${res.status})`;
+            throw new Error(msg);
+          }
+          result = { success: true };
+        }
+
+        if (!isMountedRef.current || saveSeqRef.current !== currentSaveSeq) {
+          return;
+        }
+
+        if (result.success) {
+          setSaveStatus('saved');
+          onSaveStatusChangeRef.current?.('saved');
+          onSaveSuccessRef.current?.(payloadToSave.pageNumber);
+        } else {
+          throw new Error(result.error || 'Failed to save annotations');
+        }
+      } catch (err: unknown) {
+        if (!isMountedRef.current || saveSeqRef.current !== currentSaveSeq) {
+          return;
+        }
+        const errorObj = err instanceof Error ? err : new Error(String(err));
+        setSaveStatus('error');
+        setSaveErrorMessage(errorObj.message);
+        onSaveStatusChangeRef.current?.('error');
+        onSaveErrorRef.current?.(payloadToSave.pageNumber, errorObj);
+      }
+    },
+    [scriptId, saveAnnotations, saveAnnotationsUrl]
+  );
+
+  const scheduleAutosave = useCallback(
+    (targetStrokes: FreehandStroke[], targetAnnotations: MarkAnnotation[]) => {
+      if (!enableAutosave || !scriptId) return;
+
+      const targetPageNumber =
+        typeof currentPage?.pageNumber === 'number'
+          ? currentPage.pageNumber
+          : activePageIndex + 1;
+      const pageStrokes = filterStrokesByPage(targetStrokes, currentPageKey);
+      const pageAnnotations = filterAnnotationsByPage(
+        targetAnnotations,
+        currentPageKey
+      );
+
+      const pendingData = {
+        pageKey: currentPageKey,
+        pageNumber: targetPageNumber,
+        strokes: pageStrokes,
+        annotations: pageAnnotations,
+        imageBounds: baseBounds,
+      };
+
+      pendingSaveRef.current = pendingData;
+
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        if (pendingSaveRef.current) {
+          const toSave = pendingSaveRef.current;
+          pendingSaveRef.current = null;
+          executeSave(toSave);
+        }
+      }, debounceDelayMs);
+    },
+    [
+      enableAutosave,
+      scriptId,
+      currentPage,
+      activePageIndex,
+      currentPageKey,
+      baseBounds,
+      debounceDelayMs,
+      executeSave,
+    ]
+  );
+
+  const flushPendingSave = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (pendingSaveRef.current) {
+      const toSave = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      executeSave(toSave);
+    }
+  }, [executeSave]);
+
+  const handleRetrySave = useCallback(() => {
+    const targetPageNumber =
+      typeof currentPage?.pageNumber === 'number'
+        ? currentPage.pageNumber
+        : activePageIndex + 1;
+    const pageStrokes = filterStrokesByPage(allStrokes, currentPageKey);
+    const pageAnnotations = filterAnnotationsByPage(
+      allAnnotations,
+      currentPageKey
+    );
+
+    const retryData = {
+      pageKey: currentPageKey,
+      pageNumber: targetPageNumber,
+      strokes: pageStrokes,
+      annotations: pageAnnotations,
+      imageBounds: baseBounds,
+    };
+    executeSave(retryData);
+  }, [
+    currentPage,
+    activePageIndex,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    baseBounds,
+    executeSave,
+  ]);
+
+  // Annotation Hydration Lifecycle (AE-136)
+  useEffect(() => {
+    // If annotation loading is disabled, no scriptId, or already loaded during this session, return
+    if (!enableAnnotationLoading || !scriptId) return;
+
+    const targetKey = currentPageKey;
+    const targetIdentifier = effectivePageIdentifier;
+
+    if (loadedPagesCacheRef.current.has(targetKey)) {
+      return;
+    }
+
+    // Fetch annotations from backend
+    activeRequestSeqRef.current += 1;
+    const currentSeq = activeRequestSeqRef.current;
+
+    // Abort previous in-flight request to prevent race conditions
+    if (activeAbortControllerRef.current) {
+      activeAbortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    activeAbortControllerRef.current = abortController;
+
+    setIsAnnotationsLoading(true);
+    setAnnotationsLoadError(null);
+
+    const executeFetch = async () => {
+      try {
+        let loadedData: { annotations: MarkAnnotation[]; strokes: FreehandStroke[] } | null = null;
+
+        if (fetchAnnotations) {
+          loadedData = await fetchAnnotations(
+            scriptId,
+            targetIdentifier,
+            abortController.signal
+          );
+        } else {
+          const url = loadAnnotationsUrl
+            ? loadAnnotationsUrl(scriptId, targetIdentifier)
+            : `/api/scripts/${encodeURIComponent(scriptId)}/pages/${encodeURIComponent(String(targetIdentifier))}/annotations`;
+
+          const res = await fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: abortController.signal,
+          });
+
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => null);
+            const msg = errJson?.message || `Failed to load annotations (${res.status})`;
+            throw new Error(msg);
+          }
+
+          const json = await res.json();
+          const rawPayload = json?.data || json;
+          loadedData = deserializePageAnnotations(rawPayload, targetKey);
+        }
+
+        // Verify request is still current
+        if (
+          abortController.signal.aborted ||
+          activeRequestSeqRef.current !== currentSeq
+        ) {
+          return;
+        }
+
+        const safeAnnotations = (loadedData?.annotations || []).map((a) => ({
+          ...a,
+          pageKey: targetKey,
+        }));
+        const safeStrokes = (loadedData?.strokes || []).map((s) => ({
+          ...s,
+          pageKey: targetKey,
+        }));
+
+        setInternalStrokes((prev) => {
+          const others = prev.filter((s) => String(s.pageKey) !== String(targetKey));
+          const next = [...others, ...safeStrokes];
+          onStrokesChange?.(next);
+          return next;
+        });
+
+        setInternalAnnotations((prev) => {
+          const others = prev.filter((a) => String(a.pageKey) !== String(targetKey));
+          const next = [...others, ...safeAnnotations];
+          onAnnotationsChange?.(next);
+          return next;
+        });
+
+        // Initialize clean undo/redo history (0 actions)
+        setPageHistoryMap((prev) => ({
+          ...prev,
+          [targetKey]: createInitialHistory(),
+        }));
+
+        loadedPagesCacheRef.current.add(targetKey);
+        setIsAnnotationsLoading(false);
+        setAnnotationsLoadError(null);
+
+        onAnnotationsLoaded?.({
+          scriptId,
+          pageId: String(currentPage?._id || currentPage?.id || ''),
+          pageNumber: currentPage?.pageNumber || activePageIndex + 1,
+          annotations: safeAnnotations,
+          strokes: safeStrokes,
+        });
+      } catch (err: unknown) {
+        if (abortController.signal.aborted) return;
+        if (activeRequestSeqRef.current !== currentSeq) return;
+
+        const errorObj = err instanceof Error ? err : new Error(String(err));
+        setIsAnnotationsLoading(false);
+        setAnnotationsLoadError(errorObj.message);
+        onAnnotationsLoadError?.(errorObj, targetIdentifier);
+      }
+    };
+
+    executeFetch();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [
+    enableAnnotationLoading,
+    scriptId,
+    currentPageKey,
+    effectivePageIdentifier,
+    currentPage,
+    activePageIndex,
+    fetchAnnotations,
+    loadAnnotationsUrl,
+    onAnnotationsLoaded,
+    onAnnotationsLoadError,
+    onStrokesChange,
+    onAnnotationsChange,
+  ]);
+
+  const canUndoActive = useMemo(() => {
+    return enableUndoRedo && canUndo(currentPageHistory);
+  }, [enableUndoRedo, currentPageHistory]);
+
+  const canRedoActive = useMemo(() => {
+    return enableUndoRedo && canRedo(currentPageHistory);
+  }, [enableUndoRedo, currentPageHistory]);
+
+  const handleStrokeComplete = useCallback(
+    (newStroke: FreehandStroke) => {
+      const updated = [...allStrokes, newStroke];
+      const newHistory = recordAddStroke(currentPageHistory, newStroke);
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalStrokes(updated);
+      onStrokesChange?.(updated);
+      scheduleAutosave(updated, allAnnotations);
+    },
+    [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
+  );
+
+  const handleAnnotationComplete = useCallback(
+    (newAnnotation: MarkAnnotation) => {
+      const updated = [...allAnnotations, newAnnotation];
+      const newHistory = recordAddAnnotation(currentPageHistory, newAnnotation);
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalAnnotations(updated);
+      onAnnotationsChange?.(updated);
+      onAnnotationComplete?.(newAnnotation);
+      scheduleAutosave(allStrokes, updated);
+    },
+    [allAnnotations, allStrokes, currentPageHistory, currentPageKey, onAnnotationsChange, onAnnotationComplete, scheduleAutosave]
+  );
+
+  const handleTextNoteClick = useCallback(
+    (imagePoint: { x: number; y: number }) => {
+      setActiveTextEditor({ imagePoint });
+    },
+    []
+  );
+
+  const handleConfirmTextNote = useCallback(
+    (text: string) => {
+      if (!activeTextEditor) return;
+      const newNote = createTextNoteAnnotation(
+        currentPageKey,
+        activeTextEditor.imagePoint,
+        text
+      );
+      handleAnnotationComplete(newNote);
+      setActiveTextEditor(null);
+    },
+    [activeTextEditor, currentPageKey, handleAnnotationComplete]
+  );
+
+  const handleCancelTextNote = useCallback(() => {
+    setActiveTextEditor(null);
+  }, []);
+
+  const handleAnnotationMove = useCallback(
+    (
+      id: string,
+      newPosition: { x: number; y: number },
+      previousPosition: { x: number; y: number }
+    ) => {
+      const updated = allAnnotations.map((a) =>
+        a.id === id ? moveAnnotation(a, newPosition) : a
+      );
+      const newHistory = recordMoveAnnotation(
+        currentPageHistory,
+        id,
+        previousPosition,
+        newPosition
+      );
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalAnnotations(updated);
+      onAnnotationsChange?.(updated);
+      onAnnotationMove?.(id, newPosition, previousPosition);
+      scheduleAutosave(allStrokes, updated);
+    },
+    [
+      allAnnotations,
+      allStrokes,
+      currentPageHistory,
+      currentPageKey,
+      onAnnotationsChange,
+      onAnnotationMove,
+      scheduleAutosave,
+    ]
+  );
+
+  const handleDeleteSelected = useCallback(() => {
+    if (!selectedAnnotationId) return;
+    const target = allAnnotations.find((a) => a.id === selectedAnnotationId);
+    if (!target) return;
+
+    const pageAnnotationsBefore = filterAnnotationsByPage(
+      allAnnotations,
+      currentPageKey
+    );
+    const newHistory = recordEraseAnnotations(
+      currentPageHistory,
+      [target],
+      pageAnnotationsBefore
+    );
+    const updated = allAnnotations.filter((a) => a.id !== selectedAnnotationId);
+
+    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+    setInternalAnnotations(updated);
+    setInternalSelectedId(null);
+    onSelectAnnotation?.(null);
+    onAnnotationsChange?.(updated);
+    onAnnotationDelete?.(target);
+    scheduleAutosave(allStrokes, updated);
+  }, [
+    selectedAnnotationId,
+    allAnnotations,
+    allStrokes,
+    currentPageHistory,
+    currentPageKey,
+    onAnnotationsChange,
+    onAnnotationDelete,
+    onSelectAnnotation,
+    scheduleAutosave,
+  ]);
+
+  const handleStrokesErased = useCallback(
+    (erasedStrokes: FreehandStroke[]) => {
+      if (!erasedStrokes || erasedStrokes.length === 0) return;
+      const erasedIds = new Set(erasedStrokes.map((s) => s.id));
+      const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
+      const newHistory = recordEraseStrokes(currentPageHistory, erasedStrokes, pageStrokesBefore);
+      const updated = allStrokes.filter((s) => !erasedIds.has(s.id));
+
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+      setInternalStrokes(updated);
+      onStrokesChange?.(updated);
+      scheduleAutosave(updated, allAnnotations);
+    },
+    [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
+  );
+
+  const handleUndo = useCallback(() => {
+    if (!enableUndoRedo || !canUndo(currentPageHistory)) return;
+    const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
+    const pageAnnotationsBefore = filterAnnotationsByPage(allAnnotations, currentPageKey);
+
+    const {
+      history: newHistory,
+      strokes: newPageStrokes,
+      annotations: newPageAnnotations,
+    } = applyUndo(currentPageHistory, pageStrokesBefore, pageAnnotationsBefore);
+
+    const otherPagesStrokes = allStrokes.filter(
+      (s) => String(s.pageKey) !== String(currentPageKey)
+    );
+    const updatedStrokes = [...otherPagesStrokes, ...newPageStrokes];
+
+    const otherPagesAnnotations = allAnnotations.filter(
+      (a) => String(a.pageKey) !== String(currentPageKey)
+    );
+    const updatedAnnotations = [...otherPagesAnnotations, ...newPageAnnotations];
+
+    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+    setInternalStrokes(updatedStrokes);
+    setInternalAnnotations(updatedAnnotations);
+    onStrokesChange?.(updatedStrokes);
+    onAnnotationsChange?.(updatedAnnotations);
+    onUndo?.();
+    scheduleAutosave(updatedStrokes, updatedAnnotations);
+  }, [
+    enableUndoRedo,
+    currentPageHistory,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    onStrokesChange,
+    onAnnotationsChange,
+    onUndo,
+    scheduleAutosave,
+  ]);
+
+  const handleRedo = useCallback(() => {
+    if (!enableUndoRedo || !canRedo(currentPageHistory)) return;
+    const pageStrokesBefore = filterStrokesByPage(allStrokes, currentPageKey);
+    const pageAnnotationsBefore = filterAnnotationsByPage(allAnnotations, currentPageKey);
+
+    const {
+      history: newHistory,
+      strokes: newPageStrokes,
+      annotations: newPageAnnotations,
+    } = applyRedo(currentPageHistory, pageStrokesBefore, pageAnnotationsBefore);
+
+    const otherPagesStrokes = allStrokes.filter(
+      (s) => String(s.pageKey) !== String(currentPageKey)
+    );
+    const updatedStrokes = [...otherPagesStrokes, ...newPageStrokes];
+
+    const otherPagesAnnotations = allAnnotations.filter(
+      (a) => String(a.pageKey) !== String(currentPageKey)
+    );
+    const updatedAnnotations = [...otherPagesAnnotations, ...newPageAnnotations];
+
+    setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
+    setInternalStrokes(updatedStrokes);
+    setInternalAnnotations(updatedAnnotations);
+    onStrokesChange?.(updatedStrokes);
+    onAnnotationsChange?.(updatedAnnotations);
+    onRedo?.();
+    scheduleAutosave(updatedStrokes, updatedAnnotations);
+  }, [
+    enableUndoRedo,
+    currentPageHistory,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    onStrokesChange,
+    onAnnotationsChange,
+    onRedo,
+    scheduleAutosave,
+  ]);
+
+  // Global / Canvas Keyboard Shortcuts: Delete/Backspace -> Delete selected annotation, Ctrl+Z -> Undo, Ctrl+Y -> Redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedAnnotationId) {
+          e.preventDefault();
+          handleDeleteSelected();
+          return;
+        }
+      }
+
+      if (!enableUndoRedo) return;
+
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrCmd) return;
+
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        if (e.shiftKey) {
+          if (canRedo(currentPageHistory)) {
+            e.preventDefault();
+            handleRedo();
+          }
+        } else {
+          if (canUndo(currentPageHistory)) {
+            e.preventDefault();
+            handleUndo();
+          }
+        }
+      } else if (key === 'y') {
+        if (canRedo(currentPageHistory)) {
+          e.preventDefault();
+          handleRedo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [
+    enableUndoRedo,
+    currentPageHistory,
+    handleUndo,
+    handleRedo,
+    selectedAnnotationId,
+    handleDeleteSelected,
+  ]);
+
   // Handle page change navigation
   const navigateToPage = useCallback(
     (targetIndex: number) => {
@@ -540,6 +1059,11 @@ export function AnswerSheetCanvas({
       const clamped = clampPageIndex(targetIndex, totalPages);
       if (clamped === activePageIndex) return;
 
+      // Flush any pending debounced autosave immediately before leaving current page
+      flushPendingSave();
+
+      setInternalSelectedId(null);
+      onSelectAnnotation?.(null);
       setInternalPageIndex(clamped);
       setTransform({ x: 0, y: 0, zoom: 1.0 });
       setIsLoading(true);
@@ -550,7 +1074,7 @@ export function AnswerSheetCanvas({
         onPageChange?.(clamped, sortedPages[clamped]);
       }
     },
-    [sortedPages, totalPages, activePageIndex, onPageChange]
+    [sortedPages, totalPages, activePageIndex, flushPendingSave, onPageChange, onSelectAnnotation]
   );
 
   const handlePrevPage = useCallback(() => {
@@ -723,6 +1247,17 @@ export function AnswerSheetCanvas({
         </nav>
       )}
 
+      {/* Autosave Status Indicator (AE-137) */}
+      {enableAutosave && Boolean(scriptId) && (
+        <div className="absolute top-3 right-3 z-20" data-testid="autosave-status-wrapper">
+          <SaveStatusIndicator
+            status={saveStatus}
+            onRetry={handleRetrySave}
+            errorMessage={saveErrorMessage}
+          />
+        </div>
+      )}
+
       {/* Canvas Stage */}
       <CanvasStage
         width={width}
@@ -745,13 +1280,14 @@ export function AnswerSheetCanvas({
           onTransformChange={handleTransformChange}
         />
 
-        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129) */}
+        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129 / AE-133) */}
         <PenLayer
           transform={transform}
           pageKey={currentPageKey}
           isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           isEraserActive={activeEraserMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           strokes={currentPageStrokes}
+          visible={isOverlayVisible}
           onStrokeComplete={handleStrokeComplete}
           onStrokesErased={handleStrokesErased}
           smoothingOptions={smoothingOptions}
@@ -759,12 +1295,16 @@ export function AnswerSheetCanvas({
           strokeWidth={effectiveStrokeWidth}
         />
 
-        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131) */}
+        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132 / AE-133) */}
         <MarkLayer
           transform={transform}
           pageKey={currentPageKey}
           activeTool={activeTool}
           annotations={currentPageAnnotations}
+          selectedAnnotationId={selectedAnnotationId}
+          visible={isOverlayVisible}
+          onSelectAnnotation={handleSelectAnnotation}
+          onAnnotationMove={handleAnnotationMove}
           onAnnotationComplete={handleAnnotationComplete}
           onTextNoteClick={handleTextNoteClick}
           disabled={isLoading || hasError || !effectiveSrc}
@@ -781,7 +1321,7 @@ export function AnswerSheetCanvas({
         />
       )}
 
-      {/* Floating Toolbar: Zoom Controls & Pen / Style / Stamps / Highlight / Text / Eraser / Undo / Redo Controls */}
+      {/* Floating Toolbar: Zoom Controls & Select / Pen / Style / Stamps / Highlight / Text / Eraser / Delete / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
           className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
@@ -789,6 +1329,40 @@ export function AnswerSheetCanvas({
           role="toolbar"
           aria-label="Canvas Zoom and Pen Controls"
         >
+          {/* Select Tool Toggle (AE-132) */}
+          {enableSelect && (
+            <button
+              type="button"
+              onClick={handleToggleSelect}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeSelectMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeSelectMode}
+              aria-label="Toggle Select Tool"
+              title={activeSelectMode ? 'Select Tool Active (Click to Disable)' : 'Enable Select Tool (Move / Delete)'}
+              data-testid="canvas-select-toggle"
+            >
+              <MousePointer className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Delete Selected Annotation Button (AE-132) */}
+          {enableSelect && (
+            <button
+              type="button"
+              onClick={handleDeleteSelected}
+              disabled={!selectedAnnotationId}
+              className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-35 disabled:hover:bg-transparent text-rose-600 transition-colors focus:outline-hidden focus:ring-2 focus:ring-rose-500"
+              aria-label="Delete Selected Annotation"
+              title="Delete Selected Annotation (Delete / Backspace)"
+              data-testid="canvas-delete-button"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
+
           {/* Pen Tool Toggle & Style Selector (AE-126 / AE-127) */}
           {enablePenTool && (
             <>
@@ -944,6 +1518,36 @@ export function AnswerSheetCanvas({
                 data-testid="canvas-redo-button"
               >
                 <Redo2 className="h-4 w-4" />
+              </button>
+            </>
+          )}
+
+          {/* Annotation Overlay Visibility Toggle (AE-133) */}
+          {enableOverlayToggle && (
+            <>
+              <div className="h-4 w-px bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={handleToggleOverlayVisibility}
+                className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                  !isOverlayVisible
+                    ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+                aria-pressed={isOverlayVisible}
+                aria-label="Toggle Annotation Overlay Visibility"
+                title={
+                  isOverlayVisible
+                    ? 'Hide Annotation Overlay (Eye)'
+                    : 'Show Annotation Overlay (EyeOff)'
+                }
+                data-testid="canvas-overlay-toggle"
+              >
+                {isOverlayVisible ? (
+                  <Eye className="h-4 w-4" />
+                ) : (
+                  <EyeOff className="h-4 w-4 text-amber-700" />
+                )}
               </button>
             </>
           )}

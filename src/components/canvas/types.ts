@@ -20,8 +20,17 @@ import type {
   MarkAnnotation,
   StampType,
 } from '@/lib/stampTool';
+import type {
+  SerializedPageAnnotations,
+  SerializedAnnotationDocument,
+  SerializeCanvasOptions,
+  ValidationResult,
+  DeserializationResult,
+} from '@/lib/annotationSerialization';
 
-export type CanvasTool = 'none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
+export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
+
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 export type {
   AnswerSheetPage,
@@ -40,6 +49,11 @@ export type {
   TextNoteAnnotation,
   MarkAnnotation,
   StampType,
+  SerializedPageAnnotations,
+  SerializedAnnotationDocument,
+  SerializeCanvasOptions,
+  ValidationResult,
+  DeserializationResult,
 };
 
 export interface CanvasDimensions {
@@ -124,6 +138,20 @@ export interface AnswerSheetCanvasProps {
   enablePanZoom?: boolean;
   /** Whether to show the floating zoom toolbar controls (default true) */
   showZoomControls?: boolean;
+  /** Whether the select / move / delete tool is enabled (default true, AE-132) */
+  enableSelect?: boolean;
+  /** Controlled selected annotation ID (AE-132) */
+  selectedAnnotationId?: string | null;
+  /** Callback fired when an annotation is selected or deselected (AE-132) */
+  onSelectAnnotation?: (id: string | null) => void;
+  /** Callback fired when an annotation is moved (AE-132) */
+  onAnnotationMove?: (
+    id: string,
+    newPosition: { x: number; y: number },
+    previousPosition: { x: number; y: number }
+  ) => void;
+  /** Callback fired when an annotation is deleted (AE-132) */
+  onAnnotationDelete?: (annotation: MarkAnnotation) => void;
   /** Whether the freehand pen tool feature is enabled (default true, AE-126) */
   enablePenTool?: boolean;
   /** Uncontrolled initial pen active state (default false, AE-126) */
@@ -174,6 +202,14 @@ export interface AnswerSheetCanvasProps {
   onUndo?: () => void;
   /** Callback fired after a redo operation */
   onRedo?: () => void;
+  /** Whether the overlay visibility toggle button is enabled in the toolbar (default true, AE-133) */
+  enableOverlayToggle?: boolean;
+  /** Controlled overlay visibility state (AE-133) */
+  isOverlayVisible?: boolean;
+  /** Uncontrolled initial overlay visibility state (default true, AE-133) */
+  initialOverlayVisible?: boolean;
+  /** Callback fired when overlay visibility is toggled (AE-133) */
+  onOverlayVisibilityChange?: (visible: boolean) => void;
   /** Default pen stroke color fallback (default '#e11d48') */
   defaultStrokeColor?: string;
   /** Default pen stroke width fallback (default 2) */
@@ -186,4 +222,44 @@ export interface AnswerSheetCanvasProps {
   onError?: (error: Error) => void;
   /** Callback fired when zoom/pan transform changes */
   onTransformChange?: (transform: PanZoomTransform) => void;
+  /** Answer script ID used for loading page annotations (AE-136) */
+  scriptId?: string;
+  /** Whether automatic annotation retrieval from backend is enabled (default true when scriptId is present, AE-136) */
+  enableAnnotationLoading?: boolean;
+  /** Custom URL builder for fetching page annotations (AE-136) */
+  loadAnnotationsUrl?: (scriptId: string, pageIdentifier: string | number) => string;
+  /** Custom fetcher function for retrieving page annotations (AE-136) */
+  fetchAnnotations?: (
+    scriptId: string,
+    pageIdentifier: string | number,
+    signal?: AbortSignal
+  ) => Promise<{ annotations: MarkAnnotation[]; strokes: FreehandStroke[] } | null>;
+  /** Callback fired when page annotations are successfully loaded and hydrated (AE-136) */
+  onAnnotationsLoaded?: (result: {
+    scriptId?: string;
+    pageId?: string;
+    pageNumber?: number;
+    annotations: MarkAnnotation[];
+    strokes: FreehandStroke[];
+  }) => void;
+  /** Callback fired when loading page annotations fails (AE-136) */
+  onAnnotationsLoadError?: (error: Error, pageIdentifier: string | number) => void;
+  /** Whether debounced autosave to backend is enabled (default true when scriptId is present, AE-137) */
+  enableAutosave?: boolean;
+  /** Debounce delay in milliseconds before triggering autosave (default 800ms, AE-137) */
+  debounceDelayMs?: number;
+  /** Custom URL builder for saving page annotations (AE-137) */
+  saveAnnotationsUrl?: (scriptId: string, pageNumber: number) => string;
+  /** Custom saver function for sending serialized page annotations (AE-137) */
+  saveAnnotations?: (params: {
+    scriptId: string;
+    pageNumber: number;
+    data: SerializedPageAnnotations;
+  }) => Promise<{ success: boolean; error?: string }>;
+  /** Callback fired when save status changes ('idle' | 'saving' | 'saved' | 'error', AE-137) */
+  onSaveStatusChange?: (status: SaveStatus) => void;
+  /** Callback fired when autosave succeeds (AE-137) */
+  onSaveSuccess?: (pageNumber: number) => void;
+  /** Callback fired when autosave fails (AE-137) */
+  onSaveError?: (pageNumber: number, error: Error) => void;
 }

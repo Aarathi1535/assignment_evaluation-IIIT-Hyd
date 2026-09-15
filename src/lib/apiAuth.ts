@@ -101,3 +101,68 @@ export async function requirePermission(permission: Permission): Promise<AuthRes
     user,
   };
 }
+
+/**
+ * Standard permissions cascade allowing grading, annotation persistence,
+ * and page image rendering for TA, Professor, and Admin roles.
+ */
+export const GRADING_OR_CANVAS_PERMISSIONS: Permission[] = [
+  Permission.GRADE_SCRIPT,
+  Permission.SAVE_MARKS_FEEDBACK,
+  Permission.EDIT_EXAM,
+  Permission.VIEW_ALL_SUBMISSIONS,
+];
+
+/**
+ * Helper to enforce that the authenticated user possesses at least one of the specified permissions.
+ * Returns the user if authorized, or a 401 (if unauthenticated) or 403 (if missing all permissions) response.
+ */
+export async function requireAnyPermission(permissions: Permission[]): Promise<AuthResult> {
+  const auth = await requireAuth();
+  if (!auth.authorized) {
+    return auth;
+  }
+
+  const user = auth.user!;
+  const role = user.role?.toUpperCase() as UserRole;
+
+  const hasAny = permissions.some((permission) => hasPermission(role, permission));
+
+  if (!hasAny) {
+    const { writeAuditLog } = await import('./audit');
+    await writeAuditLog({
+      user: user.id,
+      action: 'AUTHORIZATION_FAILURE',
+      outcome: 'FAILURE',
+      details: {
+        attemptedPermissions: permissions,
+        role,
+      },
+    });
+    return {
+      authorized: false,
+      response: NextResponse.json(
+        { success: false, message: 'Forbidden', data: null },
+        { status: 403 }
+      ),
+      user,
+    };
+  }
+
+  return {
+    authorized: true,
+    response: null,
+    user,
+  };
+}
+
+/**
+ * Helper to enforce grading and canvas annotation permissions:
+ * - GRADE_SCRIPT
+ * - SAVE_MARKS_FEEDBACK
+ * - EDIT_EXAM
+ * - VIEW_ALL_SUBMISSIONS
+ */
+export async function requireGradingOrAnnotationAccess(): Promise<AuthResult> {
+  return requireAnyPermission(GRADING_OR_CANVAS_PERMISSIONS);
+}
