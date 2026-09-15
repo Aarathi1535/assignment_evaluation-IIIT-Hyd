@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
-import { requirePermission } from '../../../../../../../lib/apiAuth';
-import { Permission } from '../../../../../../../constants/permissions';
+import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
+import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
 import DerivedStorageService from '../../../../../../../services/DerivedStorageService';
@@ -17,7 +17,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
 ) {
-  const auth = await requirePermission(Permission.EDIT_EXAM);
+  const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
   }
@@ -76,7 +76,11 @@ export async function GET(
     }
 
     // 3. Verify authorized access to the batch
-    const batch = await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role);
+    const isProfessor = auth.user.role?.toUpperCase() === UserRole.PROFESSOR;
+    const batch = isProfessor
+      ? await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role)
+      : await BatchRepository.getBatchByBatchIdInternal(batchId);
+
     if (!batch) {
       return NextResponse.json(
         {

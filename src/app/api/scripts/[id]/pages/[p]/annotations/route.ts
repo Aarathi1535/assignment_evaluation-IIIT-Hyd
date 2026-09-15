@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../../../../../lib/db';
-import { requirePermission } from '../../../../../../../lib/apiAuth';
-import { Permission } from '../../../../../../../constants/permissions';
+import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../../lib/errors';
 import annotationPersistenceService from '../../../../../../../services/AnnotationPersistenceService';
 
@@ -15,27 +14,11 @@ export async function GET(
   context: { params: Promise<{ id: string; p: string }> }
 ) {
   // 1. Authenticate and enforce grading / exam permissions
-  const auth = await requirePermission(Permission.GRADE_SCRIPT);
-  let user = auth.user;
-
+  const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
-    const profAuth = await requirePermission(Permission.SAVE_MARKS_FEEDBACK);
-    if (profAuth.authorized) {
-      user = profAuth.user;
-    } else {
-      const examAuth = await requirePermission(Permission.EDIT_EXAM);
-      if (examAuth.authorized) {
-        user = examAuth.user;
-      } else {
-        const viewSubAuth = await requirePermission(Permission.VIEW_ALL_SUBMISSIONS);
-        if (viewSubAuth.authorized) {
-          user = viewSubAuth.user;
-        } else {
-          return auth.response;
-        }
-      }
-    }
+    return auth.response;
   }
+  const user = auth.user;
 
   const { id, p } = await context.params;
 
@@ -45,8 +28,8 @@ export async function GET(
     const result = await annotationPersistenceService.getPageAnnotations({
       scriptId: id,
       pageIdentifier: p,
-      userId: user!.id,
-      userRole: user!.role,
+      userId: user.id,
+      userRole: user.role,
     });
 
     return NextResponse.json(
@@ -81,22 +64,11 @@ export async function PUT(
   context: { params: Promise<{ id: string; p: string }> }
 ) {
   // 1. Authenticate and enforce grading / exam permissions
-  const auth = await requirePermission(Permission.GRADE_SCRIPT);
-  let user = auth.user;
-
+  const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
-    const profAuth = await requirePermission(Permission.SAVE_MARKS_FEEDBACK);
-    if (profAuth.authorized) {
-      user = profAuth.user;
-    } else {
-      const examAuth = await requirePermission(Permission.EDIT_EXAM);
-      if (examAuth.authorized) {
-        user = examAuth.user;
-      } else {
-        return auth.response;
-      }
-    }
+    return auth.response;
   }
+  const user = auth.user;
 
   const { id, p } = await context.params;
 
