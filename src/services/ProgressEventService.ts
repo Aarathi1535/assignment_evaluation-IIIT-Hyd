@@ -38,7 +38,11 @@ export const LIVE_UPDATES_UNAVAILABLE_MESSAGE = 'Live updates unavailable — re
  *    connected SSE clients are informed to refresh or poll.
  */
 export class ProgressEventService {
-    private static emitter = new EventEmitter();
+    private static emitter: EventEmitter = (() => {
+        const em = new EventEmitter();
+        em.setMaxListeners(100);
+        return em;
+    })();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private static changeStream: any = null;
     private static isChangeStreamInitializing = false;

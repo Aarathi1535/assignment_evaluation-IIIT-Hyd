@@ -23,6 +23,7 @@ export interface PageInfo {
   pageNumber: number;
   fileIndex: number;
   thumbnailUrl: string;
+  imageUrl?: string;
   width?: number;
   height?: number;
   nearBlank?: boolean;
