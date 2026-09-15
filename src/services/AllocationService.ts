@@ -197,7 +197,7 @@ export class AllocationService {
             }));
 
             // Save allocations and return them
-            const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+            const createdAllocations = await Allocation.create(allocationsToCreate, { session, ordered: true });
 
             // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
             const notificationsToCreate = createdAllocations.map(alloc => ({
@@ -213,7 +213,7 @@ export class AllocationService {
                 question: alloc.question,
                 read: false
             }));
-            await Notification.create(notificationsToCreate, { session });
+            await Notification.create(notificationsToCreate, { session, ordered: true });
 
             return createdAllocations;
         });
@@ -285,7 +285,7 @@ export class AllocationService {
             }));
 
             // Save allocations and return them
-            const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+            const createdAllocations = await Allocation.create(allocationsToCreate, { session, ordered: true });
 
             // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
             const notificationsToCreate = createdAllocations.map(alloc => ({
@@ -301,7 +301,7 @@ export class AllocationService {
                 question: alloc.question,
                 read: false
             }));
-            await Notification.create(notificationsToCreate, { session });
+            await Notification.create(notificationsToCreate, { session, ordered: true });
 
             return createdAllocations;
         });
@@ -373,7 +373,7 @@ export class AllocationService {
             }));
 
             // Save allocations and return them
-            const createdAllocations = await Allocation.create(allocationsToCreate, { session });
+            const createdAllocations = await Allocation.create(allocationsToCreate, { session, ordered: true });
 
             // Create persistent in-app notifications for receiving TAs within the same transaction (AE-111)
             const notificationsToCreate = createdAllocations.map(alloc => ({
@@ -389,7 +389,7 @@ export class AllocationService {
                 question: alloc.question,
                 read: false
             }));
-            await Notification.create(notificationsToCreate, { session });
+            await Notification.create(notificationsToCreate, { session, ordered: true });
 
             return createdAllocations;
         });

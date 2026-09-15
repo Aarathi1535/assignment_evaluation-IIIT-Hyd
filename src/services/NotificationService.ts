@@ -43,7 +43,7 @@ export class NotificationService {
             read: false
         }));
 
-        return await Notification.create(docsToCreate, { session });
+        return await Notification.create(docsToCreate, { session, ordered: true });
     }
 
     /**
