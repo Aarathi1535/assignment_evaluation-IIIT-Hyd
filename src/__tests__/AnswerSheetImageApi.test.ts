@@ -3,6 +3,10 @@ import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from 'vite
 import { NextRequest } from 'next/server';
 import mongoose from 'mongoose';
 import User, { UserRole } from '../models/User';
+import Course from '../models/Course';
+import Exam, { ExamStatus } from '../models/Exam';
+import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
+import Allocation, { AllocationStatus, AllocationRule } from '../models/Allocation';
 import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
@@ -34,8 +38,20 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
   let profUser: any;
   let otherProfUser: any;
   let taUser: any;
+  let unallocatedTaUser: any;
   let studentUser: any;
   let adminUser: any;
+
+  let courseA: any;
+  let examA: any;
+  let answerScriptA: any;
+
+  let courseB: any;
+  let examB: any;
+  let answerScriptB: any;
+  let batchB: any;
+  let jobB: any;
+  let pageB: any;
 
   let testBatch: any;
   let testJob: any;
@@ -53,10 +69,14 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
   beforeEach(async () => {
     mockSessionUser = null;
 
-    await User.deleteMany({});
-    await Batch.deleteMany({});
-    await IngestionJob.deleteMany({});
+    await Allocation.deleteMany({});
     await IngestionPage.deleteMany({});
+    await IngestionJob.deleteMany({});
+    await Batch.deleteMany({});
+    await AnswerScript.deleteMany({});
+    await Exam.deleteMany({});
+    await Course.deleteMany({});
+    await User.deleteMany({});
 
     // 1. Create Users
     profUser = await User.create({
@@ -76,8 +96,16 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     });
 
     taUser = await User.create({
-      name: 'Hermione Granger (TA)',
+      name: 'Hermione Granger (Allocated TA)',
       email: `hermione-ta-${Date.now()}@hogwarts.edu`,
+      password: 'password123',
+      role: UserRole.TA,
+      isActive: true,
+    });
+
+    unallocatedTaUser = await User.create({
+      name: 'Draco Malfoy (Unallocated TA)',
+      email: `draco-ta-${Date.now()}@hogwarts.edu`,
       password: 'password123',
       role: UserRole.TA,
       isActive: true,
@@ -99,7 +127,29 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       isActive: true,
     });
 
-    // 2. Create Batch owned by profUser
+    // 2. Create Course A and Exam A
+    courseA = await Course.create({
+      courseCode: `POTION-101-${Date.now()}`,
+      courseName: 'Potions Masterclass',
+      semester: 1,
+      academicYear: '2025-2026',
+      professor: profUser._id,
+      teachingAssistants: [taUser._id, unallocatedTaUser._id],
+      isActive: true,
+    });
+
+    examA = await Exam.create({
+      title: 'Potions Midterm Exam',
+      course: courseA._id,
+      createdBy: profUser._id,
+      totalMarks: 100,
+      numberOfQuestions: 5,
+      examDate: new Date(),
+      status: ExamStatus.PUBLISHED,
+      isActive: true,
+    });
+
+    // 3. Create Batch owned by profUser
     const batchId = crypto.randomUUID();
     testBatch = await BatchRepository.createBatch({
       batchId,
@@ -133,7 +183,28 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       failedPages: 0,
     });
 
-    // 3. Create IngestionPages with various image extensions
+    // 4. Create AnswerScript A linked to Exam A and Student
+    answerScriptA = await AnswerScript.create({
+      exam: examA._id,
+      student: studentUser._id,
+      batchId,
+      fileIndex: 0,
+      pageCount: 5,
+      identificationStatus: IdentificationStatus.IDENTIFIED,
+      isActive: true,
+    });
+
+    // 5. Create Allocation for taUser on answerScriptA
+    await Allocation.create({
+      exam: examA._id,
+      ta: taUser._id,
+      answerScript: answerScriptA._id,
+      allocatedBy: profUser._id,
+      status: AllocationStatus.PENDING,
+      rule: AllocationRule.EQUAL,
+    });
+
+    // 6. Create IngestionPages linked to answerScriptA
     pagePng = await IngestionPage.create({
       batchId,
       job: testJob._id as mongoose.Types.ObjectId,
@@ -143,6 +214,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       thumbnailKey: `batches/${batchId}/derived/file-1/1/thumb.jpg`,
       pageNumber: 1,
       status: PageProcessingStatus.PROCESSED,
+      answerScript: answerScriptA._id,
     });
 
     pageJpg = await IngestionPage.create({
@@ -154,6 +226,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       thumbnailKey: `batches/${batchId}/derived/file-1/2/thumb.jpg`,
       pageNumber: 2,
       status: PageProcessingStatus.PROCESSED,
+      answerScript: answerScriptA._id,
     });
 
     pageWebp = await IngestionPage.create({
@@ -165,6 +238,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       thumbnailKey: `batches/${batchId}/derived/file-1/3/thumb.jpg`,
       pageNumber: 3,
       status: PageProcessingStatus.PROCESSED,
+      answerScript: answerScriptA._id,
     });
 
     pageGif = await IngestionPage.create({
@@ -176,6 +250,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       thumbnailKey: `batches/${batchId}/derived/file-1/4/thumb.jpg`,
       pageNumber: 4,
       status: PageProcessingStatus.PROCESSED,
+      answerScript: answerScriptA._id,
     });
 
     pageMissingStorageKey = await IngestionPage.create({
@@ -187,6 +262,92 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       thumbnailKey: `batches/${batchId}/derived/file-1/5/thumb.jpg`,
       pageNumber: 5,
       status: PageProcessingStatus.PENDING,
+      answerScript: answerScriptA._id,
+    });
+
+    // 7. Create Course B, Exam B, Batch B, Script B, and Page B (Course B isolation)
+    courseB = await Course.create({
+      courseCode: `TRANSFIG-201-${Date.now()}`,
+      courseName: 'Transfiguration Advanced',
+      semester: 2,
+      academicYear: '2025-2026',
+      professor: otherProfUser._id,
+      teachingAssistants: [unallocatedTaUser._id],
+      isActive: true,
+    });
+
+    examB = await Exam.create({
+      title: 'Transfiguration Final',
+      course: courseB._id,
+      createdBy: otherProfUser._id,
+      totalMarks: 100,
+      numberOfQuestions: 5,
+      examDate: new Date(),
+      status: ExamStatus.PUBLISHED,
+      isActive: true,
+    });
+
+    const studentB = await User.create({
+      name: 'Ron Weasley (Student B)',
+      email: `ron-${Date.now()}@hogwarts.edu`,
+      password: 'password123',
+      role: UserRole.STUDENT,
+      isActive: true,
+    });
+
+    const batchIdB = crypto.randomUUID();
+    batchB = await BatchRepository.createBatch({
+      batchId: batchIdB,
+      uploadedBy: otherProfUser._id as mongoose.Types.ObjectId,
+      files: [
+        {
+          fileId: 'file-b-1',
+          fileIndex: 0,
+          originalFilename: 'transfig_exam.pdf',
+          fileType: 'pdf',
+          mimeType: 'application/pdf',
+          size: 2048,
+          pageCount: 2,
+          storageKey: `batches/${batchIdB}/transfig_exam.pdf`,
+        },
+      ],
+      totalFiles: 1,
+      totalSize: 2048,
+      totalPageCount: 2,
+      status: BatchStatus.QUEUED,
+      isActive: true,
+    });
+
+    jobB = await BatchRepository.createIngestionJob({
+      batchId: batchIdB,
+      batch: batchB._id as mongoose.Types.ObjectId,
+      uploadedBy: otherProfUser._id as mongoose.Types.ObjectId,
+      status: IngestionStatus.DONE,
+      totalPages: 2,
+      processedPages: 2,
+      failedPages: 0,
+    });
+
+    answerScriptB = await AnswerScript.create({
+      exam: examB._id,
+      student: studentB._id,
+      batchId: batchIdB,
+      fileIndex: 0,
+      pageCount: 2,
+      identificationStatus: IdentificationStatus.IDENTIFIED,
+      isActive: true,
+    });
+
+    pageB = await IngestionPage.create({
+      batchId: batchIdB,
+      job: jobB._id as mongoose.Types.ObjectId,
+      fileId: 'file-b-1',
+      fileIndex: 0,
+      storageKey: `batches/${batchIdB}/derived/file-b-1/1/page.png`,
+      thumbnailKey: `batches/${batchIdB}/derived/file-b-1/1/thumb.jpg`,
+      pageNumber: 1,
+      status: PageProcessingStatus.PROCESSED,
+      answerScript: answerScriptB._id,
     });
   });
 
@@ -222,7 +383,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(spyRead).toHaveBeenCalledWith(pagePng.storageKey);
   });
 
-  it('2. allows authenticated TA with GRADE_SCRIPT / SAVE_MARKS_FEEDBACK access to load the page image (P1 fix)', async () => {
+  it('2. allows authenticated TA WITH a valid allocation for page.answerScript to load the page image (P1 fix)', async () => {
     mockSessionUser = {
       id: taUser._id.toString(),
       email: taUser.email,
@@ -273,7 +434,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.headers.get('Content-Type')).toBe('image/png');
   });
 
-  it('4. correctly resolves MIME types for jpeg, webp, and gif files', async () => {
+  it('4. correctly resolves MIME types for jpeg, webp, and gif files for allocated TA', async () => {
     mockSessionUser = {
       id: taUser._id.toString(),
       email: taUser.email,
@@ -531,5 +692,84 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     const customMismatch = await requireAnyPermission([Permission.MANAGE_USERS, Permission.DELETE_COURSE]);
     expect(customMismatch.authorized).toBe(false);
     expect(customMismatch.response?.status).toBe(403);
+  });
+
+  it('14. returns 404 when TA has NO allocation for the requested page answerScript', async () => {
+    mockSessionUser = {
+      id: unallocatedTaUser._id.toString(),
+      email: unallocatedTaUser.email,
+      name: unallocatedTaUser.name,
+      role: UserRole.TA,
+    };
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      { method: 'GET' }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('Page not found');
+  });
+
+  it('15. returns 404 when TA allocated to Course A script attempts to request a page from Course B', async () => {
+    // taUser is allocated to answerScriptA (Course A), but NOT to answerScriptB (Course B)
+    mockSessionUser = {
+      id: taUser._id.toString(),
+      email: taUser.email,
+      name: taUser.name,
+      role: UserRole.TA,
+    };
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${batchB.batchId}/pages/${pageB._id}/image`,
+      { method: 'GET' }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: batchB.batchId, pageId: pageB._id.toString() }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('Page not found');
+  });
+
+  it('16. returns 404 when TA requests an IngestionPage that is not linked to any answerScript', async () => {
+    const unlinkedPage = await IngestionPage.create({
+      batchId: testBatch.batchId,
+      job: testJob._id as mongoose.Types.ObjectId,
+      fileId: 'file-1',
+      fileIndex: 0,
+      storageKey: `batches/${testBatch.batchId}/derived/file-1/99/page.png`,
+      thumbnailKey: `batches/${testBatch.batchId}/derived/file-1/99/thumb.jpg`,
+      pageNumber: 99,
+      status: PageProcessingStatus.PROCESSED,
+      answerScript: null,
+    });
+
+    mockSessionUser = {
+      id: taUser._id.toString(),
+      email: taUser.email,
+      name: taUser.name,
+      role: UserRole.TA,
+    };
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${unlinkedPage._id}/image`,
+      { method: 'GET' }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: unlinkedPage._id.toString() }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('Page not found');
   });
 });

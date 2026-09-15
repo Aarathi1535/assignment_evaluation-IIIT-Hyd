@@ -5,6 +5,7 @@ import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAu
 import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
+import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService from '../../../../../../../services/DerivedStorageService';
 
 /**
@@ -76,7 +77,11 @@ export async function GET(
     }
 
     // 3. Verify authorized access to the batch
-    const isProfessor = auth.user.role?.toUpperCase() === UserRole.PROFESSOR;
+    const userRole = auth.user.role?.toUpperCase();
+    const isProfessor = userRole === UserRole.PROFESSOR;
+    const isAdmin = userRole === UserRole.ADMIN;
+    const isProfessorOrAdmin = isProfessor || isAdmin;
+
     const batch = isProfessor
       ? await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role)
       : await BatchRepository.getBatchByBatchIdInternal(batchId);
@@ -90,6 +95,36 @@ export async function GET(
         },
         { status: 404 }
       );
+    }
+
+    // 4. For TA users, enforce allocation-scoped authorization (AE-123 security fix)
+    if (!isProfessorOrAdmin) {
+      if (!page.answerScript) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Page not found',
+            data: null,
+          },
+          { status: 404 }
+        );
+      }
+
+      const allocation = await AllocationService.verifyTaAllocation(
+        page.answerScript,
+        auth.user.id
+      );
+
+      if (!allocation) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Page not found',
+            data: null,
+          },
+          { status: 404 }
+        );
+      }
     }
 
     // 4. Verify storageKey is available
