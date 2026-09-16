@@ -75,3 +75,50 @@ export async function PUT(
 ) {
   return POST(req, context);
 }
+
+/**
+ * GET /api/scripts/[id]/grades
+ *
+ * Retrieves all saved question grades for the given AnswerScript (AE-148).
+ * Enforces:
+ * - RBAC & Allocation access control.
+ */
+export async function GET(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const auth = await requireGradingOrAnnotationAccess();
+  if (!auth.authorized) {
+    return auth.response;
+  }
+  const user = auth.user;
+
+  const { id } = await context.params;
+
+  try {
+    await connectDB();
+
+    const grades = await gradingService.getGradesForScript(id, user.id, user.role);
+
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Grades retrieved successfully',
+        data: grades,
+      },
+      { status: 200 }
+    );
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const status = error instanceof HttpError ? error.statusCode : 500;
+    return NextResponse.json(
+      {
+        success: false,
+        message,
+        data: null,
+      },
+      { status }
+    );
+  }
+}
+
