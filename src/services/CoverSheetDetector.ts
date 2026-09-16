@@ -105,6 +105,13 @@ export class CoverSheetDetector implements ICoverSheetDetector {
                 // Left / right halves
                 this.scanRegion(ctx, 0, 0, halfW, height, reader, detectedCodes);
                 this.scanRegion(ctx, halfW, 0, width - halfW, height, reader, detectedCodes);
+
+                // Center region (~60% central area for centered cover-sheet QR codes)
+                const centerX = Math.floor(width * 0.2);
+                const centerY = Math.floor(height * 0.2);
+                const centerW = Math.floor(width * 0.6);
+                const centerH = Math.floor(height * 0.6);
+                this.scanRegion(ctx, centerX, centerY, centerW, centerH, reader, detectedCodes);
             }
 
             const uniqueCodes = Array.from(detectedCodes);
