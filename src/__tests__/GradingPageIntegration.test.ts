@@ -12,11 +12,9 @@ import IngestionJob from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import GradingPage from '../app/(dashboard)/grading/[scriptId]/page';
-import { AnswerSheetCanvas } from '../components/canvas/AnswerSheetCanvas';
-import type { AnswerSheetPage } from '../lib/pageNavigation';
 
 let mockSessionUser: any = null;
-let mockParams: { scriptId?: string } = {};
+let mockParams: { scriptId?: string; questionNumber?: string } = {};
 
 vi.mock('next-auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('next-auth')>();
@@ -345,21 +343,6 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
     });
 
     it('renders AnswerSheetCanvas and RubricSidebar side-by-side in functional grading workspace', async () => {
-      const samplePages: AnswerSheetPage[] = [
-        {
-          _id: page1._id.toString(),
-          pageNumber: 1,
-          fileIndex: 0,
-          imageUrl: `/api/ingest/batch-potions-101/pages/${page1._id}/image`,
-        },
-        {
-          _id: page2._id.toString(),
-          pageNumber: 2,
-          fileIndex: 0,
-          imageUrl: `/api/ingest/batch-potions-101/pages/${page2._id}/image`,
-        },
-      ];
-
       const { GradingWorkspace } = await import('../components/grading/GradingWorkspace');
 
       // Create a component instance simulating script loaded with pages
@@ -399,7 +382,6 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
 
   describe('3. Rubric API & TA Access Integration (AE-142)', () => {
     let rubricGET: any;
-    let rubric: any;
 
     beforeAll(async () => {
       const rubricsRoute = await import('../app/api/rubrics/route');
@@ -410,7 +392,7 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
       const Rubric = (await import('../models/Rubric')).default;
       await Rubric.deleteMany({});
 
-      rubric = await Rubric.create({
+      await Rubric.create({
         exam: exam._id,
         createdBy: prof._id,
         questions: [

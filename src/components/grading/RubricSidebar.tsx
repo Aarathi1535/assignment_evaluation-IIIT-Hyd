@@ -51,76 +51,89 @@ export function RubricSidebar({
   const [rubric, setRubric] = useState<RubricData | null>(initialRubric ?? null);
   const [loading, setLoading] = useState<boolean>(!initialRubric && Boolean(examId));
   const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState<number>(0);
 
   const isQuestionWise = allocatedQuestionNumber !== undefined && allocatedQuestionNumber !== null;
 
-  const fetchRubric = useCallback(async () => {
+  useEffect(() => {
     if (initialRubric) {
-      setRubric(initialRubric);
-      setLoading(false);
-      onRubricLoaded?.(initialRubric);
       return;
     }
 
     if (!examId) {
-      setLoading(false);
-      setRubric(null);
-      onRubricLoaded?.(null);
       return;
     }
 
+    let isMounted = true;
 
-    setLoading(true);
-    setError(null);
+    async function loadRubric() {
+      try {
+        const res = await fetch(`/api/rubrics?exam=${encodeURIComponent(examId!)}`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
 
-    try {
-      const res = await fetch(`/api/rubrics?exam=${encodeURIComponent(examId)}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-
-      if (!res.ok) {
-        if (res.status === 401) {
-          throw new Error('Authentication required to view rubric.');
+        if (!res.ok) {
+          if (res.status === 401) {
+            throw new Error('Authentication required to view rubric.');
+          }
+          if (res.status === 403) {
+            throw new Error('Access denied. You do not have permission to view this rubric.');
+          }
+          if (res.status === 404) {
+            if (isMounted) {
+              setRubric(null);
+              setError(null);
+              setLoading(false);
+              onRubricLoaded?.(null);
+            }
+            return;
+          }
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.message || `Failed to fetch rubric (${res.status})`);
         }
-        if (res.status === 403) {
-          throw new Error('Access denied. You do not have permission to view this rubric.');
+
+        const json = await res.json();
+        if (isMounted) {
+          if (json.success && json.data) {
+            setRubric(json.data);
+            setError(null);
+            onRubricLoaded?.(json.data);
+          } else {
+            setRubric(null);
+            setError(null);
+            onRubricLoaded?.(null);
+          }
+          setLoading(false);
         }
-        if (res.status === 404) {
+      } catch (err: unknown) {
+        if (isMounted) {
+          const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+          setError(message);
           setRubric(null);
           onRubricLoaded?.(null);
           setLoading(false);
-          return;
         }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.message || `Failed to fetch rubric (${res.status})`);
       }
-
-      const json = await res.json();
-      if (json.success && json.data) {
-        setRubric(json.data);
-        onRubricLoaded?.(json.data);
-      } else {
-        setRubric(null);
-        onRubricLoaded?.(null);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'An unexpected error occurred';
-      setError(message);
-      setRubric(null);
-      onRubricLoaded?.(null);
-    } finally {
-      setLoading(false);
     }
-  }, [examId, onRubricLoaded]);
 
-  useEffect(() => {
-    fetchRubric();
-  }, [fetchRubric]);
+    loadRubric();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [examId, initialRubric, retryKey, onRubricLoaded]);
+
+  const handleRetry = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    setRetryKey((k) => k + 1);
+  }, []);
 
   // Calculations
   const questions = rubric?.questions || [];
   const totalRubricMarks = questions.reduce((acc, q) => acc + (Number(q.maxMarks) || 0), 0);
+
 
   return (
     <div
@@ -177,7 +190,7 @@ export function RubricSidebar({
             <Button
               variant="outline"
               size="sm"
-              onClick={fetchRubric}
+              onClick={handleRetry}
               className="text-xs border-rose-300 text-rose-800 hover:bg-rose-100/50"
             >
               <RotateCcw className="h-3.5 w-3.5 mr-1" />
