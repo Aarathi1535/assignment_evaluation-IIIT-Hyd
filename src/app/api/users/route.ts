@@ -7,7 +7,7 @@ import { Permission, UserRole } from '../../../constants/permissions';
 import User from '../../../models/User';
 import { HttpError } from '../../../lib/errors';
 
-export async function GET() {
+export async function GET(req?: NextRequest) {
   const auth = await requireAuth();
   if (!auth.authorized) {
     return auth.response;
@@ -27,13 +27,48 @@ export async function GET() {
 
   try {
     await connectDB();
-    
+
+    let targetRole: UserRole | null = null;
+    if (req?.url) {
+      try {
+        const url = new URL(req.url);
+        const roleParam = url.searchParams.get('role')?.toUpperCase();
+        if (roleParam && Object.values(UserRole).includes(roleParam as UserRole)) {
+          targetRole = roleParam as UserRole;
+        } else if (roleParam) {
+          return NextResponse.json({
+            success: false,
+            message: 'Invalid role parameter',
+            data: null
+          }, { status: 400 });
+        }
+      } catch {
+        // ignore URL parse errors
+      }
+    }
+
     let users;
     if (isAdmin) {
-      users = await UserService.getAllUsers();
+      if (targetRole) {
+        users = await User.find({ role: targetRole, isActive: true }).sort({ name: 1 });
+      } else {
+        users = await UserService.getAllUsers();
+      }
     } else {
-      // Professor can only view active students
-      users = await User.find({ role: UserRole.STUDENT, isActive: true }).sort({ name: 1 });
+      // Professor can view active students and active teaching assistants
+      if (targetRole === UserRole.STUDENT) {
+        users = await User.find({ role: UserRole.STUDENT, isActive: true }).sort({ name: 1 });
+      } else if (targetRole === UserRole.TA) {
+        users = await User.find({ role: UserRole.TA, isActive: true }).sort({ name: 1 });
+      } else if (targetRole) {
+        return NextResponse.json({
+          success: false,
+          message: 'Forbidden',
+          data: null
+        }, { status: 403 });
+      } else {
+        users = await User.find({ role: { $in: [UserRole.STUDENT, UserRole.TA] }, isActive: true }).sort({ name: 1 });
+      }
     }
     
     // Sanitize user objects by removing password field before returning

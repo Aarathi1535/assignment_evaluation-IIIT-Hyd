@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -37,12 +37,6 @@ const semesterOptions = [
   { value: '8', label: 'Semester 8' },
 ];
 
-const taOptions = [
-  { value: '60d5ec49315e2c56a84976fb', label: 'TA 1' },
-  { value: '60d5ec49315e2c56a84976fc', label: 'TA 2' },
-  { value: '60d5ec49315e2c56a84976fd', label: 'TA 3' },
-];
-
 const academicYearOptions = [
   { value: '2025-26', label: '2025-26' },
   { value: '2026-27', label: '2026-27' },
@@ -56,6 +50,28 @@ export default function CreateCoursePage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [taOptions, setTaOptions] = useState<{ value: string; label: string }[]>([]);
+
+  useEffect(() => {
+    async function loadTeachingAssistants() {
+      try {
+        const res = await fetch('/api/users?role=TA');
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          const options = json.data
+            .filter((u: { role?: string; isActive?: boolean }) => u.role?.toUpperCase() === 'TA' && u.isActive !== false)
+            .map((ta: { _id: string; name: string; email?: string }) => ({
+              value: String(ta._id),
+              label: ta.email ? `${ta.name} (${ta.email})` : ta.name,
+            }));
+          setTaOptions(options);
+        }
+      } catch (err) {
+        console.error('Failed to load teaching assistants:', err);
+      }
+    }
+    loadTeachingAssistants();
+  }, []);
 
   const {
     register,

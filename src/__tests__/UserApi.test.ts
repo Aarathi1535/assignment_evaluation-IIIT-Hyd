@@ -443,4 +443,74 @@ describe('User Management API Tests (AE-030)', () => {
       }
     });
   });
+
+  describe('Professor User Retrieval & TA Listing (GET /api/users)', () => {
+    beforeEach(async () => {
+      mockSessionUser = {
+        id: '000000000000000000000003',
+        email: 'prof@university.edu',
+        name: 'Professor User',
+        role: 'PROFESSOR',
+      };
+
+      const passwordHash = await bcrypt.hash('password123', 10);
+      await User.create([
+        { name: 'Alice Student', email: 'alice@university.edu', password: passwordHash, role: UserRole.STUDENT, isActive: true },
+        { name: 'Bob TA', email: 'bob.ta@university.edu', password: passwordHash, role: UserRole.TA, isActive: true },
+        { name: 'Inactive TA', email: 'inactive.ta@university.edu', password: passwordHash, role: UserRole.TA, isActive: false },
+        { name: 'Charlie Admin', email: 'charlie.admin@university.edu', password: passwordHash, role: UserRole.ADMIN, isActive: true },
+        { name: 'Dr. Smith', email: 'dr.smith@university.edu', password: passwordHash, role: UserRole.PROFESSOR, isActive: true },
+      ]);
+    });
+
+    it('should return active students and active TAs when professor queries GET /api/users without role param', async () => {
+      const res = await usersGET();
+      expect(res.status).toBe(200);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(true);
+
+      const roles = resBody.data.map((u: any) => u.role);
+      expect(roles).toContain(UserRole.STUDENT);
+      expect(roles).toContain(UserRole.TA);
+      expect(roles).not.toContain(UserRole.ADMIN);
+      expect(roles).not.toContain(UserRole.PROFESSOR);
+
+      const names = resBody.data.map((u: any) => u.name);
+      expect(names).toContain('Alice Student');
+      expect(names).toContain('Bob TA');
+      expect(names).not.toContain('Inactive TA');
+    });
+
+    it('should return only active TAs when professor queries GET /api/users?role=TA', async () => {
+      const req = new Request('http://localhost:3000/api/users?role=TA');
+      const res = await usersGET(req as any);
+      expect(res.status).toBe(200);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(true);
+      expect(resBody.data.length).toBe(1);
+      expect(resBody.data[0].name).toBe('Bob TA');
+      expect(resBody.data[0].role).toBe(UserRole.TA);
+    });
+
+    it('should return only active students when professor queries GET /api/users?role=STUDENT', async () => {
+      const req = new Request('http://localhost:3000/api/users?role=STUDENT');
+      const res = await usersGET(req as any);
+      expect(res.status).toBe(200);
+      const resBody = await res.json();
+      expect(resBody.success).toBe(true);
+      expect(resBody.data.length).toBe(1);
+      expect(resBody.data[0].name).toBe('Alice Student');
+      expect(resBody.data[0].role).toBe(UserRole.STUDENT);
+    });
+
+    it('should return 403 Forbidden when professor queries GET /api/users?role=ADMIN or role=PROFESSOR', async () => {
+      const reqAdmin = new Request('http://localhost:3000/api/users?role=ADMIN');
+      const resAdmin = await usersGET(reqAdmin as any);
+      expect(resAdmin.status).toBe(403);
+
+      const reqProf = new Request('http://localhost:3000/api/users?role=PROFESSOR');
+      const resProf = await usersGET(reqProf as any);
+      expect(resProf.status).toBe(403);
+    });
+  });
 });

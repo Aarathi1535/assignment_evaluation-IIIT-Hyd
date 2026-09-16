@@ -38,12 +38,6 @@ const semesterOptions = [
   { value: '8', label: 'Semester 8' },
 ];
 
-const taOptions = [
-  { value: '60d5ec49315e2c56a84976fb', label: 'TA 1' },
-  { value: '60d5ec49315e2c56a84976fc', label: 'TA 2' },
-  { value: '60d5ec49315e2c56a84976fd', label: 'TA 3' },
-];
-
 const academicYearOptions = [
   { value: '2025-26', label: '2025-26' },
   { value: '2026-27', label: '2026-27' },
@@ -59,6 +53,7 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [taOptions, setTaOptions] = useState<{ value: string; label: string }[]>([]);
 
   const {
     register,
@@ -78,21 +73,41 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
   });
 
   useEffect(() => {
-    async function loadCourseDetails() {
+    async function loadData() {
       try {
-        const res = await fetch(`/api/courses/${id}`);
-        const data = await res.json();
-        if (data.success && data.data) {
-          const course = data.data;
+        const [courseRes, usersRes] = await Promise.all([
+          fetch(`/api/courses/${id}`),
+          fetch('/api/users?role=TA')
+        ]);
+        const courseData = await courseRes.json();
+        const usersData = await usersRes.json();
+
+        if (usersData.success && Array.isArray(usersData.data)) {
+          const options = usersData.data
+            .filter((u: { role?: string; isActive?: boolean }) => u.role?.toUpperCase() === 'TA' && u.isActive !== false)
+            .map((ta: { _id: string; name: string; email?: string }) => ({
+              value: String(ta._id),
+              label: ta.email ? `${ta.name} (${ta.email})` : ta.name,
+            }));
+          setTaOptions(options);
+        }
+
+        if (courseData.success && courseData.data) {
+          const course = courseData.data;
+          const assignedTaIds = Array.isArray(course.teachingAssistants)
+            ? course.teachingAssistants.map((t: unknown) =>
+                typeof t === 'object' && t !== null && '_id' in t ? String((t as { _id: unknown })._id) : String(t)
+              )
+            : [];
           reset({
             courseCode: course.courseCode || '',
             courseName: course.courseName || '',
             semester: course.semester !== undefined ? String(course.semester) : '',
             academicYear: course.academicYear || '',
-            teachingAssistants: course.teachingAssistants || [],
+            teachingAssistants: assignedTaIds,
           });
         } else {
-          setErrorMsg(data.message || 'Failed to load course details.');
+          setErrorMsg(courseData.message || 'Failed to load course details.');
         }
       } catch {
         setErrorMsg('Error fetching course details.');
@@ -100,7 +115,7 @@ export default function EditCoursePage({ params }: { params: Promise<{ id: strin
         setFetching(false);
       }
     }
-    loadCourseDetails();
+    loadData();
   }, [id, reset]);
 
   const onSubmit = async (values: FormValues) => {
