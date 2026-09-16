@@ -51,6 +51,7 @@ export interface RubricSidebarProps {
   initialRubric?: RubricData | null;
   initialScores?: Record<string, number>;
   initialFeedback?: Record<number, string>;
+  initialTagIds?: Record<number, string[]>;
   initialTags?: CommentTagData[] | null;
   allocatedQuestionNumber?: number;
   onRubricLoaded?: (rubric: RubricData | null) => void;
@@ -66,6 +67,7 @@ export function RubricSidebar({
   initialRubric,
   initialScores,
   initialFeedback,
+  initialTagIds,
   initialTags,
   allocatedQuestionNumber,
   onRubricLoaded,
@@ -85,6 +87,7 @@ export function RubricSidebar({
 
   // Question-level feedback & announcements state (AE-147)
   const [feedback, setFeedback] = useState<Record<number, string>>(initialFeedback ?? {});
+  const [tagIds, setTagIds] = useState<Record<number, string[]>>(initialTagIds ?? {});
   const [announcements, setAnnouncements] = useState<Record<number, string>>({});
   const [savingStatus, setSavingStatus] = useState<
     Record<number, { saving?: boolean; error?: string; success?: boolean }>
@@ -180,16 +183,23 @@ export function RubricSidebar({
         if (isMounted && json.success && Array.isArray(json.data)) {
           const loadedFeedback: Record<number, string> = {};
           const loadedScores: Record<string, number> = {};
+          const loadedTagIds: Record<number, string[]> = {};
 
           json.data.forEach(
             (grade: {
               question?: number;
               feedback?: string;
+              tagIds?: Array<string | { _id?: string }>;
               marksAwarded?: Array<{ criterionName: string; score: number }>;
             }) => {
               if (grade.question !== undefined && grade.question !== null) {
                 if (grade.feedback !== undefined) {
                   loadedFeedback[grade.question] = grade.feedback;
+                }
+                if (Array.isArray(grade.tagIds)) {
+                  loadedTagIds[grade.question] = grade.tagIds
+                    .map((t) => (typeof t === 'string' ? t : t._id ? t._id.toString() : String(t)))
+                    .filter(Boolean);
                 }
                 if (Array.isArray(grade.marksAwarded)) {
                   grade.marksAwarded.forEach((item) => {
@@ -202,6 +212,7 @@ export function RubricSidebar({
 
           setFeedback((prev) => ({ ...loadedFeedback, ...prev }));
           setScores((prev) => ({ ...loadedScores, ...prev }));
+          setTagIds((prev) => ({ ...loadedTagIds, ...prev }));
         }
       } catch {
         // Non-blocking grade loading failure
@@ -295,9 +306,9 @@ export function RubricSidebar({
     [onScoresChange]
   );
 
-  // Handle Tag Selection / Quick-Insert (AE-147)
+  // Handle Tag Selection / Quick-Insert (AE-147 & AE-149)
   const handleSelectTag = useCallback(
-    (qNum: number, tagLabel: string) => {
+    (qNum: number, tagLabel: string, tagId?: string) => {
       const currentText = feedback[qNum] || '';
       const { updatedFeedback, isDuplicate } = insertTagIntoFeedback(currentText, tagLabel);
 
@@ -311,6 +322,15 @@ export function RubricSidebar({
           ...prev,
           [qNum]: updatedFeedback,
         }));
+        if (tagId) {
+          setTagIds((prev) => {
+            const current = prev[qNum] || [];
+            if (!current.includes(tagId)) {
+              return { ...prev, [qNum]: [...current, tagId] };
+            }
+            return prev;
+          });
+        }
         setAnnouncements((prev) => ({
           ...prev,
           [qNum]: `Inserted comment tag: ${tagLabel}`,
@@ -352,6 +372,7 @@ export function RubricSidebar({
       });
 
       const currentFeedback = feedback[qNum] || '';
+      const currentTagIds = tagIds[qNum] || [];
 
       try {
         const res = await fetch(
@@ -362,6 +383,7 @@ export function RubricSidebar({
             body: JSON.stringify({
               marksAwarded,
               feedback: currentFeedback,
+              tagIds: currentTagIds,
             }),
           }
         );
@@ -393,7 +415,7 @@ export function RubricSidebar({
         }));
       }
     },
-    [scriptId, scores, feedback, onGradeSaved]
+    [scriptId, scores, feedback, tagIds, onGradeSaved]
   );
 
   // Calculations
@@ -725,7 +747,7 @@ export function RubricSidebar({
                       examId={examId}
                       initialTags={initialTags}
                       disabled={!isAllocated}
-                      onSelectTag={(label) => handleSelectTag(q.questionNumber, label)}
+                      onSelectTag={(label, tagId) => handleSelectTag(q.questionNumber, label, tagId)}
                     />
 
                     {/* Accessible Live Announcement Region */}

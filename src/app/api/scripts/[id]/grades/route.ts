@@ -32,7 +32,7 @@ export async function POST(
     await connectDB();
 
     const body = await req.json().catch(() => ({}));
-    const { question, marksAwarded, feedback, clientTotalScore } = body;
+    const { question, marksAwarded, feedback, tagIds, clientTotalScore } = body;
 
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
@@ -41,6 +41,7 @@ export async function POST(
       question: Number(question),
       marksAwarded: Array.isArray(marksAwarded) ? marksAwarded : [],
       feedback,
+      tagIds,
       userId: user.id,
       userRole: user.role,
       ipAddress,

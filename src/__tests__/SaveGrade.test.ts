@@ -7,6 +7,7 @@ import Rubric from '../models/Rubric';
 import AnswerScript from '../models/AnswerScript';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import Grade from '../models/Grade';
+import CommentTag, { TagScope } from '../models/CommentTag';
 import AuditLog from '../models/AuditLog';
 import gradingService from '../services/GradingService';
 import { HttpError } from '../lib/errors';
@@ -108,24 +109,24 @@ describe('AE-145: Save Grade (Service & API)', () => {
     const script = new AnswerScript({
       exam: examId,
       student: studentId,
-      filePath: '/scripts/script1.pdf',
-      filename: 'script1.pdf',
+      status: 'INGESTED',
       pageCount: 3,
+      pages: [],
       isActive: true,
     });
     const savedScript = await script.save();
     scriptId = savedScript._id as mongoose.Types.ObjectId;
 
-    // 5. Create Allocation: TA is allocated to Question 1 only (PENDING)
-    const allocation = new Allocation({
+    // 5. Create Allocation: TA is assigned to Question 1 (PENDING)
+    const alloc = new Allocation({
       exam: examId,
-      ta: taId,
       answerScript: scriptId,
+      ta: taId,
       allocatedBy: professorId,
       question: 1,
       status: AllocationStatus.PENDING,
     });
-    await allocation.save();
+    await alloc.save();
   });
 
   afterEach(async () => {
@@ -135,6 +136,7 @@ describe('AE-145: Save Grade (Service & API)', () => {
     await AnswerScript.deleteMany({});
     await Allocation.deleteMany({});
     await Grade.deleteMany({});
+    await CommentTag.deleteMany({});
     await AuditLog.deleteMany({});
     mockSessionUser = null;
   });
@@ -507,5 +509,276 @@ describe('AE-145: Save Grade (Service & API)', () => {
 
     const res = await gradesPOST(req, { params: Promise.resolve({ id: scriptId.toString() }) });
     expect(res.status).toBe(403);
+  });
+
+  // 15. Saving a preset tag persists its CommentTag ObjectId in Grade.tagIds
+  it('15. allows saving preset tag and persists its CommentTag ObjectId in Grade.tagIds', async () => {
+    const globalTag = await CommentTag.create({
+      label: 'Good explanation.',
+      scope: TagScope.GLOBAL,
+      createdBy: professorId,
+    });
+
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+      feedback: 'Good explanation.',
+      tagIds: [globalTag._id.toString()],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.tagIds).toBeDefined();
+    expect(saved.tagIds).toHaveLength(1);
+    expect(saved.tagIds![0].toString()).toBe(globalTag._id.toString());
+
+    // Verify in DB directly
+    const dbGrade = await Grade.findById(saved._id);
+    expect(dbGrade?.tagIds).toHaveLength(1);
+    expect(dbGrade?.tagIds![0].toString()).toBe(globalTag._id.toString());
+  });
+
+  // 16. Multiple different tags persist multiple IDs
+  it('16. allows persisting multiple different preset tags as ObjectIds', async () => {
+    const tag1 = await CommentTag.create({
+      label: 'Clear steps',
+      scope: TagScope.GLOBAL,
+      createdBy: professorId,
+    });
+    const tag2 = await CommentTag.create({
+      label: 'Accurate derivation',
+      scope: TagScope.EXAM,
+      exam: examId,
+      createdBy: professorId,
+    });
+
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+      feedback: 'Clear steps. Accurate derivation.',
+      tagIds: [tag1._id.toString(), tag2._id.toString()],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.tagIds).toHaveLength(2);
+    expect(saved.tagIds!.map((id) => id.toString())).toContain(tag1._id.toString());
+    expect(saved.tagIds!.map((id) => id.toString())).toContain(tag2._id.toString());
+  });
+
+  // 17. Same tag cannot be persisted twice (deduplicates on save)
+  it('17. deduplicates same tag ID if passed multiple times in tagIds', async () => {
+    const tag = await CommentTag.create({
+      label: 'Unique tag',
+      scope: TagScope.GLOBAL,
+      createdBy: professorId,
+    });
+
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 5 }],
+      tagIds: [tag._id.toString(), tag._id.toString(), tag._id],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.tagIds).toHaveLength(1);
+    expect(saved.tagIds![0].toString()).toBe(tag._id.toString());
+  });
+
+  // 18. Existing custom feedback remains intact when tag is saved
+  it('18. preserves existing custom feedback intact when saving tagIds', async () => {
+    const tag = await CommentTag.create({
+      label: 'Optimal Solution',
+      scope: TagScope.GLOBAL,
+      createdBy: professorId,
+    });
+
+    const customFeedback = 'The student demonstrated exceptional grasp of dynamic programming. Optimal Solution';
+
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+      feedback: customFeedback,
+      tagIds: [tag._id.toString()],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.feedback).toBe(customFeedback);
+    expect(saved.tagIds).toHaveLength(1);
+  });
+
+  // 19. Invalid tag ID is rejected server-side
+  it('19. rejects invalid tag ID format or non-existent tag ID with 400', async () => {
+    // 1. Invalid ObjectId format
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 1,
+        marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+        tagIds: ['invalid-not-an-id'],
+        userId: taId.toString(),
+        userRole: UserRole.TA,
+      })
+    ).rejects.toThrow(HttpError);
+
+    // 2. Non-existent ObjectId
+    const fakeId = new mongoose.Types.ObjectId();
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 1,
+        marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+        tagIds: [fakeId.toString()],
+        userId: taId.toString(),
+        userRole: UserRole.TA,
+      })
+    ).rejects.toThrow(HttpError);
+  });
+
+  // 20. Tag from another professor's exam is rejected
+  it('20. rejects EXAM tag belonging to a different exam with 403', async () => {
+    const otherExamId = new mongoose.Types.ObjectId();
+    const otherExamTag = await CommentTag.create({
+      label: 'Other Exam Special Tag',
+      scope: TagScope.EXAM,
+      exam: otherExamId,
+      createdBy: new mongoose.Types.ObjectId(),
+    });
+
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 1,
+        marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+        tagIds: [otherExamTag._id.toString()],
+        userId: taId.toString(),
+        userRole: UserRole.TA,
+      })
+    ).rejects.toThrow('Forbidden: Comment tag belongs to a different exam and cannot be attached.');
+  });
+
+  // 21. EXAM tag for current exam is accepted
+  it('21. accepts EXAM tag for current exam', async () => {
+    const examTag = await CommentTag.create({
+      label: 'Exam Specific Remark',
+      scope: TagScope.EXAM,
+      exam: examId,
+      createdBy: professorId,
+    });
+
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+      tagIds: [examTag._id.toString()],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.tagIds).toHaveLength(1);
+    expect(saved.tagIds![0].toString()).toBe(examTag._id.toString());
+  });
+
+  // 22. GLOBAL tag is accepted
+  it('22. accepts GLOBAL tag for any exam', async () => {
+    const globalTag = await CommentTag.create({
+      label: 'Universal Tag',
+      scope: TagScope.GLOBAL,
+      createdBy: new mongoose.Types.ObjectId(),
+    });
+
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+      tagIds: [globalTag._id.toString()],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.tagIds).toHaveLength(1);
+    expect(saved.tagIds![0].toString()).toBe(globalTag._id.toString());
+  });
+
+  // 23. Existing Grade.tagIds are not accidentally erased by an ordinary feedback/grade update
+  it('23. preserves existing Grade.tagIds when update request omits tagIds', async () => {
+    const tag = await CommentTag.create({
+      label: 'Persisted tag',
+      scope: TagScope.GLOBAL,
+      createdBy: professorId,
+    });
+
+    // Initial save with tagIds
+    const firstSave = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 5 }],
+      feedback: 'Initial feedback',
+      tagIds: [tag._id.toString()],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+    expect(firstSave.tagIds).toHaveLength(1);
+
+    // Second update modifying only score and feedback without passing tagIds (tagIds is undefined)
+    const secondSave = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }],
+      feedback: 'Updated feedback',
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(secondSave.totalScore).toBe(6);
+    expect(secondSave.feedback).toBe('Updated feedback');
+    expect(secondSave.tagIds).toHaveLength(1);
+    expect(secondSave.tagIds![0].toString()).toBe(tag._id.toString());
+  });
+
+  // 24. API endpoint POST /api/scripts/[id]/questions/[questionNumber]/grade accepts and persists tagIds
+  it('24. POST /api/scripts/[id]/questions/[questionNumber]/grade accepts and persists tagIds', async () => {
+    mockSessionUser = {
+      id: taId.toString(),
+      name: 'TA User',
+      email: 'ta@example.com',
+      role: UserRole.TA,
+    };
+
+    const tag = await CommentTag.create({
+      label: 'API Tag Test',
+      scope: TagScope.GLOBAL,
+      createdBy: professorId,
+    });
+
+    const req = new Request(`http://localhost:3000/api/scripts/${scriptId}/questions/1/grade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        marksAwarded: [
+          { criterionName: 'Correctness', score: 6 },
+          { criterionName: 'Complexity', score: 4 },
+        ],
+        feedback: 'API Tag Test feedback',
+        tagIds: [tag._id.toString()],
+      }),
+    });
+
+    const res = await questionGradePOST(req, {
+      params: Promise.resolve({ id: scriptId.toString(), questionNumber: '1' }),
+    });
+    expect(res.status).toBe(200);
+
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.tagIds).toBeDefined();
+    expect(json.data.tagIds).toHaveLength(1);
+    expect(json.data.tagIds[0].toString()).toBe(tag._id.toString());
   });
 });
