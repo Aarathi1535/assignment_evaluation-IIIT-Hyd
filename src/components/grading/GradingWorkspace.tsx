@@ -239,6 +239,7 @@ export function GradingWorkspace({
             {/* Rubric Sidebar Area */}
             <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0">
               <RubricSidebar
+                scriptId={scriptId}
                 examId={scriptData?.exam}
                 allocatedQuestionNumber={allocatedQuestionNumber}
                 onRubricLoaded={setRubricData}
