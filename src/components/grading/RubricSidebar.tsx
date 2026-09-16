@@ -33,25 +33,38 @@ export interface RubricData {
   version?: number;
 }
 
+export interface CriterionGradeEntry {
+  criterionName: string;
+  score: number;
+}
+
 export interface RubricSidebarProps {
   examId?: string;
   initialRubric?: RubricData | null;
+  initialScores?: Record<string, number>;
   allocatedQuestionNumber?: number;
   onRubricLoaded?: (rubric: RubricData | null) => void;
+  onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
   className?: string;
 }
 
 export function RubricSidebar({
   examId,
   initialRubric,
+  initialScores,
   allocatedQuestionNumber,
   onRubricLoaded,
+  onScoresChange,
   className = '',
 }: RubricSidebarProps) {
   const [rubric, setRubric] = useState<RubricData | null>(initialRubric ?? null);
   const [loading, setLoading] = useState<boolean>(!initialRubric && Boolean(examId));
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState<number>(0);
+
+  // Criterion-level score entry state
+  const [scores, setScores] = useState<Record<string, number | string>>(initialScores ?? {});
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const isQuestionWise = allocatedQuestionNumber !== undefined && allocatedQuestionNumber !== null;
 
@@ -130,10 +143,96 @@ export function RubricSidebar({
     setRetryKey((k) => k + 1);
   }, []);
 
+  const handleScoreChange = useCallback(
+    (qNum: number, cName: string, maxPoints: number, rawValue: string) => {
+      const key = `${qNum}-${cName}`;
+
+      if (rawValue.trim() === '') {
+        setScores((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          if (onScoresChange) {
+            const marksList: CriterionGradeEntry[] = Object.entries(next)
+              .filter(([, val]) => typeof val === 'number')
+              .map(([k, val]) => {
+                const criterionPart = k.substring(k.indexOf('-') + 1);
+                return { criterionName: criterionPart, score: Number(val) };
+              });
+            onScoresChange(marksList);
+          }
+          return next;
+        });
+        setErrors((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+        return;
+      }
+
+      const num = Number(rawValue);
+
+      if (Number.isNaN(num)) {
+        setScores((prev) => ({ ...prev, [key]: rawValue }));
+        setErrors((prev) => ({ ...prev, [key]: 'Please enter a valid number' }));
+        return;
+      }
+
+      if (num < 0) {
+        setScores((prev) => ({ ...prev, [key]: rawValue }));
+        setErrors((prev) => ({ ...prev, [key]: 'Score cannot be negative' }));
+        return;
+      }
+
+      if (num > maxPoints) {
+        setScores((prev) => ({ ...prev, [key]: rawValue }));
+        setErrors((prev) => ({
+          ...prev,
+          [key]: `Score cannot exceed maximum of ${maxPoints} pts`,
+        }));
+        return;
+      }
+
+      // Valid score
+      setScores((prev) => {
+        const next = { ...prev, [key]: num };
+        if (onScoresChange) {
+          const marksList: CriterionGradeEntry[] = Object.entries(next)
+            .filter(([, val]) => typeof val === 'number')
+            .map(([k, val]) => {
+              const criterionPart = k.substring(k.indexOf('-') + 1);
+              return { criterionName: criterionPart, score: Number(val) };
+            });
+          onScoresChange(marksList);
+        }
+        return next;
+      });
+
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    },
+    [onScoresChange]
+  );
+
   // Calculations
   const questions = rubric?.questions || [];
   const totalRubricMarks = questions.reduce((acc, q) => acc + (Number(q.maxMarks) || 0), 0);
 
+  const getQuestionScore = (q: RubricQuestion) => {
+    const sum = q.criteria.reduce((acc, c) => {
+      const key = `${q.questionNumber}-${c.criterionName}`;
+      const val = scores[key];
+      const err = errors[key];
+      if (typeof val === 'number' && !err && !Number.isNaN(val) && val >= 0 && val <= c.points) {
+        return acc + val;
+      }
+      return acc;
+    }, 0);
+    return Math.round(sum * 100) / 100;
+  };
 
   return (
     <div
@@ -244,7 +343,7 @@ export function RubricSidebar({
             {/* Questions list */}
             {questions.map((q) => {
               const isAllocated = !isQuestionWise || q.questionNumber === Number(allocatedQuestionNumber);
-              const pointsSum = q.criteria.reduce((sum, c) => sum + (Number(c.points) || 0), 0);
+              const questionScore = getQuestionScore(q);
 
               return (
                 <div
@@ -273,73 +372,148 @@ export function RubricSidebar({
                       </span>
                     </div>
 
-                    {/* Status Badge */}
-                    {isQuestionWise ? (
-                      isAllocated ? (
-                        <span
-                          data-testid="badge-allocated"
-                          className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
-                        >
-                          <CheckCircle2 className="h-3 w-3" />
-                          <span>Allocated</span>
-                        </span>
+                    <div className="flex items-center gap-2">
+                      {/* Read-only Question Total */}
+                      <div
+                        data-testid={`question-total-${q.questionNumber}`}
+                        aria-label={`Question ${q.questionNumber} Total Score`}
+                        aria-readonly="true"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-white text-slate-900 border border-slate-200 shadow-2xs"
+                      >
+                        <span className="text-2xs text-slate-500 font-semibold">Total:</span>
+                        <span className="font-mono text-brand-primary font-extrabold">{questionScore}</span>
+                        <span className="text-2xs text-slate-400 font-normal">/ {q.maxMarks}</span>
+                      </div>
+
+                      {/* Status Badge */}
+                      {isQuestionWise ? (
+                        isAllocated ? (
+                          <span
+                            data-testid="badge-allocated"
+                            className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+                          >
+                            <CheckCircle2 className="h-3 w-3" />
+                            <span>Allocated</span>
+                          </span>
+                        ) : (
+                          <span
+                            data-testid="badge-readonly"
+                            className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300"
+                          >
+                            <Lock className="h-3 w-3" />
+                            <span>Read-only</span>
+                          </span>
+                        )
                       ) : (
                         <span
-                          data-testid="badge-readonly"
-                          className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 border border-slate-300"
+                          data-testid="badge-editable"
+                          className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200"
                         >
-                          <Lock className="h-3 w-3" />
-                          <span>Read-only</span>
+                          <span>Editable</span>
                         </span>
-                      )
-                    ) : (
-                      <span
-                        data-testid="badge-editable"
-                        className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200"
-                      >
-                        <span>Editable</span>
-                      </span>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   {/* Criteria List */}
                   <div
                     data-testid={`rubric-criteria-list-${q.questionNumber}`}
-                    className="p-3 space-y-2.5 text-xs"
+                    className="p-3 space-y-3 text-xs"
                   >
                     {q.criteria.length === 0 ? (
                       <p className="text-2xs text-slate-400 italic">No sub-criteria specified for this question.</p>
                     ) : (
-                      q.criteria.map((c, cIdx) => (
-                        <div
-                          key={cIdx}
-                          data-testid={`criterion-item-${q.questionNumber}-${cIdx}`}
-                          className="bg-slate-50/70 border border-slate-200/80 rounded p-2.5 space-y-1"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="font-bold text-slate-900 leading-snug">
-                              {c.criterionName || `Criterion ${cIdx + 1}`}
-                            </span>
-                            <span className="shrink-0 text-2xs font-bold px-1.5 py-0.5 rounded bg-brand-primary/10 text-brand-primary font-mono">
-                              {c.points} {c.points === 1 ? 'pt' : 'pts'}
-                            </span>
-                          </div>
-                          {c.description && (
-                            <p className="text-2xs text-slate-600 leading-relaxed">
-                              {c.description}
-                            </p>
-                          )}
-                        </div>
-                      ))
-                    )}
+                      q.criteria.map((c, cIdx) => {
+                        const scoreKey = `${q.questionNumber}-${c.criterionName}`;
+                        const currentScore = scores[scoreKey] ?? '';
+                        const currentError = errors[scoreKey];
+                        const inputId = `score-input-${q.questionNumber}-${cIdx}`;
+                        const errorId = `score-error-${q.questionNumber}-${cIdx}`;
 
-                    {/* Criteria total vs maxMarks summary */}
-                    <div className="pt-1 flex items-center justify-between text-2xs text-slate-500 font-semibold border-t border-slate-100">
-                      <span>Criteria Total:</span>
-                      <span className={pointsSum === q.maxMarks ? 'text-emerald-700 font-bold' : 'text-slate-600'}>
-                        {pointsSum} / {q.maxMarks} pts
-                      </span>
-                    </div>
+                        return (
+                          <div
+                            key={cIdx}
+                            data-testid={`criterion-item-${q.questionNumber}-${cIdx}`}
+                            className={`bg-slate-50/70 border rounded p-2.5 space-y-2 transition-colors ${
+                              currentError ? 'border-rose-300 bg-rose-50/30' : 'border-slate-200/80'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-bold text-slate-900 leading-snug block">
+                                  {c.criterionName || `Criterion ${cIdx + 1}`}
+                                </span>
+                                {c.description && (
+                                  <p className="text-2xs text-slate-600 leading-relaxed mt-0.5">
+                                    {c.description}
+                                  </p>
+                                )}
+                              </div>
+                              <span className="shrink-0 text-2xs font-bold px-1.5 py-0.5 rounded bg-brand-primary/10 text-brand-primary font-mono">
+                                Max {c.points} {c.points === 1 ? 'pt' : 'pts'}
+                              </span>
+                            </div>
+
+                            {/* Score Entry Input Field */}
+                            <div className="flex flex-col gap-1 pt-1 border-t border-slate-200/60">
+                              <div className="flex items-center justify-between gap-2">
+                                <label
+                                  htmlFor={inputId}
+                                  className="text-2xs font-bold text-slate-700 select-none cursor-pointer"
+                                >
+                                  Score Awarded:
+                                </label>
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    id={inputId}
+                                    data-testid={inputId}
+                                    type="number"
+                                    min={0}
+                                    max={c.points}
+                                    step="any"
+                                    disabled={!isAllocated}
+                                    readOnly={!isAllocated}
+                                    value={currentScore}
+                                    onChange={(e) =>
+                                      handleScoreChange(
+                                        q.questionNumber,
+                                        c.criterionName,
+                                        c.points,
+                                        e.target.value
+                                      )
+                                    }
+                                    aria-label={`Score for ${c.criterionName} (Maximum ${c.points} points)`}
+                                    aria-invalid={Boolean(currentError)}
+                                    aria-describedby={currentError ? errorId : undefined}
+                                    className={`w-20 px-2 py-1 rounded border text-xs font-bold text-center transition-colors focus:outline-none ${
+                                      currentError
+                                        ? 'border-rose-400 bg-rose-50 text-rose-900 focus:ring-2 focus:ring-rose-300'
+                                        : isAllocated
+                                          ? 'border-slate-300 bg-white text-slate-900 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary'
+                                          : 'border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed'
+                                    }`}
+                                    placeholder="0"
+                                  />
+                                  <span className="text-2xs font-bold text-slate-500">/ {c.points} pts</span>
+                                </div>
+                              </div>
+
+                              {/* Accessible Validation Error Message */}
+                              {currentError && (
+                                <span
+                                  id={errorId}
+                                  data-testid={errorId}
+                                  role="alert"
+                                  className="text-2xs text-rose-600 font-semibold text-right"
+                                >
+                                  {currentError}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               );
@@ -352,3 +526,4 @@ export function RubricSidebar({
 }
 
 export default RubricSidebar;
+
