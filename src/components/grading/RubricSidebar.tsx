@@ -53,6 +53,7 @@ export interface RubricSidebarProps {
   initialFeedback?: Record<number, string>;
   initialTagIds?: Record<number, string[]>;
   initialTags?: CommentTagData[] | null;
+  initialFinalized?: Record<number, boolean>;
   allocatedQuestionNumber?: number;
   onRubricLoaded?: (rubric: RubricData | null) => void;
   onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
@@ -69,6 +70,7 @@ export function RubricSidebar({
   initialFeedback,
   initialTagIds,
   initialTags,
+  initialFinalized,
   allocatedQuestionNumber,
   onRubricLoaded,
   onScoresChange,
@@ -88,6 +90,7 @@ export function RubricSidebar({
   // Question-level feedback & announcements state (AE-147)
   const [feedback, setFeedback] = useState<Record<number, string>>(initialFeedback ?? {});
   const [tagIds, setTagIds] = useState<Record<number, string[]>>(initialTagIds ?? {});
+  const [finalizedQuestions, setFinalizedQuestions] = useState<Record<number, boolean>>(initialFinalized ?? {});
   const [announcements, setAnnouncements] = useState<Record<number, string>>({});
   const [savingStatus, setSavingStatus] = useState<
     Record<number, { saving?: boolean; error?: string; success?: boolean }>
@@ -184,6 +187,7 @@ export function RubricSidebar({
           const loadedFeedback: Record<number, string> = {};
           const loadedScores: Record<string, number> = {};
           const loadedTagIds: Record<number, string[]> = {};
+          const loadedFinalized: Record<number, boolean> = {};
 
           json.data.forEach(
             (grade: {
@@ -191,6 +195,7 @@ export function RubricSidebar({
               feedback?: string;
               tagIds?: Array<string | { _id?: string }>;
               marksAwarded?: Array<{ criterionName: string; score: number }>;
+              isFinal?: boolean;
             }) => {
               if (grade.question !== undefined && grade.question !== null) {
                 if (grade.feedback !== undefined) {
@@ -206,6 +211,9 @@ export function RubricSidebar({
                     loadedScores[`${grade.question}-${item.criterionName}`] = item.score;
                   });
                 }
+                if (grade.isFinal) {
+                  loadedFinalized[grade.question] = true;
+                }
               }
             }
           );
@@ -213,6 +221,7 @@ export function RubricSidebar({
           setFeedback((prev) => ({ ...loadedFeedback, ...prev }));
           setScores((prev) => ({ ...loadedScores, ...prev }));
           setTagIds((prev) => ({ ...loadedTagIds, ...prev }));
+          setFinalizedQuestions((prev) => ({ ...loadedFinalized, ...prev }));
         }
       } catch {
         // Non-blocking grade loading failure
@@ -350,9 +359,9 @@ export function RubricSidebar({
     [onFeedbackChange]
   );
 
-  // Handle Save Grade for Question (AE-145 Persistence)
+  // Handle Save Grade for Question (AE-145 Persistence & AE-8B Finalization)
   const handleSaveGrade = useCallback(
-    async (q: RubricQuestion) => {
+    async (q: RubricQuestion, isFinal = false) => {
       if (!scriptId) return;
 
       const qNum = q.questionNumber;
@@ -384,6 +393,7 @@ export function RubricSidebar({
               marksAwarded,
               feedback: currentFeedback,
               tagIds: currentTagIds,
+              isFinal,
             }),
           }
         );
@@ -394,6 +404,9 @@ export function RubricSidebar({
         }
 
         const json = await res.json();
+        if (isFinal) {
+          setFinalizedQuestions((prev) => ({ ...prev, [qNum]: true }));
+        }
         setSavingStatus((prev) => ({
           ...prev,
           [qNum]: { saving: false, error: undefined, success: true },
@@ -544,9 +557,18 @@ export function RubricSidebar({
             {/* Questions list */}
             {questions.map((q) => {
               const isAllocated = !isQuestionWise || q.questionNumber === Number(allocatedQuestionNumber);
+              const isFinalized = Boolean(finalizedQuestions[q.questionNumber]);
               const questionScore = getQuestionScore(q);
               const currentAnnouncement = announcements[q.questionNumber];
               const currentSaveStatus = savingStatus[q.questionNumber];
+
+              const isQuestionStarted =
+                Object.keys(scores).some(
+                  (k) =>
+                    k.startsWith(`${q.questionNumber}-`) &&
+                    scores[k] !== undefined &&
+                    scores[k] !== ''
+                ) || Boolean(feedback[q.questionNumber]);
 
               return (
                 <div
@@ -590,7 +612,32 @@ export function RubricSidebar({
                         <span className="text-2xs text-slate-400 font-normal">/ {q.maxMarks}</span>
                       </div>
 
-                      {/* Status Badge */}
+                      {/* Lifecycle Status Badge (AE-8B) */}
+                      {isFinalized ? (
+                        <span
+                          data-testid={`badge-status-${q.questionNumber}`}
+                          className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300"
+                        >
+                          <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                          <span>COMPLETED</span>
+                        </span>
+                      ) : isQuestionStarted ? (
+                        <span
+                          data-testid={`badge-status-${q.questionNumber}`}
+                          className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+                        >
+                          <span>IN_PROGRESS</span>
+                        </span>
+                      ) : (
+                        <span
+                          data-testid={`badge-status-${q.questionNumber}`}
+                          className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200"
+                        >
+                          <span>PENDING</span>
+                        </span>
+                      )}
+
+                      {/* Allocation Mode Badge */}
                       {isQuestionWise ? (
                         isAllocated ? (
                           <span
@@ -676,8 +723,8 @@ export function RubricSidebar({
                                     min={0}
                                     max={c.points}
                                     step="any"
-                                    disabled={!isAllocated}
-                                    readOnly={!isAllocated}
+                                    disabled={!isAllocated || isFinalized}
+                                    readOnly={!isAllocated || isFinalized}
                                     value={currentScore}
                                     onChange={(e) =>
                                       handleScoreChange(
@@ -693,7 +740,7 @@ export function RubricSidebar({
                                     className={`w-20 px-2 py-1 rounded border text-xs font-bold text-center transition-colors focus:outline-none ${
                                       currentError
                                         ? 'border-rose-400 bg-rose-50 text-rose-900 focus:ring-2 focus:ring-rose-300'
-                                        : isAllocated
+                                        : isAllocated && !isFinalized
                                           ? 'border-slate-300 bg-white text-slate-900 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary'
                                           : 'border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed'
                                     }`}
@@ -746,7 +793,7 @@ export function RubricSidebar({
                     <PresetCommentChips
                       examId={examId}
                       initialTags={initialTags}
-                      disabled={!isAllocated}
+                      disabled={!isAllocated || isFinalized}
                       onSelectTag={(label, tagId) => handleSelectTag(q.questionNumber, label, tagId)}
                     />
 
@@ -768,18 +815,20 @@ export function RubricSidebar({
                         data-testid={`feedback-input-${q.questionNumber}`}
                         rows={2}
                         maxLength={2000}
-                        disabled={!isAllocated}
-                        readOnly={!isAllocated}
+                        disabled={!isAllocated || isFinalized}
+                        readOnly={!isAllocated || isFinalized}
                         value={feedback[q.questionNumber] || ''}
                         onChange={(e) => handleFeedbackChange(q.questionNumber, e.target.value)}
                         placeholder={
-                          isAllocated
-                            ? 'Add question feedback or click preset chips above...'
-                            : 'Grading feedback is read-only.'
+                          isFinalized
+                            ? 'Grade finalized. Read-only.'
+                            : isAllocated
+                              ? 'Add question feedback or click preset chips above...'
+                              : 'Grading feedback is read-only.'
                         }
                         aria-label={`Feedback for Question ${q.questionNumber}`}
                         className={`w-full p-2 text-xs rounded border transition-all resize-y focus:outline-none ${
-                          isAllocated
+                          isAllocated && !isFinalized
                             ? 'bg-white border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary'
                             : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
                         }`}
@@ -801,32 +850,66 @@ export function RubricSidebar({
                           {currentSaveStatus?.success && (
                             <span className="text-2xs text-emerald-600 font-semibold flex items-center gap-1">
                               <CheckCircle2 className="h-3 w-3" />
-                              <span>Grade saved</span>
+                              <span>{isFinalized ? 'Grade finalized' : 'Grade saved'}</span>
                             </span>
                           )}
                         </div>
 
-                        <Button
-                          type="button"
-                          variant="primary"
-                          size="sm"
-                          data-testid={`save-grade-button-${q.questionNumber}`}
-                          disabled={currentSaveStatus?.saving}
-                          onClick={() => handleSaveGrade(q)}
-                          className="text-2xs h-7 px-3 gap-1 shrink-0 ml-auto"
-                        >
-                          {currentSaveStatus?.saving ? (
-                            <>
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              <span>Saving...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Save className="h-3 w-3" />
-                              <span>Save Grade</span>
-                            </>
-                          )}
-                        </Button>
+                        {isFinalized ? (
+                          <span
+                            data-testid={`finalized-indicator-${q.questionNumber}`}
+                            className="text-2xs text-emerald-700 font-semibold flex items-center gap-1 ml-auto"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                            <span>Grade Finalized</span>
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-2 shrink-0 ml-auto">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              data-testid={`save-grade-button-${q.questionNumber}`}
+                              disabled={currentSaveStatus?.saving}
+                              onClick={() => handleSaveGrade(q, false)}
+                              className="text-2xs h-7 px-2.5 gap-1"
+                            >
+                              {currentSaveStatus?.saving ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  <span>Saving...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3 w-3" />
+                                  <span>Save Grade</span>
+                                </>
+                              )}
+                            </Button>
+
+                            <Button
+                              type="button"
+                              variant="primary"
+                              size="sm"
+                              data-testid={`finalize-grade-button-${q.questionNumber}`}
+                              disabled={currentSaveStatus?.saving}
+                              onClick={() => handleSaveGrade(q, true)}
+                              className="text-2xs h-7 px-3 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                            >
+                              {currentSaveStatus?.saving ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  <span>Submitting...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  <span>Submit Final</span>
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

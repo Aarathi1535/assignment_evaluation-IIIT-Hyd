@@ -769,9 +769,14 @@ export class AllocationService {
      * Helper to execute a sequence of DB operations inside a transaction.
      * Gracefully falls back to normal non-transactional execution if the MongoDB topology doesn't support transactions.
      */
-    private static async runInTransaction<T>(
-        fn: (session: mongoose.ClientSession | undefined) => Promise<T>
+    static async runInTransaction<T>(
+        fn: (session: mongoose.ClientSession | undefined) => Promise<T>,
+        existingSession?: mongoose.ClientSession
     ): Promise<T> {
+        if (existingSession !== undefined) {
+            return await fn(existingSession);
+        }
+
         const connection = mongoose.connection;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const topology = (connection.getClient() as any)?.topology;
@@ -812,7 +817,8 @@ export class AllocationService {
      */
     static async claimAllocation(
         allocationId: string,
-        taId: string
+        taId: string,
+        options?: { session?: mongoose.ClientSession }
     ): Promise<IAllocation> {
         if (!mongoose.Types.ObjectId.isValid(allocationId)) {
             throw new HttpError('Invalid Allocation ID format', 400);
@@ -837,7 +843,7 @@ export class AllocationService {
                         claimedAt: new Date()
                     }
                 },
-                { new: true, session }
+                { new: true, session: session ?? null }
             );
 
             if (!allocation) {
@@ -870,10 +876,10 @@ export class AllocationService {
                     question: allocation.question,
                     taId: taId
                 }
-            }], { session });
+            }], { session: session ?? undefined });
 
             return allocation;
-        });
+        }, options?.session);
     }
 
     /**
@@ -964,7 +970,8 @@ export class AllocationService {
      */
     static async markCompleted(
         allocationId: string,
-        actor: unknown
+        actor: unknown,
+        options?: { session?: mongoose.ClientSession }
     ): Promise<IAllocation> {
         if (!mongoose.Types.ObjectId.isValid(allocationId)) {
             throw new HttpError('Invalid Allocation ID format', 400);
@@ -1024,7 +1031,7 @@ export class AllocationService {
                         completedAt: new Date()
                     }
                 },
-                { new: true, session }
+                { new: true, session: session ?? null }
             );
 
             if (!allocation) {
@@ -1062,10 +1069,10 @@ export class AllocationService {
                     actingUserId: actorIdStr,
                     isOverride
                 }
-            }], { session });
+            }], { session: session ?? undefined });
 
             return allocation;
-        });
+        }, options?.session);
 
         // Emit transport-independent progress update event after successful completion
         const owningTaId = allocation.ta.toString();
@@ -1859,7 +1866,11 @@ export class AllocationService {
         };
 
         if (question !== undefined && question !== null) {
-            query.question = question;
+            query.$or = [
+                { question: question },
+                { question: null },
+                { question: { $exists: false } }
+            ];
         }
 
         return await Allocation.findOne(query);

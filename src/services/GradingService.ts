@@ -34,6 +34,7 @@ export interface SaveGradeOptions {
     userRole: string;
     ipAddress?: string;
     clientTotalScore?: number;
+    isFinal?: boolean;
 }
 
 export class GradingService {
@@ -223,22 +224,7 @@ export class GradingService {
             marksAwarded,
         });
 
-        // 5. Check existing Grade and finalized protection
-        let gradeDoc = await Grade.findOne({
-            answerScript: script._id,
-            question,
-        });
-
-        const isExisting = Boolean(gradeDoc);
-
-        if (gradeDoc && gradeDoc.isFinal) {
-            throw new HttpError(
-                'Cannot edit grade: This grade has been finalized and cannot be modified.',
-                409
-            );
-        }
-
-        // Validate and sanitize feedback (AE-148)
+        // 4.5. Validate and sanitize feedback & tagIds (AE-148, AE-149)
         let processedFeedback: string | undefined = undefined;
         if (feedback !== undefined && feedback !== null) {
             if (typeof feedback !== 'string') {
@@ -251,7 +237,6 @@ export class GradingService {
             processedFeedback = trimmed;
         }
 
-        // Validate and sanitize tagIds (AE-149)
         let processedTagIds: mongoose.Types.ObjectId[] | undefined = undefined;
         if (tagIds !== undefined) {
             if (!Array.isArray(tagIds)) {
@@ -283,7 +268,6 @@ export class GradingService {
                 }
 
                 // Validate tag availability / authorization:
-                // GLOBAL tags or EXAM tags scoped to script.exam
                 for (const tag of foundTags) {
                     if (tag.scope === TagScope.GLOBAL) {
                         continue;
@@ -299,14 +283,147 @@ export class GradingService {
                     }
                 }
 
-                // Preserve order of resolved tag ObjectIds
                 processedTagIds = tagObjIds;
             } else {
                 processedTagIds = [];
             }
         }
 
-        // 6. Persist or Update Grade document
+        // 5. Final vs Draft Submission Flow
+        const shouldFinalize = Boolean(options.isFinal);
+
+        if (shouldFinalize) {
+            return await AllocationService.runInTransaction(async (session) => {
+                let gradeDoc = await Grade.findOne({
+                    answerScript: script._id,
+                    question,
+                }).session(session || null);
+
+                const isExisting = Boolean(gradeDoc);
+
+                if (gradeDoc && gradeDoc.isFinal) {
+                    throw new HttpError(
+                        'Cannot edit grade: This grade has been finalized and cannot be modified.',
+                        409
+                    );
+                }
+
+                if (allocationDoc) {
+                    const freshAlloc = await Allocation.findById(allocationDoc._id).session(session || null);
+                    if (!freshAlloc) {
+                        throw new HttpError('Allocation not found.', 404);
+                    }
+                    if (freshAlloc.status === AllocationStatus.COMPLETED) {
+                        throw new HttpError(
+                            'Cannot grade script: Allocation has already been marked as COMPLETED.',
+                            409
+                        );
+                    }
+                }
+
+                if (gradeDoc) {
+                    gradeDoc.rubric = rubric._id as mongoose.Types.ObjectId;
+                    gradeDoc.gradedBy = new mongoose.Types.ObjectId(userId);
+                    gradeDoc.marksAwarded = marksAwarded;
+                    gradeDoc.totalScore = computed.totalScore;
+                    if (processedFeedback !== undefined) {
+                        gradeDoc.feedback = processedFeedback;
+                    }
+                    if (processedTagIds !== undefined) {
+                        gradeDoc.tagIds = processedTagIds;
+                    }
+                    gradeDoc.isFinal = true;
+                } else {
+                    gradeDoc = new Grade({
+                        answerScript: script._id,
+                        rubric: rubric._id,
+                        gradedBy: new mongoose.Types.ObjectId(userId),
+                        question,
+                        marksAwarded,
+                        totalScore: computed.totalScore,
+                        feedback: processedFeedback !== undefined ? processedFeedback : '',
+                        tagIds: processedTagIds !== undefined ? processedTagIds : [],
+                        isFinal: true,
+                    });
+                }
+
+                let savedGrade: IGrade;
+                try {
+                    savedGrade = await gradeDoc.save({ session });
+
+                    if (allocationDoc) {
+                        const currentAlloc = await Allocation.findById(allocationDoc._id).session(session || null);
+                        if (currentAlloc && currentAlloc.status === AllocationStatus.PENDING) {
+                            try {
+                                await AllocationService.claimAllocation(allocationDoc._id.toString(), userId, { session });
+                            } catch {
+                                // Concurrent claim handled
+                            }
+                        }
+
+                        await AllocationService.markCompleted(
+                            allocationDoc._id.toString(),
+                            { id: userId, role: userRole },
+                            { session }
+                        );
+                    }
+                } catch (err) {
+                    // If running in a non-transactional topology (session is undefined), manually rollback to maintain invariant
+                    if (!session) {
+                        if (!isExisting && gradeDoc._id) {
+                            try {
+                                await Grade.deleteOne({ _id: gradeDoc._id });
+                            } catch {
+                                // Ignore cleanup errors
+                            }
+                        } else if (isExisting && gradeDoc._id) {
+                            try {
+                                await Grade.updateOne({ _id: gradeDoc._id }, { $set: { isFinal: false } });
+                            } catch {
+                                // Ignore cleanup errors
+                            }
+                        }
+                    }
+                    throw err;
+                }
+
+                await writeAuditLog({
+                    user: userId,
+                    action: 'GRADE_FINALIZED',
+                    outcome: 'SUCCESS',
+                    entityId: savedGrade._id as mongoose.Types.ObjectId,
+                    entityType: 'Grade',
+                    details: {
+                        examId: script.exam.toString(),
+                        answerScriptId: script._id.toString(),
+                        question,
+                        totalScore: computed.totalScore,
+                        marksAwardedCount: marksAwarded.length,
+                        rubricId: rubric._id.toString(),
+                        isFinal: true,
+                    },
+                    ipAddress,
+                });
+
+                return savedGrade;
+            });
+        }
+
+        // 6. Normal Non-Final Save (AE-145 Behavior)
+        let gradeDoc = await Grade.findOne({
+            answerScript: script._id,
+            question,
+        });
+
+        const isExisting = Boolean(gradeDoc);
+
+        if (gradeDoc && gradeDoc.isFinal) {
+            throw new HttpError(
+                'Cannot edit grade: This grade has been finalized and cannot be modified.',
+                409
+            );
+        }
+
         if (gradeDoc) {
             gradeDoc.rubric = rubric._id as mongoose.Types.ObjectId;
             gradeDoc.gradedBy = new mongoose.Types.ObjectId(userId);
@@ -334,7 +451,6 @@ export class GradingService {
 
         const savedGrade = await gradeDoc.save();
 
-        // 7. Claim allocation if this is the first successful save and status is PENDING
         if (allocationDoc && allocationDoc.status === AllocationStatus.PENDING) {
             try {
                 await AllocationService.claimAllocation(allocationDoc._id.toString(), userId);
@@ -343,7 +459,6 @@ export class GradingService {
             }
         }
 
-        // 8. Write audit log
         await writeAuditLog({
             user: userId,
             action: isExisting ? 'GRADE_UPDATED' : 'GRADE_SAVED',
@@ -357,6 +472,7 @@ export class GradingService {
                 totalScore: computed.totalScore,
                 marksAwardedCount: marksAwarded.length,
                 rubricId: rubric._id.toString(),
+                isFinal: false,
             },
             ipAddress,
         });
