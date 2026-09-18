@@ -197,6 +197,10 @@ export class CommentTagService {
                 throw new HttpError(`A tag with label "${label}" already exists for this exam`, 409);
             }
         } else if (scope === TagScope.GLOBAL) {
+            if (normalizedRole !== UserRole.ADMIN) {
+                throw new HttpError('Forbidden: Only administrators can create global comment tags', 403);
+            }
+
             // Duplicate check among GLOBAL tags
             const duplicate = await CommentTag.findOne({
                 label: { $regex: new RegExp(`^${escapeRegex(label)}$`, 'i') },

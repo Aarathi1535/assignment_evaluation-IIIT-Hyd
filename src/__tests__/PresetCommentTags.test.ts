@@ -35,6 +35,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
   let professorBId: mongoose.Types.ObjectId;
   let taId: mongoose.Types.ObjectId;
   let otherTaId: mongoose.Types.ObjectId;
+  let adminId: mongoose.Types.ObjectId;
 
   let courseAId: mongoose.Types.ObjectId;
   let examAId: mongoose.Types.ObjectId;
@@ -57,6 +58,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     professorBId = new mongoose.Types.ObjectId('000000000000000000000302');
     taId = new mongoose.Types.ObjectId('000000000000000000000303');
     otherTaId = new mongoose.Types.ObjectId('000000000000000000000304');
+    adminId = new mongoose.Types.ObjectId('000000000000000000000305');
 
     // Course & Exam owned by Professor A (TA assigned)
     const courseA = new Course({
@@ -121,8 +123,24 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     mockSessionUser = null;
   });
 
-  // 1. Professor can create GLOBAL tag
-  it('1. allows Professor to create a GLOBAL tag and writes an audit log', async () => {
+  // 1. Professor cannot create GLOBAL tag (403), Admin can create GLOBAL tag
+  it('1. rejects Professor creating a GLOBAL tag with 403, and allows Admin to create a GLOBAL tag with audit log', async () => {
+    // Professor attempt -> 403
+    await expect(
+      commentTagService.createTag(
+        {
+          label: 'Missing Base Case',
+          scope: TagScope.GLOBAL,
+          description: 'Recursive solution lacks termination condition',
+        },
+        {
+          userId: professorAId.toString(),
+          userRole: UserRole.PROFESSOR,
+        }
+      )
+    ).rejects.toThrow('Forbidden: Only administrators can create global comment tags');
+
+    // Admin attempt -> succeeds
     const tag = await commentTagService.createTag(
       {
         label: 'Missing Base Case',
@@ -130,8 +148,8 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
         description: 'Recursive solution lacks termination condition',
       },
       {
-        userId: professorAId.toString(),
-        userRole: UserRole.PROFESSOR,
+        userId: adminId.toString(),
+        userRole: UserRole.ADMIN,
       }
     );
 
@@ -139,7 +157,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     expect(tag.label).toBe('Missing Base Case');
     expect(tag.scope).toBe(TagScope.GLOBAL);
     expect(tag.exam).toBeNull();
-    expect(tag.createdBy.toString()).toBe(professorAId.toString());
+    expect(tag.createdBy.toString()).toBe(adminId.toString());
 
     // Check audit log
     const auditLogs = await AuditLog.find({ entityId: tag._id, entityType: 'CommentTag' });
@@ -225,7 +243,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     // Seed global tag
     await commentTagService.createTag(
       { label: 'Off-by-one Error', scope: TagScope.GLOBAL },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
 
     // Seed Exam A tag
@@ -260,7 +278,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     // Seed a tag
     const tag = await commentTagService.createTag(
       { label: 'Global Tag', scope: TagScope.GLOBAL },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
 
     // TA attempts update
@@ -285,7 +303,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
   it('6. returns both global and exam-specific tags when querying for an exam', async () => {
     await commentTagService.createTag(
       { label: 'Global Tag 1', scope: TagScope.GLOBAL },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
     await commentTagService.createTag(
       { label: 'Exam A Tag 1', scope: TagScope.EXAM, examId: examAId.toString() },
@@ -332,13 +350,13 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
   it('8. rejects duplicate GLOBAL tag labels with HTTP 409', async () => {
     await commentTagService.createTag(
       { label: 'Clean Code', scope: TagScope.GLOBAL },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
 
     await expect(
       commentTagService.createTag(
         { label: '  clean code  ', scope: TagScope.GLOBAL },
-        { userId: professorBId.toString(), userRole: UserRole.PROFESSOR }
+        { userId: adminId.toString(), userRole: UserRole.ADMIN }
       )
     ).rejects.toThrow('A global tag with label "clean code" already exists');
   });
@@ -362,7 +380,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
   it('10. allows the same label in GLOBAL scope and EXAM scope, and across different exams', async () => {
     const globalTag = await commentTagService.createTag(
       { label: 'Incorrect Complexity', scope: TagScope.GLOBAL },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
 
     const examATag = await commentTagService.createTag(
@@ -384,7 +402,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     await expect(
       commentTagService.createTag(
         { label: '   ', scope: TagScope.GLOBAL },
-        { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+        { userId: adminId.toString(), userRole: UserRole.ADMIN }
       )
     ).rejects.toThrow(HttpError);
   });
@@ -403,21 +421,21 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
   it('13. logs audit entries on update and delete mutations', async () => {
     const tag = await commentTagService.createTag(
       { label: 'Initial Tag', scope: TagScope.GLOBAL },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
 
     await commentTagService.updateTag(
       tag._id.toString(),
       { label: 'Renamed Tag', description: 'Updated note' },
-      { userId: professorAId.toString(), userRole: UserRole.PROFESSOR }
+      { userId: adminId.toString(), userRole: UserRole.ADMIN }
     );
 
     const updateLogs = await AuditLog.find({ entityId: tag._id, action: 'TAG_UPDATED' });
     expect(updateLogs).toHaveLength(1);
 
     await commentTagService.deleteTag(tag._id.toString(), {
-      userId: professorAId.toString(),
-      userRole: UserRole.PROFESSOR,
+      userId: adminId.toString(),
+      userRole: UserRole.ADMIN,
     });
 
     const deleteLogs = await AuditLog.find({ entityId: tag._id, action: 'TAG_DELETED' });
@@ -426,6 +444,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
 
   // 14. API Routes Integration: GET /api/tags, POST /api/tags, PUT /api/tags/[id], DELETE /api/tags/[id]
   it('14. integrates end-to-end with /api/tags and /api/tags/[id] HTTP endpoints', async () => {
+    // 0. Professor trying to POST a GLOBAL tag gets 403
     mockSessionUser = {
       id: professorAId.toString(),
       name: 'Professor A',
@@ -433,7 +452,28 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
       role: UserRole.PROFESSOR,
     };
 
-    // 1. POST /api/tags
+    const profCreateReq = new Request('http://localhost:3000/api/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        label: 'HTTP Prof Global Tag',
+        scope: 'GLOBAL',
+        description: 'Should fail with 403',
+      }),
+    });
+
+    const profCreateRes = await tagsPOST(profCreateReq);
+    expect(profCreateRes.status).toBe(403);
+
+    // Now act as Admin
+    mockSessionUser = {
+      id: adminId.toString(),
+      name: 'Admin User',
+      email: 'admin@example.com',
+      role: UserRole.ADMIN,
+    };
+
+    // 1. POST /api/tags as Admin
     const createReq = new Request('http://localhost:3000/api/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
