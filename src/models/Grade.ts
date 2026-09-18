@@ -85,9 +85,25 @@ const GradeSchema = new Schema<IGrade>(
 // Allow multiple grades per answer script for question-wise grading, but restrict to one grade per script + question combination (and one whole-script grade when question is absent).
 GradeSchema.index({ answerScript: 1, question: 1 }, { unique: true });
 
+// Server-authoritative totalScore calculation:
+// If marksAwarded is provided, recompute totalScore directly from criterion scores.
+// Client-provided totalScore is never trusted.
+GradeSchema.pre('validate', function () {
+    if (this.marksAwarded && Array.isArray(this.marksAwarded) && this.marksAwarded.length > 0) {
+        const computed = this.marksAwarded.reduce((sum, item) => sum + (Number(item.score) || 0), 0);
+        this.totalScore = Math.round(computed * 100) / 100;
+    }
+});
+
 // Prevent mixed-mode grading: an answer script cannot simultaneously have a whole-script grade and question-wise grades
 GradeSchema.pre('save', async function () {
     const GradeModel = this.constructor as mongoose.Model<IGrade>;
+    
+    // Server-authoritative totalScore calculation on save
+    if (this.marksAwarded && Array.isArray(this.marksAwarded) && this.marksAwarded.length > 0) {
+        const computed = this.marksAwarded.reduce((sum, item) => sum + (Number(item.score) || 0), 0);
+        this.totalScore = Math.round(computed * 100) / 100;
+    }
     
     if (this.question !== undefined && this.question !== null) {
         // Saving a question-wise grade. Ensure no whole-script grade exists for this script.
