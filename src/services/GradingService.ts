@@ -5,7 +5,7 @@ import AnswerScript from '../models/AnswerScript';
 import CommentTag, { TagScope } from '../models/CommentTag';
 import ExamRepository from '../repositories/ExamRepository';
 import AllocationService from './AllocationService';
-import { AllocationStatus } from '../models/Allocation';
+import Allocation, { AllocationStatus } from '../models/Allocation';
 import { UserRole } from '../constants/permissions';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
@@ -410,6 +410,8 @@ export class GradingService {
         const isProfessorOrAdmin =
             normalizedRole === UserRole.PROFESSOR || normalizedRole === UserRole.ADMIN;
 
+        let gradesQuery: Record<string, unknown> = { answerScript: script._id };
+
         if (isProfessorOrAdmin) {
             const exam = await ExamRepository.getExamById(
                 script.exam.toString(),
@@ -420,19 +422,35 @@ export class GradingService {
                 throw new HttpError('Forbidden: Access denied to the exam for this answer script.', 403);
             }
         } else {
-            const allocation = await AllocationService.verifyTaAllocation(
-                script._id,
-                userId
-            );
-            if (!allocation) {
+            const allocations = await Allocation.find({
+                answerScript: script._id,
+                ta: new mongoose.Types.ObjectId(userId),
+            });
+
+            if (!allocations || allocations.length === 0) {
                 throw new HttpError(
                     'Forbidden: You are not allocated to grade this answer script.',
                     403
                 );
             }
+
+            const hasWholeScriptAllocation = allocations.some(
+                (a) => a.question === null || a.question === undefined
+            );
+
+            if (!hasWholeScriptAllocation) {
+                const allocatedQuestions = allocations
+                    .map((a) => a.question)
+                    .filter((q): q is number => typeof q === 'number');
+
+                gradesQuery = {
+                    answerScript: script._id,
+                    question: { $in: allocatedQuestions },
+                };
+            }
         }
 
-        const grades = await Grade.find({ answerScript: script._id }).sort({ question: 1 });
+        const grades = await Grade.find(gradesQuery).sort({ question: 1 });
         return grades;
     }
 }
