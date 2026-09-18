@@ -10,9 +10,54 @@ import User from '../models/User';
 import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
 import Notification, { NotificationType } from '../models/Notification';
+import Rubric, { IRubric } from '../models/Rubric';
 import { Anonymizer } from '../lib/anonymizer';
 import { renderNotificationTemplate } from '../templates/notificationTemplates';
 export class AllocationService {
+    /**
+     * Checks whether an allocation satisfies completion readiness:
+     * - For a whole-script allocation (allocation.question == null):
+     *   every question in the exam rubric must have a Grade for this answerScript with isFinal === true.
+     * - For a question-wise allocation (allocation.question != null):
+     *   the allocated question must have a Grade for this answerScript with isFinal === true.
+     *
+     * Returns true if ready for completion, false otherwise.
+     */
+    static async isCompletionReady(
+        allocation: IAllocation | { exam: mongoose.Types.ObjectId | string; answerScript: mongoose.Types.ObjectId | string; question?: number | null },
+        options?: { session?: mongoose.ClientSession; rubric?: IRubric | null }
+    ): Promise<boolean> {
+        const session = options?.session ?? null;
+        const isWholeScript = allocation.question == null;
+
+        if (isWholeScript) {
+            let rubric = options?.rubric;
+            if (!rubric) {
+                rubric = await Rubric.findOne({
+                    exam: new mongoose.Types.ObjectId(allocation.exam.toString()),
+                    isActive: true,
+                }).session(session);
+            }
+            if (!rubric || !rubric.questions || rubric.questions.length === 0) {
+                return false;
+            }
+
+            const finalCount = await Grade.countDocuments({
+                answerScript: new mongoose.Types.ObjectId(allocation.answerScript.toString()),
+                isFinal: true,
+            }).session(session);
+
+            return finalCount >= rubric.questions.length;
+        } else {
+            const finalGrade = await Grade.findOne({
+                answerScript: new mongoose.Types.ObjectId(allocation.answerScript.toString()),
+                question: allocation.question,
+                isFinal: true,
+            }).session(session);
+
+            return Boolean(finalGrade);
+        }
+    }
     /**
      * Checks if grading has already commenced for the given exam.
      * Throws 400 HttpError if grading has commenced or grades exist.
@@ -769,9 +814,14 @@ export class AllocationService {
      * Helper to execute a sequence of DB operations inside a transaction.
      * Gracefully falls back to normal non-transactional execution if the MongoDB topology doesn't support transactions.
      */
-    private static async runInTransaction<T>(
-        fn: (session: mongoose.ClientSession | undefined) => Promise<T>
+    static async runInTransaction<T>(
+        fn: (session: mongoose.ClientSession | undefined) => Promise<T>,
+        existingSession?: mongoose.ClientSession
     ): Promise<T> {
+        if (existingSession !== undefined) {
+            return await fn(existingSession);
+        }
+
         const connection = mongoose.connection;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const topology = (connection.getClient() as any)?.topology;
@@ -812,7 +862,8 @@ export class AllocationService {
      */
     static async claimAllocation(
         allocationId: string,
-        taId: string
+        taId: string,
+        options?: { session?: mongoose.ClientSession }
     ): Promise<IAllocation> {
         if (!mongoose.Types.ObjectId.isValid(allocationId)) {
             throw new HttpError('Invalid Allocation ID format', 400);
@@ -837,7 +888,7 @@ export class AllocationService {
                         claimedAt: new Date()
                     }
                 },
-                { new: true, session }
+                { new: true, session: session ?? null }
             );
 
             if (!allocation) {
@@ -870,10 +921,10 @@ export class AllocationService {
                     question: allocation.question,
                     taId: taId
                 }
-            }], { session });
+            }], { session: session ?? undefined });
 
             return allocation;
-        });
+        }, options?.session);
     }
 
     /**
@@ -964,7 +1015,8 @@ export class AllocationService {
      */
     static async markCompleted(
         allocationId: string,
-        actor: unknown
+        actor: unknown,
+        options?: { session?: mongoose.ClientSession }
     ): Promise<IAllocation> {
         if (!mongoose.Types.ObjectId.isValid(allocationId)) {
             throw new HttpError('Invalid Allocation ID format', 400);
@@ -1024,7 +1076,7 @@ export class AllocationService {
                         completedAt: new Date()
                     }
                 },
-                { new: true, session }
+                { new: true, session: session ?? null }
             );
 
             if (!allocation) {
@@ -1062,10 +1114,10 @@ export class AllocationService {
                     actingUserId: actorIdStr,
                     isOverride
                 }
-            }], { session });
+            }], { session: session ?? undefined });
 
             return allocation;
-        });
+        }, options?.session);
 
         // Emit transport-independent progress update event after successful completion
         const owningTaId = allocation.ta.toString();
@@ -1859,7 +1911,11 @@ export class AllocationService {
         };
 
         if (question !== undefined && question !== null) {
-            query.question = question;
+            query.$or = [
+                { question: question },
+                { question: null },
+                { question: { $exists: false } }
+            ];
         }
 
         return await Allocation.findOne(query);

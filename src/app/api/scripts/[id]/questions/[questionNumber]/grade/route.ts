@@ -26,7 +26,7 @@ export async function POST(
     await connectDB();
 
     const body = await req.json().catch(() => ({}));
-    const { marksAwarded, feedback, tagIds, clientTotalScore } = body;
+    const { marksAwarded, feedback, tagIds, clientTotalScore, isFinal } = body;
 
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
@@ -40,6 +40,7 @@ export async function POST(
       userRole: user.role,
       ipAddress,
       clientTotalScore,
+      isFinal: Boolean(isFinal),
     });
 
     return NextResponse.json(
