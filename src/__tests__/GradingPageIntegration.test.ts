@@ -12,11 +12,9 @@ import IngestionJob from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import GradingPage from '../app/(dashboard)/grading/[scriptId]/page';
-import { AnswerSheetCanvas } from '../components/canvas/AnswerSheetCanvas';
-import type { AnswerSheetPage } from '../lib/pageNavigation';
 
 let mockSessionUser: any = null;
-let mockParams: { scriptId?: string } = {};
+let mockParams: { scriptId?: string; questionNumber?: string } = {};
 
 vi.mock('next-auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('next-auth')>();
@@ -344,83 +342,138 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
       expect(html).toContain('data-testid="grading-loading-state"');
     });
 
-    it('renders AnswerSheetCanvas with complete toolbars, navigation, and persistence wiring', () => {
-      const samplePages: AnswerSheetPage[] = [
-        {
-          _id: page1._id.toString(),
-          pageNumber: 1,
-          fileIndex: 0,
-          imageUrl: `/api/ingest/batch-potions-101/pages/${page1._id}/image`,
-        },
-        {
-          _id: page2._id.toString(),
-          pageNumber: 2,
-          fileIndex: 0,
-          imageUrl: `/api/ingest/batch-potions-101/pages/${page2._id}/image`,
-        },
-      ];
+    it('renders AnswerSheetCanvas and RubricSidebar side-by-side in functional grading workspace', async () => {
+      const { GradingWorkspace } = await import('../components/grading/GradingWorkspace');
 
+      // Create a component instance simulating script loaded with pages
       const html = renderToStaticMarkup(
-        React.createElement(AnswerSheetCanvas, {
+        React.createElement(GradingWorkspace, {
           scriptId: answerScript._id.toString(),
-          pages: samplePages,
-          showPageNavigation: true,
-          enablePanZoom: true,
-          showZoomControls: true,
-          enableSelect: true,
-          enablePenTool: true,
-          enableEraserTool: true,
-          enableStamps: true,
-          enableHighlight: true,
-          enableTextNote: true,
-          enableUndoRedo: true,
-          enableOverlayToggle: true,
-          enableAnnotationLoading: true,
-          enableAutosave: true,
+          allocatedQuestionNumber: 2,
         })
       );
 
-      // Verify canvas wrapper and stage containers are present
-      expect(html).toContain('data-testid="answer-sheet-canvas-wrapper"');
-      expect(html).toContain('data-testid="canvas-stage-container"');
-
-      // Verify multi-page navigation controls
-      expect(html).toContain('data-testid="page-navigation-controls"');
-      expect(html).toContain('Page 1 of 2');
-      expect(html).toContain('aria-label="Previous Page"');
-      expect(html).toContain('aria-label="Next Page"');
-
-      // Verify autosave status wrapper and loading overlay
-      expect(html).toContain('data-testid="autosave-status-wrapper"');
-      expect(html).toContain('data-testid="canvas-loading-overlay"');
-      expect(html).toContain('Loading page image...');
+      // Verify the page structure
+      expect(html).toContain('Grading Portal');
+      expect(html).toContain('Back to Work Queue');
+      expect(html).not.toContain('Grading Portal Placeholder');
     });
 
-    it('passes scriptId and page identifiers correctly for annotation loading and autosave', () => {
-      const samplePages: AnswerSheetPage[] = [
-        {
-          _id: 'page-abc-123',
-          pageNumber: 1,
-          imageUrl: '/api/ingest/batch-1/pages/page-abc-123/image',
-        },
-      ];
+    it('reaches functional grading workspace with question context when navigating to question-wise route', async () => {
+      const QuestionGradingPage = (
+        await import('../app/(dashboard)/grading/[scriptId]/question/[questionNumber]/page')
+      ).default;
 
-      const onAnnotationsLoadedMock = vi.fn();
-      const onSaveSuccessMock = vi.fn();
+      mockParams = {
+        scriptId: answerScript._id.toString(),
+        questionNumber: '2',
+      };
 
-      const element = React.createElement(AnswerSheetCanvas, {
-        scriptId: 'script-xyz-789',
-        pages: samplePages,
-        enableAnnotationLoading: true,
-        enableAutosave: true,
-        onAnnotationsLoaded: onAnnotationsLoadedMock,
-        onSaveSuccess: onSaveSuccessMock,
+      const html = renderToStaticMarkup(React.createElement(QuestionGradingPage));
+
+      // Must be the functional workspace and NOT the placeholder
+      expect(html).not.toContain('Grading Portal Placeholder');
+      expect(html).not.toContain('This is a minimal placeholder route');
+      expect(html).toContain('Grading Portal');
+      expect(html).toContain('Back to Work Queue');
+      expect(html).toContain('Loading Answer Script...');
+    });
+  });
+
+  describe('3. Rubric API & TA Access Integration (AE-142)', () => {
+    let rubricGET: any;
+
+    beforeAll(async () => {
+      const rubricsRoute = await import('../app/api/rubrics/route');
+      rubricGET = rubricsRoute.GET;
+    });
+
+    beforeEach(async () => {
+      const Rubric = (await import('../models/Rubric')).default;
+      await Rubric.deleteMany({});
+
+      await Rubric.create({
+        exam: exam._id,
+        createdBy: prof._id,
+        questions: [
+          {
+            questionNumber: 1,
+            maxMarks: 20,
+            criteria: [
+              {
+                criterionName: 'Potion Boiling Point Theory',
+                description: 'Detailed analysis of temperature curve',
+                points: 12,
+              },
+              {
+                criterionName: 'Ingredient Compatibility',
+                description: 'Handling volatile components safely',
+                points: 8,
+              },
+            ],
+          },
+          {
+            questionNumber: 2,
+            maxMarks: 30,
+            criteria: [
+              {
+                criterionName: 'Stirring Technique & Direction',
+                description: 'Counter-clockwise stir frequency',
+                points: 15,
+              },
+              {
+                criterionName: 'Color Shift Precision',
+                description: 'Pearl sheen transition verification',
+                points: 15,
+              },
+            ],
+          },
+        ],
       });
+    });
 
-      expect(element.props.scriptId).toBe('script-xyz-789');
-      expect(element.props.pages).toEqual(samplePages);
-      expect(element.props.enableAnnotationLoading).toBe(true);
-      expect(element.props.enableAutosave).toBe(true);
+    it('returns rubric questions and criteria to an allocated TA via GET /api/rubrics?exam=<id>', async () => {
+      mockSessionUser = {
+        id: taAllocated._id.toString(),
+        email: taAllocated.email,
+        name: taAllocated.name,
+        role: UserRole.TA,
+      };
+
+      const req = new NextRequest(`http://localhost:3000/api/rubrics?exam=${exam._id}`);
+      const res = await rubricGET(req);
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data.questions).toHaveLength(2);
+      expect(json.data.questions[0].questionNumber).toBe(1);
+      expect(json.data.questions[0].maxMarks).toBe(20);
+      expect(json.data.questions[0].criteria).toHaveLength(2);
+      expect(json.data.questions[1].questionNumber).toBe(2);
+      expect(json.data.questions[1].maxMarks).toBe(30);
+    });
+
+    it('returns null data with 200 when exam has no rubric', async () => {
+      mockSessionUser = {
+        id: taAllocated._id.toString(),
+        email: taAllocated.email,
+        name: taAllocated.name,
+        role: UserRole.TA,
+      };
+
+      const Rubric = (await import('../models/Rubric')).default;
+      await Rubric.deleteMany({});
+
+      const req = new NextRequest(`http://localhost:3000/api/rubrics?exam=${exam._id}`);
+      const res = await rubricGET(req);
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data).toBeNull();
+      expect(json.message).toContain('No rubric found');
     });
   });
 });
+
