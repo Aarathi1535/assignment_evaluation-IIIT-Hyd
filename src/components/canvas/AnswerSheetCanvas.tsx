@@ -22,6 +22,8 @@ import {
   Redo2,
   Eye,
   EyeOff,
+  RotateCw,
+  Sun,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
@@ -162,6 +164,17 @@ export function AnswerSheetCanvas({
   isOverlayVisible: propIsOverlayVisible,
   initialOverlayVisible = true,
   onOverlayVisibilityChange,
+  rotation: propRotation,
+  initialRotation = 0,
+  onRotationChange,
+  brightness: propBrightness,
+  initialBrightness = 0,
+  onBrightnessChange,
+  contrast: propContrast,
+  initialContrast = 0,
+  onContrastChange,
+  enableRotationControls = true,
+  enableImageAdjustments = true,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
   defaultStrokeWidth = DEFAULT_PEN_WIDTH,
   fallback,
@@ -397,16 +410,43 @@ export function AnswerSheetCanvas({
   const [isLoading, setIsLoading] = useState<boolean>(Boolean(effectiveSrc !== null));
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  // Controlled vs uncontrolled rotation (AE-150)
+  const [internalRotation, setInternalRotation] = useState<number>(initialRotation);
+  const activeRotation = propRotation !== undefined ? propRotation : internalRotation;
+
+  // Controlled vs uncontrolled brightness (AE-150)
+  const [internalBrightness, setInternalBrightness] = useState<number>(initialBrightness);
+  const activeBrightness = propBrightness !== undefined ? propBrightness : internalBrightness;
+
+  // Controlled vs uncontrolled contrast (AE-150)
+  const [internalContrast, setInternalContrast] = useState<number>(initialContrast);
+  const activeContrast = propContrast !== undefined ? propContrast : internalContrast;
+
+  // Image adjustments popup toggle state (AE-150)
+  const [showAdjustmentsMenu, setShowAdjustmentsMenu] = useState<boolean>(false);
+
   const [baseBounds, setBaseBounds] = useState<RenderedImageBounds | null>(null);
 
-  // Controlled/tracked transform (pan and zoom)
+  // Controlled/tracked transform (pan, zoom, rotation)
   const [transform, setTransform] = useState<PanZoomTransform>({
     x: 0,
     y: 0,
     zoom: 1.0,
+    rotation: activeRotation,
   });
 
   const stageDimensionsRef = useRef({ width: 800, height: 600 });
+
+  // Effective transform combining pan/zoom state with active rotation (AE-150)
+  const effectiveTransform = useMemo<PanZoomTransform>(
+    () => ({
+      x: transform.x,
+      y: transform.y,
+      zoom: transform.zoom,
+      rotation: activeRotation,
+    }),
+    [transform.x, transform.y, transform.zoom, activeRotation]
+  );
 
   // Synchronize loading/error state when effectiveSrc changes
   if (prevEffectiveSrc !== effectiveSrc) {
@@ -416,13 +456,13 @@ export function AnswerSheetCanvas({
       setHasError(false);
       setErrorMessage('');
       setBaseBounds(null);
-      setTransform({ x: 0, y: 0, zoom: 1.0 });
+      setTransform({ x: 0, y: 0, zoom: 1.0, rotation: activeRotation });
     } else {
       setIsLoading(true);
       setHasError(false);
       setErrorMessage('');
       setBaseBounds(null);
-      setTransform({ x: 0, y: 0, zoom: 1.0 });
+      setTransform({ x: 0, y: 0, zoom: 1.0, rotation: activeRotation });
     }
   }
 
@@ -1089,17 +1129,52 @@ export function AnswerSheetCanvas({
     navigateToPage(nextIdx);
   }, [sortedPages, totalPages, activePageIndex, navigateToPage]);
 
+  const handleRotate = useCallback(() => {
+    const nextRotation = (activeRotation + 90) % 360;
+    setInternalRotation(nextRotation);
+    onRotationChange?.(nextRotation);
+    setTransform((prev) => {
+      const nextTransform = { ...prev, rotation: nextRotation };
+      onTransformChange?.(nextTransform);
+      return nextTransform;
+    });
+  }, [activeRotation, onRotationChange, onTransformChange]);
+
+  const handleBrightnessChange = useCallback(
+    (newBrightness: number) => {
+      setInternalBrightness(newBrightness);
+      onBrightnessChange?.(newBrightness);
+    },
+    [onBrightnessChange]
+  );
+
+  const handleContrastChange = useCallback(
+    (newContrast: number) => {
+      setInternalContrast(newContrast);
+      onContrastChange?.(newContrast);
+    },
+    [onContrastChange]
+  );
+
+  const handleResetBrightness = useCallback(() => {
+    handleBrightnessChange(0);
+  }, [handleBrightnessChange]);
+
+  const handleResetContrast = useCallback(() => {
+    handleContrastChange(0);
+  }, [handleContrastChange]);
+
   const handleImageLoad = useCallback(
     (_img: HTMLImageElement, bounds: RenderedImageBounds) => {
       setIsLoading(false);
       setHasError(false);
       setBaseBounds(bounds);
-      const initialTransform = { x: bounds.x, y: bounds.y, zoom: 1.0 };
+      const initialTransform = { x: bounds.x, y: bounds.y, zoom: 1.0, rotation: activeRotation };
       setTransform(initialTransform);
       onLoad?.(bounds);
       onTransformChange?.(initialTransform);
     },
-    [onLoad, onTransformChange]
+    [activeRotation, onLoad, onTransformChange]
   );
 
   const handleImageError = useCallback(
@@ -1111,6 +1186,12 @@ export function AnswerSheetCanvas({
     },
     [onError]
   );
+
+  const handleRetry = useCallback(() => {
+    setIsLoading(true);
+    setHasError(false);
+    setErrorMessage('');
+  }, []);
 
   const handleTransformChange = useCallback(
     (newTransform: PanZoomTransform) => {
@@ -1127,14 +1208,14 @@ export function AnswerSheetCanvas({
   // Zoom Button Handlers
   const handleZoomIn = useCallback(() => {
     if (!baseBounds) return;
-    const targetZoom = calculateStepZoom(transform.zoom, DEFAULT_ZOOM_STEP, minZoom, maxZoom);
+    const targetZoom = calculateStepZoom(effectiveTransform.zoom, DEFAULT_ZOOM_STEP, minZoom, maxZoom);
     const centerX = stageDimensionsRef.current.width / 2;
     const centerY = stageDimensionsRef.current.height / 2;
 
     const nextTransform = calculateZoomTransform(
-      transform.x,
-      transform.y,
-      transform.zoom,
+      effectiveTransform.x,
+      effectiveTransform.y,
+      effectiveTransform.zoom,
       targetZoom,
       centerX,
       centerY,
@@ -1145,20 +1226,21 @@ export function AnswerSheetCanvas({
       maxZoom
     );
 
-    setTransform(nextTransform);
-    onTransformChange?.(nextTransform);
-  }, [baseBounds, transform, minZoom, maxZoom, onTransformChange]);
+    const fullTransform = { ...nextTransform, rotation: effectiveTransform.rotation };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+  }, [baseBounds, effectiveTransform, minZoom, maxZoom, onTransformChange]);
 
   const handleZoomOut = useCallback(() => {
     if (!baseBounds) return;
-    const targetZoom = calculateStepZoom(transform.zoom, -DEFAULT_ZOOM_STEP, minZoom, maxZoom);
+    const targetZoom = calculateStepZoom(effectiveTransform.zoom, -DEFAULT_ZOOM_STEP, minZoom, maxZoom);
     const centerX = stageDimensionsRef.current.width / 2;
     const centerY = stageDimensionsRef.current.height / 2;
 
     const nextTransform = calculateZoomTransform(
-      transform.x,
-      transform.y,
-      transform.zoom,
+      effectiveTransform.x,
+      effectiveTransform.y,
+      effectiveTransform.zoom,
       targetZoom,
       centerX,
       centerY,
@@ -1169,9 +1251,10 @@ export function AnswerSheetCanvas({
       maxZoom
     );
 
-    setTransform(nextTransform);
-    onTransformChange?.(nextTransform);
-  }, [baseBounds, transform, minZoom, maxZoom, onTransformChange]);
+    const fullTransform = { ...nextTransform, rotation: effectiveTransform.rotation };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+  }, [baseBounds, effectiveTransform, minZoom, maxZoom, onTransformChange]);
 
   const handleResetZoom = useCallback(() => {
     if (!baseBounds) return;
@@ -1179,12 +1262,13 @@ export function AnswerSheetCanvas({
       x: baseBounds.x,
       y: baseBounds.y,
       zoom: 1.0,
+      rotation: effectiveTransform.rotation || 0,
     };
     setTransform(resetTransform);
     onTransformChange?.(resetTransform);
-  }, [baseBounds, onTransformChange]);
+  }, [baseBounds, effectiveTransform.rotation, onTransformChange]);
 
-  const zoomPercent = Math.round(transform.zoom * 100);
+  const zoomPercent = Math.round(effectiveTransform.zoom * 100);
 
   // Accessible active page label
   const effectivePageLabel = useMemo(() => {
@@ -1203,7 +1287,46 @@ export function AnswerSheetCanvas({
         height: typeof height === 'number' ? `${height}px` : '100%',
       }}
       data-testid="answer-sheet-canvas-wrapper"
+      role="region"
+      aria-label={effectivePageLabel}
+      tabIndex={0}
     >
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div
+          className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white/80 backdrop-blur-xs transition-opacity"
+          data-testid="canvas-loading-overlay"
+        >
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600 mb-2" />
+          <span className="text-sm font-medium text-slate-700">Loading page...</span>
+        </div>
+      )}
+
+      {/* Error Overlay with Retry */}
+      {hasError && (
+        <div
+          className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white/95 p-6 text-center"
+          data-testid="canvas-error-overlay"
+        >
+          <div className="rounded-full bg-rose-100 p-3 mb-3">
+            <AlertCircle className="h-8 w-8 text-rose-600" />
+          </div>
+          <h4 className="text-base font-semibold text-slate-900 mb-1">Failed to load page</h4>
+          <p className="text-sm text-slate-600 max-w-sm mb-4">
+            {errorMessage || 'An error occurred while loading the answer sheet image.'}
+          </p>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            data-testid="canvas-retry-button"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Top Multi-Page Navigation Bar */}
       {isMultiPageMode && showPageNavigation && totalPages > 0 && (
         <nav
@@ -1249,7 +1372,7 @@ export function AnswerSheetCanvas({
 
       {/* Autosave Status Indicator (AE-137) */}
       {enableAutosave && Boolean(scriptId) && (
-        <div className="absolute top-3 right-3 z-20" data-testid="autosave-status-wrapper">
+        <div className="absolute top-3 right-3 z-20 pointer-events-auto" data-testid="autosave-status-wrapper">
           <SaveStatusIndicator
             status={saveStatus}
             onRetry={handleRetrySave}
@@ -1270,7 +1393,9 @@ export function AnswerSheetCanvas({
           src={effectiveSrc}
           alt={effectivePageLabel}
           fitMode={fitMode}
-          transform={transform}
+          transform={effectiveTransform}
+          brightness={activeBrightness}
+          contrast={activeContrast}
           minZoom={minZoom}
           maxZoom={maxZoom}
           enablePanZoom={enablePanZoom}
@@ -1280,9 +1405,9 @@ export function AnswerSheetCanvas({
           onTransformChange={handleTransformChange}
         />
 
-        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129 / AE-133) */}
+        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129 / AE-133 / AE-150) */}
         <PenLayer
-          transform={transform}
+          transform={effectiveTransform}
           pageKey={currentPageKey}
           isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           isEraserActive={activeEraserMode && !isLoading && !hasError && Boolean(effectiveSrc)}
@@ -1293,11 +1418,12 @@ export function AnswerSheetCanvas({
           smoothingOptions={smoothingOptions}
           color={effectiveStrokeColor}
           strokeWidth={effectiveStrokeWidth}
+          baseBounds={baseBounds}
         />
 
-        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132 / AE-133) */}
+        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132 / AE-133 / AE-150) */}
         <MarkLayer
-          transform={transform}
+          transform={effectiveTransform}
           pageKey={currentPageKey}
           activeTool={activeTool}
           annotations={currentPageAnnotations}
@@ -1308,14 +1434,15 @@ export function AnswerSheetCanvas({
           onAnnotationComplete={handleAnnotationComplete}
           onTextNoteClick={handleTextNoteClick}
           disabled={isLoading || hasError || !effectiveSrc}
+          baseBounds={baseBounds}
         />
       </CanvasStage>
 
-      {/* In-Place Text Note Editor Overlay (AE-131) */}
+      {/* In-Place Text Note Editor Overlay (AE-131 / AE-150) */}
       {activeTextEditor && !isLoading && !hasError && Boolean(effectiveSrc) && (
         <TextNoteEditor
-          x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).x}
-          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).y}
+          x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, effectiveTransform, baseBounds || undefined).x}
+          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, effectiveTransform, baseBounds || undefined).y}
           onConfirm={handleConfirmTextNote}
           onCancel={handleCancelTextNote}
         />
@@ -1550,6 +1677,133 @@ export function AnswerSheetCanvas({
                 )}
               </button>
             </>
+          )}
+
+          {/* Rotate Control (AE-150) */}
+          {enableRotationControls && (
+            <>
+              <div className="h-4 w-px bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={handleRotate}
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                aria-label={`Rotate Canvas 90° Clockwise (Current: ${activeRotation}°)`}
+                title={`Rotate 90° Clockwise (Current: ${activeRotation}°)`}
+                data-testid="canvas-rotate-button"
+              >
+                <RotateCw className="h-4 w-4" />
+              </button>
+            </>
+          )}
+
+          {/* Image Adjustments: Brightness & Contrast (AE-150) */}
+          {enableImageAdjustments && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowAdjustmentsMenu((prev) => !prev)}
+                className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                  showAdjustmentsMenu || activeBrightness !== 0 || activeContrast !== 0
+                    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+                aria-label="Image Adjustments (Brightness and Contrast)"
+                aria-expanded={showAdjustmentsMenu}
+                title="Image Adjustments (Brightness / Contrast)"
+                data-testid="canvas-image-adjust-toggle"
+              >
+                <Sun className="h-4 w-4" />
+              </button>
+
+              {/* Adjustments Dropdown Popover */}
+              {showAdjustmentsMenu && (
+                <div
+                  className="absolute bottom-full right-0 mb-2 w-56 p-3 bg-white border border-slate-200 rounded-lg shadow-lg z-30 flex flex-col gap-3 text-xs select-none"
+                  data-testid="canvas-image-adjust-panel"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 font-semibold text-slate-700">
+                    <span>Image Adjustments</span>
+                    {(activeBrightness !== 0 || activeContrast !== 0) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleResetBrightness();
+                          handleResetContrast();
+                        }}
+                        className="text-3xs text-blue-600 hover:underline font-normal"
+                        data-testid="canvas-adjustments-reset-all"
+                      >
+                        Reset All
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Brightness Control */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="font-medium">Brightness</span>
+                      <div className="flex items-center gap-1 font-mono text-3xs">
+                        <span>{activeBrightness > 0 ? `+${activeBrightness}` : activeBrightness}%</span>
+                        {activeBrightness !== 0 && (
+                          <button
+                            type="button"
+                            onClick={handleResetBrightness}
+                            className="text-slate-400 hover:text-slate-700 ml-1"
+                            title="Reset Brightness"
+                            data-testid="canvas-brightness-reset"
+                          >
+                            <RotateCcw className="h-2.5 w-2.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="-100"
+                      max="100"
+                      step="5"
+                      value={activeBrightness}
+                      onChange={(e) => handleBrightnessChange(Number(e.target.value))}
+                      className="w-full accent-blue-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg appearance-none"
+                      aria-label="Adjust Brightness"
+                      data-testid="canvas-brightness-slider"
+                    />
+                  </div>
+
+                  {/* Contrast Control */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="font-medium">Contrast</span>
+                      <div className="flex items-center gap-1 font-mono text-3xs">
+                        <span>{activeContrast > 0 ? `+${activeContrast}` : activeContrast}%</span>
+                        {activeContrast !== 0 && (
+                          <button
+                            type="button"
+                            onClick={handleResetContrast}
+                            className="text-slate-400 hover:text-slate-700 ml-1"
+                            title="Reset Contrast"
+                            data-testid="canvas-contrast-reset"
+                          >
+                            <RotateCcw className="h-2.5 w-2.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="-100"
+                      max="100"
+                      step="5"
+                      value={activeContrast}
+                      onChange={(e) => handleContrastChange(Number(e.target.value))}
+                      className="w-full accent-blue-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg appearance-none"
+                      aria-label="Adjust Contrast"
+                      data-testid="canvas-contrast-slider"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           <div className="h-4 w-px bg-slate-200 mx-0.5" />

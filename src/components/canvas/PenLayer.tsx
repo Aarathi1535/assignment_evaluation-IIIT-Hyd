@@ -21,6 +21,8 @@ import {
 } from '@/lib/strokeSmoothing';
 import type { PanZoomTransform } from '@/lib/panZoom';
 
+import type { RenderedImageBounds } from '@/lib/annotations';
+
 export interface PenLayerProps {
   /** Parent Konva stage instance */
   stage?: Konva.Stage | null;
@@ -48,6 +50,8 @@ export interface PenLayerProps {
   color?: string;
   /** Default pen stroke width */
   strokeWidth?: number;
+  /** Base image bounds for rotation pivot calculation (AE-150) */
+  baseBounds?: RenderedImageBounds | null;
 }
 
 export function PenLayer({
@@ -64,6 +68,7 @@ export function PenLayer({
   visible = true,
   color = DEFAULT_PEN_COLOR,
   strokeWidth = DEFAULT_PEN_WIDTH,
+  baseBounds = null,
 }: PenLayerProps) {
   const { stage: contextStage } = useCanvasStage();
   const stage = propStage || contextStage;
@@ -94,6 +99,7 @@ export function PenLayer({
   const visibleRef = useRef(visible);
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
+  const baseBoundsRef = useRef(baseBounds);
 
   useEffect(() => {
     transformRef.current = transform;
@@ -108,6 +114,7 @@ export function PenLayer({
     visibleRef.current = visible;
     colorRef.current = color;
     strokeWidthRef.current = strokeWidth;
+    baseBoundsRef.current = baseBounds;
   }, [
     transform,
     pageKey,
@@ -121,7 +128,33 @@ export function PenLayer({
     visible,
     color,
     strokeWidth,
+    baseBounds,
   ]);
+
+  // Helper to sync group transform with pan, zoom, rotation & center pivot
+  const syncGroupTransform = useCallback(() => {
+    if (!groupRef.current) return;
+    const currentTransform = transformRef.current;
+    const bounds = baseBoundsRef.current;
+    const rotation = currentTransform.rotation || 0;
+
+    if (bounds && bounds.width > 0 && bounds.height > 0) {
+      const cx = bounds.width / 2;
+      const cy = bounds.height / 2;
+      groupRef.current.position({
+        x: currentTransform.x + cx * currentTransform.zoom,
+        y: currentTransform.y + cy * currentTransform.zoom,
+      });
+      groupRef.current.offset({ x: cx, y: cy });
+      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+      groupRef.current.rotation(rotation);
+    } else {
+      groupRef.current.position({ x: currentTransform.x, y: currentTransform.y });
+      groupRef.current.offset({ x: 0, y: 0 });
+      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+      groupRef.current.rotation(rotation);
+    }
+  }, []);
 
   // Initialize Layer and Group
   useEffect(() => {
@@ -135,10 +168,6 @@ export function PenLayer({
 
     const group = new Konva.Group({
       name: 'pen-stroke-group',
-      x: transform.x,
-      y: transform.y,
-      scaleX: transform.zoom,
-      scaleY: transform.zoom,
       listening: false,
       visible,
     });
@@ -148,6 +177,8 @@ export function PenLayer({
 
     layerRef.current = layer;
     groupRef.current = group;
+    syncGroupTransform();
+
     const linesMap = linesMapRef.current;
 
     return () => {
@@ -157,7 +188,7 @@ export function PenLayer({
       layerRef.current = null;
       groupRef.current = null;
     };
-  }, [stage, transform.x, transform.y, transform.zoom, visible]);
+  }, [stage, visible, syncGroupTransform]);
 
   // Synchronize visibility changes
   useEffect(() => {
@@ -167,14 +198,12 @@ export function PenLayer({
     layerRef.current.batchDraw();
   }, [visible]);
 
-  // Synchronize group transform with pan/zoom
+  // Synchronize group transform with pan/zoom/rotation
   useEffect(() => {
     if (!groupRef.current || !layerRef.current) return;
-
-    groupRef.current.position({ x: transform.x, y: transform.y });
-    groupRef.current.scale({ x: transform.zoom, y: transform.zoom });
+    syncGroupTransform();
     layerRef.current.batchDraw();
-  }, [transform.x, transform.y, transform.zoom]);
+  }, [transform.x, transform.y, transform.zoom, transform.rotation, baseBounds, syncGroupTransform]);
 
   // Re-render committed strokes when strokes list or page changes
   useEffect(() => {
@@ -269,7 +298,12 @@ export function PenLayer({
       const screenY = e.clientY - rect.top;
 
       const currentTransform = transformRef.current;
-      const imagePoint = screenToImageCoordinates(screenX, screenY, currentTransform);
+      const imagePoint = screenToImageCoordinates(
+        screenX,
+        screenY,
+        currentTransform,
+        baseBoundsRef.current || undefined
+      );
 
       if (isEraserActiveRef.current) {
         isErasingRef.current = true;
@@ -330,7 +364,12 @@ export function PenLayer({
       const screenY = e.clientY - rect.top;
 
       const currentTransform = transformRef.current;
-      const nextPoint = screenToImageCoordinates(screenX, screenY, currentTransform);
+      const nextPoint = screenToImageCoordinates(
+        screenX,
+        screenY,
+        currentTransform,
+        baseBoundsRef.current || undefined
+      );
 
       if (isEraserActiveRef.current && isErasingRef.current) {
         const remaining = strokesRef.current.filter(
