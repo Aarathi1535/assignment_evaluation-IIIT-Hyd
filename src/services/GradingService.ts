@@ -235,6 +235,19 @@ export class GradingService {
             );
         }
 
+        // Validate and sanitize feedback (AE-148)
+        let processedFeedback: string | undefined = undefined;
+        if (feedback !== undefined && feedback !== null) {
+            if (typeof feedback !== 'string') {
+                throw new HttpError('Feedback must be a valid text string.', 400);
+            }
+            const trimmed = feedback.trim();
+            if (trimmed.length > 2000) {
+                throw new HttpError('Feedback exceeds maximum allowed length of 2000 characters.', 400);
+            }
+            processedFeedback = trimmed;
+        }
+
         // 6. Persist or Update Grade document
         let savedGrade: IGrade;
 
@@ -245,8 +258,9 @@ export class GradingService {
                 marksAwarded,
                 totalScore: computed.totalScore,
             };
-            if (feedback !== undefined) {
-                updateFields.feedback = feedback;
+
+            if (processedFeedback !== undefined) {
+                updateFields.feedback = processedFeedback;
             }
 
             const updateResult = await Grade.updateOne(
@@ -265,6 +279,7 @@ export class GradingService {
             if (!updated) {
                 throw new HttpError('Grade not found after update.', 404);
             }
+
             savedGrade = updated;
         } else {
             gradeDoc = new Grade({
@@ -274,12 +289,12 @@ export class GradingService {
                 question,
                 marksAwarded,
                 totalScore: computed.totalScore,
-                feedback: feedback || '',
+                feedback: processedFeedback !== undefined ? processedFeedback : '',
                 isFinal: false,
             });
+
             savedGrade = await gradeDoc.save();
         }
-
         // 7. Claim allocation if this is the first successful save and status is PENDING
         if (allocationDoc && allocationDoc.status === AllocationStatus.PENDING) {
             try {
@@ -308,6 +323,54 @@ export class GradingService {
         });
 
         return savedGrade;
+    }
+
+    /**
+     * Retrieves all Grade documents for a given AnswerScript (AE-148).
+     * Enforces access control (Exam access for Professor/Admin, allocation check for TA).
+     */
+    async getGradesForScript(
+        scriptId: string | mongoose.Types.ObjectId,
+        userId: string,
+        userRole: string
+    ): Promise<IGrade[]> {
+        if (!scriptId || !mongoose.Types.ObjectId.isValid(scriptId)) {
+            throw new HttpError('Invalid AnswerScript ID format.', 400);
+        }
+
+        const script = await AnswerScript.findOne({ _id: scriptId, isActive: true });
+        if (!script) {
+            throw new HttpError('Answer script not found.', 404);
+        }
+
+        const normalizedRole = userRole?.toUpperCase();
+        const isProfessorOrAdmin =
+            normalizedRole === UserRole.PROFESSOR || normalizedRole === UserRole.ADMIN;
+
+        if (isProfessorOrAdmin) {
+            const exam = await ExamRepository.getExamById(
+                script.exam.toString(),
+                userId,
+                userRole
+            );
+            if (!exam) {
+                throw new HttpError('Forbidden: Access denied to the exam for this answer script.', 403);
+            }
+        } else {
+            const allocation = await AllocationService.verifyTaAllocation(
+                script._id,
+                userId
+            );
+            if (!allocation) {
+                throw new HttpError(
+                    'Forbidden: You are not allocated to grade this answer script.',
+                    403
+                );
+            }
+        }
+
+        const grades = await Grade.find({ answerScript: script._id }).sort({ question: 1 });
+        return grades;
     }
 }
 

@@ -161,6 +161,60 @@ export function RubricSidebar({
     };
   }, [examId, initialRubric, retryKey, onRubricLoaded]);
 
+  // Load existing grades & feedback for this script (AE-148)
+  useEffect(() => {
+    if (!scriptId) return;
+
+    let isMounted = true;
+
+    async function loadExistingGrades() {
+      try {
+        const res = await fetch(`/api/scripts/${encodeURIComponent(scriptId!)}/grades`, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+
+        if (!res.ok) return;
+
+        const json = await res.json();
+        if (isMounted && json.success && Array.isArray(json.data)) {
+          const loadedFeedback: Record<number, string> = {};
+          const loadedScores: Record<string, number> = {};
+
+          json.data.forEach(
+            (grade: {
+              question?: number;
+              feedback?: string;
+              marksAwarded?: Array<{ criterionName: string; score: number }>;
+            }) => {
+              if (grade.question !== undefined && grade.question !== null) {
+                if (grade.feedback !== undefined) {
+                  loadedFeedback[grade.question] = grade.feedback;
+                }
+                if (Array.isArray(grade.marksAwarded)) {
+                  grade.marksAwarded.forEach((item) => {
+                    loadedScores[`${grade.question}-${item.criterionName}`] = item.score;
+                  });
+                }
+              }
+            }
+          );
+
+          setFeedback((prev) => ({ ...loadedFeedback, ...prev }));
+          setScores((prev) => ({ ...loadedScores, ...prev }));
+        }
+      } catch {
+        // Non-blocking grade loading failure
+      }
+    }
+
+    loadExistingGrades();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [scriptId]);
+
   const handleRetry = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -658,6 +712,12 @@ export function RubricSidebar({
                         <MessageSquare className="h-3 w-3 text-slate-500" />
                         <span>Question Feedback</span>
                       </label>
+                      <span
+                        data-testid={`feedback-char-counter-${q.questionNumber}`}
+                        className={`text-3xs font-mono ${(feedback[q.questionNumber]?.length || 0) > 2000 ? 'text-rose-600 font-bold' : 'text-slate-400'}`}
+                      >
+                        {feedback[q.questionNumber]?.length || 0}/2000
+                      </span>
                     </div>
 
                     {/* Quick-Insert Preset Comment Chips */}
@@ -685,6 +745,7 @@ export function RubricSidebar({
                         id={`feedback-input-${q.questionNumber}`}
                         data-testid={`feedback-input-${q.questionNumber}`}
                         rows={2}
+                        maxLength={2000}
                         disabled={!isAllocated}
                         readOnly={!isAllocated}
                         value={feedback[q.questionNumber] || ''}
