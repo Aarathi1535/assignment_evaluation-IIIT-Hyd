@@ -15,7 +15,7 @@ export interface CommentTagData {
 export interface PresetCommentChipsProps {
   examId?: string;
   initialTags?: CommentTagData[] | null;
-  onSelectTag: (tagLabel: string) => void;
+  onSelectTag: (tagLabel: string, tagId?: string) => void;
   disabled?: boolean;
   className?: string;
 }
@@ -219,7 +219,7 @@ export function PresetCommentChips({
               type="button"
               data-testid={`preset-tag-${tag._id}`}
               disabled={disabled}
-              onClick={() => onSelectTag(tag.label)}
+              onClick={() => onSelectTag(tag.label, tag._id)}
               aria-label={`Insert comment: ${tag.label}`}
               title={tag.description || tag.label}
               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-2xs font-semibold border transition-all text-left ${

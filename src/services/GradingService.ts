@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Grade, { IGrade, ICriterionGrade } from '../models/Grade';
 import Rubric, { IRubric, IQuestion } from '../models/Rubric';
 import AnswerScript from '../models/AnswerScript';
+import CommentTag, { TagScope } from '../models/CommentTag';
 import ExamRepository from '../repositories/ExamRepository';
 import AllocationService from './AllocationService';
 import { AllocationStatus } from '../models/Allocation';
@@ -28,6 +29,7 @@ export interface SaveGradeOptions {
     question: number;
     marksAwarded: ICriterionGrade[];
     feedback?: string;
+    tagIds?: Array<string | mongoose.Types.ObjectId>;
     userId: string;
     userRole: string;
     ipAddress?: string;
@@ -145,6 +147,7 @@ export class GradingService {
             question,
             marksAwarded,
             feedback,
+            tagIds,
             userId,
             userRole,
             ipAddress,
@@ -248,6 +251,61 @@ export class GradingService {
             processedFeedback = trimmed;
         }
 
+        // Validate and sanitize tagIds (AE-149)
+        let processedTagIds: mongoose.Types.ObjectId[] | undefined = undefined;
+        if (tagIds !== undefined) {
+            if (!Array.isArray(tagIds)) {
+                throw new HttpError('tagIds must be an array of tag IDs.', 400);
+            }
+
+            const uniqueTagIdStrings: string[] = [];
+            for (const id of tagIds) {
+                if (!id || !mongoose.Types.ObjectId.isValid(id.toString())) {
+                    throw new HttpError('Invalid comment tag ID format.', 400);
+                }
+                const str = id.toString();
+                if (!uniqueTagIdStrings.includes(str)) {
+                    uniqueTagIdStrings.push(str);
+                }
+            }
+
+            if (uniqueTagIdStrings.length > 0) {
+                const tagObjIds = uniqueTagIdStrings.map(
+                    (idStr) => new mongoose.Types.ObjectId(idStr)
+                );
+
+                const foundTags = await CommentTag.find({
+                    _id: { $in: tagObjIds },
+                });
+
+                if (foundTags.length !== uniqueTagIdStrings.length) {
+                    throw new HttpError('One or more comment tag IDs do not exist.', 400);
+                }
+
+                // Validate tag availability / authorization:
+                // GLOBAL tags or EXAM tags scoped to script.exam
+                for (const tag of foundTags) {
+                    if (tag.scope === TagScope.GLOBAL) {
+                        continue;
+                    } else if (tag.scope === TagScope.EXAM) {
+                        if (!tag.exam || tag.exam.toString() !== script.exam.toString()) {
+                            throw new HttpError(
+                                'Forbidden: Comment tag belongs to a different exam and cannot be attached.',
+                                403
+                            );
+                        }
+                    } else {
+                        throw new HttpError('Invalid comment tag scope.', 400);
+                    }
+                }
+
+                // Preserve order of resolved tag ObjectIds
+                processedTagIds = tagObjIds;
+            } else {
+                processedTagIds = [];
+            }
+        }
+
         // 6. Persist or Update Grade document
         let savedGrade: IGrade;
 
@@ -261,6 +319,10 @@ export class GradingService {
 
             if (processedFeedback !== undefined) {
                 updateFields.feedback = processedFeedback;
+            }
+
+            if (processedTagIds !== undefined) {
+                updateFields.tagIds = processedTagIds;
             }
 
             const updateResult = await Grade.updateOne(
@@ -290,6 +352,7 @@ export class GradingService {
                 marksAwarded,
                 totalScore: computed.totalScore,
                 feedback: processedFeedback !== undefined ? processedFeedback : '',
+                tagIds: processedTagIds !== undefined ? processedTagIds : [],
                 isFinal: false,
             });
 

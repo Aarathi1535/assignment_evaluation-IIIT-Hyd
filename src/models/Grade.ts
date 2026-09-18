@@ -13,6 +13,7 @@ export interface IGrade extends Document {
     marksAwarded: ICriterionGrade[];
     totalScore: number;
     feedback?: string;
+    tagIds?: mongoose.Types.ObjectId[];
     isFinal: boolean;
     question?: number;
     createdAt: Date;
@@ -67,6 +68,11 @@ const GradeSchema = new Schema<IGrade>(
             type: String,
             trim: true
         },
+        tagIds: [{
+            type: Schema.Types.ObjectId,
+            ref: 'CommentTag',
+            index: true
+        }],
         isFinal: {
             type: Boolean,
             default: false

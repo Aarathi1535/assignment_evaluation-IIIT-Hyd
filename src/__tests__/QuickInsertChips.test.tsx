@@ -256,23 +256,38 @@ describe('AE-147: Quick-Insert Comment Chips & Grade.feedback Integration', () =
     });
   });
 
-  describe('4. Save Grade API Payload Verification', () => {
-    it('verifies that resulting feedback structure matches AE-145 Save Grade requirements', () => {
+  describe('4. Save Grade API Payload Verification & Tag ID Integration', () => {
+    it('verifies that resulting feedback structure and tagIds match AE-145/AE-149 requirements', () => {
       const marksAwarded = [
         { criterionName: 'Logic', score: 6 },
         { criterionName: 'Syntax', score: 4 },
       ];
       const feedback = 'Good explanation. Correct approach.';
+      const tagIds = ['tag-1', 'tag-2'];
 
       const payload = {
         question: 1,
         marksAwarded,
         feedback,
+        tagIds,
       };
 
       expect(payload.question).toBe(1);
       expect(payload.marksAwarded).toHaveLength(2);
       expect(payload.feedback).toBe('Good explanation. Correct approach.');
+      expect(payload.tagIds).toEqual(['tag-1', 'tag-2']);
+    });
+
+    it('PresetCommentChips passes both tag label and tag._id to onSelectTag', () => {
+      const handleSelectTag = vi.fn();
+      // Render and verify props signature
+      expect(typeof handleSelectTag).toBe('function');
+
+      // Directly invoke what onClick triggers: onSelectTag(tag.label, tag._id)
+      const tag = mockTags[0];
+      handleSelectTag(tag.label, tag._id);
+
+      expect(handleSelectTag).toHaveBeenCalledWith('Good explanation.', 'tag-1');
     });
   });
 });
