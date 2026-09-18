@@ -10,9 +10,54 @@ import User from '../models/User';
 import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
 import Notification, { NotificationType } from '../models/Notification';
+import Rubric, { IRubric } from '../models/Rubric';
 import { Anonymizer } from '../lib/anonymizer';
 import { renderNotificationTemplate } from '../templates/notificationTemplates';
 export class AllocationService {
+    /**
+     * Checks whether an allocation satisfies completion readiness:
+     * - For a whole-script allocation (allocation.question == null):
+     *   every question in the exam rubric must have a Grade for this answerScript with isFinal === true.
+     * - For a question-wise allocation (allocation.question != null):
+     *   the allocated question must have a Grade for this answerScript with isFinal === true.
+     *
+     * Returns true if ready for completion, false otherwise.
+     */
+    static async isCompletionReady(
+        allocation: IAllocation | { exam: mongoose.Types.ObjectId | string; answerScript: mongoose.Types.ObjectId | string; question?: number | null },
+        options?: { session?: mongoose.ClientSession; rubric?: IRubric | null }
+    ): Promise<boolean> {
+        const session = options?.session ?? null;
+        const isWholeScript = allocation.question == null;
+
+        if (isWholeScript) {
+            let rubric = options?.rubric;
+            if (!rubric) {
+                rubric = await Rubric.findOne({
+                    exam: new mongoose.Types.ObjectId(allocation.exam.toString()),
+                    isActive: true,
+                }).session(session);
+            }
+            if (!rubric || !rubric.questions || rubric.questions.length === 0) {
+                return false;
+            }
+
+            const finalCount = await Grade.countDocuments({
+                answerScript: new mongoose.Types.ObjectId(allocation.answerScript.toString()),
+                isFinal: true,
+            }).session(session);
+
+            return finalCount >= rubric.questions.length;
+        } else {
+            const finalGrade = await Grade.findOne({
+                answerScript: new mongoose.Types.ObjectId(allocation.answerScript.toString()),
+                question: allocation.question,
+                isFinal: true,
+            }).session(session);
+
+            return Boolean(finalGrade);
+        }
+    }
     /**
      * Checks if grading has already commenced for the given exam.
      * Throws 400 HttpError if grading has commenced or grades exist.

@@ -251,8 +251,8 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
     expect(checkAlloc?.claimedAt?.toISOString()).toBe(initialClaimTime.toISOString());
   });
 
-  // 4. TA can complete their own allocation via endpoint
-  it('4. allows TA to complete their own IN_PROGRESS allocation via POST /api/allocations/[id]/complete', async () => {
+  // 4. TA can complete their own finalized question-wise allocation via endpoint
+  it('4. allows TA to complete their own IN_PROGRESS question-wise allocation with finalized grade via POST /api/allocations/[id]/complete', async () => {
     const allocation = await Allocation.create({
       exam: examId,
       ta: ta1Id,
@@ -262,6 +262,201 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
       rule: AllocationRule.QUESTION,
       question: 1,
       claimedAt: new Date(),
+    });
+
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 6 },
+        { criterionName: 'Complexity', score: 4 },
+      ],
+      totalScore: 10,
+      isFinal: true,
+    });
+
+    mockSessionUser = { id: ta1Id.toString(), role: UserRole.TA, email: 'hermione@hogwarts.edu' };
+
+    const res = await completePOST(new Request('http://localhost'), {
+      params: Promise.resolve({ id: allocation._id.toString() }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.data.status).toBe(AllocationStatus.COMPLETED);
+    expect(body.data.completedAt).toBeDefined();
+
+    const dbAlloc = await Allocation.findById(allocation._id);
+    expect(dbAlloc?.status).toBe(AllocationStatus.COMPLETED);
+    expect(dbAlloc?.completedAt).toBeDefined();
+  });
+
+  // 4b. POST complete returns 409 for allocation with no grades
+  it('4b. rejects POST complete with 409 if no grades exist for the allocation', async () => {
+    const allocation = await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: scriptId,
+      allocatedBy: professorId,
+      status: AllocationStatus.IN_PROGRESS,
+      rule: AllocationRule.QUESTION,
+      question: 1,
+      claimedAt: new Date(),
+    });
+
+    mockSessionUser = { id: ta1Id.toString(), role: UserRole.TA, email: 'hermione@hogwarts.edu' };
+
+    const res = await completePOST(new Request('http://localhost'), {
+      params: Promise.resolve({ id: allocation._id.toString() }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toMatch(/all allocated questions must have finalized grades/i);
+
+    const dbAlloc = await Allocation.findById(allocation._id);
+    expect(dbAlloc?.status).toBe(AllocationStatus.IN_PROGRESS);
+    expect(dbAlloc?.completedAt).toBeUndefined();
+  });
+
+  // 4c. POST complete returns 409 for draft-only allocation
+  it('4c. rejects POST complete with 409 if grade is only a draft (isFinal === false)', async () => {
+    const allocation = await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: scriptId,
+      allocatedBy: professorId,
+      status: AllocationStatus.IN_PROGRESS,
+      rule: AllocationRule.QUESTION,
+      question: 1,
+      claimedAt: new Date(),
+    });
+
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 5 },
+      ],
+      totalScore: 5,
+      isFinal: false,
+    });
+
+    mockSessionUser = { id: ta1Id.toString(), role: UserRole.TA, email: 'hermione@hogwarts.edu' };
+
+    const res = await completePOST(new Request('http://localhost'), {
+      params: Promise.resolve({ id: allocation._id.toString() }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toMatch(/all allocated questions must have finalized grades/i);
+
+    const dbAlloc = await Allocation.findById(allocation._id);
+    expect(dbAlloc?.status).toBe(AllocationStatus.IN_PROGRESS);
+    expect(dbAlloc?.completedAt).toBeUndefined();
+  });
+
+  // 4d. POST complete returns 409 for partially finalized whole-script allocation
+  it('4d. rejects POST complete with 409 for whole-script allocation when only some rubric questions are finalized', async () => {
+    const allocation = await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: scriptId,
+      allocatedBy: professorId,
+      status: AllocationStatus.IN_PROGRESS,
+      rule: AllocationRule.EQUAL,
+      claimedAt: new Date(),
+    });
+
+    // Q1 is finalized
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 6 },
+        { criterionName: 'Complexity', score: 4 },
+      ],
+      totalScore: 10,
+      isFinal: true,
+    });
+
+    // Q2 is draft (isFinal: false)
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 2,
+      marksAwarded: [
+        { criterionName: 'Derivation', score: 8 },
+      ],
+      totalScore: 8,
+      isFinal: false,
+    });
+
+    mockSessionUser = { id: ta1Id.toString(), role: UserRole.TA, email: 'hermione@hogwarts.edu' };
+
+    const res = await completePOST(new Request('http://localhost'), {
+      params: Promise.resolve({ id: allocation._id.toString() }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toMatch(/all allocated questions must have finalized grades/i);
+
+    const dbAlloc = await Allocation.findById(allocation._id);
+    expect(dbAlloc?.status).toBe(AllocationStatus.IN_PROGRESS);
+    expect(dbAlloc?.completedAt).toBeUndefined();
+  });
+
+  // 4e. POST complete succeeds for fully finalized whole-script allocation
+  it('4e. allows completing whole-script allocation via POST complete when all rubric questions are finalized', async () => {
+    const allocation = await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: scriptId,
+      allocatedBy: professorId,
+      status: AllocationStatus.IN_PROGRESS,
+      rule: AllocationRule.EQUAL,
+      claimedAt: new Date(),
+    });
+
+    // Q1 is finalized
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 6 },
+        { criterionName: 'Complexity', score: 4 },
+      ],
+      totalScore: 10,
+      isFinal: true,
+    });
+
+    // Q2 is finalized
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 2,
+      marksAwarded: [
+        { criterionName: 'Derivation', score: 10 },
+        { criterionName: 'Clarity', score: 5 },
+      ],
+      totalScore: 15,
+      isFinal: true,
     });
 
     mockSessionUser = { id: ta1Id.toString(), role: UserRole.TA, email: 'hermione@hogwarts.edu' };
@@ -292,6 +487,17 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
       rule: AllocationRule.QUESTION,
       question: 1,
       claimedAt: new Date(),
+    });
+
+    // Finalized grade exists for Q1
+    await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: ta1Id,
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 6 }, { criterionName: 'Complexity', score: 4 }],
+      totalScore: 10,
+      isFinal: true,
     });
 
     // TA2 attempts to complete TA1's allocation
@@ -562,8 +768,8 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
     expect(checkQ2?.completedAt).toBeUndefined();
   });
 
-  // 15. Whole-script allocation completion follows existing semantics
-  it('15. supports whole-script allocation claim on first save and completion on final save', async () => {
+  // 15. Whole-script allocation completion: remains IN_PROGRESS on partial finalization, editable for remaining questions, and completes only when all rubric questions are final
+  it('15. keeps whole-script allocation IN_PROGRESS on partial question finalization, allows remaining questions to be edited/finalized, and completes only when all questions are finalized', async () => {
     const wholeScriptAlloc = await Allocation.create({
       exam: examId,
       ta: ta1Id,
@@ -573,7 +779,7 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
       rule: AllocationRule.EQUAL,
     });
 
-    // First save claims whole-script allocation
+    // 1. First save (Q1 draft) claims whole-script allocation (PENDING -> IN_PROGRESS)
     await gradingService.saveGrade({
       scriptId: scriptId.toString(),
       question: 1,
@@ -584,11 +790,46 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
       userRole: UserRole.TA,
     });
 
-    const claimedAlloc = await Allocation.findById(wholeScriptAlloc._id);
-    expect(claimedAlloc?.status).toBe(AllocationStatus.IN_PROGRESS);
-    expect(claimedAlloc?.claimedAt).toBeDefined();
+    let allocState = await Allocation.findById(wholeScriptAlloc._id);
+    expect(allocState?.status).toBe(AllocationStatus.IN_PROGRESS);
+    expect(allocState?.claimedAt).toBeDefined();
 
-    // Final submit completes the whole-script allocation
+    // 2. Finalize Question 1: allocation must remain IN_PROGRESS because Q2 is not yet final (1 of 2 questions final)
+    await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 6 },
+        { criterionName: 'Complexity', score: 4 },
+      ],
+      isFinal: true,
+      userId: ta1Id.toString(),
+      userRole: UserRole.TA,
+    });
+
+    allocState = await Allocation.findById(wholeScriptAlloc._id);
+    expect(allocState?.status).toBe(AllocationStatus.IN_PROGRESS);
+    expect(allocState?.completedAt).toBeUndefined();
+
+    // 3. Question 2 remains editable (save draft for Question 2)
+    const q2Draft = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 2,
+      marksAwarded: [
+        { criterionName: 'Derivation', score: 8 },
+        { criterionName: 'Clarity', score: 3 },
+      ],
+      isFinal: false,
+      userId: ta1Id.toString(),
+      userRole: UserRole.TA,
+    });
+    expect(q2Draft.isFinal).toBe(false);
+    expect(q2Draft.totalScore).toBe(11);
+
+    allocState = await Allocation.findById(wholeScriptAlloc._id);
+    expect(allocState?.status).toBe(AllocationStatus.IN_PROGRESS);
+
+    // 4. Finalize Question 2 (last remaining rubric question -> 2 of 2 questions final): marks allocation COMPLETED
     await gradingService.saveGrade({
       scriptId: scriptId.toString(),
       question: 2,
@@ -604,6 +845,7 @@ describe('AE-8B: Allocation Claim & Completion Lifecycle', () => {
     const completedAlloc = await Allocation.findById(wholeScriptAlloc._id);
     expect(completedAlloc?.status).toBe(AllocationStatus.COMPLETED);
     expect(completedAlloc?.completedAt).toBeDefined();
+    expect(completedAlloc?.completedAt).toBeInstanceOf(Date);
   });
 
   // 16. Duplicate final submission is safely rejected / idempotent (returns 409)

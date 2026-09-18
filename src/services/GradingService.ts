@@ -361,11 +361,18 @@ export class GradingService {
                             }
                         }
 
-                        await AllocationService.markCompleted(
-                            allocationDoc._id.toString(),
-                            { id: userId, role: userRole },
-                            { session }
+                        const isReady = await AllocationService.isCompletionReady(
+                            allocationDoc,
+                            { session: session || undefined, rubric }
                         );
+
+                        if (isReady) {
+                            await AllocationService.markCompleted(
+                                allocationDoc._id.toString(),
+                                { id: userId, role: userRole },
+                                { session }
+                            );
+                        }
                     }
                 } catch (err) {
                     // If running in a non-transactional topology (session is undefined), manually rollback to maintain invariant
