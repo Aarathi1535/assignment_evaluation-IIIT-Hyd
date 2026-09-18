@@ -99,6 +99,8 @@ export interface PageImageLayerProps {
   maxZoom?: number;
   /** Whether interactive pan/zoom is enabled (default true) */
   enablePanZoom?: boolean;
+  /** Page rotation in degrees (0, 90, 180, 270) (AE-150 / AE-151) */
+  rotation?: number;
   /** Whether freehand pen tool mode is currently active (disables drag-pan in favor of drawing) */
   isPenActive?: boolean;
   /** Parent Konva stage instance */
@@ -122,6 +124,8 @@ export interface AnswerSheetCanvasProps {
   pageLabel?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */
   fitMode?: ImageFitMode;
+  /** Page rotation in degrees (0, 90, 180, 270) (AE-150 / AE-151) */
+  rotation?: number;
   /** Custom width (defaults to 'auto' responsive) */
   width?: number | 'auto';
   /** Custom height (defaults to 'auto' responsive) */
@@ -138,6 +142,12 @@ export interface AnswerSheetCanvasProps {
   enablePanZoom?: boolean;
   /** Whether to show the floating zoom toolbar controls (default true) */
   showZoomControls?: boolean;
+  /** Callback fired when Fit Width preset is applied (AE-151) */
+  onFitWidth?: () => void;
+  /** Callback fired when Actual Size (1:1) preset is applied (AE-151) */
+  onActualSize?: () => void;
+  /** Callback fired when Fit to Page preset is applied (AE-151) */
+  onFitPage?: () => void;
   /** Whether the select / move / delete tool is enabled (default true, AE-132) */
   enableSelect?: boolean;
   /** Controlled selected annotation ID (AE-132) */
