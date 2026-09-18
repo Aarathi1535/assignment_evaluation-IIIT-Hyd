@@ -641,4 +641,79 @@ describe('AE-145: Save Grade (Service & API)', () => {
 
     vi.restoreAllMocks();
   });
+
+  // 17. Question maxMarks validation: sum of criteria exceeds question.maxMarks
+  it('17. rejects grade when sum of criterion scores exceeds question.maxMarks even if individual criteria are valid', async () => {
+    // Update question 1 maxMarks in rubric to 8 (criteria points are 6 and 4)
+    await Rubric.updateOne(
+      { _id: rubricId, 'questions.questionNumber': 1 },
+      { $set: { 'questions.$.maxMarks': 8 } }
+    );
+
+    // Submit 5 (<= 6) and 4 (<= 4), sum = 9 > 8
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 1,
+        marksAwarded: [
+          { criterionName: 'Correctness', score: 5 },
+          { criterionName: 'Complexity', score: 4 },
+        ],
+        userId: taId.toString(),
+        userRole: UserRole.TA,
+      })
+    ).rejects.toThrow('Computed question total (9) exceeds maximum marks of 8 for Question 1.');
+  });
+
+  // 18. Decimal precision handling
+  it('18. accurately computes decimal criterion scores without floating-point precision issues', async () => {
+    const saved = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 4.25 },
+        { criterionName: 'Complexity', score: 2.15 },
+      ],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    expect(saved.totalScore).toBe(6.4);
+  });
+
+  // 19. No persisted script-level total fields
+  it('19. verifies no persisted script-level total field is created on Grade documents', async () => {
+    const savedGrade = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 6 },
+        { criterionName: 'Complexity', score: 4 },
+      ],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+    });
+
+    const gradeObject = savedGrade.toObject();
+
+    expect(gradeObject).toHaveProperty('totalScore', 10);
+    expect(gradeObject).toHaveProperty('question', 1);
+    expect(gradeObject).not.toHaveProperty('scriptTotal');
+    expect(gradeObject).not.toHaveProperty('scriptTotalScore');
+    expect(gradeObject).not.toHaveProperty('wholeScriptTotal');
+    expect(gradeObject).not.toHaveProperty('overallScore');
+  });
+
+  // 20. Invalid rubric question rejection
+  it('20. rejects grade save for question number not present in the rubric', async () => {
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 99,
+        marksAwarded: [{ criterionName: 'Correctness', score: 5 }],
+        userId: professorId.toString(),
+        userRole: UserRole.PROFESSOR,
+      })
+    ).rejects.toThrow('Question 99 not found in rubric.');
+  });
 });
