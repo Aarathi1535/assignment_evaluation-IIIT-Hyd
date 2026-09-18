@@ -10,8 +10,15 @@ import {
   CheckCircle2,
   Lock,
   HelpCircle,
+  Save,
+  MessageSquare,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import {
+  PresetCommentChips,
+  CommentTagData,
+  insertTagIntoFeedback,
+} from './PresetCommentChips';
 
 export interface RubricCriterion {
   criterionName: string;
@@ -39,22 +46,32 @@ export interface CriterionGradeEntry {
 }
 
 export interface RubricSidebarProps {
+  scriptId?: string;
   examId?: string;
   initialRubric?: RubricData | null;
   initialScores?: Record<string, number>;
+  initialFeedback?: Record<number, string>;
+  initialTags?: CommentTagData[] | null;
   allocatedQuestionNumber?: number;
   onRubricLoaded?: (rubric: RubricData | null) => void;
   onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
+  onFeedbackChange?: (questionNumber: number, feedback: string) => void;
+  onGradeSaved?: (savedGrade: unknown) => void;
   className?: string;
 }
 
 export function RubricSidebar({
+  scriptId,
   examId,
   initialRubric,
   initialScores,
+  initialFeedback,
+  initialTags,
   allocatedQuestionNumber,
   onRubricLoaded,
   onScoresChange,
+  onFeedbackChange,
+  onGradeSaved,
   className = '',
 }: RubricSidebarProps) {
   const [rubric, setRubric] = useState<RubricData | null>(initialRubric ?? null);
@@ -65,6 +82,13 @@ export function RubricSidebar({
   // Criterion-level score entry state
   const [scores, setScores] = useState<Record<string, number | string>>(initialScores ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Question-level feedback & announcements state (AE-147)
+  const [feedback, setFeedback] = useState<Record<number, string>>(initialFeedback ?? {});
+  const [announcements, setAnnouncements] = useState<Record<number, string>>({});
+  const [savingStatus, setSavingStatus] = useState<
+    Record<number, { saving?: boolean; error?: string; success?: boolean }>
+  >({});
 
   const isQuestionWise = allocatedQuestionNumber !== undefined && allocatedQuestionNumber !== null;
 
@@ -217,6 +241,107 @@ export function RubricSidebar({
     [onScoresChange]
   );
 
+  // Handle Tag Selection / Quick-Insert (AE-147)
+  const handleSelectTag = useCallback(
+    (qNum: number, tagLabel: string) => {
+      const currentText = feedback[qNum] || '';
+      const { updatedFeedback, isDuplicate } = insertTagIntoFeedback(currentText, tagLabel);
+
+      if (isDuplicate) {
+        setAnnouncements((prev) => ({
+          ...prev,
+          [qNum]: 'Comment tag already added.',
+        }));
+      } else {
+        setFeedback((prev) => ({
+          ...prev,
+          [qNum]: updatedFeedback,
+        }));
+        setAnnouncements((prev) => ({
+          ...prev,
+          [qNum]: `Inserted comment tag: ${tagLabel}`,
+        }));
+        onFeedbackChange?.(qNum, updatedFeedback);
+      }
+    },
+    [feedback, onFeedbackChange]
+  );
+
+  // Handle Direct Feedback Textarea Changes
+  const handleFeedbackChange = useCallback(
+    (qNum: number, text: string) => {
+      setFeedback((prev) => ({ ...prev, [qNum]: text }));
+      onFeedbackChange?.(qNum, text);
+    },
+    [onFeedbackChange]
+  );
+
+  // Handle Save Grade for Question (AE-145 Persistence)
+  const handleSaveGrade = useCallback(
+    async (q: RubricQuestion) => {
+      if (!scriptId) return;
+
+      const qNum = q.questionNumber;
+      setSavingStatus((prev) => ({
+        ...prev,
+        [qNum]: { saving: true, error: undefined, success: false },
+      }));
+
+      // Gather marks awarded for this question
+      const marksAwarded: CriterionGradeEntry[] = q.criteria.map((c) => {
+        const key = `${qNum}-${c.criterionName}`;
+        const val = scores[key];
+        return {
+          criterionName: c.criterionName,
+          score: typeof val === 'number' ? val : Number(val) || 0,
+        };
+      });
+
+      const currentFeedback = feedback[qNum] || '';
+
+      try {
+        const res = await fetch(
+          `/api/scripts/${encodeURIComponent(scriptId)}/questions/${qNum}/grade`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              marksAwarded,
+              feedback: currentFeedback,
+            }),
+          }
+        );
+
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.message || `Failed to save grade (${res.status})`);
+        }
+
+        const json = await res.json();
+        setSavingStatus((prev) => ({
+          ...prev,
+          [qNum]: { saving: false, error: undefined, success: true },
+        }));
+        onGradeSaved?.(json.data || json);
+
+        // Clear success message after 3 seconds
+        setTimeout(() => {
+          setSavingStatus((prev) => ({
+            ...prev,
+            [qNum]: { ...prev[qNum], success: false },
+          }));
+        }, 3000);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'An error occurred while saving grade';
+        setSavingStatus((prev) => ({
+          ...prev,
+          [qNum]: { saving: false, error: message, success: false },
+        }));
+      }
+    },
+    [scriptId, scores, feedback, onGradeSaved]
+  );
+
   // Calculations
   const questions = rubric?.questions || [];
   const totalRubricMarks = questions.reduce((acc, q) => acc + (Number(q.maxMarks) || 0), 0);
@@ -344,6 +469,8 @@ export function RubricSidebar({
             {questions.map((q) => {
               const isAllocated = !isQuestionWise || q.questionNumber === Number(allocatedQuestionNumber);
               const questionScore = getQuestionScore(q);
+              const currentAnnouncement = announcements[q.questionNumber];
+              const currentSaveStatus = savingStatus[q.questionNumber];
 
               return (
                 <div
@@ -358,11 +485,13 @@ export function RubricSidebar({
                   }`}
                 >
                   {/* Question Header */}
-                  <div className={`p-3 border-b flex items-center justify-between gap-2 ${
-                    isAllocated && isQuestionWise
-                      ? 'bg-brand-primary/5 border-brand-primary/20'
-                      : 'bg-slate-50 border-slate-100'
-                  }`}>
+                  <div
+                    className={`p-3 border-b flex items-center justify-between gap-2 ${
+                      isAllocated && isQuestionWise
+                        ? 'bg-brand-primary/5 border-brand-primary/20'
+                        : 'bg-slate-50 border-slate-100'
+                    }`}
+                  >
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-slate-900">
                         Question {q.questionNumber}
@@ -418,7 +547,7 @@ export function RubricSidebar({
                   {/* Criteria List */}
                   <div
                     data-testid={`rubric-criteria-list-${q.questionNumber}`}
-                    className="p-3 space-y-3 text-xs"
+                    className="p-3 space-y-3 text-xs border-b border-slate-100"
                   >
                     {q.criteria.length === 0 ? (
                       <p className="text-2xs text-slate-400 italic">No sub-criteria specified for this question.</p>
@@ -515,6 +644,109 @@ export function RubricSidebar({
                       })
                     )}
                   </div>
+
+                  {/* Question Feedback & Quick-Insert Section (AE-147) */}
+                  <div
+                    data-testid={`question-feedback-section-${q.questionNumber}`}
+                    className="p-3 bg-slate-50/50 space-y-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor={`feedback-input-${q.questionNumber}`}
+                        className="text-2xs font-bold text-slate-700 flex items-center gap-1 cursor-pointer"
+                      >
+                        <MessageSquare className="h-3 w-3 text-slate-500" />
+                        <span>Question Feedback</span>
+                      </label>
+                    </div>
+
+                    {/* Quick-Insert Preset Comment Chips */}
+                    <PresetCommentChips
+                      examId={examId}
+                      initialTags={initialTags}
+                      disabled={!isAllocated}
+                      onSelectTag={(label) => handleSelectTag(q.questionNumber, label)}
+                    />
+
+                    {/* Accessible Live Announcement Region */}
+                    <div
+                      aria-live="polite"
+                      role="status"
+                      aria-atomic="true"
+                      data-testid={`tag-live-announcement-${q.questionNumber}`}
+                      className="sr-only"
+                    >
+                      {currentAnnouncement}
+                    </div>
+
+                    {/* Free-form Feedback Textarea */}
+                    <div>
+                      <textarea
+                        id={`feedback-input-${q.questionNumber}`}
+                        data-testid={`feedback-input-${q.questionNumber}`}
+                        rows={2}
+                        disabled={!isAllocated}
+                        readOnly={!isAllocated}
+                        value={feedback[q.questionNumber] || ''}
+                        onChange={(e) => handleFeedbackChange(q.questionNumber, e.target.value)}
+                        placeholder={
+                          isAllocated
+                            ? 'Add question feedback or click preset chips above...'
+                            : 'Grading feedback is read-only.'
+                        }
+                        aria-label={`Feedback for Question ${q.questionNumber}`}
+                        className={`w-full p-2 text-xs rounded border transition-all resize-y focus:outline-none ${
+                          isAllocated
+                            ? 'bg-white border-slate-300 text-slate-900 focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary'
+                            : 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
+                        }`}
+                      />
+                    </div>
+
+                    {/* Save Grade / Feedback Action Button & Status */}
+                    {isAllocated && scriptId && (
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <div>
+                          {currentSaveStatus?.error && (
+                            <span
+                              role="alert"
+                              className="text-2xs text-rose-600 font-semibold leading-tight block"
+                            >
+                              {currentSaveStatus.error}
+                            </span>
+                          )}
+                          {currentSaveStatus?.success && (
+                            <span className="text-2xs text-emerald-600 font-semibold flex items-center gap-1">
+                              <CheckCircle2 className="h-3 w-3" />
+                              <span>Grade saved</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          data-testid={`save-grade-button-${q.questionNumber}`}
+                          disabled={currentSaveStatus?.saving}
+                          onClick={() => handleSaveGrade(q)}
+                          className="text-2xs h-7 px-3 gap-1 shrink-0 ml-auto"
+                        >
+                          {currentSaveStatus?.saving ? (
+                            <>
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              <span>Saving...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Save className="h-3 w-3" />
+                              <span>Save Grade</span>
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -526,4 +758,5 @@ export function RubricSidebar({
 }
 
 export default RubricSidebar;
+
 
