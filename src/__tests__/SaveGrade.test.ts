@@ -508,4 +508,137 @@ describe('AE-145: Save Grade (Service & API)', () => {
     const res = await gradesPOST(req, { params: Promise.resolve({ id: scriptId.toString() }) });
     expect(res.status).toBe(403);
   });
+
+  // 15. Stale draft update after finalization returns 409
+  it('15. rejects stale draft save with 409 if grade has already been finalized', async () => {
+    const initialGrade = await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: taId,
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 4 },
+        { criterionName: 'Complexity', score: 2 },
+      ],
+      totalScore: 6,
+      feedback: 'Initial draft feedback',
+      isFinal: false,
+    });
+
+    // Final save completes
+    await Grade.updateOne(
+      { _id: initialGrade._id },
+      {
+        $set: {
+          marksAwarded: [
+            { criterionName: 'Correctness', score: 6 },
+            { criterionName: 'Complexity', score: 4 },
+          ],
+          totalScore: 10,
+          feedback: 'Final approved feedback',
+          isFinal: true,
+        },
+      }
+    );
+
+    // Stale draft save attempts to write
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 1,
+        marksAwarded: [
+          { criterionName: 'Correctness', score: 1 },
+          { criterionName: 'Complexity', score: 1 },
+        ],
+        feedback: 'Stale debounced draft that should be rejected',
+        userId: taId.toString(),
+        userRole: UserRole.TA,
+      })
+    ).rejects.toThrow(HttpError);
+
+    const checkGrade = await Grade.findById(initialGrade._id);
+    expect(checkGrade).toBeDefined();
+    expect(checkGrade?.isFinal).toBe(true);
+    expect(checkGrade?.totalScore).toBe(10);
+    expect(checkGrade?.feedback).toBe('Final approved feedback');
+    expect(checkGrade?.marksAwarded[0].score).toBe(6);
+    expect(checkGrade?.marksAwarded[1].score).toBe(4);
+  });
+
+  // 16. Concurrency / race condition test: in-flight draft cannot overwrite concurrently finalized Grade
+  it('16. prevents in-flight draft save from overwriting a Grade that became finalized concurrently', async () => {
+    const initialGrade = await Grade.create({
+      answerScript: scriptId,
+      rubric: rubricId,
+      gradedBy: taId,
+      question: 1,
+      marksAwarded: [
+        { criterionName: 'Correctness', score: 4 },
+        { criterionName: 'Complexity', score: 2 },
+      ],
+      totalScore: 6,
+      feedback: 'Draft in progress',
+      isFinal: false,
+    });
+
+    // Simulate in-flight draft save: hook into Grade.findOne so that right after findOne reads non-final grade,
+    // a concurrent final submission commits and finalizes the grade before draft atomic update executes.
+    const originalFindOne = Grade.findOne.bind(Grade);
+    let raceTriggered = false;
+    vi.spyOn(Grade as any, 'findOne').mockImplementation(function (...args: any[]) {
+      const query = (originalFindOne as any)(...args);
+      const originalThen = query.then ? query.then.bind(query) : null;
+
+      if (originalThen) {
+        query.then = async (onfulfilled: any) => {
+          const result = await originalThen();
+          if (!raceTriggered && result && result._id.toString() === initialGrade._id.toString()) {
+            raceTriggered = true;
+            // Concurrent final save commits now:
+            await Grade.updateOne(
+              { _id: initialGrade._id },
+              {
+                $set: {
+                  marksAwarded: [
+                    { criterionName: 'Correctness', score: 6 },
+                    { criterionName: 'Complexity', score: 4 },
+                  ],
+                  totalScore: 10,
+                  feedback: 'Final approved submission',
+                  isFinal: true,
+                },
+              }
+            );
+          }
+          return onfulfilled ? onfulfilled(result) : result;
+        };
+      }
+      return query;
+    });
+
+    // Draft save proceeds but should fail with 409 because conditional update matched 0 documents
+    await expect(
+      gradingService.saveGrade({
+        scriptId: scriptId.toString(),
+        question: 1,
+        marksAwarded: [
+          { criterionName: 'Correctness', score: 1 },
+          { criterionName: 'Complexity', score: 1 },
+        ],
+        feedback: 'Stale draft overwrite attempt',
+        userId: taId.toString(),
+        userRole: UserRole.TA,
+      })
+    ).rejects.toThrowError(/Cannot modify grade: Grade has already been finalized/i);
+
+    // Verify Grade state in DB: remains finalized with final marks, score, and feedback
+    const persistedGrade = await Grade.findById(initialGrade._id);
+    expect(persistedGrade?.isFinal).toBe(true);
+    expect(persistedGrade?.totalScore).toBe(10);
+    expect(persistedGrade?.feedback).toBe('Final approved submission');
+    expect(persistedGrade?.marksAwarded[0].score).toBe(6);
+    expect(persistedGrade?.marksAwarded[1].score).toBe(4);
+
+    vi.restoreAllMocks();
+  });
 });

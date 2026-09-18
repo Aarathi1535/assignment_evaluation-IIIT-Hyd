@@ -236,14 +236,36 @@ export class GradingService {
         }
 
         // 6. Persist or Update Grade document
+        let savedGrade: IGrade;
+
         if (gradeDoc) {
-            gradeDoc.rubric = rubric._id as mongoose.Types.ObjectId;
-            gradeDoc.gradedBy = new mongoose.Types.ObjectId(userId);
-            gradeDoc.marksAwarded = marksAwarded;
-            gradeDoc.totalScore = computed.totalScore;
+            const updateFields: Record<string, unknown> = {
+                rubric: rubric._id,
+                gradedBy: new mongoose.Types.ObjectId(userId),
+                marksAwarded,
+                totalScore: computed.totalScore,
+            };
             if (feedback !== undefined) {
-                gradeDoc.feedback = feedback;
+                updateFields.feedback = feedback;
             }
+
+            const updateResult = await Grade.updateOne(
+                { _id: gradeDoc._id, isFinal: false },
+                { $set: updateFields }
+            );
+
+            if (updateResult.matchedCount === 0) {
+                throw new HttpError(
+                    'Cannot modify grade: Grade has already been finalized.',
+                    409
+                );
+            }
+
+            const updated = await Grade.findById(gradeDoc._id);
+            if (!updated) {
+                throw new HttpError('Grade not found after update.', 404);
+            }
+            savedGrade = updated;
         } else {
             gradeDoc = new Grade({
                 answerScript: script._id,
@@ -255,9 +277,8 @@ export class GradingService {
                 feedback: feedback || '',
                 isFinal: false,
             });
+            savedGrade = await gradeDoc.save();
         }
-
-        const savedGrade = await gradeDoc.save();
 
         // 7. Claim allocation if this is the first successful save and status is PENDING
         if (allocationDoc && allocationDoc.status === AllocationStatus.PENDING) {
