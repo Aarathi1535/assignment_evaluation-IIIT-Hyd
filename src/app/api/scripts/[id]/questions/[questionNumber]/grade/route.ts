@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../../lib/errors';
-import gradingService from '../../../../../../../services/GradingService';
+import gradingService, { SavedGradeWithNext } from '../../../../../../../services/GradingService';
 
 /**
  * POST /api/scripts/[id]/questions/[questionNumber]/grade
@@ -30,7 +30,7 @@ export async function POST(
 
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
-    const savedGrade = await gradingService.saveGrade({
+    const savedGrade: SavedGradeWithNext = await gradingService.saveGrade({
       scriptId: id,
       question: Number(questionNumber),
       marksAwarded: Array.isArray(marksAwarded) ? marksAwarded : [],
@@ -43,11 +43,21 @@ export async function POST(
       isFinal: Boolean(isFinal),
     });
 
+    const gradeObj = typeof savedGrade.toObject === 'function'
+      ? savedGrade.toObject()
+      : savedGrade;
+
+    const responseData = {
+      ...gradeObj,
+      allocationCompleted: savedGrade.allocationCompleted ?? false,
+      nextAllocation: savedGrade.nextAllocation ?? null,
+    };
+
     return NextResponse.json(
       {
         success: true,
         message: 'Grade saved successfully',
-        data: savedGrade,
+        data: responseData,
       },
       { status: 200 }
     );

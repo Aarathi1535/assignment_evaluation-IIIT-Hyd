@@ -4,7 +4,7 @@ import Rubric, { IRubric, IQuestion } from '../models/Rubric';
 import AnswerScript from '../models/AnswerScript';
 import CommentTag, { TagScope } from '../models/CommentTag';
 import ExamRepository from '../repositories/ExamRepository';
-import AllocationService from './AllocationService';
+import AllocationService, { NextAllocationResult } from './AllocationService';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import { UserRole } from '../constants/permissions';
 import { HttpError } from '../lib/errors';
@@ -35,6 +35,11 @@ export interface SaveGradeOptions {
     ipAddress?: string;
     clientTotalScore?: number;
     isFinal?: boolean;
+}
+
+export interface SavedGradeWithNext extends IGrade {
+    allocationCompleted?: boolean;
+    nextAllocation?: NextAllocationResult | null;
 }
 
 export class GradingService {
@@ -366,13 +371,28 @@ export class GradingService {
                             { session: session || undefined, rubric }
                         );
 
+                        let nextAllocation: NextAllocationResult | null = null;
+
                         if (isReady) {
                             await AllocationService.markCompleted(
                                 allocationDoc._id.toString(),
                                 { id: userId, role: userRole },
                                 { session }
                             );
+
+                            nextAllocation = await AllocationService.getNextAllocation(
+                                userId,
+                                script.exam,
+                                allocationDoc._id,
+                                session || undefined
+                            );
                         }
+
+                        (savedGrade as SavedGradeWithNext).allocationCompleted = Boolean(isReady);
+                        (savedGrade as SavedGradeWithNext).nextAllocation = nextAllocation;
+                    } else {
+                        (savedGrade as SavedGradeWithNext).allocationCompleted = false;
+                        (savedGrade as SavedGradeWithNext).nextAllocation = null;
                     }
                 } catch (err) {
                     // If running in a non-transactional topology (session is undefined), manually rollback to maintain invariant
@@ -509,6 +529,9 @@ export class GradingService {
             },
             ipAddress,
         });
+
+        (savedGrade as SavedGradeWithNext).allocationCompleted = false;
+        (savedGrade as SavedGradeWithNext).nextAllocation = null;
 
         return savedGrade;
     }

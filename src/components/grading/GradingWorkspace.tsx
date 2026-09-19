@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   FileText,
@@ -36,11 +37,30 @@ export function GradingWorkspace({
   scriptId,
   allocatedQuestionNumber,
 }: GradingWorkspaceProps) {
+  const router = useRouter();
+  const hasNavigatedRef = useRef<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
+
+  const handleGradeSaved = useCallback(
+    (savedGrade: unknown) => {
+      if (!savedGrade || typeof savedGrade !== 'object') return;
+      const data = savedGrade as {
+        allocationCompleted?: boolean;
+        nextAllocation?: { targetUrl?: string } | null;
+      };
+
+      if (data.allocationCompleted && data.nextAllocation?.targetUrl) {
+        if (hasNavigatedRef.current) return;
+        hasNavigatedRef.current = true;
+        router.push(data.nextAllocation.targetUrl);
+      }
+    },
+    [router]
+  );
 
   const fetchScriptData = useCallback(async () => {
     if (!scriptId) return;
@@ -243,6 +263,7 @@ export function GradingWorkspace({
                 examId={scriptData?.exam}
                 allocatedQuestionNumber={allocatedQuestionNumber}
                 onRubricLoaded={setRubricData}
+                onGradeSaved={handleGradeSaved}
               />
             </div>
           </div>
