@@ -673,14 +673,21 @@ describe('AE-145: Save Grade (Service & API)', () => {
       scriptId: scriptId.toString(),
       question: 1,
       marksAwarded: [
-        { criterionName: 'Correctness', score: 4.25 },
-        { criterionName: 'Complexity', score: 2.15 },
+        { criterionName: 'Correctness', score: 5.5 },
+        { criterionName: 'Complexity', score: 3.5 },
       ],
       userId: taId.toString(),
       userRole: UserRole.TA,
     });
 
-    expect(saved.totalScore).toBe(6.4);
+    expect(saved.totalScore).toBe(9);
+
+    // Verify precision rounding on arbitrary decimal sums in computeAuthoritativeTotal
+    const precisionTotal = gradingService.computeAuthoritativeTotal([
+      { criterionName: 'Correctness', score: 4.25 },
+      { criterionName: 'Complexity', score: 2.15 },
+    ]);
+    expect(precisionTotal).toBe(6.4);
   });
 
   // 19. No persisted script-level total fields
