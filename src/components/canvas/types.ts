@@ -28,7 +28,7 @@ import type {
   DeserializationResult,
 } from '@/lib/annotationSerialization';
 
-export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
+export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -162,6 +162,20 @@ export interface AnswerSheetCanvasProps {
   onPenActiveChange?: (active: boolean) => void;
   /** Whether the eraser tool is enabled (default true, AE-128) */
   enableEraserTool?: boolean;
+  /** Whether the magnifier / loupe tool is enabled (default true, AE-152) */
+  enableLoupe?: boolean;
+  /** Controlled loupe active state (AE-152) */
+  isLoupeActive?: boolean;
+  /** Callback fired when loupe active state changes (AE-152) */
+  onLoupeActiveChange?: (active: boolean) => void;
+  /** Loupe magnification multiplier (default 2.0x, AE-152) */
+  loupeMagnification?: number;
+  /** Loupe lens diameter in pixels (default 180px, AE-152) */
+  loupeDiameter?: number;
+  /** Page brightness multiplier (default 1.0, AE-150 / AE-152) */
+  brightness?: number;
+  /** Page contrast multiplier (default 1.0, AE-150 / AE-152) */
+  contrast?: number;
   /** Whether the stamp tools (check, cross) are enabled (default true, AE-130) */
   enableStamps?: boolean;
   /** Whether the highlight tool is enabled (default true, AE-130) */
@@ -170,9 +184,9 @@ export interface AnswerSheetCanvasProps {
   enableTextNote?: boolean;
   /** Whether the undo/redo feature is enabled (default true, AE-128) */
   enableUndoRedo?: boolean;
-  /** Controlled active tool ('none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser', AE-128 / AE-130 / AE-131) */
+  /** Controlled active tool ('none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe', AE-128 / AE-130 / AE-131 / AE-152) */
   activeTool?: CanvasTool;
-  /** Callback fired when active tool changes (AE-128 / AE-130) */
+  /** Callback fired when active tool changes (AE-128 / AE-130 / AE-152) */
   onToolChange?: (tool: CanvasTool) => void;
   /** Controlled selected pen color ('red' | 'blue' | 'green', AE-127) */
   selectedPenColor?: PenColorId;
