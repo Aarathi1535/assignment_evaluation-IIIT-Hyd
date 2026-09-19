@@ -17,3 +17,4 @@ export * from '@/lib/annotationHistory';
 export * from '@/lib/strokeSmoothing';
 export * from '@/lib/stampTool';
 export * from '@/lib/magnifierTool';
+export * from '@/lib/shortcutMap';

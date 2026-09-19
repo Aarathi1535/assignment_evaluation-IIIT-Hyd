@@ -35,6 +35,11 @@ import { SaveStatusIndicator } from './SaveStatusIndicator';
 import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
+  findMatchingShortcut,
+  isTypingTarget,
+  SHORTCUT_MAP,
+} from '@/lib/shortcutMap';
+import {
   calculateStepZoom,
   calculateZoomTransform,
   calculateInitialTransform,
@@ -204,6 +209,12 @@ export function AnswerSheetCanvas({
   onSaveStatusChange,
   onSaveSuccess,
   onSaveError,
+  onShortcutAction,
+  onSaveDraft,
+  onSubmitFinal,
+  onNextQuestion,
+  onPrevQuestion,
+  shortcutMap,
 }: AnswerSheetCanvasProps) {
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
@@ -1035,74 +1046,17 @@ export function AnswerSheetCanvas({
     scheduleAutosave,
   ]);
 
-  // Global / Canvas Keyboard Shortcuts: Delete/Backspace -> Delete selected annotation, Ctrl+Z -> Undo, Ctrl+Y -> Redo
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
+  const handleRotateCw = useCallback(() => {
+    const nextRotation = ((activeRotation + 90) % 360) as number;
+    setInternalRotation(nextRotation);
+    onRotationChange?.(nextRotation);
+  }, [activeRotation, onRotationChange]);
 
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedAnnotationId) {
-          e.preventDefault();
-          handleDeleteSelected();
-          return;
-        }
-      }
-
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
-
-      // Magnifier / Loupe toggle shortcut (M or L) when not modifying with Ctrl/Meta/Alt
-      if (enableLoupe && !isCtrlOrCmd && !e.altKey && (key === 'm' || key === 'l')) {
-        e.preventDefault();
-        handleToggleLoupe();
-        return;
-      }
-
-      if (!enableUndoRedo) return;
-      if (!isCtrlOrCmd) return;
-
-      if (key === 'z') {
-        if (e.shiftKey) {
-          if (canRedo(currentPageHistory)) {
-            e.preventDefault();
-            handleRedo();
-          }
-        } else {
-          if (canUndo(currentPageHistory)) {
-            e.preventDefault();
-            handleUndo();
-          }
-        }
-      } else if (key === 'y') {
-        if (canRedo(currentPageHistory)) {
-          e.preventDefault();
-          handleRedo();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [
-    enableLoupe,
-    handleToggleLoupe,
-    enableUndoRedo,
-    currentPageHistory,
-    handleUndo,
-    handleRedo,
-    selectedAnnotationId,
-    handleDeleteSelected,
-  ]);
+  const handleRotateCcw = useCallback(() => {
+    const nextRotation = (((activeRotation - 90) % 360 + 360) % 360) as number;
+    setInternalRotation(nextRotation);
+    onRotationChange?.(nextRotation);
+  }, [activeRotation, onRotationChange]);
 
   // Handle page change navigation
   const navigateToPage = useCallback(
@@ -1258,6 +1212,208 @@ export function AnswerSheetCanvas({
   const handleResetZoom = useCallback(() => {
     handleResetView();
   }, [handleResetView]);
+
+  // Centralized Authoritative Keyboard Shortcuts Dispatch (AE-154)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore shortcut when typing in input, textarea, or contenteditable element
+      if (isTypingTarget(e.target)) {
+        return;
+      }
+
+      // Ignore global shortcuts while in-place text note editor is active
+      if (activeTextEditor !== null) {
+        return;
+      }
+
+      const matched = findMatchingShortcut(e, shortcutMap || SHORTCUT_MAP);
+      if (!matched) {
+        return;
+      }
+
+      switch (matched.action) {
+        case 'saveDraft':
+          e.preventDefault();
+          onSaveDraft?.();
+          break;
+        case 'submitFinal':
+          e.preventDefault();
+          onSubmitFinal?.();
+          break;
+        case 'undo':
+          if (enableUndoRedo && canUndoActive) {
+            e.preventDefault();
+            handleUndo();
+          }
+          break;
+        case 'redo':
+          if (enableUndoRedo && canRedoActive) {
+            e.preventDefault();
+            handleRedo();
+          }
+          break;
+        case 'deleteSelected':
+          if (selectedAnnotationId) {
+            e.preventDefault();
+            handleDeleteSelected();
+          }
+          break;
+        case 'toggleLoupe':
+          if (enableLoupe) {
+            e.preventDefault();
+            handleToggleLoupe();
+          }
+          break;
+        case 'tool:select':
+          if (enableSelect) {
+            e.preventDefault();
+            setTool('select');
+          }
+          break;
+        case 'tool:pen':
+          if (enablePenTool) {
+            e.preventDefault();
+            setTool('pen');
+          }
+          break;
+        case 'tool:eraser':
+          if (enableEraserTool) {
+            e.preventDefault();
+            setTool('eraser');
+          }
+          break;
+        case 'tool:check':
+          if (enableStamps) {
+            e.preventDefault();
+            setTool('check');
+          }
+          break;
+        case 'tool:cross':
+          if (enableStamps) {
+            e.preventDefault();
+            setTool('cross');
+          }
+          break;
+        case 'tool:highlight':
+          if (enableHighlight) {
+            e.preventDefault();
+            setTool('highlight');
+          }
+          break;
+        case 'tool:text':
+          if (enableTextNote) {
+            e.preventDefault();
+            setTool('text');
+          }
+          break;
+        case 'zoomIn':
+          if (enablePanZoom) {
+            e.preventDefault();
+            handleZoomIn();
+          }
+          break;
+        case 'zoomOut':
+          if (enablePanZoom) {
+            e.preventDefault();
+            handleZoomOut();
+          }
+          break;
+        case 'resetZoom':
+          if (enablePanZoom) {
+            e.preventDefault();
+            handleResetZoom();
+          }
+          break;
+        case 'rotateCw':
+          e.preventDefault();
+          handleRotateCw();
+          break;
+        case 'rotateCcw':
+          e.preventDefault();
+          handleRotateCcw();
+          break;
+        case 'resetView':
+          if (enableResetView) {
+            e.preventDefault();
+            handleResetView();
+          }
+          break;
+        case 'toggleOverlay':
+          if (enableOverlayToggle) {
+            e.preventDefault();
+            handleToggleOverlayVisibility();
+          }
+          break;
+        case 'nextPage':
+          if (canGoNext(activePageIndex, totalPages)) {
+            e.preventDefault();
+            handleNextPage();
+          }
+          break;
+        case 'prevPage':
+          if (canGoPrev(activePageIndex, totalPages)) {
+            e.preventDefault();
+            handlePrevPage();
+          }
+          break;
+        case 'nextQuestion':
+          e.preventDefault();
+          onNextQuestion?.();
+          break;
+        case 'prevQuestion':
+          e.preventDefault();
+          onPrevQuestion?.();
+          break;
+        default:
+          break;
+      }
+
+      onShortcutAction?.(matched.action, e);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [
+    activeTextEditor,
+    shortcutMap,
+    enableUndoRedo,
+    canUndoActive,
+    canRedoActive,
+    handleUndo,
+    handleRedo,
+    selectedAnnotationId,
+    handleDeleteSelected,
+    enableLoupe,
+    handleToggleLoupe,
+    enableSelect,
+    enablePenTool,
+    enableEraserTool,
+    enableStamps,
+    enableHighlight,
+    enableTextNote,
+    setTool,
+    enablePanZoom,
+    handleZoomIn,
+    handleZoomOut,
+    handleResetZoom,
+    handleRotateCw,
+    handleRotateCcw,
+    enableResetView,
+    handleResetView,
+    enableOverlayToggle,
+    handleToggleOverlayVisibility,
+    activePageIndex,
+    totalPages,
+    handleNextPage,
+    handlePrevPage,
+    onSaveDraft,
+    onSubmitFinal,
+    onNextQuestion,
+    onPrevQuestion,
+    onShortcutAction,
+  ]);
 
   const zoomPercent = Math.round(transform.zoom * 100);
 

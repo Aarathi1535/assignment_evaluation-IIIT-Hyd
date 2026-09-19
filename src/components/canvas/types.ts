@@ -28,6 +28,12 @@ import type {
   DeserializationResult,
 } from '@/lib/annotationSerialization';
 
+import type {
+  ShortcutAction,
+  ShortcutGroup,
+  ShortcutDefinition,
+} from '@/lib/shortcutMap';
+
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -55,6 +61,9 @@ export type {
   SerializeCanvasOptions,
   ValidationResult,
   DeserializationResult,
+  ShortcutAction,
+  ShortcutGroup,
+  ShortcutDefinition,
 };
 
 export interface CanvasDimensions {
@@ -301,4 +310,16 @@ export interface AnswerSheetCanvasProps {
   onSaveSuccess?: (pageNumber: number) => void;
   /** Callback fired when autosave fails (AE-137) */
   onSaveError?: (pageNumber: number, error: Error) => void;
+  /** Authoritative shortcut action listener (AE-154) */
+  onShortcutAction?: (action: ShortcutAction, event: KeyboardEvent) => void;
+  /** Save draft trigger handler (AE-154) */
+  onSaveDraft?: () => void;
+  /** Final submit trigger handler (AE-154) */
+  onSubmitFinal?: () => void;
+  /** Next question trigger handler (AE-154) */
+  onNextQuestion?: () => void;
+  /** Previous question trigger handler (AE-154) */
+  onPrevQuestion?: () => void;
+  /** Custom keymap override (default: SHORTCUT_MAP, AE-154) */
+  shortcutMap?: readonly ShortcutDefinition[];
 }
