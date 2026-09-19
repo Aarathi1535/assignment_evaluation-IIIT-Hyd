@@ -34,7 +34,7 @@ describe('AE-155: Tool Hotkeys for the Grading Canvas', () => {
           target?: EventTarget | null | HTMLElement | { tagName?: string; isContentEditable?: boolean };
         }
       ) => {
-        if (isTypingTarget(event.target)) {
+        if (isTypingTarget(event.target ?? null)) {
           return { handled: false, reason: 'typing-target' };
         }
         if (activeTextEditor !== null) {
