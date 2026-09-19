@@ -138,6 +138,8 @@ export interface AnswerSheetCanvasProps {
   pageLabel?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */
   fitMode?: ImageFitMode;
+  /** Initial loading state (defaults to true when image source is provided) */
+  initialLoading?: boolean;
   /** Custom width (defaults to 'auto' responsive) */
   width?: number | 'auto';
   /** Custom height (defaults to 'auto' responsive) */
@@ -322,4 +324,12 @@ export interface AnswerSheetCanvasProps {
   onPrevQuestion?: () => void;
   /** Custom keymap override (default: SHORTCUT_MAP, AE-154) */
   shortcutMap?: readonly ShortcutDefinition[];
+  /** Whether the Keyboard Shortcuts Help toolbar button & dialog are enabled (default true, AE-156) */
+  enableShortcutHelp?: boolean;
+  /** Controlled shortcut help overlay open state (AE-156) */
+  isShortcutHelpOpen?: boolean;
+  /** Callback fired when shortcut help overlay open state changes (AE-156) */
+  onShortcutHelpOpenChange?: (isOpen: boolean) => void;
 }
+
+export type { ShortcutHelpOverlayProps } from './ShortcutHelpOverlay';

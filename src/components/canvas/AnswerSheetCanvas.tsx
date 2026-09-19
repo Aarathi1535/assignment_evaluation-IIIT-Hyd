@@ -24,6 +24,7 @@ import {
   Eye,
   EyeOff,
   Search,
+  Keyboard,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
@@ -32,6 +33,7 @@ import { MarkLayer } from './MarkLayer';
 import { TextNoteEditor } from './TextNoteEditor';
 import { MagnifierLoupe } from './MagnifierLoupe';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
+import { ShortcutHelpOverlay } from './ShortcutHelpOverlay';
 import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
@@ -132,6 +134,7 @@ export function AnswerSheetCanvas({
   showPageNavigation = true,
   pageLabel,
   fitMode = 'contain',
+  initialLoading,
   width = 'auto',
   height = 'auto',
   className = '',
@@ -215,6 +218,9 @@ export function AnswerSheetCanvas({
   onNextQuestion,
   onPrevQuestion,
   shortcutMap,
+  enableShortcutHelp = true,
+  isShortcutHelpOpen: propIsShortcutHelpOpen,
+  onShortcutHelpOpenChange,
 }: AnswerSheetCanvasProps) {
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
@@ -436,7 +442,9 @@ export function AnswerSheetCanvas({
   }, [isMultiPageMode, totalPages, currentPage, src]);
 
   const [prevEffectiveSrc, setPrevEffectiveSrc] = useState<string | null | undefined>(effectiveSrc);
-  const [isLoading, setIsLoading] = useState<boolean>(Boolean(effectiveSrc !== null));
+  const [isLoading, setIsLoading] = useState<boolean>(() =>
+    initialLoading !== undefined ? initialLoading : Boolean(effectiveSrc !== null)
+  );
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [baseBounds, setBaseBounds] = useState<RenderedImageBounds | null>(null);
@@ -451,6 +459,33 @@ export function AnswerSheetCanvas({
   // Rotation state (controlled vs uncontrolled, AE-150)
   const [internalRotation, setInternalRotation] = useState<number>(initialRotation);
   const activeRotation = propRotation !== undefined ? propRotation : internalRotation;
+
+  // Shortcut Help Overlay state (AE-156)
+  const [internalIsHelpOpen, setInternalIsHelpOpen] = useState<boolean>(false);
+  const isHelpOpen = propIsShortcutHelpOpen !== undefined ? propIsShortcutHelpOpen : internalIsHelpOpen;
+  const helpButtonRef = useRef<HTMLButtonElement>(null);
+
+  const handleOpenHelp = useCallback(() => {
+    if (propIsShortcutHelpOpen === undefined) {
+      setInternalIsHelpOpen(true);
+    }
+    onShortcutHelpOpenChange?.(true);
+  }, [propIsShortcutHelpOpen, onShortcutHelpOpenChange]);
+
+  const handleCloseHelp = useCallback(() => {
+    if (propIsShortcutHelpOpen === undefined) {
+      setInternalIsHelpOpen(false);
+    }
+    onShortcutHelpOpenChange?.(false);
+  }, [propIsShortcutHelpOpen, onShortcutHelpOpenChange]);
+
+  const handleToggleHelp = useCallback(() => {
+    if (isHelpOpen) {
+      handleCloseHelp();
+    } else {
+      handleOpenHelp();
+    }
+  }, [isHelpOpen, handleOpenHelp, handleCloseHelp]);
 
   // Brightness adjustment state (controlled vs uncontrolled, AE-150)
   const [internalBrightness, setInternalBrightness] = useState<number>(initialBrightness);
@@ -1216,6 +1251,15 @@ export function AnswerSheetCanvas({
   // Centralized Authoritative Keyboard Shortcuts Dispatch (AE-154)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // When shortcut help overlay is open, handle Escape and suppress all other shortcuts (AE-156)
+      if (isHelpOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          handleCloseHelp();
+        }
+        return;
+      }
+
       // Ignore shortcut when typing in input, textarea, or contenteditable element
       if (isTypingTarget(e.target)) {
         return;
@@ -1344,6 +1388,12 @@ export function AnswerSheetCanvas({
             handleToggleOverlayVisibility();
           }
           break;
+        case 'openHelp':
+          if (enableShortcutHelp) {
+            e.preventDefault();
+            handleToggleHelp();
+          }
+          break;
         case 'nextPage':
           if (canGoNext(activePageIndex, totalPages)) {
             e.preventDefault();
@@ -1413,6 +1463,10 @@ export function AnswerSheetCanvas({
     onNextQuestion,
     onPrevQuestion,
     onShortcutAction,
+    isHelpOpen,
+    enableShortcutHelp,
+    handleCloseHelp,
+    handleToggleHelp,
   ]);
 
   const zoomPercent = Math.round(transform.zoom * 100);
@@ -1863,6 +1917,25 @@ export function AnswerSheetCanvas({
               <RotateCcw className="h-4 w-4" />
             </button>
           )}
+
+          {/* Keyboard Shortcuts Help Button (AE-156) */}
+          {enableShortcutHelp && (
+            <button
+              ref={helpButtonRef}
+              type="button"
+              onClick={handleToggleHelp}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                isHelpOpen
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+              data-testid="canvas-shortcut-help-button"
+            >
+              <Keyboard className="h-4 w-4" />
+            </button>
+          )}
         </div>
       )}
 
@@ -1916,6 +1989,16 @@ export function AnswerSheetCanvas({
         <div className="absolute bottom-3 left-3 px-2 py-1 bg-slate-900/70 backdrop-blur-xs text-white text-3xs font-mono rounded shadow pointer-events-none z-10">
           {effectivePageLabel} ({Math.round(baseBounds.width * transform.zoom)} × {Math.round(baseBounds.height * transform.zoom)}px · {zoomPercent}%)
         </div>
+      )}
+
+      {/* Shortcut Help Overlay Dialog (AE-156) */}
+      {enableShortcutHelp && (
+        <ShortcutHelpOverlay
+          isOpen={isHelpOpen}
+          onClose={handleCloseHelp}
+          shortcutMap={shortcutMap || SHORTCUT_MAP}
+          triggerRef={helpButtonRef}
+        />
       )}
     </div>
   );

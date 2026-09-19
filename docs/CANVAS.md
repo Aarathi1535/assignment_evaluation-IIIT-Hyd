@@ -236,6 +236,7 @@ interface SerializedPageAnnotations {
 | `Shift+R` | **Rotate Counter-Clockwise** | `view` | Rotate canvas and annotations 90° counter-clockwise (AE-150). |
 | `Alt+R` | **Reset View** | `view` | Atomically reset all view transforms (pan, zoom, rotation, brightness, contrast) (AE-153). |
 | `O` | **Toggle Overlay** | `view` | Toggle visibility of all annotations and pen strokes (AE-133). |
+| `?` / `Shift+?` | **Keyboard Shortcuts Help** | `view` | Display accessible keyboard shortcut reference overlay dialog (AE-156). |
 
 ### History & Editing Shortcuts
 | Input / Shortcut | Action | Group | Description / Notes |

@@ -8,6 +8,7 @@ export { AnswerSheetCanvas, SAMPLE_ANSWER_SHEET_DATA_URI } from './AnswerSheetCa
 export { TextNoteEditor } from './TextNoteEditor';
 export { MagnifierLoupe } from './MagnifierLoupe';
 export { SaveStatusIndicator } from './SaveStatusIndicator';
+export { ShortcutHelpOverlay, formatShortcutKeys } from './ShortcutHelpOverlay';
 export * from '@/lib/annotations';
 export * from '@/lib/panZoom';
 export * from '@/lib/pageNavigation';
