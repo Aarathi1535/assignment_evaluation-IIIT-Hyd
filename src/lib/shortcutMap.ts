@@ -524,3 +524,30 @@ export function getShortcutByAction(
 ): ShortcutDefinition | undefined {
   return keymap.find((s) => s.action === action);
 }
+
+/**
+ * Maps a tool shortcut action to its corresponding CanvasTool identifier.
+ * Returns null if the action is not a tool action.
+ */
+export function actionToCanvasTool(action: ShortcutAction): string | null {
+  switch (action) {
+    case 'tool:select':
+      return 'select';
+    case 'tool:pen':
+      return 'pen';
+    case 'tool:eraser':
+      return 'eraser';
+    case 'tool:check':
+      return 'check';
+    case 'tool:cross':
+      return 'cross';
+    case 'tool:highlight':
+      return 'highlight';
+    case 'tool:text':
+      return 'text';
+    case 'toggleLoupe':
+      return 'loupe';
+    default:
+      return null;
+  }
+}
