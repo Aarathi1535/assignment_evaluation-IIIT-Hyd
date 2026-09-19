@@ -23,9 +23,75 @@ export interface PanZoomTransform {
   zoom: number;
 }
 
+export interface CanvasViewState {
+  /** Rotation in degrees (0, 90, 180, 270) */
+  rotation: number;
+  /** Image brightness factor (default 1.0) */
+  brightness: number;
+  /** Image contrast factor (default 1.0) */
+  contrast: number;
+  /** Viewport pan and zoom transform */
+  transform: PanZoomTransform;
+}
+
 export const MIN_ZOOM_LEVEL = 1.0; // 100% / fit-to-viewport
 export const MAX_ZOOM_LEVEL = 4.0; // 400% maximum magnification
 export const DEFAULT_ZOOM_STEP = 0.25; // 25% step per click/increment
+export const DEFAULT_ROTATION = 0; // 0 degrees
+export const DEFAULT_BRIGHTNESS = 1.0; // 1.0 = neutral/normal
+export const DEFAULT_CONTRAST = 1.0; // 1.0 = neutral/normal
+
+/**
+ * Calculates the initial/default fit transform for a loaded page image.
+ */
+export function calculateInitialTransform(
+  baseBounds?: RenderedImageBounds | null
+): PanZoomTransform {
+  if (baseBounds && typeof baseBounds.x === 'number' && typeof baseBounds.y === 'number') {
+    return {
+      x: baseBounds.x,
+      y: baseBounds.y,
+      zoom: 1.0,
+    };
+  }
+  return {
+    x: 0,
+    y: 0,
+    zoom: 1.0,
+  };
+}
+
+/**
+ * Generates the clean default view state for a canvas page.
+ */
+export function createDefaultViewState(
+  baseBounds?: RenderedImageBounds | null
+): CanvasViewState {
+  return {
+    rotation: DEFAULT_ROTATION,
+    brightness: DEFAULT_BRIGHTNESS,
+    contrast: DEFAULT_CONTRAST,
+    transform: calculateInitialTransform(baseBounds),
+  };
+}
+
+/**
+ * Checks whether the current view state matches the clean default viewing state.
+ */
+export function isDefaultViewState(
+  viewState: CanvasViewState,
+  baseBounds?: RenderedImageBounds | null
+): boolean {
+  const initialTransform = calculateInitialTransform(baseBounds);
+  return (
+    viewState.rotation === DEFAULT_ROTATION &&
+    Math.abs(viewState.brightness - DEFAULT_BRIGHTNESS) < 0.001 &&
+    Math.abs(viewState.contrast - DEFAULT_CONTRAST) < 0.001 &&
+    Math.abs(viewState.transform.zoom - initialTransform.zoom) < 0.001 &&
+    Math.abs(viewState.transform.x - initialTransform.x) < 0.5 &&
+    Math.abs(viewState.transform.y - initialTransform.y) < 0.5
+  );
+}
 
 /**
  * Calculates allowable pan boundaries for an image within a container viewport.

@@ -1,6 +1,6 @@
 import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
-import type { PanZoomTransform } from '@/lib/panZoom';
+import type { PanZoomTransform, CanvasViewState } from '@/lib/panZoom';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
 import type {
   FreehandStroke,
@@ -28,11 +28,12 @@ import type {
   DeserializationResult,
 } from '@/lib/annotationSerialization';
 
-export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
+export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 export type {
+  CanvasViewState,
   AnswerSheetPage,
   FreehandStroke,
   StrokePoint,
@@ -87,6 +88,12 @@ export interface PageImageLayerProps {
   fitMode?: ImageFitMode;
   /** Current pan/zoom transform */
   transform?: PanZoomTransform;
+  /** Page rotation in degrees (0, 90, 180, 270) */
+  rotation?: number;
+  /** Image brightness factor (default 1.0) */
+  brightness?: number;
+  /** Image contrast factor (default 1.0) */
+  contrast?: number;
   /** Callback fired when image is successfully loaded and rendered */
   onImageLoad?: (image: HTMLImageElement, baseBounds: RenderedImageBounds) => void;
   /** Callback fired if image loading fails */
@@ -162,6 +169,38 @@ export interface AnswerSheetCanvasProps {
   onPenActiveChange?: (active: boolean) => void;
   /** Whether the eraser tool is enabled (default true, AE-128) */
   enableEraserTool?: boolean;
+  /** Whether the magnifier / loupe tool is enabled (default true, AE-152) */
+  enableLoupe?: boolean;
+  /** Controlled loupe active state (AE-152) */
+  isLoupeActive?: boolean;
+  /** Callback fired when loupe active state is toggled (AE-152) */
+  onLoupeActiveChange?: (active: boolean) => void;
+  /** Loupe magnification multiplier (default 2.0x, AE-152) */
+  loupeMagnification?: number;
+  /** Loupe lens diameter in pixels (default 180px, AE-152) */
+  loupeDiameter?: number;
+  /** Whether the Reset View toolbar button is enabled (default true, AE-153) */
+  enableResetView?: boolean;
+  /** Callback fired when Reset View is executed (AE-153) */
+  onResetView?: () => void;
+  /** Controlled page rotation in degrees (0, 90, 180, 270, AE-150) */
+  rotation?: number;
+  /** Uncontrolled initial page rotation in degrees (default 0, AE-150) */
+  initialRotation?: number;
+  /** Callback fired when page rotation changes (AE-150) */
+  onRotationChange?: (rotation: number) => void;
+  /** Controlled image brightness factor (default 1.0, AE-150) */
+  brightness?: number;
+  /** Uncontrolled initial brightness factor (default 1.0, AE-150) */
+  initialBrightness?: number;
+  /** Callback fired when brightness changes (AE-150) */
+  onBrightnessChange?: (brightness: number) => void;
+  /** Controlled image contrast factor (default 1.0, AE-150) */
+  contrast?: number;
+  /** Uncontrolled initial contrast factor (default 1.0, AE-150) */
+  initialContrast?: number;
+  /** Callback fired when contrast changes (AE-150) */
+  onContrastChange?: (contrast: number) => void;
   /** Whether the stamp tools (check, cross) are enabled (default true, AE-130) */
   enableStamps?: boolean;
   /** Whether the highlight tool is enabled (default true, AE-130) */
