@@ -16,7 +16,7 @@ import {
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { AnswerSheetCanvas } from '@/components/canvas/AnswerSheetCanvas';
-import { RubricSidebar, RubricData } from './RubricSidebar';
+import { RubricSidebar, RubricData, RubricSidebarHandle } from './RubricSidebar';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
 
 export interface ScriptData {
@@ -39,11 +39,20 @@ export function GradingWorkspace({
 }: GradingWorkspaceProps) {
   const router = useRouter();
   const hasNavigatedRef = useRef<boolean>(false);
+  const rubricSidebarRef = useRef<RubricSidebarHandle>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
+
+  const handleSaveDraft = useCallback(() => {
+    rubricSidebarRef.current?.saveDraft();
+  }, []);
+
+  const handleSubmitFinal = useCallback(() => {
+    rubricSidebarRef.current?.submitFinal();
+  }, []);
 
   const handleGradeSaved = useCallback(
     (savedGrade: unknown) => {
@@ -252,6 +261,8 @@ export function GradingWorkspace({
                 enableOverlayToggle={true}
                 enableAnnotationLoading={true}
                 enableAutosave={true}
+                onSaveDraft={handleSaveDraft}
+                onSubmitFinal={handleSubmitFinal}
                 className="w-full min-h-[700px] rounded-brand"
               />
             </div>
@@ -259,6 +270,7 @@ export function GradingWorkspace({
             {/* Rubric Sidebar Area */}
             <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0">
               <RubricSidebar
+                ref={rubricSidebarRef}
                 scriptId={scriptId}
                 examId={scriptData?.exam}
                 allocatedQuestionNumber={allocatedQuestionNumber}

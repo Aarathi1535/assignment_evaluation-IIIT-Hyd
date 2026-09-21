@@ -1948,32 +1948,35 @@ export class AllocationService {
             query._id = { $ne: new mongoose.Types.ObjectId(currentAllocationId) };
         }
 
-        const candidateAllocations = await Allocation.find(query)
+        const candidate = await Allocation.findOne(query)
             .sort({ createdAt: 1, _id: 1 })
-            .populate('answerScript')
             .session(session || null)
             .lean();
 
-        for (const candidate of candidateAllocations) {
-            const script = candidate.answerScript as { _id?: mongoose.Types.ObjectId; isActive?: boolean } | null;
-            if (!script) continue;
-            if (script.isActive === false) continue;
-
-            const scriptId = script._id ? script._id.toString() : script.toString();
-            const isQuestionWise = candidate.question !== undefined && candidate.question !== null;
-            const targetUrl = isQuestionWise
-                ? `/grading/${scriptId}/question/${candidate.question}`
-                : `/grading/${scriptId}`;
-
-            return {
-                allocationId: candidate._id.toString(),
-                scriptId,
-                question: candidate.question ?? null,
-                targetUrl,
-            };
+        if (!candidate) {
+            return null;
         }
 
-        return null;
+        const script = candidate.answerScript;
+        if (!script) {
+            return null;
+        }
+
+        const scriptId = typeof script === 'object' && script !== null && '_id' in (script as unknown as Record<string, unknown>)
+            ? (script as unknown as { _id: mongoose.Types.ObjectId })._id.toString()
+            : script.toString();
+
+        const isQuestionWise = candidate.question !== undefined && candidate.question !== null;
+        const targetUrl = isQuestionWise
+            ? `/grading/${scriptId}/question/${candidate.question}`
+            : `/grading/${scriptId}`;
+
+        return {
+            allocationId: candidate._id.toString(),
+            scriptId,
+            question: candidate.question ?? null,
+            targetUrl,
+        };
     }
 }
 

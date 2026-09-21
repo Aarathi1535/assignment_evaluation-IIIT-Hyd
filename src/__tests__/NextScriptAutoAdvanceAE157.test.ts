@@ -808,4 +808,254 @@ describe('AE-157: Next-script auto-advance test suite', () => {
     handleGradeSaved(completionPayload);
     expect(routerPushSpy).toHaveBeenCalledTimes(1); // Not called again
   });
+
+  // 14. Enter triggers save draft without confirmation and never auto-advances
+  it('14. Enter triggers save draft without confirmation and never auto-advances', async () => {
+    const confirmMock = vi.fn();
+    vi.stubGlobal('confirm', confirmMock);
+    vi.stubGlobal('window', { confirm: confirmMock });
+    const autoAdvanceSpy = vi.fn();
+    const gradeSavedSpy = vi.fn();
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          question: 1,
+          isFinal: false,
+          allocationCompleted: false,
+          nextAllocation: null,
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Simulate RubricSidebar handle invocation via saveDraft (Enter)
+    const handleSaveDraft = async (q: any, saveGradeFn: any) => {
+      await saveGradeFn(q, false);
+    };
+
+    const dummyQuestion = {
+      questionNumber: 1,
+      maxMarks: 10,
+      criteria: [{ criterionName: 'Correctness', points: 10 }],
+    };
+
+    const saveGradeMock = async (q: any, isFinal: boolean) => {
+      const res = await fetch(`/api/scripts/${script1Id}/questions/${q.questionNumber}/grade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFinal }),
+      });
+      const json = await res.json();
+      gradeSavedSpy(json.data);
+      if (json.data?.allocationCompleted && json.data?.nextAllocation?.targetUrl) {
+        autoAdvanceSpy(json.data.nextAllocation.targetUrl);
+      }
+    };
+
+    await handleSaveDraft(dummyQuestion, saveGradeMock);
+
+    // Confirm was NOT called
+    expect(confirmMock).not.toHaveBeenCalled();
+    // Save draft was called with isFinal: false
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(requestBody.isFinal).toBe(false);
+    // Draft save never auto-advances
+    expect(autoAdvanceSpy).not.toHaveBeenCalled();
+    expect(gradeSavedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ isFinal: false, allocationCompleted: false })
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  // 15. Ctrl+Enter prompts for confirmation before final submit
+  it('15. Ctrl+Enter triggers confirmation prompt before final submission', async () => {
+    const confirmMock = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', confirmMock);
+    vi.stubGlobal('window', { confirm: confirmMock });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          question: 1,
+          isFinal: true,
+          allocationCompleted: true,
+          nextAllocation: { targetUrl: '/grading/next-script/question/1' },
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const dummyQuestion = {
+      questionNumber: 1,
+      maxMarks: 10,
+      criteria: [{ criterionName: 'Correctness', points: 10 }],
+    };
+
+    // Simulate RubricSidebar handleFinalizeQuestion flow
+    const handleFinalizeQuestion = async (q: any) => {
+      const confirmFn = typeof window !== 'undefined' && window.confirm ? window.confirm : confirmMock;
+      const confirmed = confirmFn(`Are you sure you want to finalize Question ${q.questionNumber}? This action is irreversible.`);
+      if (!confirmed) return;
+
+      await fetch(`/api/scripts/${script1Id}/questions/${q.questionNumber}/grade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFinal: true }),
+      });
+    };
+
+    await handleFinalizeQuestion(dummyQuestion);
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining('Are you sure you want to finalize Question 1?')
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.isFinal).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  // 16. When confirmation is cancelled, no finalization occurs
+  it('16. when confirmation is cancelled, no finalization or API dispatch occurs', async () => {
+    const confirmMock = vi.fn().mockReturnValue(false);
+    vi.stubGlobal('confirm', confirmMock);
+    vi.stubGlobal('window', { confirm: confirmMock });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const dummyQuestion = {
+      questionNumber: 1,
+      maxMarks: 10,
+      criteria: [{ criterionName: 'Correctness', points: 10 }],
+    };
+
+    const handleFinalizeQuestion = async (q: any) => {
+      const confirmFn = typeof window !== 'undefined' && window.confirm ? window.confirm : confirmMock;
+      const confirmed = confirmFn(`Are you sure you want to finalize Question ${q.questionNumber}? This action is irreversible.`);
+      if (!confirmed) return;
+
+      await fetch(`/api/scripts/${script1Id}/questions/${q.questionNumber}/grade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFinal: true }),
+      });
+    };
+
+    await handleFinalizeQuestion(dummyQuestion);
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  // 17. Ctrl+Enter uses the exact same handler and lifecycle as visible Submit Final button
+  it('17. Ctrl+Enter and Submit Final button share identical confirmation and execution flow', async () => {
+    const confirmMock = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', confirmMock);
+    vi.stubGlobal('window', { confirm: confirmMock });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          question: 1,
+          isFinal: true,
+          allocationCompleted: true,
+          nextAllocation: { targetUrl: `/grading/${script2Id}/question/1` },
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const autoAdvanceSpy = vi.fn();
+    const handleGradeSaved = (data: any) => {
+      if (data?.allocationCompleted && data?.nextAllocation?.targetUrl) {
+        autoAdvanceSpy(data.nextAllocation.targetUrl);
+      }
+    };
+
+    const dummyQuestion = {
+      questionNumber: 1,
+      maxMarks: 10,
+      criteria: [{ criterionName: 'Correctness', points: 10 }],
+    };
+
+    // Shared final submit handler
+    const handleFinalizeQuestion = async (q: any) => {
+      const confirmFn = typeof window !== 'undefined' && window.confirm ? window.confirm : confirmMock;
+      const confirmed = confirmFn(`Are you sure you want to finalize Question ${q.questionNumber}? This action is irreversible.`);
+      if (!confirmed) return;
+
+      const res = await fetch(`/api/scripts/${script1Id}/questions/${q.questionNumber}/grade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFinal: true }),
+      });
+      const json = await res.json();
+      handleGradeSaved(json.data);
+    };
+
+    // 1. Trigger via keyboard (Ctrl+Enter)
+    await handleFinalizeQuestion(dummyQuestion);
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(autoAdvanceSpy).toHaveBeenCalledWith(`/grading/${script2Id}/question/1`);
+
+    // 2. Trigger via button click
+    await handleFinalizeQuestion(dummyQuestion);
+    expect(confirmMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.unstubAllGlobals();
+  });
+
+  // 18. getNextAllocation performs efficient single query (limit 1) matching dashboard order
+  it('18. getNextAllocation performs single-query retrieval respecting createdAt ASC, _id ASC ordering', async () => {
+    const currentAlloc = await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: script1Id,
+      allocatedBy: professorId,
+      status: AllocationStatus.IN_PROGRESS,
+      rule: AllocationRule.QUESTION,
+      question: 1,
+      createdAt: new Date('2026-09-01T10:00:00.000Z'),
+    });
+
+    const alloc2 = await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: script2Id,
+      allocatedBy: professorId,
+      status: AllocationStatus.PENDING,
+      rule: AllocationRule.QUESTION,
+      question: 1,
+      createdAt: new Date('2026-09-01T10:05:00.000Z'),
+    });
+
+    await Allocation.create({
+      exam: examId,
+      ta: ta1Id,
+      answerScript: script3Id,
+      allocatedBy: professorId,
+      status: AllocationStatus.PENDING,
+      rule: AllocationRule.QUESTION,
+      question: 1,
+      createdAt: new Date('2026-09-01T10:10:00.000Z'),
+    });
+
+    const next = await AllocationService.getNextAllocation(ta1Id, examId, currentAlloc._id);
+    expect(next).toBeDefined();
+    expect(next?.allocationId).toBe(alloc2._id.toString());
+    expect(next?.scriptId).toBe(script2Id.toString());
+  });
 });

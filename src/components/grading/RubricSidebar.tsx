@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from 'react';
 import {
   BookOpen,
   AlertCircle,
@@ -45,6 +45,11 @@ export interface CriterionGradeEntry {
   score: number;
 }
 
+export interface RubricSidebarHandle {
+  saveDraft: () => Promise<void>;
+  submitFinal: () => Promise<void>;
+}
+
 export interface RubricSidebarProps {
   scriptId?: string;
   examId?: string;
@@ -63,23 +68,26 @@ export interface RubricSidebarProps {
   className?: string;
 }
 
-export function RubricSidebar({
-  scriptId,
-  examId,
-  initialRubric,
-  initialScores,
-  initialFeedback,
-  initialTagIds,
-  initialTags,
-  initialFinalized,
-  allocatedQuestionNumber,
-  onRubricLoaded,
-  onScoresChange,
-  onFeedbackChange,
-  onGradeSaved,
-  onAutoAdvance,
-  className = '',
-}: RubricSidebarProps) {
+export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>(function RubricSidebar(
+  {
+    scriptId,
+    examId,
+    initialRubric,
+    initialScores,
+    initialFeedback,
+    initialTagIds,
+    initialTags,
+    initialFinalized,
+    allocatedQuestionNumber,
+    onRubricLoaded,
+    onScoresChange,
+    onFeedbackChange,
+    onGradeSaved,
+    onAutoAdvance,
+    className = '',
+  }: RubricSidebarProps,
+  ref
+) {
   const [rubric, setRubric] = useState<RubricData | null>(initialRubric ?? null);
   const [loading, setLoading] = useState<boolean>(!initialRubric && Boolean(examId));
   const [error, setError] = useState<string | null>(null);
@@ -436,6 +444,64 @@ export function RubricSidebar({
       }
     },
     [scriptId, scores, feedback, tagIds, onGradeSaved, onAutoAdvance]
+  );
+
+  // Handle Finalize with Confirmation
+  const handleFinalizeQuestion = useCallback(
+    async (q: RubricQuestion) => {
+      const confirmFn =
+        typeof window !== 'undefined' && typeof window.confirm === 'function'
+          ? window.confirm
+          : typeof globalThis !== 'undefined' && typeof (globalThis as unknown as { confirm?: (msg: string) => boolean }).confirm === 'function'
+            ? (globalThis as unknown as { confirm: (msg: string) => boolean }).confirm
+            : null;
+
+      const confirmed = confirmFn
+        ? confirmFn(`Are you sure you want to finalize Question ${q.questionNumber}? This action is irreversible.`)
+        : true;
+
+      if (!confirmed) {
+        return;
+      }
+
+      await handleSaveGrade(q, true);
+    },
+    [handleSaveGrade]
+  );
+
+  // Determine current active / target question for keyboard actions
+  const getTargetQuestion = useCallback((): RubricQuestion | null => {
+    if (!rubric || !rubric.questions || rubric.questions.length === 0) return null;
+    if (isQuestionWise) {
+      return (
+        rubric.questions.find((q) => q.questionNumber === Number(allocatedQuestionNumber)) ||
+        null
+      );
+    }
+    return (
+      rubric.questions.find((q) => !finalizedQuestions[q.questionNumber]) ||
+      rubric.questions[0] ||
+      null
+    );
+  }, [rubric, isQuestionWise, allocatedQuestionNumber, finalizedQuestions]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      saveDraft: async () => {
+        const q = getTargetQuestion();
+        if (q) {
+          await handleSaveGrade(q, false);
+        }
+      },
+      submitFinal: async () => {
+        const q = getTargetQuestion();
+        if (q) {
+          await handleFinalizeQuestion(q);
+        }
+      },
+    }),
+    [getTargetQuestion, handleSaveGrade, handleFinalizeQuestion]
   );
 
   // Calculations
@@ -900,7 +966,7 @@ export function RubricSidebar({
                               size="sm"
                               data-testid={`finalize-grade-button-${q.questionNumber}`}
                               disabled={currentSaveStatus?.saving}
-                              onClick={() => handleSaveGrade(q, true)}
+                              onClick={() => handleFinalizeQuestion(q)}
                               className="text-2xs h-7 px-3 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                             >
                               {currentSaveStatus?.saving ? (
@@ -928,7 +994,7 @@ export function RubricSidebar({
       </div>
     </div>
   );
-}
+});
 
 export default RubricSidebar;
 
