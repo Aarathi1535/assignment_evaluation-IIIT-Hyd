@@ -205,25 +205,67 @@ interface SerializedPageAnnotations {
 ## 8. Keyboard & Interaction Shortcuts Reference
 
 > [!IMPORTANT]
-> Every shortcut listed below is verified against active source code and unit tests.
+> Every shortcut listed below is backed by the authoritative shortcut map ([`src/lib/shortcutMap.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/lib/shortcutMap.ts)) and verified by automated unit tests.
+> Shortcuts are strictly suppressed when the user is typing in `<input>`, `<textarea>`, or content-editable elements.
 
-| Input / Shortcut | Action | Context / Notes |
+### Grading & Submission Shortcuts
+| Input / Shortcut | Action | Group | Description / Notes |
+| :--- | :--- | :--- | :--- |
+| `Enter` | **Save Draft** | `grading` | Saves the active question score & feedback as draft. **Never** finalizes a grade. |
+| `Ctrl+Enter` / `Cmd+Enter` | **Submit Final** | `grading` | Deliberate modifier shortcut to submit and finalize grading for current question. |
+
+### Canvas Annotation Tool Hotkeys
+| Input / Shortcut | Action | Group | Description / Notes |
+| :--- | :--- | :--- | :--- |
+| `V` / `S` | **Select Tool** | `tools` | Toggle select/move tool to reposition or delete annotations. |
+| `P` | **Pen Tool** | `tools` | Activate freehand drawing pen tool (distinct from Q). |
+| `E` | **Eraser Tool** | `tools` | Activate stroke eraser tool. |
+| `C` | **Check Stamp** | `tools` | Stamp green checkmark (✓). |
+| `X` | **Cross Stamp** | `tools` | Stamp red cross (✗). |
+| `H` | **Highlighter** | `tools` | Draw semi-transparent yellow highlight box. |
+| `T` | **Text Note** | `tools` | Open in-place text note editor. |
+| `M` / `L` | **Magnifier / Loupe** | `tools` | Toggle floating magnifier loupe (AE-152). |
+
+### View & Transform Controls
+| Input / Shortcut | Action | Group | Description / Notes |
+| :--- | :--- | :--- | :--- |
+| `+` / `=` | **Zoom In** | `view` | Magnify canvas view (+25%). |
+| `-` | **Zoom Out** | `view` | Reduce canvas view (-25%). |
+| `0` | **Reset Zoom** | `view` | Reset canvas zoom level to 100% (fit-to-page). |
+| `R` | **Rotate Clockwise** | `view` | Rotate canvas and annotations 90° clockwise (AE-150). |
+| `Shift+R` | **Rotate Counter-Clockwise** | `view` | Rotate canvas and annotations 90° counter-clockwise (AE-150). |
+| `Alt+R` | **Reset View** | `view` | Atomically reset all view transforms (pan, zoom, rotation, brightness, contrast) (AE-153). |
+| `O` | **Toggle Overlay** | `view` | Toggle visibility of all annotations and pen strokes (AE-133). |
+
+### History & Editing Shortcuts
+| Input / Shortcut | Action | Group | Description / Notes |
+| :--- | :--- | :--- | :--- |
+| `Ctrl+Z` / `Cmd+Z` | **Undo** | `history` | Revert the last annotation addition, stroke, move, or erasure on active page. |
+| `Ctrl+Y` / `Ctrl+Shift+Z` / `Cmd+Shift+Z` | **Redo** | `history` | Re-apply the last undone action on active page. |
+| `Delete` / `Backspace` | **Delete Selected** | `history` | Delete the currently selected annotation in `select` mode. |
+
+### Navigation Shortcuts
+| Input / Shortcut | Action | Group | Description / Notes |
+| :--- | :--- | :--- | :--- |
+| `Alt+Down` / `PageDown` / `J` | **Next Page** | `navigation` | Advance to the next script page. (`Tab` is reserved for browser accessibility). |
+| `Alt+Up` / `PageUp` / `K` | **Previous Page** | `navigation` | Return to the previous script page. |
+| `Q` | **Next Question** | `navigation` | Move focus to the next question for grading (distinct from P). |
+| `Shift+Q` | **Previous Question** | `navigation` | Move focus to the previous question for grading. |
+
+### Text Note Editor Modal Shortcuts
+| Input / Shortcut | Action | Description / Notes |
 | :--- | :--- | :--- |
-| `Ctrl+Z` / `Cmd+Z` | **Undo** | Reverts the last annotation addition, stroke, move, or erasure on the active page. Disabled if typing in an `input` or `textarea`. |
-| `Ctrl+Shift+Z` / `Cmd+Shift+Z` | **Redo** | Re-applies the last undone annotation action on the active page. |
-| `Ctrl+Y` / `Cmd+Y` | **Redo (Alternate)** | Standard Windows alternate shortcut for Redo. |
-| `Delete` / `Backspace` | **Delete Selected** | Deletes the currently selected annotation in `select` mode. Ignored when typing in text fields. |
-| `Enter` *(in TextNoteEditor)* | **Save Text Note** | Confirms and saves the text note annotation. (Ignored if text is empty). |
-| `Shift+Enter` *(in TextNoteEditor)* | **Insert Newline** | Inserts a newline character in the text note comment area. |
-| `Escape` *(in TextNoteEditor)* | **Cancel Text Note** | Closes the text note editor without creating an annotation. |
-| `Mouse Wheel Up` | **Zoom In** | Magnifies canvas by $1.15\times$, anchored around pointer position. |
-| `Mouse Wheel Down` | **Zoom Out** | Reduces canvas magnification by $1.15\times$, anchored around pointer position. |
-| `Mouse / Touch Drag` *(Tool: `none`)* | **Pan Viewport** | Drags and pans the zoomed answer sheet scan within allowable container bounds. |
-| `Mouse / Pen / Touch Drag` *(Tool: `pen`)* | **Draw Freehand Stroke** | Draws continuous smoothed vector stroke. |
-| `Mouse / Pen / Touch Drag` *(Tool: `highlight`)* | **Create Highlight Box** | Creates a normalized rectangular highlight box across dragged bounds. |
-| `Mouse / Pen / Touch Drag` *(Tool: `eraser`)* | **Erase Strokes** | Erases intersecting freehand strokes along the continuous pointer path. |
-| `Mouse / Pen / Touch Drag` *(Tool: `select`)* | **Move Annotation** | Drags the selected annotation to a new position on the page. |
-| `Two-Finger Pinch` *(Touch)* | **Pinch-to-Zoom** | Scales canvas magnification dynamically anchored around the pinch midpoint. |
+| `Enter` | **Save Text Note** | Confirms and saves the sticky text comment. |
+| `Shift+Enter` | **Insert Newline** | Inserts a line break inside the comment text area. |
+| `Escape` | **Cancel Text Note** | Dismisses the text note editor without creating an annotation. |
+
+### Direct Gestures & Hardware Input
+| Gesture / Action | Result | Notes |
+| :--- | :--- | :--- |
+| `Mouse Wheel Up / Down` | **Smooth Zoom** | Magnifies or reduces canvas anchored around pointer coordinate. |
+| `Drag (Tool: none)` | **Pan Viewport** | Pans zoomed viewport within bounding limits. |
+| `Two-Finger Pinch` | **Pinch-to-Zoom** | Dynamic zoom scaling anchored around touch pinch midpoint. |
+
 
 ---
 
