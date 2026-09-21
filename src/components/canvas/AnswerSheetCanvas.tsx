@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import type Konva from 'konva';
 import {
   Loader2,
   AlertCircle,
@@ -24,12 +25,14 @@ import {
   EyeOff,
   RotateCw,
   Sun,
+  Search,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
 import { MarkLayer } from './MarkLayer';
 import { TextNoteEditor } from './TextNoteEditor';
+import { MagnifierLoupe } from './MagnifierLoupe';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
 import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
@@ -147,6 +150,11 @@ export function AnswerSheetCanvas({
   isPenActive: propIsPenActive,
   onPenActiveChange,
   enableEraserTool = true,
+  enableLoupe = true,
+  isLoupeActive: propIsLoupeActive,
+  onLoupeActiveChange,
+  loupeMagnification = 2.0,
+  loupeDiameter = 180,
   enableStamps = true,
   enableHighlight = true,
   enableTextNote = true,
@@ -250,9 +258,10 @@ export function AnswerSheetCanvas({
 
   const activeTool = useMemo<CanvasTool>(() => {
     if (propActiveTool !== undefined) return propActiveTool;
+    if (propIsLoupeActive !== undefined && propIsLoupeActive) return 'loupe';
     if (propIsPenActive !== undefined) return propIsPenActive ? 'pen' : 'none';
     return internalTool;
-  }, [propActiveTool, propIsPenActive, internalTool]);
+  }, [propActiveTool, propIsLoupeActive, propIsPenActive, internalTool]);
 
   // Selection state (AE-132)
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
@@ -266,7 +275,9 @@ export function AnswerSheetCanvas({
   const activeHighlightMode = activeTool === 'highlight';
   const activeTextMode = activeTool === 'text';
   const activeEraserMode = activeTool === 'eraser';
-  const isDrawingToolActive = activeTool !== 'none' && activeTool !== 'select';
+  const activeLoupeMode = activeTool === 'loupe';
+  const isDrawingToolActive =
+    activeTool !== 'none' && activeTool !== 'select' && activeTool !== 'loupe';
 
   // Active in-place text note editor anchor state (AE-131)
   const [activeTextEditor, setActiveTextEditor] = useState<{
@@ -293,8 +304,9 @@ export function AnswerSheetCanvas({
       setInternalTool(nextTool);
       onToolChange?.(nextTool);
       onPenActiveChange?.(nextTool === 'pen');
+      onLoupeActiveChange?.(nextTool === 'loupe');
     },
-    [onToolChange, onPenActiveChange, onSelectAnnotation]
+    [onToolChange, onPenActiveChange, onLoupeActiveChange, onSelectAnnotation]
   );
 
   const handleToggleSelect = useCallback(() => {
@@ -332,6 +344,10 @@ export function AnswerSheetCanvas({
   const handleToggleEraser = useCallback(() => {
     setTool(activeEraserMode ? 'none' : 'eraser');
   }, [activeEraserMode, setTool]);
+
+  const handleToggleLoupe = useCallback(() => {
+    setTool(activeLoupeMode ? 'none' : 'loupe');
+  }, [activeLoupeMode, setTool]);
 
   // Overlay visibility state (AE-133)
   const [internalOverlayVisible, setInternalOverlayVisible] = useState<boolean>(initialOverlayVisible);
@@ -1060,12 +1076,19 @@ export function AnswerSheetCanvas({
         }
       }
 
-      if (!enableUndoRedo) return;
-
       const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      // Magnifier / Loupe toggle shortcut (M or L) when not modifying with Ctrl/Meta/Alt
+      if (enableLoupe && !isCtrlOrCmd && !e.altKey && (key === 'm' || key === 'l')) {
+        e.preventDefault();
+        handleToggleLoupe();
+        return;
+      }
+
+      if (!enableUndoRedo) return;
       if (!isCtrlOrCmd) return;
 
-      const key = e.key.toLowerCase();
       if (key === 'z') {
         if (e.shiftKey) {
           if (canRedo(currentPageHistory)) {
@@ -1091,6 +1114,8 @@ export function AnswerSheetCanvas({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [
+    enableLoupe,
+    handleToggleLoupe,
     enableUndoRedo,
     currentPageHistory,
     handleUndo,
@@ -1207,6 +1232,11 @@ export function AnswerSheetCanvas({
     },
     [onTransformChange]
   );
+
+  const [stageInstance, setStageInstance] = useState<Konva.Stage | null>(null);
+  const handleStageReady = useCallback((stg: Konva.Stage | null) => {
+    setStageInstance(stg);
+  }, []);
 
   const handleResize = useCallback((dims: { width: number; height: number }) => {
     stageDimensionsRef.current = dims;
@@ -1446,6 +1476,7 @@ export function AnswerSheetCanvas({
         backgroundColor={backgroundColor}
         className="w-full h-full"
         onResize={handleResize}
+        onStageReady={handleStageReady}
       >
         <PageImageLayer
           src={effectiveSrc}
@@ -1496,6 +1527,14 @@ export function AnswerSheetCanvas({
         />
       </CanvasStage>
 
+      {/* Magnifier / Loupe Inspection Lens (AE-152) */}
+      <MagnifierLoupe
+        active={activeLoupeMode && !isLoading && !hasError && Boolean(effectiveSrc)}
+        stage={stageInstance}
+        magnification={loupeMagnification}
+        diameter={loupeDiameter}
+      />
+
       {/* In-Place Text Note Editor Overlay (AE-131 / AE-150) */}
       {activeTextEditor && !isLoading && !hasError && Boolean(effectiveSrc) && (
         <TextNoteEditor
@@ -1530,6 +1569,25 @@ export function AnswerSheetCanvas({
               data-testid="canvas-select-toggle"
             >
               <MousePointer className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Magnifier / Loupe Tool Toggle (AE-152) */}
+          {enableLoupe && (
+            <button
+              type="button"
+              onClick={handleToggleLoupe}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeLoupeMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeLoupeMode}
+              aria-label="Toggle Magnifier Loupe Tool"
+              title={activeLoupeMode ? 'Magnifier Active (Click to Disable or Press M / L)' : 'Enable Magnifier Loupe (M / L)'}
+              data-testid="canvas-loupe-toggle"
+            >
+              <Search className="h-4 w-4" />
             </button>
           )}
 
