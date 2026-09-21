@@ -1920,6 +1920,68 @@ export class AllocationService {
 
         return await Allocation.findOne(query);
     }
+
+    /**
+     * Retrieves the next PENDING or IN_PROGRESS grading allocation for a TA within the specified exam (AE-157).
+     * Follows the exact same ordering as the TA dashboard: { createdAt: 1, _id: 1 }.
+     * Never returns COMPLETED allocations.
+     * Skips the current allocation if specified.
+     * Returns null if no remaining active allocations exist.
+     */
+    static async getNextAllocation(
+        taId: string | mongoose.Types.ObjectId,
+        examId: string | mongoose.Types.ObjectId,
+        currentAllocationId?: string | mongoose.Types.ObjectId | null,
+        session?: mongoose.ClientSession
+    ): Promise<NextAllocationResult | null> {
+        if (!mongoose.Types.ObjectId.isValid(taId) || !mongoose.Types.ObjectId.isValid(examId)) {
+            return null;
+        }
+
+        const query: Record<string, unknown> = {
+            ta: new mongoose.Types.ObjectId(taId),
+            exam: new mongoose.Types.ObjectId(examId),
+            status: { $in: [AllocationStatus.PENDING, AllocationStatus.IN_PROGRESS] },
+        };
+
+        if (currentAllocationId && mongoose.Types.ObjectId.isValid(currentAllocationId)) {
+            query._id = { $ne: new mongoose.Types.ObjectId(currentAllocationId) };
+        }
+
+        const candidateAllocations = await Allocation.find(query)
+            .sort({ createdAt: 1, _id: 1 })
+            .populate('answerScript')
+            .session(session || null)
+            .lean();
+
+        for (const candidate of candidateAllocations) {
+            const script = candidate.answerScript as { _id?: mongoose.Types.ObjectId; isActive?: boolean } | null;
+            if (!script) continue;
+            if (script.isActive === false) continue;
+
+            const scriptId = script._id ? script._id.toString() : script.toString();
+            const isQuestionWise = candidate.question !== undefined && candidate.question !== null;
+            const targetUrl = isQuestionWise
+                ? `/grading/${scriptId}/question/${candidate.question}`
+                : `/grading/${scriptId}`;
+
+            return {
+                allocationId: candidate._id.toString(),
+                scriptId,
+                question: candidate.question ?? null,
+                targetUrl,
+            };
+        }
+
+        return null;
+    }
+}
+
+export interface NextAllocationResult {
+    allocationId: string;
+    scriptId: string;
+    question?: number | null;
+    targetUrl: string;
 }
 
 export const GRADING_ACTIVITY_ACTIONS = [

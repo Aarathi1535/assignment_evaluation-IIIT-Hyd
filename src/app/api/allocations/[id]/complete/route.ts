@@ -76,10 +76,24 @@ export async function POST(
       }
     );
 
+    const nextAllocation = await AllocationService.getNextAllocation(
+      user.id,
+      allocation.exam,
+      id
+    );
+
+    const allocObj = updatedAllocation && typeof (updatedAllocation as unknown as { toObject?: () => Record<string, unknown> }).toObject === 'function'
+      ? (updatedAllocation as unknown as { toObject: () => Record<string, unknown> }).toObject()
+      : updatedAllocation;
+
     return NextResponse.json({
       success: true,
       message: 'Allocation completed successfully',
-      data: updatedAllocation,
+      data: {
+        ...allocObj,
+        allocationCompleted: true,
+        nextAllocation,
+      },
     }, { status: 200 });
 
   } catch (error: unknown) {

@@ -59,6 +59,7 @@ export interface RubricSidebarProps {
   onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
   onFeedbackChange?: (questionNumber: number, feedback: string) => void;
   onGradeSaved?: (savedGrade: unknown) => void;
+  onAutoAdvance?: (nextUrl: string) => void;
   className?: string;
 }
 
@@ -76,6 +77,7 @@ export function RubricSidebar({
   onScoresChange,
   onFeedbackChange,
   onGradeSaved,
+  onAutoAdvance,
   className = '',
 }: RubricSidebarProps) {
   const [rubric, setRubric] = useState<RubricData | null>(initialRubric ?? null);
@@ -404,6 +406,7 @@ export function RubricSidebar({
         }
 
         const json = await res.json();
+        const savedData = json.data || json;
         if (isFinal) {
           setFinalizedQuestions((prev) => ({ ...prev, [qNum]: true }));
         }
@@ -411,7 +414,11 @@ export function RubricSidebar({
           ...prev,
           [qNum]: { saving: false, error: undefined, success: true },
         }));
-        onGradeSaved?.(json.data || json);
+        onGradeSaved?.(savedData);
+
+        if (savedData?.allocationCompleted && savedData?.nextAllocation?.targetUrl) {
+          onAutoAdvance?.(savedData.nextAllocation.targetUrl);
+        }
 
         // Clear success message after 3 seconds
         setTimeout(() => {
@@ -428,7 +435,7 @@ export function RubricSidebar({
         }));
       }
     },
-    [scriptId, scores, feedback, tagIds, onGradeSaved]
+    [scriptId, scores, feedback, tagIds, onGradeSaved, onAutoAdvance]
   );
 
   // Calculations
