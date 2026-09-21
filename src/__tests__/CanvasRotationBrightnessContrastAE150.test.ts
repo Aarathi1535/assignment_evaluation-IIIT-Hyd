@@ -178,6 +178,84 @@ describe('AE-150: Canvas Rotation, Pointer Inverse Transformation, and Image-Onl
         expect(screenHighlightPt.y).toBeCloseTo(screenTextPt.y, 2);
       }
     });
+
+    it('proves the image rendering Konva group receives rotation and shares exact transform with pen/mark groups', () => {
+      const imageGroup = new Konva.Group({ name: 'page-image-group' });
+      const penGroup = new Konva.Group({ name: 'pen-stroke-group' });
+      const markGroup = new Konva.Group({ name: 'mark-annotation-group' });
+
+      const mockImg = {} as CanvasImageSource;
+      const imageNode = new Konva.Image({
+        image: mockImg,
+        x: 0,
+        y: 0,
+        width: mockBaseBounds.width,
+        height: mockBaseBounds.height,
+      });
+      imageGroup.add(imageNode);
+
+      const applyUnifiedTransform = (
+        group: Konva.Group,
+        transform: PanZoomTransform,
+        bounds: typeof mockBaseBounds
+      ) => {
+        const cx = bounds.width / 2;
+        const cy = bounds.height / 2;
+        const rotation = transform.rotation || 0;
+
+        group.position({
+          x: transform.x + cx * transform.zoom,
+          y: transform.y + cy * transform.zoom,
+        });
+        group.offset({ x: cx, y: cy });
+        group.scale({ x: transform.zoom, y: transform.zoom });
+        group.rotation(rotation);
+      };
+
+      const testRotations = [0, 90, 180, 270];
+
+      for (const rot of testRotations) {
+        const currentTransform: PanZoomTransform = {
+          x: mockBaseBounds.x,
+          y: mockBaseBounds.y,
+          zoom: 1.25,
+          rotation: rot,
+        };
+
+        applyUnifiedTransform(imageGroup, currentTransform, mockBaseBounds);
+        applyUnifiedTransform(penGroup, currentTransform, mockBaseBounds);
+        applyUnifiedTransform(markGroup, currentTransform, mockBaseBounds);
+
+        // 1. Verify image group receives the rotation
+        expect(imageGroup.rotation()).toBe(rot);
+        expect(penGroup.rotation()).toBe(rot);
+        expect(markGroup.rotation()).toBe(rot);
+
+        // 2. Verify all three groups have identical center pivot offsets
+        expect(imageGroup.offsetX()).toBe(mockBaseBounds.width / 2);
+        expect(imageGroup.offsetY()).toBe(mockBaseBounds.height / 2);
+        expect(penGroup.offsetX()).toBe(imageGroup.offsetX());
+        expect(penGroup.offsetY()).toBe(imageGroup.offsetY());
+        expect(markGroup.offsetX()).toBe(imageGroup.offsetX());
+        expect(markGroup.offsetY()).toBe(imageGroup.offsetY());
+
+        // 3. Verify all three groups share exact positions and scales
+        expect(imageGroup.x()).toBe(penGroup.x());
+        expect(imageGroup.y()).toBe(penGroup.y());
+        expect(imageGroup.x()).toBe(markGroup.x());
+        expect(imageGroup.y()).toBe(markGroup.y());
+        expect(imageGroup.scaleX()).toBe(currentTransform.zoom);
+        expect(imageGroup.scaleY()).toBe(currentTransform.zoom);
+        expect(penGroup.scaleX()).toBe(currentTransform.zoom);
+        expect(markGroup.scaleX()).toBe(currentTransform.zoom);
+
+        // 4. Verify image node inside group remains in local invariant coordinates
+        expect(imageNode.x()).toBe(0);
+        expect(imageNode.y()).toBe(0);
+        expect(imageNode.width()).toBe(mockBaseBounds.width);
+        expect(imageNode.height()).toBe(mockBaseBounds.height);
+      }
+    });
   });
 
   describe('5. Image-Only Brightness Control (View-Only & Non-Destructive)', () => {

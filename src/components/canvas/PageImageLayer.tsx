@@ -104,13 +104,38 @@ export function PageImageLayer({
   const dragStartTransformRef = useRef({ x: 0, y: 0 });
   const lastTouchDistanceRef = useRef<number | null>(null);
 
+  // Helper to sync group transform with pan, zoom, rotation & center pivot (matching PenLayer & MarkLayer)
+  const syncGroupTransform = useCallback(() => {
+    if (!groupRef.current) return;
+    const currentTransform = activeTransformRef.current;
+    const bounds = baseBoundsRef.current;
+    const rotation = currentTransform.rotation || 0;
+
+    if (bounds && bounds.width > 0 && bounds.height > 0) {
+      const cx = bounds.width / 2;
+      const cy = bounds.height / 2;
+      groupRef.current.position({
+        x: currentTransform.x + cx * currentTransform.zoom,
+        y: currentTransform.y + cy * currentTransform.zoom,
+      });
+      groupRef.current.offset({ x: cx, y: cy });
+      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+      groupRef.current.rotation(rotation);
+    } else {
+      groupRef.current.position({ x: currentTransform.x, y: currentTransform.y });
+      groupRef.current.offset({ x: 0, y: 0 });
+      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+      groupRef.current.rotation(rotation);
+    }
+  }, []);
+
   // Helper to layout the image node within the current stage dimensions & transform
   const updateImageLayout = useCallback(
     (
       img: HTMLImageElement,
       stageW: number,
       stageH: number,
-      transform: PanZoomTransform
+      _transform: PanZoomTransform
     ): RenderedImageBounds | null => {
       if (!layerRef.current || stageW <= 0 || stageH <= 0) return null;
 
@@ -123,40 +148,13 @@ export function PageImageLayer({
       );
       baseBoundsRef.current = baseBounds;
 
-      const isRotated90 = ((transform.rotation || 0) % 180) !== 0;
-      const renderW = (isRotated90 ? baseBounds.height : baseBounds.width) * transform.zoom;
-      const renderH = (isRotated90 ? baseBounds.width : baseBounds.height) * transform.zoom;
-
-      // Ensure position is within valid pan bounds for the current zoom
-      const bounds = calculatePanBounds(stageW, stageH, renderW, renderH);
-      const clamped = clampPanPosition(transform.x, transform.y, bounds);
-
-      const cx = baseBounds.width / 2;
-      const cy = baseBounds.height / 2;
-      const rotation = transform.rotation || 0;
-
       if (!groupRef.current) {
         const group = new Konva.Group({
           name: 'page-image-group',
-          x: clamped.x + cx * transform.zoom,
-          y: clamped.y + cy * transform.zoom,
-          offsetX: cx,
-          offsetY: cy,
-          scaleX: transform.zoom,
-          scaleY: transform.zoom,
-          rotation,
           listening: false,
         });
         groupRef.current = group;
         layerRef.current.add(group);
-      } else {
-        groupRef.current.position({
-          x: clamped.x + cx * transform.zoom,
-          y: clamped.y + cy * transform.zoom,
-        });
-        groupRef.current.offset({ x: cx, y: cy });
-        groupRef.current.scale({ x: transform.zoom, y: transform.zoom });
-        groupRef.current.rotation(rotation);
       }
 
       if (!imageNodeRef.current) {
@@ -178,10 +176,11 @@ export function PageImageLayer({
         applyImageFilters(imageNodeRef.current, brightnessRef.current, contrastRef.current);
       }
 
+      syncGroupTransform();
       layerRef.current.batchDraw();
       return baseBounds;
     },
-    [fitMode, applyImageFilters]
+    [fitMode, applyImageFilters, syncGroupTransform]
   );
 
   // Initialize Konva Layer
@@ -256,6 +255,7 @@ export function PageImageLayer({
         x: baseBounds.x,
         y: baseBounds.y,
         zoom: 1.0,
+        rotation: activeTransformRef.current.rotation || 0,
       };
 
       setInternalTransform(initialTransform);
@@ -300,6 +300,7 @@ export function PageImageLayer({
         x: clamped.x,
         y: clamped.y,
         zoom: current.zoom,
+        rotation: current.rotation || 0,
       };
 
       setInternalTransform(adjustedTransform);
@@ -316,12 +317,18 @@ export function PageImageLayer({
     }
   }, [brightness, contrast, applyImageFilters]);
 
-  // Apply transform updates from props
+  // Synchronize group transform with pan, zoom, rotation props & state
   useEffect(() => {
-    if (propTransform && loadedImageRef.current && dimensions.width > 0 && dimensions.height > 0) {
-      updateImageLayout(loadedImageRef.current, dimensions.width, dimensions.height, propTransform);
-    }
-  }, [propTransform, dimensions.width, dimensions.height, updateImageLayout]);
+    if (!groupRef.current || !layerRef.current) return;
+    syncGroupTransform();
+    layerRef.current.batchDraw();
+  }, [
+    activeTransform.x,
+    activeTransform.y,
+    activeTransform.zoom,
+    activeTransform.rotation,
+    syncGroupTransform,
+  ]);
 
   // Pointer & Gesture Event Handlers for Pan/Zoom
   useEffect(() => {

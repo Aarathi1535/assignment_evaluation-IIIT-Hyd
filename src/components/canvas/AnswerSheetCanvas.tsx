@@ -1791,7 +1791,7 @@ export function AnswerSheetCanvas({
       {/* Floating Toolbar: Zoom Controls & Select / Pen / Style / Stamps / Highlight / Text / Eraser / Delete / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
-          className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
+          className="absolute bottom-3 right-3 flex flex-wrap items-center justify-end bg-white/95 backdrop-blur-xs border border-slate-200/90 rounded-lg shadow-md p-1 gap-1 z-20 max-w-[calc(100%-24px)] transition-opacity"
           data-testid="canvas-zoom-controls"
           role="toolbar"
           aria-label="Canvas Zoom and Pen Controls"

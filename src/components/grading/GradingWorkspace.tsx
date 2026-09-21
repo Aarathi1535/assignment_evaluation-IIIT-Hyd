@@ -130,6 +130,7 @@ export function GradingWorkspace({
           ? `Evaluate and grade Question ${allocatedQuestionNumber} on exam submissions.`
           : 'Evaluate and grade full exam script submissions.'
       }
+      maxWidth="full"
     >
       <div className="space-y-4">
         {/* Top Context & Navigation Bar */}
@@ -243,7 +244,7 @@ export function GradingWorkspace({
             {/* Canvas Viewport Area */}
             <div
               data-testid="grading-canvas-container"
-              className="flex-1 w-full bg-white border border-slate-200 rounded-brand-lg shadow-sm overflow-hidden p-2 sm:p-4 min-w-0"
+              className="flex-1 w-full bg-white border border-slate-200 rounded-brand-lg shadow-sm overflow-hidden p-2 sm:p-4 min-w-0 h-[calc(100vh-210px)] min-h-[700px] flex flex-col"
             >
               <AnswerSheetCanvas
                 scriptId={scriptId}
@@ -263,12 +264,12 @@ export function GradingWorkspace({
                 enableAutosave={true}
                 onSaveDraft={handleSaveDraft}
                 onSubmitFinal={handleSubmitFinal}
-                className="w-full min-h-[700px] rounded-brand"
+                className="w-full h-full min-h-[660px] rounded-brand flex-1"
               />
             </div>
 
             {/* Rubric Sidebar Area */}
-            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0">
+            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0 lg:h-[calc(100vh-210px)] min-h-[660px] flex flex-col">
               <RubricSidebar
                 ref={rubricSidebarRef}
                 scriptId={scriptId}

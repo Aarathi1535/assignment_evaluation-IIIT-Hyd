@@ -18,6 +18,7 @@ interface DashboardLayoutProps {
   stats?: StatItem[];
   quickActions?: React.ReactNode;
   children?: React.ReactNode;
+  maxWidth?: '7xl' | 'full' | 'none';
 }
 
 export const DashboardLayout = ({
@@ -26,10 +27,16 @@ export const DashboardLayout = ({
   stats = [],
   quickActions,
   children,
+  maxWidth = '7xl',
 }: DashboardLayoutProps) => {
+  const containerMaxWidth =
+    maxWidth === 'full' || maxWidth === 'none'
+      ? 'w-full max-w-none'
+      : 'max-w-7xl mx-auto';
+
   return (
     <div className="min-h-screen bg-slate-50 py-6 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className={`${containerMaxWidth} space-y-6`}>
         
         {/* Header */}
         <PageHeader title={title} description={description} />
