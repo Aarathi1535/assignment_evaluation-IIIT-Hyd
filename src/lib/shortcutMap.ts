@@ -295,11 +295,15 @@ export const SHORTCUT_MAP: readonly ShortcutDefinition[] = [
  * Checks if the event target is an active typing input / textarea / contenteditable element or interactive control.
  * When true, global shortcuts (like 'Enter', 'P', 'R', 'Delete') must be ignored to preserve typing and native button/link activation.
  */
-export function isTypingTarget(target: EventTarget | null | HTMLElement | { tagName?: string; isContentEditable?: boolean; getAttribute?: (attr: string) => string | null }): boolean {
-  if (!target) return false;
+export function isTypingTarget(target: EventTarget | null | unknown): boolean {
+  if (!target || typeof target !== 'object') return false;
 
-  const el = target as HTMLElement;
-  const tagName = el.tagName ? el.tagName.toUpperCase() : '';
+  const el = target as {
+    tagName?: string;
+    isContentEditable?: boolean;
+    getAttribute?: (attr: string) => string | null;
+  };
+  const tagName = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
 
   if (
     tagName === 'INPUT' ||
@@ -315,12 +319,12 @@ export function isTypingTarget(target: EventTarget | null | HTMLElement | { tagN
     return true;
   }
 
-  if (typeof (el as HTMLElement).getAttribute === 'function') {
-    const role = (el as HTMLElement).getAttribute('role')?.toLowerCase();
+  if (typeof el.getAttribute === 'function') {
+    const role = el.getAttribute('role')?.toLowerCase();
     if (role === 'textbox' || role === 'searchbox' || role === 'button' || role === 'link') {
       return true;
     }
-    const contentEditableAttr = (el as HTMLElement).getAttribute('contenteditable');
+    const contentEditableAttr = el.getAttribute('contenteditable');
     if (contentEditableAttr === 'true' || contentEditableAttr === '') {
       return true;
     }

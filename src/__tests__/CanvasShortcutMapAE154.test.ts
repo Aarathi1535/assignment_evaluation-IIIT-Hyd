@@ -254,7 +254,7 @@ describe('AE-154: Shortcut Map for the Grading Canvas Workspace', () => {
       const saveDraftSpy = vi.fn();
       let defaultPrevented = false;
 
-      const handleKey = (e: { key: string; target: any; preventDefault: () => void }) => {
+      const handleKey = (e: { key: string; target: unknown; preventDefault: () => void }) => {
         if (isTypingTarget(e.target)) {
           return; // Suppressed so native button/link activation occurs
         }
