@@ -42,9 +42,13 @@ import {
   calculateFitWidthTransform,
   calculateActualSizeTransform,
   calculateActualSizeZoom,
+  calculateInitialTransform,
   MIN_ZOOM_LEVEL,
   MAX_ZOOM_LEVEL,
   DEFAULT_ZOOM_STEP,
+  DEFAULT_ROTATION,
+  DEFAULT_BRIGHTNESS,
+  DEFAULT_CONTRAST,
   PanZoomTransform,
 } from '@/lib/panZoom';
 import {
@@ -155,6 +159,8 @@ export function AnswerSheetCanvas({
   onLoupeActiveChange,
   loupeMagnification = 2.0,
   loupeDiameter = 180,
+  enableResetView = true,
+  onResetView,
   enableStamps = true,
   enableHighlight = true,
   enableTextNote = true,
@@ -1242,6 +1248,31 @@ export function AnswerSheetCanvas({
     stageDimensionsRef.current = dims;
   }, []);
 
+  // Reset View Handler (AE-153): Atomically restores all view-only state (pan, zoom, rotation, brightness, contrast)
+  const handleResetView = useCallback(() => {
+    const initialTransform = calculateInitialTransform(baseBounds);
+    setTransform(initialTransform);
+    onTransformChange?.(initialTransform);
+
+    setInternalRotation(DEFAULT_ROTATION);
+    onRotationChange?.(DEFAULT_ROTATION);
+
+    setInternalBrightness(DEFAULT_BRIGHTNESS);
+    onBrightnessChange?.(DEFAULT_BRIGHTNESS);
+
+    setInternalContrast(DEFAULT_CONTRAST);
+    onContrastChange?.(DEFAULT_CONTRAST);
+
+    onResetView?.();
+  }, [
+    baseBounds,
+    onTransformChange,
+    onRotationChange,
+    onBrightnessChange,
+    onContrastChange,
+    onResetView,
+  ]);
+
   // Zoom Button Handlers
   const handleZoomIn = useCallback(() => {
     if (!baseBounds) return;
@@ -2005,15 +2036,17 @@ export function AnswerSheetCanvas({
             <ZoomIn className="h-4 w-4" />
           </button>
 
-          {transform.zoom > 1.05 && (
+          {/* Reset View Button (AE-153) */}
+          {enableResetView && (
             <button
               type="button"
-              onClick={handleResetZoom}
-              className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-              aria-label="Reset to Fit"
-              title="Reset to Fit"
+              onClick={handleResetView}
+              className="p-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+              aria-label="Reset view"
+              title="Reset view (Fit Page, 0° Rotation, Neutral adjustments)"
+              data-testid="canvas-reset-view-button"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              <RotateCcw className="h-4 w-4" />
             </button>
           )}
         </div>

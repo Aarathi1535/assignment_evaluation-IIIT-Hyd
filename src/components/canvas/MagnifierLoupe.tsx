@@ -19,6 +19,7 @@ export interface MagnifierLoupeProps {
   diameter?: number;
   /** Parent Konva stage instance */
   stage?: Konva.Stage | null;
+
   /** Additional CSS class names */
   className?: string;
 }
@@ -28,6 +29,7 @@ export function MagnifierLoupe({
   magnification = DEFAULT_LOUPE_MAGNIFICATION,
   diameter = DEFAULT_LOUPE_DIAMETER,
   stage: propStage,
+
   className = '',
 }: MagnifierLoupeProps) {
   const { stage: contextStage, dimensions } = useCanvasStage();
@@ -62,6 +64,7 @@ export function MagnifierLoupe({
       // Background fill
       ctx.fillStyle = '#f8fafc';
       ctx.fillRect(0, 0, diameter, diameter);
+
 
       // Sample all layer canvases from Konva stage container
       const container = stage.container();

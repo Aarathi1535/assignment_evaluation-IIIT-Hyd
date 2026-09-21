@@ -1,6 +1,6 @@
 import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
-import type { PanZoomTransform } from '@/lib/panZoom';
+import type { PanZoomTransform, CanvasViewState } from '@/lib/panZoom';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
 import type {
   FreehandStroke,
@@ -33,6 +33,7 @@ export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highli
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 export type {
+  CanvasViewState,
   AnswerSheetPage,
   FreehandStroke,
   StrokePoint,
@@ -206,6 +207,10 @@ export interface AnswerSheetCanvasProps {
   loupeMagnification?: number;
   /** Loupe lens diameter in pixels (default 180px, AE-152) */
   loupeDiameter?: number;
+  /** Whether the Reset View toolbar button is enabled (default true, AE-153) */
+  enableResetView?: boolean;
+  /** Callback fired when Reset View is executed (AE-153) */
+  onResetView?: () => void;
   /** Whether the stamp tools (check, cross) are enabled (default true, AE-130) */
   enableStamps?: boolean;
   /** Whether the highlight tool is enabled (default true, AE-130) */
