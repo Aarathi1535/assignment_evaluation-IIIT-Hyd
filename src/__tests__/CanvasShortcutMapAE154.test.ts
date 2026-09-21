@@ -190,9 +190,6 @@ describe('AE-154: Shortcut Map for the Grading Canvas Workspace', () => {
       const canvasTarget = { tagName: 'CANVAS', isContentEditable: false };
       expect(isTypingTarget(canvasTarget)).toBe(false);
 
-      const buttonTarget = { tagName: 'BUTTON', isContentEditable: false };
-      expect(isTypingTarget(buttonTarget)).toBe(false);
-
       expect(isTypingTarget(null)).toBe(false);
     });
 
@@ -201,9 +198,11 @@ describe('AE-154: Shortcut Map for the Grading Canvas Workspace', () => {
       expect(isTypingTarget({ tagName: 'input' })).toBe(true);
     });
 
-    it('12. strictly ignores shortcuts when typing in <textarea> elements', () => {
+    it('12. strictly ignores shortcuts when typing in <textarea> and <select> elements', () => {
       expect(isTypingTarget({ tagName: 'TEXTAREA' })).toBe(true);
       expect(isTypingTarget({ tagName: 'textarea' })).toBe(true);
+      expect(isTypingTarget({ tagName: 'SELECT' })).toBe(true);
+      expect(isTypingTarget({ tagName: 'select' })).toBe(true);
     });
 
     it('13. strictly ignores shortcuts when typing in contentEditable / role="textbox" elements', () => {
@@ -216,12 +215,103 @@ describe('AE-154: Shortcut Map for the Grading Canvas Workspace', () => {
       };
       expect(isTypingTarget(mockRoleTextbox)).toBe(true);
 
+      const mockRoleSearchbox = {
+        tagName: 'DIV',
+        getAttribute: (attr: string) => (attr === 'role' ? 'searchbox' : null),
+        isContentEditable: false,
+      };
+      expect(isTypingTarget(mockRoleSearchbox)).toBe(true);
+
       const mockContentEditableAttr = {
         tagName: 'DIV',
         getAttribute: (attr: string) => (attr === 'contenteditable' ? 'true' : null),
         isContentEditable: false,
       };
       expect(isTypingTarget(mockContentEditableAttr)).toBe(true);
+    });
+
+    it('13b. ignores shortcuts and does NOT intercept Enter when focus is on BUTTON, A, role="button", or role="link"', () => {
+      expect(isTypingTarget({ tagName: 'BUTTON' })).toBe(true);
+      expect(isTypingTarget({ tagName: 'button' })).toBe(true);
+      expect(isTypingTarget({ tagName: 'A' })).toBe(true);
+      expect(isTypingTarget({ tagName: 'a' })).toBe(true);
+
+      const mockRoleButton = {
+        tagName: 'DIV',
+        getAttribute: (attr: string) => (attr === 'role' ? 'button' : null),
+        isContentEditable: false,
+      };
+      expect(isTypingTarget(mockRoleButton)).toBe(true);
+
+      const mockRoleLink = {
+        tagName: 'SPAN',
+        getAttribute: (attr: string) => (attr === 'role' ? 'link' : null),
+        isContentEditable: false,
+      };
+      expect(isTypingTarget(mockRoleLink)).toBe(true);
+
+      // Regression test: Simulated canvas keydown handler ignores Enter on focused button/link
+      const saveDraftSpy = vi.fn();
+      let defaultPrevented = false;
+
+      const handleKey = (e: { key: string; target: any; preventDefault: () => void }) => {
+        if (isTypingTarget(e.target)) {
+          return; // Suppressed so native button/link activation occurs
+        }
+        const matched = findMatchingShortcut(e);
+        if (matched?.action === 'saveDraft') {
+          e.preventDefault();
+          saveDraftSpy();
+        }
+      };
+
+      // When button is focused and Enter pressed:
+      const buttonEvent = {
+        key: 'Enter',
+        target: { tagName: 'BUTTON' },
+        preventDefault: () => {
+          defaultPrevented = true;
+        },
+      };
+      handleKey(buttonEvent);
+      expect(saveDraftSpy).not.toHaveBeenCalled();
+      expect(defaultPrevented).toBe(false);
+
+      // When link is focused and Enter pressed:
+      const linkEvent = {
+        key: 'Enter',
+        target: { tagName: 'A' },
+        preventDefault: () => {
+          defaultPrevented = true;
+        },
+      };
+      handleKey(linkEvent);
+      expect(saveDraftSpy).not.toHaveBeenCalled();
+      expect(defaultPrevented).toBe(false);
+
+      // When role="button" is focused and Enter pressed:
+      const roleButtonEvent = {
+        key: 'Enter',
+        target: mockRoleButton,
+        preventDefault: () => {
+          defaultPrevented = true;
+        },
+      };
+      handleKey(roleButtonEvent);
+      expect(saveDraftSpy).not.toHaveBeenCalled();
+      expect(defaultPrevented).toBe(false);
+
+      // When canvas/div is focused and Enter pressed:
+      const canvasEvent = {
+        key: 'Enter',
+        target: { tagName: 'CANVAS' },
+        preventDefault: () => {
+          defaultPrevented = true;
+        },
+      };
+      handleKey(canvasEvent);
+      expect(saveDraftSpy).toHaveBeenCalledTimes(1);
+      expect(defaultPrevented).toBe(true);
     });
 
     it('14. ignores shortcuts when TextNoteEditor active state is present in simulated canvas dispatcher', () => {
