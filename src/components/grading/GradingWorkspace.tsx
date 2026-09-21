@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   FileText,
@@ -15,7 +16,7 @@ import {
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { AnswerSheetCanvas } from '@/components/canvas/AnswerSheetCanvas';
-import { RubricSidebar, RubricData } from './RubricSidebar';
+import { RubricSidebar, RubricData, RubricSidebarHandle } from './RubricSidebar';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
 
 export interface ScriptData {
@@ -36,11 +37,39 @@ export function GradingWorkspace({
   scriptId,
   allocatedQuestionNumber,
 }: GradingWorkspaceProps) {
+  const router = useRouter();
+  const hasNavigatedRef = useRef<boolean>(false);
+  const rubricSidebarRef = useRef<RubricSidebarHandle>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
+
+  const handleSaveDraft = useCallback(() => {
+    rubricSidebarRef.current?.saveDraft();
+  }, []);
+
+  const handleSubmitFinal = useCallback(() => {
+    rubricSidebarRef.current?.submitFinal();
+  }, []);
+
+  const handleGradeSaved = useCallback(
+    (savedGrade: unknown) => {
+      if (!savedGrade || typeof savedGrade !== 'object') return;
+      const data = savedGrade as {
+        allocationCompleted?: boolean;
+        nextAllocation?: { targetUrl?: string } | null;
+      };
+
+      if (data.allocationCompleted && data.nextAllocation?.targetUrl) {
+        if (hasNavigatedRef.current) return;
+        hasNavigatedRef.current = true;
+        router.push(data.nextAllocation.targetUrl);
+      }
+    },
+    [router]
+  );
 
   const fetchScriptData = useCallback(async () => {
     if (!scriptId) return;
@@ -101,6 +130,7 @@ export function GradingWorkspace({
           ? `Evaluate and grade Question ${allocatedQuestionNumber} on exam submissions.`
           : 'Evaluate and grade full exam script submissions.'
       }
+      maxWidth="full"
     >
       <div className="space-y-4">
         {/* Top Context & Navigation Bar */}
@@ -214,7 +244,7 @@ export function GradingWorkspace({
             {/* Canvas Viewport Area */}
             <div
               data-testid="grading-canvas-container"
-              className="flex-1 w-full bg-white border border-slate-200 rounded-brand-lg shadow-sm overflow-hidden p-2 sm:p-4 min-w-0"
+              className="flex-1 w-full bg-white border border-slate-200 rounded-brand-lg shadow-sm overflow-hidden p-2 sm:p-4 min-w-0 h-[calc(100vh-210px)] min-h-[700px] flex flex-col"
             >
               <AnswerSheetCanvas
                 scriptId={scriptId}
@@ -232,17 +262,21 @@ export function GradingWorkspace({
                 enableOverlayToggle={true}
                 enableAnnotationLoading={true}
                 enableAutosave={true}
-                className="w-full min-h-[700px] rounded-brand"
+                onSaveDraft={handleSaveDraft}
+                onSubmitFinal={handleSubmitFinal}
+                className="w-full h-full min-h-[660px] rounded-brand flex-1"
               />
             </div>
 
             {/* Rubric Sidebar Area */}
-            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0">
+            <div className="w-full lg:w-[360px] xl:w-[380px] shrink-0 lg:h-[calc(100vh-210px)] min-h-[660px] flex flex-col">
               <RubricSidebar
+                ref={rubricSidebarRef}
                 scriptId={scriptId}
                 examId={scriptData?.exam}
                 allocatedQuestionNumber={allocatedQuestionNumber}
                 onRubricLoaded={setRubricData}
+                onGradeSaved={handleGradeSaved}
               />
             </div>
           </div>

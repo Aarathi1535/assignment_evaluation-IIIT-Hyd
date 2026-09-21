@@ -82,9 +82,22 @@ export async function GET(
     const isAdmin = userRole === UserRole.ADMIN;
     const isProfessorOrAdmin = isProfessor || isAdmin;
 
-    const batch = isProfessor
-      ? await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role)
-      : await BatchRepository.getBatchByBatchIdInternal(batchId);
+    let batch = null;
+    if (isProfessor) {
+      batch = await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role);
+      if (!batch) {
+        const internalBatch = await BatchRepository.getBatchByBatchIdInternal(batchId);
+        if (internalBatch?.exam) {
+          const ExamRepository = (await import('../../../../../../../repositories/ExamRepository')).default;
+          const exam = await ExamRepository.getExamById(internalBatch.exam.toString(), auth.user.id, auth.user.role);
+          if (exam) {
+            batch = internalBatch;
+          }
+        }
+      }
+    } else {
+      batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
+    }
 
     if (!batch) {
       return NextResponse.json(

@@ -125,32 +125,76 @@ export function calculatePressureStrokeWidth(
 
 /**
  * Converts physical viewport screen coordinates (e.g. from mouse/touch/stylus)
- * to invariant base image coordinates using the active pan/zoom transform.
+ * to invariant base page image coordinates using the active pan/zoom/rotation transform.
  */
 export function screenToImageCoordinates(
   screenX: number,
   screenY: number,
-  transform: PanZoomTransform
+  transform: PanZoomTransform,
+  baseBounds?: { width: number; height: number }
 ): { x: number; y: number } {
   const zoom = transform.zoom > 0 ? transform.zoom : 1.0;
+  const viewX = (screenX - transform.x) / zoom;
+  const viewY = (screenY - transform.y) / zoom;
+
+  const rotation = transform.rotation || 0;
+  if (!rotation || !baseBounds || baseBounds.width <= 0 || baseBounds.height <= 0) {
+    return {
+      x: Math.round(viewX * 100) / 100,
+      y: Math.round(viewY * 100) / 100,
+    };
+  }
+
+  const cx = baseBounds.width / 2;
+  const cy = baseBounds.height / 2;
+  const rad = (-rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+
+  const dx = viewX - cx;
+  const dy = viewY - cy;
+
+  const pageX = cx + dx * cos - dy * sin;
+  const pageY = cy + dx * sin + dy * cos;
+
   return {
-    x: (screenX - transform.x) / zoom,
-    y: (screenY - transform.y) / zoom,
+    x: Math.round(pageX * 100) / 100,
+    y: Math.round(pageY * 100) / 100,
   };
 }
 
 /**
- * Converts invariant base image coordinates back to physical viewport screen coordinates.
+ * Converts invariant base page image coordinates back to physical viewport screen coordinates.
  */
 export function imageToScreenCoordinates(
   imageX: number,
   imageY: number,
-  transform: PanZoomTransform
+  transform: PanZoomTransform,
+  baseBounds?: { width: number; height: number }
 ): { x: number; y: number } {
   const zoom = transform.zoom > 0 ? transform.zoom : 1.0;
+  const rotation = transform.rotation || 0;
+
+  let viewX = imageX;
+  let viewY = imageY;
+
+  if (rotation && baseBounds && baseBounds.width > 0 && baseBounds.height > 0) {
+    const cx = baseBounds.width / 2;
+    const cy = baseBounds.height / 2;
+    const rad = (rotation * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    const dx = imageX - cx;
+    const dy = imageY - cy;
+
+    viewX = cx + dx * cos - dy * sin;
+    viewY = cy + dx * sin + dy * cos;
+  }
+
   return {
-    x: transform.x + imageX * zoom,
-    y: transform.y + imageY * zoom,
+    x: transform.x + viewX * zoom,
+    y: transform.y + viewY * zoom,
   };
 }
 

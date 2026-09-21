@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import type Konva from 'konva';
 import {
   Loader2,
   AlertCircle,
@@ -22,21 +23,39 @@ import {
   Redo2,
   Eye,
   EyeOff,
+  RotateCw,
+  Sun,
+  Search,
+  Keyboard,
 } from 'lucide-react';
 import { CanvasStage } from './CanvasStage';
 import { PageImageLayer } from './PageImageLayer';
 import { PenLayer } from './PenLayer';
 import { MarkLayer } from './MarkLayer';
 import { TextNoteEditor } from './TextNoteEditor';
+import { MagnifierLoupe } from './MagnifierLoupe';
 import { SaveStatusIndicator } from './SaveStatusIndicator';
+import { ShortcutHelpOverlay } from './ShortcutHelpOverlay';
 import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
+  findMatchingShortcut,
+  isTypingTarget,
+  SHORTCUT_MAP,
+} from '@/lib/shortcutMap';
+import {
   calculateStepZoom,
   calculateZoomTransform,
+  calculateFitWidthTransform,
+  calculateActualSizeTransform,
+  calculateActualSizeZoom,
+  calculateInitialTransform,
   MIN_ZOOM_LEVEL,
   MAX_ZOOM_LEVEL,
   DEFAULT_ZOOM_STEP,
+  DEFAULT_ROTATION,
+  DEFAULT_BRIGHTNESS,
+  DEFAULT_CONTRAST,
   PanZoomTransform,
 } from '@/lib/panZoom';
 import {
@@ -120,6 +139,7 @@ export function AnswerSheetCanvas({
   showPageNavigation = true,
   pageLabel,
   fitMode = 'contain',
+  initialLoading,
   width = 'auto',
   height = 'auto',
   className = '',
@@ -128,6 +148,9 @@ export function AnswerSheetCanvas({
   maxZoom = MAX_ZOOM_LEVEL,
   enablePanZoom = true,
   showZoomControls = true,
+  onFitWidth,
+  onActualSize,
+  onFitPage,
   enableSelect = true,
   selectedAnnotationId: propSelectedAnnotationId,
   onSelectAnnotation,
@@ -138,6 +161,13 @@ export function AnswerSheetCanvas({
   isPenActive: propIsPenActive,
   onPenActiveChange,
   enableEraserTool = true,
+  enableLoupe = true,
+  isLoupeActive: propIsLoupeActive,
+  onLoupeActiveChange,
+  loupeMagnification = 2.0,
+  loupeDiameter = 180,
+  enableResetView = true,
+  onResetView,
   enableStamps = true,
   enableHighlight = true,
   enableTextNote = true,
@@ -162,6 +192,17 @@ export function AnswerSheetCanvas({
   isOverlayVisible: propIsOverlayVisible,
   initialOverlayVisible = true,
   onOverlayVisibilityChange,
+  rotation: propRotation,
+  initialRotation = 0,
+  onRotationChange,
+  brightness: propBrightness,
+  initialBrightness = 0,
+  onBrightnessChange,
+  contrast: propContrast,
+  initialContrast = 0,
+  onContrastChange,
+  enableRotationControls = true,
+  enableImageAdjustments = true,
   defaultStrokeColor = DEFAULT_PEN_COLOR,
   defaultStrokeWidth = DEFAULT_PEN_WIDTH,
   fallback,
@@ -181,6 +222,15 @@ export function AnswerSheetCanvas({
   onSaveStatusChange,
   onSaveSuccess,
   onSaveError,
+  onShortcutAction,
+  onSaveDraft,
+  onSubmitFinal,
+  onNextQuestion,
+  onPrevQuestion,
+  shortcutMap,
+  enableShortcutHelp = true,
+  isShortcutHelpOpen: propIsShortcutHelpOpen,
+  onShortcutHelpOpenChange,
 }: AnswerSheetCanvasProps) {
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
@@ -230,9 +280,10 @@ export function AnswerSheetCanvas({
 
   const activeTool = useMemo<CanvasTool>(() => {
     if (propActiveTool !== undefined) return propActiveTool;
+    if (propIsLoupeActive !== undefined && propIsLoupeActive) return 'loupe';
     if (propIsPenActive !== undefined) return propIsPenActive ? 'pen' : 'none';
     return internalTool;
-  }, [propActiveTool, propIsPenActive, internalTool]);
+  }, [propActiveTool, propIsLoupeActive, propIsPenActive, internalTool]);
 
   // Selection state (AE-132)
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
@@ -246,7 +297,9 @@ export function AnswerSheetCanvas({
   const activeHighlightMode = activeTool === 'highlight';
   const activeTextMode = activeTool === 'text';
   const activeEraserMode = activeTool === 'eraser';
-  const isDrawingToolActive = activeTool !== 'none' && activeTool !== 'select';
+  const activeLoupeMode = activeTool === 'loupe';
+  const isDrawingToolActive =
+    activeTool !== 'none' && activeTool !== 'select' && activeTool !== 'loupe';
 
   // Active in-place text note editor anchor state (AE-131)
   const [activeTextEditor, setActiveTextEditor] = useState<{
@@ -273,8 +326,9 @@ export function AnswerSheetCanvas({
       setInternalTool(nextTool);
       onToolChange?.(nextTool);
       onPenActiveChange?.(nextTool === 'pen');
+      onLoupeActiveChange?.(nextTool === 'loupe');
     },
-    [onToolChange, onPenActiveChange, onSelectAnnotation]
+    [onToolChange, onPenActiveChange, onLoupeActiveChange, onSelectAnnotation]
   );
 
   const handleToggleSelect = useCallback(() => {
@@ -312,6 +366,10 @@ export function AnswerSheetCanvas({
   const handleToggleEraser = useCallback(() => {
     setTool(activeEraserMode ? 'none' : 'eraser');
   }, [activeEraserMode, setTool]);
+
+  const handleToggleLoupe = useCallback(() => {
+    setTool(activeLoupeMode ? 'none' : 'loupe');
+  }, [activeLoupeMode, setTool]);
 
   // Overlay visibility state (AE-133)
   const [internalOverlayVisible, setInternalOverlayVisible] = useState<boolean>(initialOverlayVisible);
@@ -394,19 +452,75 @@ export function AnswerSheetCanvas({
   }, [isMultiPageMode, totalPages, currentPage, src]);
 
   const [prevEffectiveSrc, setPrevEffectiveSrc] = useState<string | null | undefined>(effectiveSrc);
-  const [isLoading, setIsLoading] = useState<boolean>(Boolean(effectiveSrc !== null));
+  const [isLoading, setIsLoading] = useState<boolean>(() =>
+    initialLoading !== undefined ? initialLoading : Boolean(effectiveSrc !== null)
+  );
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  // Controlled vs uncontrolled rotation (AE-150)
+  const [internalRotation, setInternalRotation] = useState<number>(initialRotation);
+  const activeRotation = propRotation !== undefined ? propRotation : internalRotation;
+
+  // Controlled vs uncontrolled brightness (AE-150)
+  const [internalBrightness, setInternalBrightness] = useState<number>(initialBrightness);
+  const activeBrightness = propBrightness !== undefined ? propBrightness : internalBrightness;
+
+  // Controlled vs uncontrolled contrast (AE-150)
+  const [internalContrast, setInternalContrast] = useState<number>(initialContrast);
+  const activeContrast = propContrast !== undefined ? propContrast : internalContrast;
+
+  // Image adjustments popup toggle state (AE-150)
+  const [showAdjustmentsMenu, setShowAdjustmentsMenu] = useState<boolean>(false);
+
   const [baseBounds, setBaseBounds] = useState<RenderedImageBounds | null>(null);
 
-  // Controlled/tracked transform (pan and zoom)
+  // Controlled/tracked transform (pan, zoom, rotation)
   const [transform, setTransform] = useState<PanZoomTransform>({
     x: 0,
     y: 0,
     zoom: 1.0,
+    rotation: activeRotation,
   });
 
+  // Shortcut Help Overlay state (AE-156)
+  const [internalIsHelpOpen, setInternalIsHelpOpen] = useState<boolean>(false);
+  const isHelpOpen = propIsShortcutHelpOpen !== undefined ? propIsShortcutHelpOpen : internalIsHelpOpen;
+  const helpButtonRef = useRef<HTMLButtonElement>(null);
+
+  const handleOpenHelp = useCallback(() => {
+    if (propIsShortcutHelpOpen === undefined) {
+      setInternalIsHelpOpen(true);
+    }
+    onShortcutHelpOpenChange?.(true);
+  }, [propIsShortcutHelpOpen, onShortcutHelpOpenChange]);
+
+  const handleCloseHelp = useCallback(() => {
+    if (propIsShortcutHelpOpen === undefined) {
+      setInternalIsHelpOpen(false);
+    }
+    onShortcutHelpOpenChange?.(false);
+  }, [propIsShortcutHelpOpen, onShortcutHelpOpenChange]);
+
+  const handleToggleHelp = useCallback(() => {
+    if (isHelpOpen) {
+      handleCloseHelp();
+    } else {
+      handleOpenHelp();
+    }
+  }, [isHelpOpen, handleOpenHelp, handleCloseHelp]);
+
   const stageDimensionsRef = useRef({ width: 800, height: 600 });
+
+  // Effective transform combining pan/zoom state with active rotation (AE-150)
+  const effectiveTransform = useMemo<PanZoomTransform>(
+    () => ({
+      x: transform.x,
+      y: transform.y,
+      zoom: transform.zoom,
+      rotation: activeRotation,
+    }),
+    [transform.x, transform.y, transform.zoom, activeRotation]
+  );
 
   // Synchronize loading/error state when effectiveSrc changes
   if (prevEffectiveSrc !== effectiveSrc) {
@@ -416,13 +530,13 @@ export function AnswerSheetCanvas({
       setHasError(false);
       setErrorMessage('');
       setBaseBounds(null);
-      setTransform({ x: 0, y: 0, zoom: 1.0 });
+      setTransform({ x: 0, y: 0, zoom: 1.0, rotation: activeRotation });
     } else {
       setIsLoading(true);
       setHasError(false);
       setErrorMessage('');
       setBaseBounds(null);
-      setTransform({ x: 0, y: 0, zoom: 1.0 });
+      setTransform({ x: 0, y: 0, zoom: 1.0, rotation: activeRotation });
     }
   }
 
@@ -992,65 +1106,29 @@ export function AnswerSheetCanvas({
     scheduleAutosave,
   ]);
 
-  // Global / Canvas Keyboard Shortcuts: Delete/Backspace -> Delete selected annotation, Ctrl+Z -> Undo, Ctrl+Y -> Redo
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
+  const handleRotateCw = useCallback(() => {
+    const nextRotation = (activeRotation + 90) % 360;
+    setInternalRotation(nextRotation);
+    onRotationChange?.(nextRotation);
+    setTransform((prev) => {
+      const nextTransform = { ...prev, rotation: nextRotation };
+      onTransformChange?.(nextTransform);
+      return nextTransform;
+    });
+  }, [activeRotation, onRotationChange, onTransformChange]);
 
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedAnnotationId) {
-          e.preventDefault();
-          handleDeleteSelected();
-          return;
-        }
-      }
+  const handleRotateCcw = useCallback(() => {
+    const nextRotation = ((activeRotation - 90) % 360 + 360) % 360;
+    setInternalRotation(nextRotation);
+    onRotationChange?.(nextRotation);
+    setTransform((prev) => {
+      const nextTransform = { ...prev, rotation: nextRotation };
+      onTransformChange?.(nextTransform);
+      return nextTransform;
+    });
+  }, [activeRotation, onRotationChange, onTransformChange]);
 
-      if (!enableUndoRedo) return;
-
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-      if (!isCtrlOrCmd) return;
-
-      const key = e.key.toLowerCase();
-      if (key === 'z') {
-        if (e.shiftKey) {
-          if (canRedo(currentPageHistory)) {
-            e.preventDefault();
-            handleRedo();
-          }
-        } else {
-          if (canUndo(currentPageHistory)) {
-            e.preventDefault();
-            handleUndo();
-          }
-        }
-      } else if (key === 'y') {
-        if (canRedo(currentPageHistory)) {
-          e.preventDefault();
-          handleRedo();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [
-    enableUndoRedo,
-    currentPageHistory,
-    handleUndo,
-    handleRedo,
-    selectedAnnotationId,
-    handleDeleteSelected,
-  ]);
+  const handleRotate = handleRotateCw;
 
   // Handle page change navigation
   const navigateToPage = useCallback(
@@ -1089,17 +1167,43 @@ export function AnswerSheetCanvas({
     navigateToPage(nextIdx);
   }, [sortedPages, totalPages, activePageIndex, navigateToPage]);
 
+
+
+  const handleBrightnessChange = useCallback(
+    (newBrightness: number) => {
+      setInternalBrightness(newBrightness);
+      onBrightnessChange?.(newBrightness);
+    },
+    [onBrightnessChange]
+  );
+
+  const handleContrastChange = useCallback(
+    (newContrast: number) => {
+      setInternalContrast(newContrast);
+      onContrastChange?.(newContrast);
+    },
+    [onContrastChange]
+  );
+
+  const handleResetBrightness = useCallback(() => {
+    handleBrightnessChange(0);
+  }, [handleBrightnessChange]);
+
+  const handleResetContrast = useCallback(() => {
+    handleContrastChange(0);
+  }, [handleContrastChange]);
+
   const handleImageLoad = useCallback(
     (_img: HTMLImageElement, bounds: RenderedImageBounds) => {
       setIsLoading(false);
       setHasError(false);
       setBaseBounds(bounds);
-      const initialTransform = { x: bounds.x, y: bounds.y, zoom: 1.0 };
+      const initialTransform = { x: bounds.x, y: bounds.y, zoom: 1.0, rotation: activeRotation };
       setTransform(initialTransform);
       onLoad?.(bounds);
       onTransformChange?.(initialTransform);
     },
-    [onLoad, onTransformChange]
+    [activeRotation, onLoad, onTransformChange]
   );
 
   const handleImageError = useCallback(
@@ -1112,6 +1216,12 @@ export function AnswerSheetCanvas({
     [onError]
   );
 
+  const handleRetry = useCallback(() => {
+    setIsLoading(true);
+    setHasError(false);
+    setErrorMessage('');
+  }, []);
+
   const handleTransformChange = useCallback(
     (newTransform: PanZoomTransform) => {
       setTransform(newTransform);
@@ -1120,21 +1230,51 @@ export function AnswerSheetCanvas({
     [onTransformChange]
   );
 
+  const [stageInstance, setStageInstance] = useState<Konva.Stage | null>(null);
+  const handleStageReady = useCallback((stg: Konva.Stage | null) => {
+    setStageInstance(stg);
+  }, []);
+
   const handleResize = useCallback((dims: { width: number; height: number }) => {
     stageDimensionsRef.current = dims;
   }, []);
 
+  // Reset View Handler (AE-153): Atomically restores all view-only state (pan, zoom, rotation, brightness, contrast)
+  const handleResetView = useCallback(() => {
+    const initialTransform = calculateInitialTransform(baseBounds);
+    setTransform(initialTransform);
+    onTransformChange?.(initialTransform);
+
+    setInternalRotation(DEFAULT_ROTATION);
+    onRotationChange?.(DEFAULT_ROTATION);
+
+    setInternalBrightness(DEFAULT_BRIGHTNESS);
+    onBrightnessChange?.(DEFAULT_BRIGHTNESS);
+
+    setInternalContrast(DEFAULT_CONTRAST);
+    onContrastChange?.(DEFAULT_CONTRAST);
+
+    onResetView?.();
+  }, [
+    baseBounds,
+    onTransformChange,
+    onRotationChange,
+    onBrightnessChange,
+    onContrastChange,
+    onResetView,
+  ]);
+
   // Zoom Button Handlers
   const handleZoomIn = useCallback(() => {
     if (!baseBounds) return;
-    const targetZoom = calculateStepZoom(transform.zoom, DEFAULT_ZOOM_STEP, minZoom, maxZoom);
+    const targetZoom = calculateStepZoom(effectiveTransform.zoom, DEFAULT_ZOOM_STEP, minZoom, maxZoom);
     const centerX = stageDimensionsRef.current.width / 2;
     const centerY = stageDimensionsRef.current.height / 2;
 
     const nextTransform = calculateZoomTransform(
-      transform.x,
-      transform.y,
-      transform.zoom,
+      effectiveTransform.x,
+      effectiveTransform.y,
+      effectiveTransform.zoom,
       targetZoom,
       centerX,
       centerY,
@@ -1145,20 +1285,21 @@ export function AnswerSheetCanvas({
       maxZoom
     );
 
-    setTransform(nextTransform);
-    onTransformChange?.(nextTransform);
-  }, [baseBounds, transform, minZoom, maxZoom, onTransformChange]);
+    const fullTransform = { ...nextTransform, rotation: effectiveTransform.rotation };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+  }, [baseBounds, effectiveTransform, minZoom, maxZoom, onTransformChange]);
 
   const handleZoomOut = useCallback(() => {
     if (!baseBounds) return;
-    const targetZoom = calculateStepZoom(transform.zoom, -DEFAULT_ZOOM_STEP, minZoom, maxZoom);
+    const targetZoom = calculateStepZoom(effectiveTransform.zoom, -DEFAULT_ZOOM_STEP, minZoom, maxZoom);
     const centerX = stageDimensionsRef.current.width / 2;
     const centerY = stageDimensionsRef.current.height / 2;
 
     const nextTransform = calculateZoomTransform(
-      transform.x,
-      transform.y,
-      transform.zoom,
+      effectiveTransform.x,
+      effectiveTransform.y,
+      effectiveTransform.zoom,
       targetZoom,
       centerX,
       centerY,
@@ -1169,9 +1310,10 @@ export function AnswerSheetCanvas({
       maxZoom
     );
 
-    setTransform(nextTransform);
-    onTransformChange?.(nextTransform);
-  }, [baseBounds, transform, minZoom, maxZoom, onTransformChange]);
+    const fullTransform = { ...nextTransform, rotation: effectiveTransform.rotation };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+  }, [baseBounds, effectiveTransform, minZoom, maxZoom, onTransformChange]);
 
   const handleResetZoom = useCallback(() => {
     if (!baseBounds) return;
@@ -1179,12 +1321,285 @@ export function AnswerSheetCanvas({
       x: baseBounds.x,
       y: baseBounds.y,
       zoom: 1.0,
+      rotation: effectiveTransform.rotation || 0,
     };
     setTransform(resetTransform);
     onTransformChange?.(resetTransform);
-  }, [baseBounds, onTransformChange]);
+    onFitPage?.();
+  }, [baseBounds, effectiveTransform.rotation, onTransformChange, onFitPage]);
 
-  const zoomPercent = Math.round(transform.zoom * 100);
+  const handleFitWidth = useCallback(() => {
+    if (!baseBounds) return;
+    const containerW = stageDimensionsRef.current.width;
+    const containerH = stageDimensionsRef.current.height;
+
+    const nextTransform = calculateFitWidthTransform(
+      containerW,
+      containerH,
+      baseBounds,
+      effectiveTransform.rotation || 0,
+      minZoom,
+      maxZoom
+    );
+
+    const fullTransform = { ...nextTransform, rotation: effectiveTransform.rotation || 0 };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+    onFitWidth?.();
+  }, [baseBounds, effectiveTransform.rotation, minZoom, maxZoom, onTransformChange, onFitWidth]);
+
+  const handleActualSize = useCallback(() => {
+    if (!baseBounds) return;
+    const containerW = stageDimensionsRef.current.width;
+    const containerH = stageDimensionsRef.current.height;
+
+    const nextTransform = calculateActualSizeTransform(
+      containerW,
+      containerH,
+      baseBounds,
+      baseBounds.scale,
+      minZoom,
+      maxZoom
+    );
+
+    const fullTransform = {
+      x: nextTransform.x,
+      y: nextTransform.y,
+      zoom: nextTransform.zoom,
+      rotation: effectiveTransform.rotation || 0,
+    };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+    onActualSize?.();
+  }, [baseBounds, effectiveTransform.rotation, minZoom, maxZoom, onTransformChange, onActualSize]);
+
+  const actualSizeInfo = useMemo(() => {
+    if (!baseBounds) return null;
+    return calculateActualSizeZoom(baseBounds.scale, minZoom, maxZoom);
+  }, [baseBounds, minZoom, maxZoom]);
+
+  // Centralized Authoritative Keyboard Shortcuts Dispatch (AE-154)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // When shortcut help overlay is open, handle Escape and suppress all other shortcuts (AE-156)
+      if (isHelpOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          handleCloseHelp();
+        }
+        return;
+      }
+
+      // Ignore shortcut when typing in input, textarea, or contenteditable element
+      if (isTypingTarget(e.target)) {
+        return;
+      }
+
+      // Ignore global shortcuts while in-place text note editor is active
+      if (activeTextEditor !== null) {
+        return;
+      }
+
+      const matched = findMatchingShortcut(e, shortcutMap || SHORTCUT_MAP);
+      if (!matched) {
+        return;
+      }
+
+      switch (matched.action) {
+        case 'saveDraft':
+          e.preventDefault();
+          onSaveDraft?.();
+          break;
+        case 'submitFinal':
+          e.preventDefault();
+          onSubmitFinal?.();
+          break;
+        case 'undo':
+          if (enableUndoRedo && canUndoActive) {
+            e.preventDefault();
+            handleUndo();
+          }
+          break;
+        case 'redo':
+          if (enableUndoRedo && canRedoActive) {
+            e.preventDefault();
+            handleRedo();
+          }
+          break;
+        case 'deleteSelected':
+          if (selectedAnnotationId) {
+            e.preventDefault();
+            handleDeleteSelected();
+          }
+          break;
+        case 'toggleLoupe':
+          if (enableLoupe) {
+            e.preventDefault();
+            handleToggleLoupe();
+          }
+          break;
+        case 'tool:select':
+          if (enableSelect) {
+            e.preventDefault();
+            setTool('select');
+          }
+          break;
+        case 'tool:pen':
+          if (enablePenTool) {
+            e.preventDefault();
+            setTool('pen');
+          }
+          break;
+        case 'tool:eraser':
+          if (enableEraserTool) {
+            e.preventDefault();
+            setTool('eraser');
+          }
+          break;
+        case 'tool:check':
+          if (enableStamps) {
+            e.preventDefault();
+            setTool('check');
+          }
+          break;
+        case 'tool:cross':
+          if (enableStamps) {
+            e.preventDefault();
+            setTool('cross');
+          }
+          break;
+        case 'tool:highlight':
+          if (enableHighlight) {
+            e.preventDefault();
+            setTool('highlight');
+          }
+          break;
+        case 'tool:text':
+          if (enableTextNote) {
+            e.preventDefault();
+            setTool('text');
+          }
+          break;
+        case 'zoomIn':
+          if (enablePanZoom) {
+            e.preventDefault();
+            handleZoomIn();
+          }
+          break;
+        case 'zoomOut':
+          if (enablePanZoom) {
+            e.preventDefault();
+            handleZoomOut();
+          }
+          break;
+        case 'resetZoom':
+          if (enablePanZoom) {
+            e.preventDefault();
+            handleResetZoom();
+          }
+          break;
+        case 'rotateCw':
+          e.preventDefault();
+          handleRotateCw();
+          break;
+        case 'rotateCcw':
+          e.preventDefault();
+          handleRotateCcw();
+          break;
+        case 'resetView':
+          if (enableResetView) {
+            e.preventDefault();
+            handleResetView();
+          }
+          break;
+        case 'toggleOverlay':
+          if (enableOverlayToggle) {
+            e.preventDefault();
+            handleToggleOverlayVisibility();
+          }
+          break;
+        case 'openHelp':
+          if (enableShortcutHelp) {
+            e.preventDefault();
+            handleToggleHelp();
+          }
+          break;
+        case 'nextPage':
+          if (canGoNext(activePageIndex, totalPages)) {
+            e.preventDefault();
+            handleNextPage();
+          }
+          break;
+        case 'prevPage':
+          if (canGoPrev(activePageIndex, totalPages)) {
+            e.preventDefault();
+            handlePrevPage();
+          }
+          break;
+        case 'nextQuestion':
+          e.preventDefault();
+          onNextQuestion?.();
+          break;
+        case 'prevQuestion':
+          e.preventDefault();
+          onPrevQuestion?.();
+          break;
+        default:
+          break;
+      }
+
+      onShortcutAction?.(matched.action, e);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [
+    activeTextEditor,
+    shortcutMap,
+    enableUndoRedo,
+    canUndoActive,
+    canRedoActive,
+    handleUndo,
+    handleRedo,
+    selectedAnnotationId,
+    handleDeleteSelected,
+    enableLoupe,
+    handleToggleLoupe,
+    enableSelect,
+    enablePenTool,
+    enableEraserTool,
+    enableStamps,
+    enableHighlight,
+    enableTextNote,
+    setTool,
+    enablePanZoom,
+    handleZoomIn,
+    handleZoomOut,
+    handleResetZoom,
+    handleRotateCw,
+    handleRotateCcw,
+    enableResetView,
+    handleResetView,
+    enableOverlayToggle,
+    handleToggleOverlayVisibility,
+    activePageIndex,
+    totalPages,
+    handleNextPage,
+    handlePrevPage,
+    onSaveDraft,
+    onSubmitFinal,
+    onNextQuestion,
+    onPrevQuestion,
+    onShortcutAction,
+    isHelpOpen,
+    enableShortcutHelp,
+    handleCloseHelp,
+    handleToggleHelp,
+  ]);
+
+  const zoomPercent = Math.round(effectiveTransform.zoom * 100);
 
   // Accessible active page label
   const effectivePageLabel = useMemo(() => {
@@ -1203,7 +1618,46 @@ export function AnswerSheetCanvas({
         height: typeof height === 'number' ? `${height}px` : '100%',
       }}
       data-testid="answer-sheet-canvas-wrapper"
+      role="region"
+      aria-label={effectivePageLabel}
+      tabIndex={0}
     >
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div
+          className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white/80 backdrop-blur-xs transition-opacity"
+          data-testid="canvas-loading-overlay"
+        >
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600 mb-2" />
+          <span className="text-sm font-medium text-slate-700">Loading page...</span>
+        </div>
+      )}
+
+      {/* Error Overlay with Retry */}
+      {hasError && (
+        <div
+          className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white/95 p-6 text-center"
+          data-testid="canvas-error-overlay"
+        >
+          <div className="rounded-full bg-rose-100 p-3 mb-3">
+            <AlertCircle className="h-8 w-8 text-rose-600" />
+          </div>
+          <h4 className="text-base font-semibold text-slate-900 mb-1">Failed to load page</h4>
+          <p className="text-sm text-slate-600 max-w-sm mb-4">
+            {errorMessage || 'An error occurred while loading the answer sheet image.'}
+          </p>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            data-testid="canvas-retry-button"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Top Multi-Page Navigation Bar */}
       {isMultiPageMode && showPageNavigation && totalPages > 0 && (
         <nav
@@ -1249,7 +1703,7 @@ export function AnswerSheetCanvas({
 
       {/* Autosave Status Indicator (AE-137) */}
       {enableAutosave && Boolean(scriptId) && (
-        <div className="absolute top-3 right-3 z-20" data-testid="autosave-status-wrapper">
+        <div className="absolute top-3 right-3 z-20 pointer-events-auto" data-testid="autosave-status-wrapper">
           <SaveStatusIndicator
             status={saveStatus}
             onRetry={handleRetrySave}
@@ -1265,12 +1719,15 @@ export function AnswerSheetCanvas({
         backgroundColor={backgroundColor}
         className="w-full h-full"
         onResize={handleResize}
+        onStageReady={handleStageReady}
       >
         <PageImageLayer
           src={effectiveSrc}
           alt={effectivePageLabel}
           fitMode={fitMode}
-          transform={transform}
+          transform={effectiveTransform}
+          brightness={activeBrightness}
+          contrast={activeContrast}
           minZoom={minZoom}
           maxZoom={maxZoom}
           enablePanZoom={enablePanZoom}
@@ -1280,9 +1737,9 @@ export function AnswerSheetCanvas({
           onTransformChange={handleTransformChange}
         />
 
-        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129 / AE-133) */}
+        {/* Freehand Pen & Eraser Drawing Layer (AE-126 / AE-127 / AE-128 / AE-129 / AE-133 / AE-150) */}
         <PenLayer
-          transform={transform}
+          transform={effectiveTransform}
           pageKey={currentPageKey}
           isPenActive={activePenMode && !isLoading && !hasError && Boolean(effectiveSrc)}
           isEraserActive={activeEraserMode && !isLoading && !hasError && Boolean(effectiveSrc)}
@@ -1293,11 +1750,12 @@ export function AnswerSheetCanvas({
           smoothingOptions={smoothingOptions}
           color={effectiveStrokeColor}
           strokeWidth={effectiveStrokeWidth}
+          baseBounds={baseBounds}
         />
 
-        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132 / AE-133) */}
+        {/* Check, Cross, Highlight & Text Marks Layer (AE-130 / AE-131 / AE-132 / AE-133 / AE-150) */}
         <MarkLayer
-          transform={transform}
+          transform={effectiveTransform}
           pageKey={currentPageKey}
           activeTool={activeTool}
           annotations={currentPageAnnotations}
@@ -1308,14 +1766,23 @@ export function AnswerSheetCanvas({
           onAnnotationComplete={handleAnnotationComplete}
           onTextNoteClick={handleTextNoteClick}
           disabled={isLoading || hasError || !effectiveSrc}
+          baseBounds={baseBounds}
         />
       </CanvasStage>
 
-      {/* In-Place Text Note Editor Overlay (AE-131) */}
+      {/* Magnifier / Loupe Inspection Lens (AE-152) */}
+      <MagnifierLoupe
+        active={activeLoupeMode && !isLoading && !hasError && Boolean(effectiveSrc)}
+        stage={stageInstance}
+        magnification={loupeMagnification}
+        diameter={loupeDiameter}
+      />
+
+      {/* In-Place Text Note Editor Overlay (AE-131 / AE-150) */}
       {activeTextEditor && !isLoading && !hasError && Boolean(effectiveSrc) && (
         <TextNoteEditor
-          x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).x}
-          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, transform).y}
+          x={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, effectiveTransform, baseBounds || undefined).x}
+          y={imageToScreenCoordinates(activeTextEditor.imagePoint.x, activeTextEditor.imagePoint.y, effectiveTransform, baseBounds || undefined).y}
           onConfirm={handleConfirmTextNote}
           onCancel={handleCancelTextNote}
         />
@@ -1324,7 +1791,7 @@ export function AnswerSheetCanvas({
       {/* Floating Toolbar: Zoom Controls & Select / Pen / Style / Stamps / Highlight / Text / Eraser / Delete / Undo / Redo Controls */}
       {showZoomControls && !isLoading && !hasError && effectiveSrc && (
         <div
-          className="absolute bottom-3 right-3 flex items-center bg-white/90 backdrop-blur-xs border border-slate-200/80 rounded-lg shadow-md p-1 gap-1 z-20 transition-opacity"
+          className="absolute bottom-3 right-3 flex flex-wrap items-center justify-end bg-white/95 backdrop-blur-xs border border-slate-200/90 rounded-lg shadow-md p-1 gap-1 z-20 max-w-[calc(100%-24px)] transition-opacity"
           data-testid="canvas-zoom-controls"
           role="toolbar"
           aria-label="Canvas Zoom and Pen Controls"
@@ -1345,6 +1812,25 @@ export function AnswerSheetCanvas({
               data-testid="canvas-select-toggle"
             >
               <MousePointer className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Magnifier / Loupe Tool Toggle (AE-152) */}
+          {enableLoupe && (
+            <button
+              type="button"
+              onClick={handleToggleLoupe}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                activeLoupeMode
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-pressed={activeLoupeMode}
+              aria-label="Toggle Magnifier Loupe Tool"
+              title={activeLoupeMode ? 'Magnifier Active (Click to Disable or Press M / L)' : 'Enable Magnifier Loupe (M / L)'}
+              data-testid="canvas-loupe-toggle"
+            >
+              <Search className="h-4 w-4" />
             </button>
           )}
 
@@ -1552,6 +2038,179 @@ export function AnswerSheetCanvas({
             </>
           )}
 
+          {/* Rotate Control (AE-150) */}
+          {enableRotationControls && (
+            <>
+              <div className="h-4 w-px bg-slate-200 mx-0.5" />
+              <button
+                type="button"
+                onClick={handleRotate}
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                aria-label={`Rotate Canvas 90° Clockwise (Current: ${activeRotation}°)`}
+                title={`Rotate 90° Clockwise (Current: ${activeRotation}°)`}
+                data-testid="canvas-rotate-button"
+              >
+                <RotateCw className="h-4 w-4" />
+              </button>
+            </>
+          )}
+
+          {/* Image Adjustments: Brightness & Contrast (AE-150) */}
+          {enableImageAdjustments && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowAdjustmentsMenu((prev) => !prev)}
+                className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                  showAdjustmentsMenu || activeBrightness !== 0 || activeContrast !== 0
+                    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+                aria-label="Image Adjustments (Brightness and Contrast)"
+                aria-expanded={showAdjustmentsMenu}
+                title="Image Adjustments (Brightness / Contrast)"
+                data-testid="canvas-image-adjust-toggle"
+              >
+                <Sun className="h-4 w-4" />
+              </button>
+
+              {/* Adjustments Dropdown Popover */}
+              {showAdjustmentsMenu && (
+                <div
+                  className="absolute bottom-full right-0 mb-2 w-56 p-3 bg-white border border-slate-200 rounded-lg shadow-lg z-30 flex flex-col gap-3 text-xs select-none"
+                  data-testid="canvas-image-adjust-panel"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 font-semibold text-slate-700">
+                    <span>Image Adjustments</span>
+                    {(activeBrightness !== 0 || activeContrast !== 0) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleResetBrightness();
+                          handleResetContrast();
+                        }}
+                        className="text-3xs text-blue-600 hover:underline font-normal"
+                        data-testid="canvas-adjustments-reset-all"
+                      >
+                        Reset All
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Brightness Control */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="font-medium">Brightness</span>
+                      <div className="flex items-center gap-1 font-mono text-3xs">
+                        <span>{activeBrightness > 0 ? `+${activeBrightness}` : activeBrightness}%</span>
+                        {activeBrightness !== 0 && (
+                          <button
+                            type="button"
+                            onClick={handleResetBrightness}
+                            className="text-slate-400 hover:text-slate-700 ml-1"
+                            title="Reset Brightness"
+                            data-testid="canvas-brightness-reset"
+                          >
+                            <RotateCcw className="h-2.5 w-2.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="-100"
+                      max="100"
+                      step="5"
+                      value={activeBrightness}
+                      onChange={(e) => handleBrightnessChange(Number(e.target.value))}
+                      className="w-full accent-blue-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg appearance-none"
+                      aria-label="Adjust Brightness"
+                      data-testid="canvas-brightness-slider"
+                    />
+                  </div>
+
+                  {/* Contrast Control */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="font-medium">Contrast</span>
+                      <div className="flex items-center gap-1 font-mono text-3xs">
+                        <span>{activeContrast > 0 ? `+${activeContrast}` : activeContrast}%</span>
+                        {activeContrast !== 0 && (
+                          <button
+                            type="button"
+                            onClick={handleResetContrast}
+                            className="text-slate-400 hover:text-slate-700 ml-1"
+                            title="Reset Contrast"
+                            data-testid="canvas-contrast-reset"
+                          >
+                            <RotateCcw className="h-2.5 w-2.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="-100"
+                      max="100"
+                      step="5"
+                      value={activeContrast}
+                      onChange={(e) => handleContrastChange(Number(e.target.value))}
+                      className="w-full accent-blue-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg appearance-none"
+                      aria-label="Adjust Contrast"
+                      data-testid="canvas-contrast-slider"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="h-4 w-px bg-slate-200 mx-0.5" />
+
+          {/* Fit Width Preset (AE-151) */}
+          <button
+            type="button"
+            onClick={handleFitWidth}
+            className="px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+            aria-label="Fit Width"
+            title="Fit Page to Width"
+            data-testid="canvas-fit-width-button"
+          >
+            Fit Width
+          </button>
+
+          {/* Actual Size (1:1) Preset (AE-151) */}
+          <button
+            type="button"
+            onClick={handleActualSize}
+            className="px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+            aria-label={
+              actualSizeInfo?.isClamped
+                ? `Actual Size (Clamped to ${Math.round(maxZoom * 100)}%)`
+                : 'Actual Size (1:1)'
+            }
+            title={
+              actualSizeInfo?.isClamped
+                ? `Actual Size (1:1) — Clamped to ${Math.round(maxZoom * 100)}% (Source 1:1 requires ${Math.round(actualSizeInfo.trueActualZoom * 100)}%)`
+                : `Actual Size (1:1 Pixel Mapping · ${actualSizeInfo ? Math.round(actualSizeInfo.targetZoom * 100) : 100}%)`
+            }
+            data-testid="canvas-actual-size-button"
+          >
+            1:1
+          </button>
+
+          {/* Fit to Page Preset (AE-151) */}
+          <button
+            type="button"
+            onClick={handleResetZoom}
+            className="px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+            aria-label="Fit Page"
+            title="Fit Entire Page to Viewport (100%)"
+            data-testid="canvas-fit-page-button"
+          >
+            Fit Page
+          </button>
+
           <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
           <button
@@ -1561,6 +2220,7 @@ export function AnswerSheetCanvas({
             className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
             aria-label="Zoom Out"
             title="Zoom Out (-25%)"
+            data-testid="canvas-zoom-out-button"
           >
             <ZoomOut className="h-4 w-4" />
           </button>
@@ -1571,6 +2231,7 @@ export function AnswerSheetCanvas({
             className="px-2 py-1 text-xs font-semibold font-mono text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
             aria-label={`Reset Zoom (Current: ${zoomPercent}%)`}
             title="Reset Zoom to Fit (100%)"
+            data-testid="canvas-zoom-readout"
           >
             {zoomPercent}%
           </button>
@@ -1582,19 +2243,41 @@ export function AnswerSheetCanvas({
             className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
             aria-label="Zoom In"
             title="Zoom In (+25%)"
+            data-testid="canvas-zoom-in-button"
           >
             <ZoomIn className="h-4 w-4" />
           </button>
 
-          {transform.zoom > 1.05 && (
+          {/* Reset View Button (AE-153) */}
+          {enableResetView && (
             <button
               type="button"
-              onClick={handleResetZoom}
-              className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-              aria-label="Reset to Fit"
-              title="Reset to Fit"
+              onClick={handleResetView}
+              className="p-1.5 rounded-md hover:bg-slate-100 text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+              aria-label="Reset view"
+              title="Reset view (Fit Page, 0° Rotation, Neutral adjustments)"
+              data-testid="canvas-reset-view-button"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              <RotateCcw className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Keyboard Shortcuts Help Button (AE-156) */}
+          {enableShortcutHelp && (
+            <button
+              ref={helpButtonRef}
+              type="button"
+              onClick={handleToggleHelp}
+              className={`p-1.5 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 ${
+                isHelpOpen
+                  ? 'bg-blue-600 text-white shadow-xs hover:bg-blue-700'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+              data-testid="canvas-shortcut-help-button"
+            >
+              <Keyboard className="h-4 w-4" />
             </button>
           )}
         </div>
@@ -1650,6 +2333,16 @@ export function AnswerSheetCanvas({
         <div className="absolute bottom-3 left-3 px-2 py-1 bg-slate-900/70 backdrop-blur-xs text-white text-3xs font-mono rounded shadow pointer-events-none z-10">
           {effectivePageLabel} ({Math.round(baseBounds.width * transform.zoom)} × {Math.round(baseBounds.height * transform.zoom)}px · {zoomPercent}%)
         </div>
+      )}
+
+      {/* Shortcut Help Overlay Dialog (AE-156) */}
+      {enableShortcutHelp && (
+        <ShortcutHelpOverlay
+          isOpen={isHelpOpen}
+          onClose={handleCloseHelp}
+          shortcutMap={shortcutMap || SHORTCUT_MAP}
+          triggerRef={helpButtonRef}
+        />
       )}
     </div>
   );

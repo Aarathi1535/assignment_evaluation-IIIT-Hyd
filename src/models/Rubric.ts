@@ -15,6 +15,7 @@ export interface IQuestion {
 export interface IRubric extends Document {
     exam: mongoose.Types.ObjectId;
     questions: IQuestion[];
+    scoreStep: number;
     createdBy: mongoose.Types.ObjectId;
     isActive: boolean;
     version: number;
@@ -71,6 +72,12 @@ const RubricSchema = new Schema<IRubric>(
             index: true
         },
         questions: [QuestionSchema],
+        scoreStep: {
+            type: Number,
+            required: true,
+            default: 0.5,
+            min: 0.001
+        },
         createdBy: {
             type: Schema.Types.ObjectId,
             ref: 'User',

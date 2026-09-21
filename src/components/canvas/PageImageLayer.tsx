@@ -22,6 +22,8 @@ export function PageImageLayer({
   alt = 'Answer sheet page',
   fitMode = 'contain',
   transform: propTransform,
+  brightness = 0,
+  contrast = 0,
   onImageLoad,
   onImageError,
   onTransformChange,
@@ -35,6 +37,7 @@ export function PageImageLayer({
   const stage = propStage || contextStage;
 
   const layerRef = useRef<Konva.Layer | null>(null);
+  const groupRef = useRef<Konva.Group | null>(null);
   const imageNodeRef = useRef<Konva.Image | null>(null);
   const loadedImageRef = useRef<HTMLImageElement | null>(null);
   const baseBoundsRef = useRef<RenderedImageBounds | null>(null);
@@ -44,14 +47,56 @@ export function PageImageLayer({
     x: 0,
     y: 0,
     zoom: 1.0,
+    rotation: 0,
   });
 
   const activeTransform = propTransform || internalTransform;
   const activeTransformRef = useRef<PanZoomTransform>(activeTransform);
+  const brightnessRef = useRef<number>(brightness);
+  const contrastRef = useRef<number>(contrast);
 
   useEffect(() => {
     activeTransformRef.current = activeTransform;
   }, [activeTransform]);
+
+  useEffect(() => {
+    brightnessRef.current = brightness;
+    contrastRef.current = contrast;
+  }, [brightness, contrast]);
+
+  // Apply filters helper (brightness / contrast on IMAGE NODE only)
+  const applyImageFilters = useCallback((imgNode: Konva.Image, b: number, c: number) => {
+    try {
+      type KonvaFilter = NonNullable<Parameters<Konva.Image['filters']>[0]>[number];
+      const filters: KonvaFilter[] = [];
+      if (b !== 0) {
+        if (Konva.Filters?.Brighten) {
+          filters.push(Konva.Filters.Brighten);
+          imgNode.brightness(Math.max(-1, Math.min(1, b / 100)));
+        }
+      }
+      if (c !== 0) {
+        if (Konva.Filters?.Contrast) {
+          filters.push(Konva.Filters.Contrast);
+          imgNode.contrast(Math.max(-100, Math.min(100, c)));
+        }
+      }
+
+      if (filters.length > 0) {
+        imgNode.filters(filters);
+        if (typeof imgNode.cache === 'function') {
+          imgNode.cache();
+        }
+      } else {
+        imgNode.filters([]);
+        if (typeof imgNode.clearCache === 'function') {
+          imgNode.clearCache();
+        }
+      }
+    } catch {
+      // Graceful fallback for non-canvas or mock environments
+    }
+  }, []);
 
   // Drag tracking refs (avoids React re-renders during active continuous dragging)
   const isDraggingRef = useRef(false);
@@ -59,13 +104,38 @@ export function PageImageLayer({
   const dragStartTransformRef = useRef({ x: 0, y: 0 });
   const lastTouchDistanceRef = useRef<number | null>(null);
 
+  // Helper to sync group transform with pan, zoom, rotation & center pivot (matching PenLayer & MarkLayer)
+  const syncGroupTransform = useCallback(() => {
+    if (!groupRef.current) return;
+    const currentTransform = activeTransformRef.current;
+    const bounds = baseBoundsRef.current;
+    const rotation = currentTransform.rotation || 0;
+
+    if (bounds && bounds.width > 0 && bounds.height > 0) {
+      const cx = bounds.width / 2;
+      const cy = bounds.height / 2;
+      groupRef.current.position({
+        x: currentTransform.x + cx * currentTransform.zoom,
+        y: currentTransform.y + cy * currentTransform.zoom,
+      });
+      groupRef.current.offset({ x: cx, y: cy });
+      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+      groupRef.current.rotation(rotation);
+    } else {
+      groupRef.current.position({ x: currentTransform.x, y: currentTransform.y });
+      groupRef.current.offset({ x: 0, y: 0 });
+      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+      groupRef.current.rotation(rotation);
+    }
+  }, []);
+
   // Helper to layout the image node within the current stage dimensions & transform
   const updateImageLayout = useCallback(
     (
       img: HTMLImageElement,
       stageW: number,
       stageH: number,
-      transform: PanZoomTransform
+      _transform: PanZoomTransform
     ): RenderedImageBounds | null => {
       if (!layerRef.current || stageW <= 0 || stageH <= 0) return null;
 
@@ -78,34 +148,39 @@ export function PageImageLayer({
       );
       baseBoundsRef.current = baseBounds;
 
-      const renderW = baseBounds.width * transform.zoom;
-      const renderH = baseBounds.height * transform.zoom;
-
-      // Ensure position is within valid pan bounds for the current zoom
-      const bounds = calculatePanBounds(stageW, stageH, renderW, renderH);
-      const clamped = clampPanPosition(transform.x, transform.y, bounds);
+      if (!groupRef.current) {
+        const group = new Konva.Group({
+          name: 'page-image-group',
+          listening: false,
+        });
+        groupRef.current = group;
+        layerRef.current.add(group);
+      }
 
       if (!imageNodeRef.current) {
         const konvaImage = new Konva.Image({
           image: img,
-          x: clamped.x,
-          y: clamped.y,
-          width: renderW,
-          height: renderH,
+          x: 0,
+          y: 0,
+          width: baseBounds.width,
+          height: baseBounds.height,
           listening: false, // Layer/stage handles pointer interactions
         });
         imageNodeRef.current = konvaImage;
-        layerRef.current.add(konvaImage);
+        applyImageFilters(konvaImage, brightnessRef.current, contrastRef.current);
+        groupRef.current.add(konvaImage);
       } else {
         imageNodeRef.current.image(img);
-        imageNodeRef.current.position({ x: clamped.x, y: clamped.y });
-        imageNodeRef.current.size({ width: renderW, height: renderH });
+        imageNodeRef.current.position({ x: 0, y: 0 });
+        imageNodeRef.current.size({ width: baseBounds.width, height: baseBounds.height });
+        applyImageFilters(imageNodeRef.current, brightnessRef.current, contrastRef.current);
       }
 
+      syncGroupTransform();
       layerRef.current.batchDraw();
       return baseBounds;
     },
-    [fitMode]
+    [fitMode, applyImageFilters, syncGroupTransform]
   );
 
   // Initialize Konva Layer
@@ -123,6 +198,10 @@ export function PageImageLayer({
       if (imageNodeRef.current) {
         imageNodeRef.current.destroy();
         imageNodeRef.current = null;
+      }
+      if (groupRef.current) {
+        groupRef.current.destroy();
+        groupRef.current = null;
       }
       layer.destroy();
       layerRef.current = null;
@@ -143,7 +222,16 @@ export function PageImageLayer({
 
     let isCancelled = false;
     const img = new window.Image();
-    img.crossOrigin = 'anonymous';
+    if (src.startsWith('http://') || src.startsWith('https://')) {
+      try {
+        const url = new URL(src, window.location.href);
+        if (url.origin !== window.location.origin) {
+          img.crossOrigin = 'anonymous';
+        }
+      } catch {
+        img.crossOrigin = 'anonymous';
+      }
+    }
     img.alt = alt;
 
     img.onload = () => {
@@ -167,6 +255,7 @@ export function PageImageLayer({
         x: baseBounds.x,
         y: baseBounds.y,
         zoom: 1.0,
+        rotation: activeTransformRef.current.rotation || 0,
       };
 
       setInternalTransform(initialTransform);
@@ -211,6 +300,7 @@ export function PageImageLayer({
         x: clamped.x,
         y: clamped.y,
         zoom: current.zoom,
+        rotation: current.rotation || 0,
       };
 
       setInternalTransform(adjustedTransform);
@@ -219,12 +309,26 @@ export function PageImageLayer({
     }
   }, [dimensions.width, dimensions.height, fitMode, updateImageLayout, onTransformChange]);
 
-  // Apply transform updates from props
+  // Synchronize brightness/contrast filter updates on image node
   useEffect(() => {
-    if (propTransform && loadedImageRef.current && dimensions.width > 0 && dimensions.height > 0) {
-      updateImageLayout(loadedImageRef.current, dimensions.width, dimensions.height, propTransform);
+    if (imageNodeRef.current && layerRef.current) {
+      applyImageFilters(imageNodeRef.current, brightness, contrast);
+      layerRef.current.batchDraw();
     }
-  }, [propTransform, dimensions.width, dimensions.height, updateImageLayout]);
+  }, [brightness, contrast, applyImageFilters]);
+
+  // Synchronize group transform with pan, zoom, rotation props & state
+  useEffect(() => {
+    if (!groupRef.current || !layerRef.current) return;
+    syncGroupTransform();
+    layerRef.current.batchDraw();
+  }, [
+    activeTransform.x,
+    activeTransform.y,
+    activeTransform.zoom,
+    activeTransform.rotation,
+    syncGroupTransform,
+  ]);
 
   // Pointer & Gesture Event Handlers for Pan/Zoom
   useEffect(() => {
@@ -238,10 +342,24 @@ export function PageImageLayer({
       activeTransformRef.current = newTransform;
 
       if (loadedImageRef.current && imageNodeRef.current && baseBoundsRef.current && layerRef.current) {
-        const renderW = baseBoundsRef.current.width * newTransform.zoom;
-        const renderH = baseBoundsRef.current.height * newTransform.zoom;
-        imageNodeRef.current.position({ x: newTransform.x, y: newTransform.y });
-        imageNodeRef.current.size({ width: renderW, height: renderH });
+        const cx = baseBoundsRef.current.width / 2;
+        const cy = baseBoundsRef.current.height / 2;
+        const rotation = newTransform.rotation || 0;
+
+        if (groupRef.current) {
+          groupRef.current.position({
+            x: newTransform.x + cx * newTransform.zoom,
+            y: newTransform.y + cy * newTransform.zoom,
+          });
+          groupRef.current.offset({ x: cx, y: cy });
+          groupRef.current.scale({ x: newTransform.zoom, y: newTransform.zoom });
+          groupRef.current.rotation(rotation);
+        } else {
+          const renderW = baseBoundsRef.current.width * newTransform.zoom;
+          const renderH = baseBoundsRef.current.height * newTransform.zoom;
+          imageNodeRef.current.position({ x: newTransform.x, y: newTransform.y });
+          imageNodeRef.current.size({ width: renderW, height: renderH });
+        }
         layerRef.current.batchDraw();
       }
     };
@@ -284,7 +402,10 @@ export function PageImageLayer({
         maxZoom
       );
 
-      applyAndCommitTransform(newTransform);
+      applyAndCommitTransform({
+        ...newTransform,
+        rotation: current.rotation,
+      });
     };
 
     // Drag / Pan handlers
@@ -332,8 +453,9 @@ export function PageImageLayer({
       const proposedX = dragStartTransformRef.current.x + dx;
       const proposedY = dragStartTransformRef.current.y + dy;
 
-      const renderW = baseBoundsRef.current.width * current.zoom;
-      const renderH = baseBoundsRef.current.height * current.zoom;
+      const isRotated90 = ((current.rotation || 0) % 180) !== 0;
+      const renderW = (isRotated90 ? baseBoundsRef.current.height : baseBoundsRef.current.width) * current.zoom;
+      const renderH = (isRotated90 ? baseBoundsRef.current.width : baseBoundsRef.current.height) * current.zoom;
       const bounds = calculatePanBounds(stage.width(), stage.height(), renderW, renderH);
       const clamped = clampPanPosition(proposedX, proposedY, bounds);
 
@@ -341,6 +463,7 @@ export function PageImageLayer({
         x: clamped.x,
         y: clamped.y,
         zoom: current.zoom,
+        rotation: current.rotation,
       });
     };
 

@@ -1,6 +1,6 @@
 import type Konva from 'konva';
 import type { ImageFitMode, RenderedImageBounds } from '@/lib/annotations';
-import type { PanZoomTransform } from '@/lib/panZoom';
+import type { PanZoomTransform, CanvasViewState } from '@/lib/panZoom';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
 import type {
   FreehandStroke,
@@ -28,11 +28,18 @@ import type {
   DeserializationResult,
 } from '@/lib/annotationSerialization';
 
-export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser';
+import type {
+  ShortcutAction,
+  ShortcutGroup,
+  ShortcutDefinition,
+} from '@/lib/shortcutMap';
+
+export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 export type {
+  CanvasViewState,
   AnswerSheetPage,
   FreehandStroke,
   StrokePoint,
@@ -54,6 +61,9 @@ export type {
   SerializeCanvasOptions,
   ValidationResult,
   DeserializationResult,
+  ShortcutAction,
+  ShortcutGroup,
+  ShortcutDefinition,
 };
 
 export interface CanvasDimensions {
@@ -85,8 +95,12 @@ export interface PageImageLayerProps {
   alt?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */
   fitMode?: ImageFitMode;
-  /** Current pan/zoom transform */
+  /** Current pan/zoom/rotation transform */
   transform?: PanZoomTransform;
+  /** Brightness level (-100 to 100, default 0 = original image, AE-150) */
+  brightness?: number;
+  /** Contrast level (-100 to 100, default 0 = original image, AE-150) */
+  contrast?: number;
   /** Callback fired when image is successfully loaded and rendered */
   onImageLoad?: (image: HTMLImageElement, baseBounds: RenderedImageBounds) => void;
   /** Callback fired if image loading fails */
@@ -99,6 +113,8 @@ export interface PageImageLayerProps {
   maxZoom?: number;
   /** Whether interactive pan/zoom is enabled (default true) */
   enablePanZoom?: boolean;
+  /** Page rotation in degrees (0, 90, 180, 270) (AE-150 / AE-151) */
+  rotation?: number;
   /** Whether freehand pen tool mode is currently active (disables drag-pan in favor of drawing) */
   isPenActive?: boolean;
   /** Parent Konva stage instance */
@@ -122,6 +138,8 @@ export interface AnswerSheetCanvasProps {
   pageLabel?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */
   fitMode?: ImageFitMode;
+  /** Initial loading state (defaults to true when image source is provided) */
+  initialLoading?: boolean;
   /** Custom width (defaults to 'auto' responsive) */
   width?: number | 'auto';
   /** Custom height (defaults to 'auto' responsive) */
@@ -138,6 +156,34 @@ export interface AnswerSheetCanvasProps {
   enablePanZoom?: boolean;
   /** Whether to show the floating zoom toolbar controls (default true) */
   showZoomControls?: boolean;
+  /** Controlled rotation angle in degrees (0, 90, 180, 270, AE-150) */
+  rotation?: number;
+  /** Uncontrolled initial rotation angle in degrees (default 0, AE-150) */
+  initialRotation?: number;
+  /** Callback fired when page rotation changes (AE-150) */
+  onRotationChange?: (rotation: number) => void;
+  /** Controlled image brightness (-100 to 100, default 0, AE-150) */
+  brightness?: number;
+  /** Uncontrolled initial image brightness (default 0, AE-150) */
+  initialBrightness?: number;
+  /** Callback fired when image brightness changes (AE-150) */
+  onBrightnessChange?: (brightness: number) => void;
+  /** Controlled image contrast (-100 to 100, default 0, AE-150) */
+  contrast?: number;
+  /** Uncontrolled initial image contrast (default 0, AE-150) */
+  initialContrast?: number;
+  /** Callback fired when image contrast changes (AE-150) */
+  onContrastChange?: (contrast: number) => void;
+  /** Whether rotation control button is enabled (default true, AE-150) */
+  enableRotationControls?: boolean;
+  /** Whether brightness & contrast controls are enabled (default true, AE-150) */
+  enableImageAdjustments?: boolean;
+  /** Callback fired when Fit Width preset is applied (AE-151) */
+  onFitWidth?: () => void;
+  /** Callback fired when Actual Size (1:1) preset is applied (AE-151) */
+  onActualSize?: () => void;
+  /** Callback fired when Fit to Page preset is applied (AE-151) */
+  onFitPage?: () => void;
   /** Whether the select / move / delete tool is enabled (default true, AE-132) */
   enableSelect?: boolean;
   /** Controlled selected annotation ID (AE-132) */
@@ -162,6 +208,20 @@ export interface AnswerSheetCanvasProps {
   onPenActiveChange?: (active: boolean) => void;
   /** Whether the eraser tool is enabled (default true, AE-128) */
   enableEraserTool?: boolean;
+  /** Whether the magnifier / loupe tool is enabled (default true, AE-152) */
+  enableLoupe?: boolean;
+  /** Controlled loupe active state (AE-152) */
+  isLoupeActive?: boolean;
+  /** Callback fired when loupe active state changes (AE-152) */
+  onLoupeActiveChange?: (active: boolean) => void;
+  /** Loupe magnification multiplier (default 2.0x, AE-152) */
+  loupeMagnification?: number;
+  /** Loupe lens diameter in pixels (default 180px, AE-152) */
+  loupeDiameter?: number;
+  /** Whether the Reset View toolbar button is enabled (default true, AE-153) */
+  enableResetView?: boolean;
+  /** Callback fired when Reset View is executed (AE-153) */
+  onResetView?: () => void;
   /** Whether the stamp tools (check, cross) are enabled (default true, AE-130) */
   enableStamps?: boolean;
   /** Whether the highlight tool is enabled (default true, AE-130) */
@@ -170,9 +230,9 @@ export interface AnswerSheetCanvasProps {
   enableTextNote?: boolean;
   /** Whether the undo/redo feature is enabled (default true, AE-128) */
   enableUndoRedo?: boolean;
-  /** Controlled active tool ('none' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser', AE-128 / AE-130 / AE-131) */
+  /** Controlled active tool ('none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe', AE-128 / AE-130 / AE-131 / AE-152) */
   activeTool?: CanvasTool;
-  /** Callback fired when active tool changes (AE-128 / AE-130) */
+  /** Callback fired when active tool changes (AE-128 / AE-130 / AE-152) */
   onToolChange?: (tool: CanvasTool) => void;
   /** Controlled selected pen color ('red' | 'blue' | 'green', AE-127) */
   selectedPenColor?: PenColorId;
@@ -262,4 +322,24 @@ export interface AnswerSheetCanvasProps {
   onSaveSuccess?: (pageNumber: number) => void;
   /** Callback fired when autosave fails (AE-137) */
   onSaveError?: (pageNumber: number, error: Error) => void;
+  /** Authoritative shortcut action listener (AE-154) */
+  onShortcutAction?: (action: ShortcutAction, event: KeyboardEvent) => void;
+  /** Save draft trigger handler (AE-154) */
+  onSaveDraft?: () => void;
+  /** Final submit trigger handler (AE-154) */
+  onSubmitFinal?: () => void;
+  /** Next question trigger handler (AE-154) */
+  onNextQuestion?: () => void;
+  /** Previous question trigger handler (AE-154) */
+  onPrevQuestion?: () => void;
+  /** Custom keymap override (default: SHORTCUT_MAP, AE-154) */
+  shortcutMap?: readonly ShortcutDefinition[];
+  /** Whether the Keyboard Shortcuts Help toolbar button & dialog are enabled (default true, AE-156) */
+  enableShortcutHelp?: boolean;
+  /** Controlled shortcut help overlay open state (AE-156) */
+  isShortcutHelpOpen?: boolean;
+  /** Callback fired when shortcut help overlay open state changes (AE-156) */
+  onShortcutHelpOpenChange?: (isOpen: boolean) => void;
 }
+
+export type { ShortcutHelpOverlayProps } from './ShortcutHelpOverlay';

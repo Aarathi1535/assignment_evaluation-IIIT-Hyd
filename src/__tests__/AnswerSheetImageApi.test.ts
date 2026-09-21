@@ -772,4 +772,76 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(body.success).toBe(false);
     expect(body.message).toBe('Page not found');
   });
+
+  it('17. allows Professor who created the Exam to load page image when batch was uploaded by another user', async () => {
+    // examA was created by profUser
+    // Create a batch on examA uploaded by adminUser
+    const batchIdAdmin = crypto.randomUUID();
+    const batchAdmin = await Batch.create({
+      batchId: batchIdAdmin,
+      uploadedBy: adminUser._id as mongoose.Types.ObjectId,
+      exam: examA._id,
+      files: [
+        {
+          fileId: 'file-admin-1',
+          fileIndex: 0,
+          originalFilename: 'admin_upload.pdf',
+          fileType: 'pdf',
+          mimeType: 'application/pdf',
+          size: 1024,
+          pageCount: 1,
+          storageKey: `batches/${batchIdAdmin}/admin_upload.pdf`,
+        },
+      ],
+      totalFiles: 1,
+      totalSize: 1024,
+      totalPageCount: 1,
+      status: BatchStatus.DONE,
+      isActive: true,
+    });
+
+    const jobAdmin = await BatchRepository.createIngestionJob({
+      batchId: batchIdAdmin,
+      batch: batchAdmin._id as mongoose.Types.ObjectId,
+      uploadedBy: adminUser._id as mongoose.Types.ObjectId,
+      status: IngestionStatus.DONE,
+      totalPages: 1,
+      processedPages: 1,
+      failedPages: 0,
+    });
+
+    const pageAdmin = await IngestionPage.create({
+      batchId: batchIdAdmin,
+      job: jobAdmin._id as mongoose.Types.ObjectId,
+      fileId: 'file-admin-1',
+      fileIndex: 0,
+      storageKey: `batches/${batchIdAdmin}/derived/file-admin-1/1/page.png`,
+      thumbnailKey: `batches/${batchIdAdmin}/derived/file-admin-1/1/thumb.jpg`,
+      pageNumber: 1,
+      status: PageProcessingStatus.PROCESSED,
+      answerScript: answerScriptA._id,
+    });
+
+    // profUser is the creator of examA
+    mockSessionUser = {
+      id: profUser._id.toString(),
+      email: profUser.email,
+      name: profUser.name,
+      role: UserRole.PROFESSOR,
+    };
+
+    const mockBuffer = Buffer.from('mock-exam-owner-image-bytes');
+    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${batchIdAdmin}/pages/${pageAdmin._id}/image`,
+      { method: 'GET' }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: batchIdAdmin, pageId: pageAdmin._id.toString() }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
 });

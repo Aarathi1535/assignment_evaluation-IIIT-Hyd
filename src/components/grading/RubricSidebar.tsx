@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from 'react';
 import {
   BookOpen,
   AlertCircle,
@@ -36,6 +36,7 @@ export interface RubricData {
   _id: string;
   exam: string;
   questions: RubricQuestion[];
+  scoreStep?: number;
   isLocked?: boolean;
   version?: number;
 }
@@ -43,6 +44,11 @@ export interface RubricData {
 export interface CriterionGradeEntry {
   criterionName: string;
   score: number;
+}
+
+export interface RubricSidebarHandle {
+  saveDraft: () => Promise<void>;
+  submitFinal: () => Promise<void>;
 }
 
 export interface RubricSidebarProps {
@@ -59,25 +65,30 @@ export interface RubricSidebarProps {
   onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
   onFeedbackChange?: (questionNumber: number, feedback: string) => void;
   onGradeSaved?: (savedGrade: unknown) => void;
+  onAutoAdvance?: (nextUrl: string) => void;
   className?: string;
 }
 
-export function RubricSidebar({
-  scriptId,
-  examId,
-  initialRubric,
-  initialScores,
-  initialFeedback,
-  initialTagIds,
-  initialTags,
-  initialFinalized,
-  allocatedQuestionNumber,
-  onRubricLoaded,
-  onScoresChange,
-  onFeedbackChange,
-  onGradeSaved,
-  className = '',
-}: RubricSidebarProps) {
+export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>(function RubricSidebar(
+  {
+    scriptId,
+    examId,
+    initialRubric,
+    initialScores,
+    initialFeedback,
+    initialTagIds,
+    initialTags,
+    initialFinalized,
+    allocatedQuestionNumber,
+    onRubricLoaded,
+    onScoresChange,
+    onFeedbackChange,
+    onGradeSaved,
+    onAutoAdvance,
+    className = '',
+  }: RubricSidebarProps,
+  ref
+) {
   const [rubric, setRubric] = useState<RubricData | null>(initialRubric ?? null);
   const [loading, setLoading] = useState<boolean>(!initialRubric && Boolean(examId));
   const [error, setError] = useState<string | null>(null);
@@ -404,6 +415,7 @@ export function RubricSidebar({
         }
 
         const json = await res.json();
+        const savedData = json.data || json;
         if (isFinal) {
           setFinalizedQuestions((prev) => ({ ...prev, [qNum]: true }));
         }
@@ -411,7 +423,11 @@ export function RubricSidebar({
           ...prev,
           [qNum]: { saving: false, error: undefined, success: true },
         }));
-        onGradeSaved?.(json.data || json);
+        onGradeSaved?.(savedData);
+
+        if (savedData?.allocationCompleted && savedData?.nextAllocation?.targetUrl) {
+          onAutoAdvance?.(savedData.nextAllocation.targetUrl);
+        }
 
         // Clear success message after 3 seconds
         setTimeout(() => {
@@ -428,7 +444,65 @@ export function RubricSidebar({
         }));
       }
     },
-    [scriptId, scores, feedback, tagIds, onGradeSaved]
+    [scriptId, scores, feedback, tagIds, onGradeSaved, onAutoAdvance]
+  );
+
+  // Handle Finalize with Confirmation
+  const handleFinalizeQuestion = useCallback(
+    async (q: RubricQuestion) => {
+      const confirmFn =
+        typeof window !== 'undefined' && typeof window.confirm === 'function'
+          ? window.confirm
+          : typeof globalThis !== 'undefined' && typeof (globalThis as unknown as { confirm?: (msg: string) => boolean }).confirm === 'function'
+            ? (globalThis as unknown as { confirm: (msg: string) => boolean }).confirm
+            : null;
+
+      const confirmed = confirmFn
+        ? confirmFn(`Are you sure you want to finalize Question ${q.questionNumber}? This action is irreversible.`)
+        : true;
+
+      if (!confirmed) {
+        return;
+      }
+
+      await handleSaveGrade(q, true);
+    },
+    [handleSaveGrade]
+  );
+
+  // Determine current active / target question for keyboard actions
+  const getTargetQuestion = useCallback((): RubricQuestion | null => {
+    if (!rubric || !rubric.questions || rubric.questions.length === 0) return null;
+    if (isQuestionWise) {
+      return (
+        rubric.questions.find((q) => q.questionNumber === Number(allocatedQuestionNumber)) ||
+        null
+      );
+    }
+    return (
+      rubric.questions.find((q) => !finalizedQuestions[q.questionNumber]) ||
+      rubric.questions[0] ||
+      null
+    );
+  }, [rubric, isQuestionWise, allocatedQuestionNumber, finalizedQuestions]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      saveDraft: async () => {
+        const q = getTargetQuestion();
+        if (q) {
+          await handleSaveGrade(q, false);
+        }
+      },
+      submitFinal: async () => {
+        const q = getTargetQuestion();
+        if (q) {
+          await handleFinalizeQuestion(q);
+        }
+      },
+    }),
+    [getTargetQuestion, handleSaveGrade, handleFinalizeQuestion]
   );
 
   // Calculations
@@ -475,7 +549,7 @@ export function RubricSidebar({
       </div>
 
       {/* Sidebar Body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 max-h-[800px]">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Loading State */}
         {loading && (
           <div
@@ -709,12 +783,17 @@ export function RubricSidebar({
                             {/* Score Entry Input Field */}
                             <div className="flex flex-col gap-1 pt-1 border-t border-slate-200/60">
                               <div className="flex items-center justify-between gap-2">
-                                <label
-                                  htmlFor={inputId}
-                                  className="text-2xs font-bold text-slate-700 select-none cursor-pointer"
-                                >
-                                  Score Awarded:
-                                </label>
+                                <div>
+                                  <label
+                                    htmlFor={inputId}
+                                    className="text-2xs font-bold text-slate-700 select-none cursor-pointer block"
+                                  >
+                                    Score Awarded:
+                                  </label>
+                                  <span className="text-3xs text-slate-400 font-medium">
+                                    Scores in steps of {rubric?.scoreStep ?? 0.5}
+                                  </span>
+                                </div>
                                 <div className="flex items-center gap-1.5">
                                   <input
                                     id={inputId}
@@ -722,7 +801,7 @@ export function RubricSidebar({
                                     type="number"
                                     min={0}
                                     max={c.points}
-                                    step="any"
+                                    step={rubric?.scoreStep ?? 0.5}
                                     disabled={!isAllocated || isFinalized}
                                     readOnly={!isAllocated || isFinalized}
                                     value={currentScore}
@@ -893,7 +972,7 @@ export function RubricSidebar({
                               size="sm"
                               data-testid={`finalize-grade-button-${q.questionNumber}`}
                               disabled={currentSaveStatus?.saving}
-                              onClick={() => handleSaveGrade(q, true)}
+                              onClick={() => handleFinalizeQuestion(q)}
                               className="text-2xs h-7 px-3 gap-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                             >
                               {currentSaveStatus?.saving ? (
@@ -921,7 +1000,7 @@ export function RubricSidebar({
       </div>
     </div>
   );
-}
+});
 
 export default RubricSidebar;
 
