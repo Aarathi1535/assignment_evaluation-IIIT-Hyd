@@ -10,11 +10,27 @@ import { UserRole } from '../constants/permissions';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
 
+export const DEFAULT_SCORE_STEP = 0.5;
+
+/**
+ * Precision-safe helper to verify if a score falls on a configured step size.
+ * Handles IEEE 754 floating-point inaccuracies (e.g., 0.3 with step 0.1, 0.75 with step 0.25).
+ */
+export function isValidScoreStep(score: number, step: number = DEFAULT_SCORE_STEP): boolean {
+    if (typeof score !== 'number' || !Number.isFinite(score) || step <= 0) {
+        return false;
+    }
+    const quotient = score / step;
+    const roundedQuotient = Math.round(quotient);
+    return Math.abs(quotient - roundedQuotient) < 1e-9;
+}
+
 export interface ValidateAndComputeOptions {
     rubric: IRubric | { questions: IQuestion[] };
     questionNumber: number;
     marksAwarded: ICriterionGrade[];
     clientTotalScore?: number;
+    scoreStep?: number;
 }
 
 export interface ComputedQuestionTotalResult {
@@ -52,18 +68,22 @@ export class GradingService {
         }
         const sum = marksAwarded.reduce((acc, curr) => {
             const score = typeof curr.score === 'number' ? curr.score : Number(curr.score);
-            return acc + (Number.isNaN(score) ? 0 : score);
+            return acc + (Number.isNaN(score) || !Number.isFinite(score) ? 0 : score);
         }, 0);
         return Math.round(sum * 100) / 100;
     }
 
     /**
      * Validates submitted criterion scores against the rubric for a specific question,
+     * enforces score bounds and step granularity (AE-158),
      * recomputes the authoritative totalScore, checks against question.maxMarks,
      * and completely ignores any client-supplied totalScore.
      */
     validateAndComputeQuestionTotal(options: ValidateAndComputeOptions): ComputedQuestionTotalResult {
-        const { rubric, questionNumber, marksAwarded } = options;
+        const { rubric, questionNumber, marksAwarded, scoreStep } = options;
+        const step = (typeof scoreStep === 'number' && scoreStep > 0 && Number.isFinite(scoreStep))
+            ? scoreStep
+            : DEFAULT_SCORE_STEP;
 
         if (!rubric || !rubric.questions || !Array.isArray(rubric.questions)) {
             throw new HttpError('Invalid rubric configuration.', 400);
@@ -110,9 +130,17 @@ export class GradingService {
                 );
             }
 
-            if (score > rubricCriterion.points) {
+            const isExactMax = Math.abs(score - rubricCriterion.points) < 1e-9;
+            if (score > rubricCriterion.points && !isExactMax) {
                 throw new HttpError(
                     `Score ${score} for criterion "${item.criterionName}" exceeds maximum allowed points of ${rubricCriterion.points}.`,
+                    400
+                );
+            }
+
+            if (!isExactMax && !isValidScoreStep(score, step)) {
+                throw new HttpError(
+                    `Score ${score} for criterion "${item.criterionName}" must be a multiple of the score step (${step}).`,
                     400
                 );
             }
