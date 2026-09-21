@@ -85,8 +85,12 @@ export interface PageImageLayerProps {
   alt?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */
   fitMode?: ImageFitMode;
-  /** Current pan/zoom transform */
+  /** Current pan/zoom/rotation transform */
   transform?: PanZoomTransform;
+  /** Brightness level (-100 to 100, default 0 = original image, AE-150) */
+  brightness?: number;
+  /** Contrast level (-100 to 100, default 0 = original image, AE-150) */
+  contrast?: number;
   /** Callback fired when image is successfully loaded and rendered */
   onImageLoad?: (image: HTMLImageElement, baseBounds: RenderedImageBounds) => void;
   /** Callback fired if image loading fails */
@@ -138,6 +142,28 @@ export interface AnswerSheetCanvasProps {
   enablePanZoom?: boolean;
   /** Whether to show the floating zoom toolbar controls (default true) */
   showZoomControls?: boolean;
+  /** Controlled rotation angle in degrees (0, 90, 180, 270, AE-150) */
+  rotation?: number;
+  /** Uncontrolled initial rotation angle in degrees (default 0, AE-150) */
+  initialRotation?: number;
+  /** Callback fired when page rotation changes (AE-150) */
+  onRotationChange?: (rotation: number) => void;
+  /** Controlled image brightness (-100 to 100, default 0, AE-150) */
+  brightness?: number;
+  /** Uncontrolled initial image brightness (default 0, AE-150) */
+  initialBrightness?: number;
+  /** Callback fired when image brightness changes (AE-150) */
+  onBrightnessChange?: (brightness: number) => void;
+  /** Controlled image contrast (-100 to 100, default 0, AE-150) */
+  contrast?: number;
+  /** Uncontrolled initial image contrast (default 0, AE-150) */
+  initialContrast?: number;
+  /** Callback fired when image contrast changes (AE-150) */
+  onContrastChange?: (contrast: number) => void;
+  /** Whether rotation control button is enabled (default true, AE-150) */
+  enableRotationControls?: boolean;
+  /** Whether brightness & contrast controls are enabled (default true, AE-150) */
+  enableImageAdjustments?: boolean;
   /** Whether the select / move / delete tool is enabled (default true, AE-132) */
   enableSelect?: boolean;
   /** Controlled selected annotation ID (AE-132) */

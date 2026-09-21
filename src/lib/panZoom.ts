@@ -21,6 +21,16 @@ export interface PanZoomTransform {
   y: number;
   /** Interactive zoom multiplier (1.0 = 100% / fit scale) */
   zoom: number;
+  /** View rotation in degrees (0, 90, 180, 270) */
+  rotation?: number;
+}
+
+/**
+ * Normalizes rotation degrees to [0, 360) range in increments of 90 degrees.
+ */
+export function normalizeRotation(degrees: number = 0): number {
+  const normalized = ((Math.round(degrees) % 360) + 360) % 360;
+  return normalized;
 }
 
 export const MIN_ZOOM_LEVEL = 1.0; // 100% / fit-to-viewport
