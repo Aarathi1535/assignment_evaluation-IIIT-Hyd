@@ -175,3 +175,153 @@ export function calculatePinchMetrics(touch1: TouchPoint, touch2: TouchPoint): P
   const centerY = (touch1.clientY + touch2.clientY) / 2;
   return { distance, centerX, centerY };
 }
+
+/**
+ * Calculates the zoom factor needed to fit the page width to the container viewport width.
+ * Accounts for page rotation (0°, 90°, 180°, 270°). (AE-151)
+ *
+ * @param containerWidth Container viewport width in display pixels
+ * @param baseBounds Rendered image bounds at 1.0x fit
+ * @param rotation Rotation in degrees (e.g. 0, 90, 180, 270)
+ * @param minZoom Minimum allowable zoom
+ * @param maxZoom Maximum allowable zoom
+ */
+export function calculateFitWidthZoom(
+  containerWidth: number,
+  baseBounds: RenderedImageBounds,
+  rotation = 0,
+  minZoom = MIN_ZOOM_LEVEL,
+  maxZoom = MAX_ZOOM_LEVEL
+): number {
+  if (containerWidth <= 0 || !baseBounds || baseBounds.width <= 0 || baseBounds.height <= 0) {
+    return minZoom;
+  }
+
+  const normalizedRotation = ((Math.round(rotation) % 360) + 360) % 360;
+  const isRotated90or270 = normalizedRotation === 90 || normalizedRotation === 270;
+  const visualBaseWidth = isRotated90or270 ? baseBounds.height : baseBounds.width;
+
+  if (visualBaseWidth <= 0) return minZoom;
+
+  const rawZoom = containerWidth / visualBaseWidth;
+  return Math.max(minZoom, Math.min(maxZoom, rawZoom));
+}
+
+export interface ActualSizeResult {
+  /** Effective clamped zoom value to apply to the canvas */
+  targetZoom: number;
+  /** Whether the true actual-size zoom exceeded maxZoom or fell below minZoom and had to be clamped */
+  isClamped: boolean;
+  /** The unconstrained mathematical 1:1 actual-size zoom (1 / fitScale) */
+  trueActualZoom: number;
+}
+
+/**
+ * Calculates the actual-size (1:1 pixel mapping) zoom according to the FIT-RELATIVE zoom model. (AE-151)
+ * In this model, true actual size is achieved when:
+ *   displayScale = fitScale * interactiveZoom = 1.0
+ *   => interactiveZoom = 1 / fitScale
+ *
+ * @param fitScale The base-fit scale applied from natural image pixels to canvas display pixels (baseBounds.scale)
+ * @param minZoom Minimum allowable zoom
+ * @param maxZoom Maximum allowable zoom
+ */
+export function calculateActualSizeZoom(
+  fitScale: number,
+  minZoom = MIN_ZOOM_LEVEL,
+  maxZoom = MAX_ZOOM_LEVEL
+): ActualSizeResult {
+  if (fitScale <= 0) {
+    return {
+      targetZoom: minZoom,
+      isClamped: false,
+      trueActualZoom: minZoom,
+    };
+  }
+
+  const trueActualZoom = 1 / fitScale;
+  const targetZoom = Math.max(minZoom, Math.min(maxZoom, trueActualZoom));
+  const isClamped = trueActualZoom > maxZoom || trueActualZoom < minZoom;
+
+  return {
+    targetZoom,
+    isClamped,
+    trueActualZoom,
+  };
+}
+
+/**
+ * Calculates a complete pan/zoom transform for Fit Width. (AE-151)
+ * Positions the page horizontally fitting the container and aligns the top (y = 0)
+ * if the fitted page is taller than the viewport, or centers it vertically if shorter.
+ */
+export function calculateFitWidthTransform(
+  containerWidth: number,
+  containerHeight: number,
+  baseBounds: RenderedImageBounds,
+  rotation = 0,
+  minZoom = MIN_ZOOM_LEVEL,
+  maxZoom = MAX_ZOOM_LEVEL
+): PanZoomTransform {
+  const zoom = calculateFitWidthZoom(containerWidth, baseBounds, rotation, minZoom, maxZoom);
+
+  if (containerWidth <= 0 || containerHeight <= 0 || !baseBounds || baseBounds.width <= 0) {
+    return { x: 0, y: 0, zoom };
+  }
+
+  const renderW = baseBounds.width * zoom;
+  const renderH = baseBounds.height * zoom;
+
+  const bounds = calculatePanBounds(containerWidth, containerHeight, renderW, renderH);
+
+  // For fit-width:
+  // x: 0 (or centered if renderW <= containerWidth)
+  // y: 0 (top-aligned for document reading) clamped to valid pan bounds
+  const targetX = renderW <= containerWidth ? (containerWidth - renderW) / 2 : 0;
+  const targetY = renderH <= containerHeight ? (containerHeight - renderH) / 2 : 0;
+
+  const clamped = clampPanPosition(targetX, targetY, bounds);
+
+  return {
+    x: clamped.x,
+    y: clamped.y,
+    zoom,
+  };
+}
+
+/**
+ * Calculates a complete pan/zoom transform for Actual Size (1:1 pixel mapping). (AE-151)
+ * Centers the image horizontally and aligns top (or centered if fits) within pan bounds.
+ */
+export function calculateActualSizeTransform(
+  containerWidth: number,
+  containerHeight: number,
+  baseBounds: RenderedImageBounds,
+  fitScale: number,
+  minZoom = MIN_ZOOM_LEVEL,
+  maxZoom = MAX_ZOOM_LEVEL
+): PanZoomTransform & { isClamped: boolean; trueActualZoom: number } {
+  const { targetZoom, isClamped, trueActualZoom } = calculateActualSizeZoom(fitScale, minZoom, maxZoom);
+
+  if (containerWidth <= 0 || containerHeight <= 0 || !baseBounds || baseBounds.width <= 0) {
+    return { x: 0, y: 0, zoom: targetZoom, isClamped, trueActualZoom };
+  }
+
+  const renderW = baseBounds.width * targetZoom;
+  const renderH = baseBounds.height * targetZoom;
+
+  const bounds = calculatePanBounds(containerWidth, containerHeight, renderW, renderH);
+
+  const targetX = renderW <= containerWidth ? (containerWidth - renderW) / 2 : (containerWidth - renderW) / 2;
+  const targetY = renderH <= containerHeight ? (containerHeight - renderH) / 2 : 0;
+
+  const clamped = clampPanPosition(targetX, targetY, bounds);
+
+  return {
+    x: clamped.x,
+    y: clamped.y,
+    zoom: targetZoom,
+    isClamped,
+    trueActualZoom,
+  };
+}

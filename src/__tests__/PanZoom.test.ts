@@ -5,6 +5,10 @@ import {
   calculateZoomTransform,
   calculateStepZoom,
   calculatePinchMetrics,
+  calculateFitWidthZoom,
+  calculateActualSizeZoom,
+  calculateFitWidthTransform,
+  calculateActualSizeTransform,
   MIN_ZOOM_LEVEL,
   MAX_ZOOM_LEVEL,
 } from '../lib/panZoom';
@@ -176,6 +180,107 @@ describe('AE-124: Pan & Zoom Models & Calculations', () => {
       // center = ((100+400)/2, (200+600)/2) = (250, 400)
       expect(metrics.centerX).toBe(250);
       expect(metrics.centerY).toBe(400);
+    });
+  });
+
+  describe('6. AE-151: Fit-Width Zoom & Transform Calculations', () => {
+    // Portrait answer sheet (600 x 800) in landscape container (1200 x 800)
+    // At 1.0x fit: baseBounds width = 600, height = 800, x = 300, y = 0
+    const portraitBaseBounds: RenderedImageBounds = {
+      x: 300,
+      y: 0,
+      width: 600,
+      height: 800,
+      scale: 0.5,
+    };
+    const containerW = 1200;
+    const containerH = 800;
+
+    it('calculates fit-width zoom for portrait page in landscape grading pane', () => {
+      const zoom = calculateFitWidthZoom(containerW, portraitBaseBounds, 0);
+      // To fit width 1200 with base width 600: zoom = 1200 / 600 = 2.0
+      expect(zoom).toBe(2.0);
+    });
+
+    it('positions page top at y=0 for reading when fitted page height exceeds viewport', () => {
+      const transform = calculateFitWidthTransform(containerW, containerH, portraitBaseBounds, 0);
+      expect(transform.zoom).toBe(2.0);
+      // Rendered width = 600 * 2.0 = 1200 (fits exactly -> x = 0)
+      // Rendered height = 800 * 2.0 = 1600 (exceeds container height 800 -> top-aligned y = 0)
+      expect(transform.x).toBe(0);
+      expect(transform.y).toBe(0);
+    });
+
+    it('accounts for 90° rotation in fit-width calculation', () => {
+      // Rotated 90°: visual width becomes base height (800)
+      // Required zoom = 1200 / 800 = 1.5
+      const zoom90 = calculateFitWidthZoom(containerW, portraitBaseBounds, 90);
+      expect(zoom90).toBe(1.5);
+
+      const zoom270 = calculateFitWidthZoom(containerW, portraitBaseBounds, 270);
+      expect(zoom270).toBe(1.5);
+
+      const zoom180 = calculateFitWidthZoom(containerW, portraitBaseBounds, 180);
+      expect(zoom180).toBe(2.0);
+    });
+
+    it('clamps fit-width zoom between minZoom and maxZoom', () => {
+      // Extremely wide container requiring 10x zoom
+      const highZoom = calculateFitWidthZoom(10000, portraitBaseBounds, 0);
+      expect(highZoom).toBe(4.0); // Clamped at maxZoom
+
+      // Extremely narrow container where image is already wider
+      const wideBounds: RenderedImageBounds = {
+        x: 0,
+        y: 100,
+        width: 1200,
+        height: 600,
+        scale: 1.0,
+      };
+      const lowZoom = calculateFitWidthZoom(600, wideBounds, 0);
+      expect(lowZoom).toBe(1.0); // Clamped at minZoom
+    });
+  });
+
+  describe('7. AE-151: Actual-Size Zoom & Clamp Calculations', () => {
+    it('calculates true actual-size zoom as 1 / fitScale for standard resolution image', () => {
+      // 300 DPI scan fitted with scale 0.5 (rendered at 50% on fit)
+      // Actual size requires 1 / 0.5 = 2.0x zoom
+      const result = calculateActualSizeZoom(0.5);
+      expect(result.trueActualZoom).toBe(2.0);
+      expect(result.targetZoom).toBe(2.0);
+      expect(result.isClamped).toBe(false);
+    });
+
+    it('detects and handles high-resolution scan (>4x) clamp case honestly', () => {
+      // 600 DPI scan fitted with scale 0.1 (rendered at 10% on fit)
+      // True actual size requires 1 / 0.1 = 10.0x zoom
+      const result = calculateActualSizeZoom(0.1, 1.0, 4.0);
+      expect(result.trueActualZoom).toBe(10.0);
+      expect(result.targetZoom).toBe(4.0); // Clamped to maxZoom 4.0
+      expect(result.isClamped).toBe(true); // Flag indicates clamped state
+    });
+
+    it('calculates actual-size transform centered within container bounds', () => {
+      const baseBounds: RenderedImageBounds = {
+        x: 100,
+        y: 0,
+        width: 600,
+        height: 800,
+        scale: 0.5,
+      };
+      const containerW = 800;
+      const containerH = 600;
+
+      const transform = calculateActualSizeTransform(containerW, containerH, baseBounds, 0.5);
+      expect(transform.zoom).toBe(2.0);
+      expect(transform.isClamped).toBe(false);
+      expect(transform.trueActualZoom).toBe(2.0);
+      // Rendered width at 2.0x = 1200, container width = 800 -> clamped between -400 and 0
+      // Rendered height at 2.0x = 1600, container height = 600 -> top-aligned y = 0
+      expect(transform.x).toBeGreaterThanOrEqual(-400);
+      expect(transform.x).toBeLessThanOrEqual(0);
+      expect(transform.y).toBe(0);
     });
   });
 });

@@ -36,6 +36,9 @@ import type { RenderedImageBounds } from '@/lib/annotations';
 import {
   calculateStepZoom,
   calculateZoomTransform,
+  calculateFitWidthTransform,
+  calculateActualSizeTransform,
+  calculateActualSizeZoom,
   MIN_ZOOM_LEVEL,
   MAX_ZOOM_LEVEL,
   DEFAULT_ZOOM_STEP,
@@ -122,6 +125,7 @@ export function AnswerSheetCanvas({
   showPageNavigation = true,
   pageLabel,
   fitMode = 'contain',
+  rotation = 0,
   width = 'auto',
   height = 'auto',
   className = '',
@@ -130,6 +134,9 @@ export function AnswerSheetCanvas({
   maxZoom = MAX_ZOOM_LEVEL,
   enablePanZoom = true,
   showZoomControls = true,
+  onFitWidth,
+  onActualSize,
+  onFitPage,
   enableSelect = true,
   selectedAnnotationId: propSelectedAnnotationId,
   onSelectAnnotation,
@@ -1266,7 +1273,58 @@ export function AnswerSheetCanvas({
     };
     setTransform(resetTransform);
     onTransformChange?.(resetTransform);
-  }, [baseBounds, effectiveTransform.rotation, onTransformChange]);
+    onFitPage?.();
+  }, [baseBounds, effectiveTransform.rotation, onTransformChange, onFitPage]);
+
+  const handleFitWidth = useCallback(() => {
+    if (!baseBounds) return;
+    const containerW = stageDimensionsRef.current.width;
+    const containerH = stageDimensionsRef.current.height;
+
+    const nextTransform = calculateFitWidthTransform(
+      containerW,
+      containerH,
+      baseBounds,
+      effectiveTransform.rotation || 0,
+      minZoom,
+      maxZoom
+    );
+
+    const fullTransform = { ...nextTransform, rotation: effectiveTransform.rotation || 0 };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+    onFitWidth?.();
+  }, [baseBounds, effectiveTransform.rotation, minZoom, maxZoom, onTransformChange, onFitWidth]);
+
+  const handleActualSize = useCallback(() => {
+    if (!baseBounds) return;
+    const containerW = stageDimensionsRef.current.width;
+    const containerH = stageDimensionsRef.current.height;
+
+    const nextTransform = calculateActualSizeTransform(
+      containerW,
+      containerH,
+      baseBounds,
+      baseBounds.scale,
+      minZoom,
+      maxZoom
+    );
+
+    const fullTransform = {
+      x: nextTransform.x,
+      y: nextTransform.y,
+      zoom: nextTransform.zoom,
+      rotation: effectiveTransform.rotation || 0,
+    };
+    setTransform(fullTransform);
+    onTransformChange?.(fullTransform);
+    onActualSize?.();
+  }, [baseBounds, effectiveTransform.rotation, minZoom, maxZoom, onTransformChange, onActualSize]);
+
+  const actualSizeInfo = useMemo(() => {
+    if (!baseBounds) return null;
+    return calculateActualSizeZoom(baseBounds.scale, minZoom, maxZoom);
+  }, [baseBounds, minZoom, maxZoom]);
 
   const zoomPercent = Math.round(effectiveTransform.zoom * 100);
 
@@ -1808,6 +1866,52 @@ export function AnswerSheetCanvas({
 
           <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
+          {/* Fit Width Preset (AE-151) */}
+          <button
+            type="button"
+            onClick={handleFitWidth}
+            className="px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+            aria-label="Fit Width"
+            title="Fit Page to Width"
+            data-testid="canvas-fit-width-button"
+          >
+            Fit Width
+          </button>
+
+          {/* Actual Size (1:1) Preset (AE-151) */}
+          <button
+            type="button"
+            onClick={handleActualSize}
+            className="px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+            aria-label={
+              actualSizeInfo?.isClamped
+                ? `Actual Size (Clamped to ${Math.round(maxZoom * 100)}%)`
+                : 'Actual Size (1:1)'
+            }
+            title={
+              actualSizeInfo?.isClamped
+                ? `Actual Size (1:1) — Clamped to ${Math.round(maxZoom * 100)}% (Source 1:1 requires ${Math.round(actualSizeInfo.trueActualZoom * 100)}%)`
+                : `Actual Size (1:1 Pixel Mapping · ${actualSizeInfo ? Math.round(actualSizeInfo.targetZoom * 100) : 100}%)`
+            }
+            data-testid="canvas-actual-size-button"
+          >
+            1:1
+          </button>
+
+          {/* Fit to Page Preset (AE-151) */}
+          <button
+            type="button"
+            onClick={handleResetZoom}
+            className="px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 whitespace-nowrap"
+            aria-label="Fit Page"
+            title="Fit Entire Page to Viewport (100%)"
+            data-testid="canvas-fit-page-button"
+          >
+            Fit Page
+          </button>
+
+          <div className="h-4 w-px bg-slate-200 mx-0.5" />
+
           <button
             type="button"
             onClick={handleZoomOut}
@@ -1815,6 +1919,7 @@ export function AnswerSheetCanvas({
             className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
             aria-label="Zoom Out"
             title="Zoom Out (-25%)"
+            data-testid="canvas-zoom-out-button"
           >
             <ZoomOut className="h-4 w-4" />
           </button>
@@ -1825,6 +1930,7 @@ export function AnswerSheetCanvas({
             className="px-2 py-1 text-xs font-semibold font-mono text-slate-700 hover:bg-slate-100 rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
             aria-label={`Reset Zoom (Current: ${zoomPercent}%)`}
             title="Reset Zoom to Fit (100%)"
+            data-testid="canvas-zoom-readout"
           >
             {zoomPercent}%
           </button>
@@ -1836,6 +1942,7 @@ export function AnswerSheetCanvas({
             className="p-1.5 rounded-md hover:bg-slate-100 disabled:opacity-40 disabled:hover:bg-transparent text-slate-700 transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500"
             aria-label="Zoom In"
             title="Zoom In (+25%)"
+            data-testid="canvas-zoom-in-button"
           >
             <ZoomIn className="h-4 w-4" />
           </button>
