@@ -28,6 +28,7 @@ export type ShortcutAction =
   | 'rotateCcw'
   | 'resetView'
   | 'toggleOverlay'
+  | 'openHelp'
   // History & Annotations
   | 'undo'
   | 'redo'
@@ -213,6 +214,15 @@ export const SHORTCUT_MAP: readonly ShortcutDefinition[] = [
     label: 'Toggle Overlay Visibility',
     group: 'view',
     description: 'Show or hide all annotation marks and strokes (AE-133)',
+  },
+  {
+    id: 'view-shortcut-help',
+    key: '?',
+    keys: ['Shift+?'],
+    action: 'openHelp',
+    label: 'Keyboard Shortcuts Help',
+    group: 'view',
+    description: 'Display this keyboard shortcut help reference overlay (AE-156)',
   },
 
   // --- History & Annotation Editing ---
@@ -550,4 +560,59 @@ export function actionToCanvasTool(action: ShortcutAction): string | null {
     default:
       return null;
   }
+}
+/**
+ * Section structure for organized UI display in ShortcutHelpOverlay.
+ */
+export interface ShortcutGroupSection {
+  group: ShortcutGroup;
+  title: string;
+  shortcuts: ShortcutDefinition[];
+}
+
+/**
+ * Returns human-readable section title for a shortcut group.
+ */
+export function getGroupTitle(group: ShortcutGroup): string {
+  switch (group) {
+    case 'grading':
+      return 'Grading Actions';
+    case 'tools':
+      return 'Canvas Tools';
+    case 'view':
+      return 'View & Canvas Controls';
+    case 'history':
+      return 'History & Editing';
+    case 'navigation':
+      return 'Navigation Controls';
+    default:
+      return (group as string).charAt(0).toUpperCase() + (group as string).slice(1);
+  }
+}
+
+/**
+ * Groups a keymap array dynamically into grouped sections for overlay display.
+ */
+export function groupShortcuts(
+  keymap: readonly ShortcutDefinition[] = SHORTCUT_MAP
+): ShortcutGroupSection[] {
+  const groupsMap = new Map<ShortcutGroup, ShortcutDefinition[]>();
+
+  for (const shortcut of keymap) {
+    if (!groupsMap.has(shortcut.group)) {
+      groupsMap.set(shortcut.group, []);
+    }
+    groupsMap.get(shortcut.group)!.push(shortcut);
+  }
+
+  const sections: ShortcutGroupSection[] = [];
+  for (const [group, shortcuts] of groupsMap.entries()) {
+    sections.push({
+      group,
+      title: getGroupTitle(group),
+      shortcuts,
+    });
+  }
+
+  return sections;
 }
