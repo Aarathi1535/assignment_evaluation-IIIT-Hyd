@@ -27,6 +27,7 @@ export const questionSchema = z.object({
 export const createRubricSchema = z.object({
   exam: objectIdSchema,
   questions: z.array(questionSchema).min(1, { message: 'At least one question is required' }),
+  scoreStep: z.number().positive({ message: 'Score step must be greater than 0' }).finite({ message: 'Score step must be a finite number' }).default(0.5).optional(),
 }).strict()
 .refine((data) => {
   const questionNumbers = data.questions.map(q => q.questionNumber);
@@ -40,6 +41,7 @@ export const createRubricSchema = z.object({
 export const updateRubricSchema = z.object({
   exam: objectIdSchema.optional(),
   questions: z.array(questionSchema).min(1, { message: 'At least one question is required' }).optional(),
+  scoreStep: z.number().positive({ message: 'Score step must be greater than 0' }).finite({ message: 'Score step must be a finite number' }).optional(),
 }).strict()
 .refine((data) => {
   if (data.questions) {

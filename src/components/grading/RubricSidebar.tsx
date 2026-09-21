@@ -36,6 +36,7 @@ export interface RubricData {
   _id: string;
   exam: string;
   questions: RubricQuestion[];
+  scoreStep?: number;
   isLocked?: boolean;
   version?: number;
 }
@@ -782,12 +783,17 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
                             {/* Score Entry Input Field */}
                             <div className="flex flex-col gap-1 pt-1 border-t border-slate-200/60">
                               <div className="flex items-center justify-between gap-2">
-                                <label
-                                  htmlFor={inputId}
-                                  className="text-2xs font-bold text-slate-700 select-none cursor-pointer"
-                                >
-                                  Score Awarded:
-                                </label>
+                                <div>
+                                  <label
+                                    htmlFor={inputId}
+                                    className="text-2xs font-bold text-slate-700 select-none cursor-pointer block"
+                                  >
+                                    Score Awarded:
+                                  </label>
+                                  <span className="text-3xs text-slate-400 font-medium">
+                                    Scores in steps of {rubric?.scoreStep ?? 0.5}
+                                  </span>
+                                </div>
                                 <div className="flex items-center gap-1.5">
                                   <input
                                     id={inputId}
@@ -795,7 +801,7 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
                                     type="number"
                                     min={0}
                                     max={c.points}
-                                    step="any"
+                                    step={rubric?.scoreStep ?? 0.5}
                                     disabled={!isAllocated || isFinalized}
                                     readOnly={!isAllocated || isFinalized}
                                     value={currentScore}

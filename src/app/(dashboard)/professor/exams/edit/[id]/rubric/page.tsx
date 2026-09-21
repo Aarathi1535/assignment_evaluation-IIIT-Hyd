@@ -35,6 +35,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
   const [exam, setExam] = useState<ExamDetails | null>(null);
   const [rubricId, setRubricId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [scoreStep, setScoreStep] = useState<number>(0.5);
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -64,6 +65,9 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
           setRubricId(rubricData.data._id);
           setQuestions(rubricData.data.questions || []);
           setIsLocked(rubricData.data.isLocked || false);
+          if (typeof rubricData.data.scoreStep === 'number' && rubricData.data.scoreStep > 0) {
+            setScoreStep(rubricData.data.scoreStep);
+          }
         } else {
           // Initialize with one empty question if no rubric exists yet
           setQuestions([
@@ -160,6 +164,10 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
   // Validation
   const validateClientSide = (): boolean => {
     const errors = validateRubricClient(questions);
+    const stepNum = Number(scoreStep);
+    if (isNaN(stepNum) || stepNum <= 0 || !Number.isFinite(stepNum)) {
+      errors.push('Score step must be a positive finite number.');
+    }
     setValidationErrors(errors);
     return errors.length === 0;
   };
@@ -177,6 +185,7 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
 
     const payload = {
       exam: examId,
+      scoreStep: Number(scoreStep) || 0.5,
       questions: questions.map(q => ({
         questionNumber: Number(q.questionNumber),
         maxMarks: Number(q.maxMarks),
@@ -295,6 +304,33 @@ export default function RubricBuilderPage({ params }: { params: Promise<{ id: st
             </ul>
           </div>
         )}
+
+        {/* Score Step Configuration */}
+        <Card className="border border-slate-200 shadow-sm bg-white">
+          <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <label htmlFor="rubric-score-step" className="text-sm font-bold text-slate-700 whitespace-nowrap">
+                  Score step:
+                </label>
+                <input
+                  id="rubric-score-step"
+                  data-testid="rubric-score-step-input"
+                  type="number"
+                  min="0.001"
+                  step="any"
+                  disabled={isLocked}
+                  value={scoreStep !== undefined ? scoreStep : 0.5}
+                  onChange={(e) => setScoreStep(e.target.value === '' ? ('' as unknown as number) : Number(e.target.value))}
+                  className="w-20 px-2.5 py-1 rounded border border-slate-300 text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-brand-primary/20 text-center text-sm"
+                />
+              </div>
+              <span className="text-xs text-slate-500 font-semibold">
+                Scores will be accepted in steps of {scoreStep || 0.5}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Questions Loop */}
         <div className="space-y-6">

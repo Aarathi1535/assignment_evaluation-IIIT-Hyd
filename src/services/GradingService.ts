@@ -83,7 +83,9 @@ export class GradingService {
         const { rubric, questionNumber, marksAwarded, scoreStep } = options;
         const step = (typeof scoreStep === 'number' && scoreStep > 0 && Number.isFinite(scoreStep))
             ? scoreStep
-            : DEFAULT_SCORE_STEP;
+            : (typeof (rubric as { scoreStep?: number })?.scoreStep === 'number' && (rubric as { scoreStep?: number }).scoreStep! > 0 && Number.isFinite((rubric as { scoreStep?: number }).scoreStep!))
+                ? (rubric as { scoreStep?: number }).scoreStep!
+                : DEFAULT_SCORE_STEP;
 
         if (!rubric || !rubric.questions || !Array.isArray(rubric.questions)) {
             throw new HttpError('Invalid rubric configuration.', 400);
@@ -255,6 +257,7 @@ export class GradingService {
             rubric,
             questionNumber: question,
             marksAwarded,
+            scoreStep: rubric.scoreStep ?? DEFAULT_SCORE_STEP,
         });
 
         // 4.5. Validate and sanitize feedback & tagIds (AE-148, AE-149)
