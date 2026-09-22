@@ -201,6 +201,22 @@ class ExamService {
             if (!isValidTransition(examBefore.status, data.status as ExamStatus)) {
                 throw new HttpError(`Invalid status transition from ${examBefore.status} to ${data.status}`, 400);
             }
+
+            // AE-164: An OPEN flag must prevent publication of the affected exam results to students.
+            // RESOLVED and ESCALATED flags do not block publication.
+            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
+                const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
+                const openFlagCount = await ScriptFlag.countDocuments({
+                    exam: new mongoose.Types.ObjectId(id),
+                    status: 'OPEN'
+                });
+                if (openFlagCount > 0) {
+                    throw new HttpError(
+                        `Cannot publish exam: There are ${openFlagCount} open flag(s) that must be resolved or escalated first`,
+                        400
+                    );
+                }
+            }
         }
 
         // Validate gradingDeadline rules (freeze rule on grading commencement and chronology against examDate)

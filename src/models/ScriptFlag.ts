@@ -12,13 +12,26 @@ export enum FlagReason {
     OTHER = 'OTHER'
 }
 
+export enum FlagResolutionAction {
+    OVERRIDE = 'OVERRIDE',
+    CLEAR = 'CLEAR',
+    ESCALATE = 'ESCALATE'
+}
+
+export interface ICriterionOverride {
+    criterionName: string;
+    score: number;
+    feedback?: string;
+}
+
 export interface IScriptFlagResolution {
-    action?: string;
+    action?: FlagResolutionAction | string;
     by?: mongoose.Types.ObjectId;
     at?: Date;
     notes?: string;
     previousScore?: number;
     newScore?: number;
+    criterionOverrides?: ICriterionOverride[];
 }
 
 export interface IScriptFlag extends Document {
@@ -29,34 +42,62 @@ export interface IScriptFlag extends Document {
     reason: FlagReason;
     note?: string;
     status: FlagStatus;
-    resolution?: IScriptFlagResolution;
+    resolution?: IScriptFlagResolution | null;
     createdAt: Date;
     updatedAt: Date;
 }
+
+const CriterionOverrideSchema = new Schema<ICriterionOverride>(
+    {
+        criterionName: {
+            type: String,
+            required: true,
+            trim: true
+        },
+        score: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        feedback: {
+            type: String,
+            trim: true
+        }
+    },
+    { _id: false }
+);
 
 const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
     {
         action: {
             type: String,
+            enum: Object.values(FlagResolutionAction),
+            required: true,
             trim: true
         },
         by: {
             type: Schema.Types.ObjectId,
-            ref: 'User'
+            ref: 'User',
+            required: true
         },
         at: {
-            type: Date
+            type: Date,
+            required: true,
+            default: Date.now
         },
         notes: {
             type: String,
-            trim: true
+            required: true,
+            trim: true,
+            maxlength: 2000
         },
         previousScore: {
             type: Number
         },
         newScore: {
             type: Number
-        }
+        },
+        criterionOverrides: [CriterionOverrideSchema]
     },
     { _id: false }
 );
