@@ -35,6 +35,43 @@ export interface ResolveScriptFlagInput {
     ipAddress?: string;
 }
 
+export interface GetFlagAnalyticsOptions {
+    userId: string | mongoose.Types.ObjectId;
+    userRole: UserRole | string;
+    examId?: string | mongoose.Types.ObjectId;
+}
+
+export interface FlagAnalyticsResult {
+    total: number;
+    byStatus: {
+        OPEN: number;
+        RESOLVED: number;
+        ESCALATED: number;
+    };
+    byReason: {
+        CHEATING_SUSPECTED: number;
+        ILLEGIBLE: number;
+        OTHER: number;
+    };
+    byReasonAndStatus: {
+        CHEATING_SUSPECTED: {
+            OPEN: number;
+            RESOLVED: number;
+            ESCALATED: number;
+        };
+        ILLEGIBLE: {
+            OPEN: number;
+            RESOLVED: number;
+            ESCALATED: number;
+        };
+        OTHER: {
+            OPEN: number;
+            RESOLVED: number;
+            ESCALATED: number;
+        };
+    };
+}
+
 export interface GetScriptFlagsOptions {
     scriptId: string | mongoose.Types.ObjectId;
     userId: string | mongoose.Types.ObjectId;
@@ -995,6 +1032,151 @@ export class ScriptFlagService {
             originalScore: originalGrade?.totalScore,
             override: null,
             marksAwarded: originalGrade?.marksAwarded
+        };
+    }
+
+    /**
+     * Aggregates ScriptFlag analytics and counts (AE-165).
+     * Enforces:
+     * - Access control (Professor / Admin only, 403 for TA / Student).
+     * - Server-side exam ownership scoping for professors (Exam.find({ createdBy: viewer.id })).
+     * - Verification of client-supplied examId filter against ownership.
+     * - MongoDB aggregation via $group on the server without loading all documents into memory.
+     * - Structured response with zero-filled reason × status combinations.
+     */
+    static async getFlagAnalytics(options: GetFlagAnalyticsOptions): Promise<FlagAnalyticsResult> {
+        const { userId, userRole, examId } = options;
+
+        // 1. Validate User ID
+        if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+            throw new HttpError('Invalid User ID format', 400);
+        }
+
+        const userObjectId = new mongoose.Types.ObjectId(userId);
+        const role = (typeof userRole === 'string' ? userRole.toUpperCase() : userRole) as UserRole;
+
+        // 2. Enforce Role-Based Access Control (RBAC)
+        if (role === UserRole.STUDENT || role === UserRole.TA) {
+            throw new HttpError('Forbidden: Access denied to flag analytics', 403);
+        }
+
+        if (role !== UserRole.PROFESSOR && role !== UserRole.ADMIN) {
+            throw new HttpError('Forbidden: Access denied to flag analytics', 403);
+        }
+
+        // 3. Server-side Exam Ownership Scoping & Filtering
+        let matchFilter: Record<string, unknown> = {};
+
+        if (role === UserRole.PROFESSOR) {
+            const ownedExams = await Exam.find({ createdBy: userObjectId }).select('_id');
+            const ownedExamIds = ownedExams.map((e) => e._id as mongoose.Types.ObjectId);
+
+            if (examId) {
+                if (!mongoose.Types.ObjectId.isValid(examId)) {
+                    throw new HttpError('Invalid Exam ID format', 400);
+                }
+                const requestedExamObjectId = new mongoose.Types.ObjectId(examId);
+                const requestedExam = await Exam.findById(requestedExamObjectId);
+                if (!requestedExam) {
+                    throw new HttpError('Exam not found', 404);
+                }
+                const isOwned = ownedExamIds.some((id) => id.equals(requestedExamObjectId));
+                if (!isOwned) {
+                    throw new HttpError('Forbidden: You do not own the requested exam', 403);
+                }
+                matchFilter = { exam: requestedExamObjectId };
+            } else {
+                matchFilter = { exam: { $in: ownedExamIds } };
+            }
+        } else if (role === UserRole.ADMIN) {
+            if (examId) {
+                if (!mongoose.Types.ObjectId.isValid(examId)) {
+                    throw new HttpError('Invalid Exam ID format', 400);
+                }
+                const requestedExamObjectId = new mongoose.Types.ObjectId(examId);
+                const requestedExam = await Exam.findById(requestedExamObjectId);
+                if (!requestedExam) {
+                    throw new HttpError('Exam not found', 404);
+                }
+                matchFilter = { exam: requestedExamObjectId };
+            } else {
+                matchFilter = {};
+            }
+        }
+
+        // 4. Server-Side MongoDB Aggregation using $group
+        const aggregationResults = await ScriptFlag.aggregate<{
+            _id: { reason: string; status: string };
+            count: number;
+        }>([
+            { $match: matchFilter },
+            {
+                $group: {
+                    _id: {
+                        reason: '$reason',
+                        status: '$status'
+                    },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // 5. Initialize complete zero-count matrix for all reason × status combinations
+        const byReasonAndStatus: FlagAnalyticsResult['byReasonAndStatus'] = {
+            [FlagReason.CHEATING_SUSPECTED]: {
+                [FlagStatus.OPEN]: 0,
+                [FlagStatus.RESOLVED]: 0,
+                [FlagStatus.ESCALATED]: 0
+            },
+            [FlagReason.ILLEGIBLE]: {
+                [FlagStatus.OPEN]: 0,
+                [FlagStatus.RESOLVED]: 0,
+                [FlagStatus.ESCALATED]: 0
+            },
+            [FlagReason.OTHER]: {
+                [FlagStatus.OPEN]: 0,
+                [FlagStatus.RESOLVED]: 0,
+                [FlagStatus.ESCALATED]: 0
+            }
+        };
+
+        const byStatus: FlagAnalyticsResult['byStatus'] = {
+            [FlagStatus.OPEN]: 0,
+            [FlagStatus.RESOLVED]: 0,
+            [FlagStatus.ESCALATED]: 0
+        };
+
+        const byReason: FlagAnalyticsResult['byReason'] = {
+            [FlagReason.CHEATING_SUSPECTED]: 0,
+            [FlagReason.ILLEGIBLE]: 0,
+            [FlagReason.OTHER]: 0
+        };
+
+        let total = 0;
+
+        for (const item of aggregationResults) {
+            const reason = item._id?.reason as FlagReason;
+            const status = item._id?.status as FlagStatus;
+            const count = Number(item.count) || 0;
+
+            if (
+                reason &&
+                byReasonAndStatus[reason] &&
+                status &&
+                byReasonAndStatus[reason][status] !== undefined
+            ) {
+                byReasonAndStatus[reason][status] = count;
+                byStatus[status] = (byStatus[status] || 0) + count;
+                byReason[reason] = (byReason[reason] || 0) + count;
+                total += count;
+            }
+        }
+
+        return {
+            total,
+            byStatus,
+            byReason,
+            byReasonAndStatus
         };
     }
 }
