@@ -38,10 +38,21 @@ export interface PublishTemplatePayload {
     publishedAt?: Date | string | null;
 }
 
+export interface FlagTemplatePayload {
+    exam?: string | mongoose.Types.ObjectId;
+    examTitle?: string | null;
+    answerScript?: string | mongoose.Types.ObjectId;
+    question?: number | null;
+    reason?: string | null;
+    raisedByName?: string | null;
+    recipient?: string | mongoose.Types.ObjectId;
+}
+
 export type NotificationPayloadMap = {
     [NotificationType.ASSIGNMENT]: AssignmentTemplatePayload;
     [NotificationType.REASSIGNMENT]: ReassignmentTemplatePayload;
     [NotificationType.PUBLISH]: PublishTemplatePayload;
+    [NotificationType.FLAG]: FlagTemplatePayload;
 };
 
 /**
@@ -110,12 +121,29 @@ export function renderPublishTemplate(payload?: PublishTemplatePayload | null): 
 }
 
 /**
+ * Renders the notification title and message for flagged scripts/questions.
+ */
+export function renderFlagTemplate(payload?: FlagTemplatePayload | null): RenderedNotification {
+    const q = extractValidQuestion(payload?.question);
+    const reasonText = payload?.reason ? ` (${payload.reason})` : '';
+
+    return {
+        type: NotificationType.FLAG,
+        title: 'Script Flagged for Review',
+        message: q !== null
+            ? `Question ${q} of an answer script has been flagged for review${reasonText}.`
+            : `An answer script has been flagged for review${reasonText}.`
+    };
+}
+
+/**
  * Registry of notification template rendering functions.
  */
 export const NotificationTemplates = {
     [NotificationType.ASSIGNMENT]: renderAssignmentTemplate,
     [NotificationType.REASSIGNMENT]: renderReassignmentTemplate,
-    [NotificationType.PUBLISH]: renderPublishTemplate
+    [NotificationType.PUBLISH]: renderPublishTemplate,
+    [NotificationType.FLAG]: renderFlagTemplate
 } as const;
 
 /**
@@ -132,6 +160,8 @@ export function renderNotificationTemplate<T extends NotificationType>(
             return renderReassignmentTemplate(payload as ReassignmentTemplatePayload);
         case NotificationType.PUBLISH:
             return renderPublishTemplate(payload as PublishTemplatePayload);
+        case NotificationType.FLAG:
+            return renderFlagTemplate(payload as FlagTemplatePayload);
         default:
             return {
                 type: NotificationType.ASSIGNMENT,

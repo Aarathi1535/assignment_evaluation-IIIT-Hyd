@@ -3,7 +3,8 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 export enum NotificationType {
     ASSIGNMENT = 'ASSIGNMENT',
     REASSIGNMENT = 'REASSIGNMENT',
-    PUBLISH = 'PUBLISH'
+    PUBLISH = 'PUBLISH',
+    FLAG = 'FLAG'
 }
 
 export interface INotification extends Document {
