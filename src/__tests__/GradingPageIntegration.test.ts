@@ -15,6 +15,7 @@ import GradingPage from '../app/(dashboard)/grading/[scriptId]/page';
 
 let mockSessionUser: any = null;
 let mockParams: { scriptId?: string; questionNumber?: string } = {};
+let mockSearchParams: URLSearchParams = new URLSearchParams();
 
 vi.mock('next-auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('next-auth')>();
@@ -29,6 +30,7 @@ vi.mock('next-auth', async (importOriginal) => {
 
 vi.mock('next/navigation', () => ({
   useParams: () => mockParams,
+  useSearchParams: () => mockSearchParams,
   useRouter: () => ({
     push: vi.fn(),
     replace: vi.fn(),
@@ -190,6 +192,7 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
       role: UserRole.TA,
     };
     mockParams = { scriptId: answerScript._id.toString() };
+    mockSearchParams = new URLSearchParams();
   });
 
   describe('1. Server-Side Script & Pages Authorization API', () => {
