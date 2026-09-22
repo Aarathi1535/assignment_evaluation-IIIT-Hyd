@@ -12,6 +12,10 @@ import {
   BookOpen,
   Layers,
   Target,
+  Lock,
+  Flag,
+  User,
+  Clock,
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
@@ -28,14 +32,30 @@ export interface ScriptData {
   pages?: AnswerSheetPage[];
 }
 
+export interface FlagDetail {
+  _id: string;
+  answerScript: string;
+  exam: string;
+  question?: number;
+  raisedBy?: string | { _id?: string; name?: string; email?: string };
+  reason: string;
+  note?: string;
+  status: string;
+  createdAt: string;
+}
+
 export interface GradingWorkspaceProps {
   scriptId: string;
   allocatedQuestionNumber?: number;
+  flagId?: string;
+  isReviewMode?: boolean;
 }
 
 export function GradingWorkspace({
   scriptId,
   allocatedQuestionNumber,
+  flagId,
+  isReviewMode = false,
 }: GradingWorkspaceProps) {
   const router = useRouter();
   const hasNavigatedRef = useRef<boolean>(false);
@@ -45,14 +65,17 @@ export function GradingWorkspace({
   const [scriptData, setScriptData] = useState<ScriptData | null>(null);
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
+  const [activeFlag, setActiveFlag] = useState<FlagDetail | null>(null);
 
   const handleSaveDraft = useCallback(() => {
+    if (isReviewMode) return;
     rubricSidebarRef.current?.saveDraft();
-  }, []);
+  }, [isReviewMode]);
 
   const handleSubmitFinal = useCallback(() => {
+    if (isReviewMode) return;
     rubricSidebarRef.current?.submitFinal();
-  }, []);
+  }, [isReviewMode]);
 
   const handleNextQuestion = useCallback(() => {
     rubricSidebarRef.current?.nextQuestion();
@@ -64,6 +87,7 @@ export function GradingWorkspace({
 
   const handleGradeSaved = useCallback(
     (savedGrade: unknown) => {
+      if (isReviewMode) return;
       if (!savedGrade || typeof savedGrade !== 'object') return;
       const data = savedGrade as {
         allocationCompleted?: boolean;
@@ -76,7 +100,7 @@ export function GradingWorkspace({
         router.push(data.nextAllocation.targetUrl);
       }
     },
-    [router]
+    [isReviewMode, router]
   );
 
   const fetchScriptData = useCallback(async () => {
@@ -96,7 +120,7 @@ export function GradingWorkspace({
           throw new Error('Authentication required. Please log in again.');
         }
         if (res.status === 403) {
-          throw new Error('Access denied. You are not allocated to grade this answer script.');
+          throw new Error('Access denied. You do not have permission to view or grade this answer script.');
         }
         if (res.status === 404) {
           throw new Error('Answer script not found.');
@@ -110,13 +134,33 @@ export function GradingWorkspace({
 
       setScriptData(data);
       setPages(Array.isArray(data?.pages) ? data.pages : []);
+
+      // If review mode or flagId is active, fetch flag details
+      if (isReviewMode || flagId) {
+        try {
+          const flagsRes = await fetch(`/api/scripts/${encodeURIComponent(scriptId)}/flags`);
+          if (flagsRes.ok) {
+            const flagsJson = await flagsRes.json();
+            const flagsList: FlagDetail[] = flagsJson?.data || [];
+            if (flagsList.length > 0) {
+              const matched = flagId
+                ? flagsList.find((f) => f._id === flagId) || flagsList[0]
+                : flagsList[0];
+              setActiveFlag(matched);
+            }
+          }
+        } catch {
+          // Non-blocking flag fetch
+        }
+      }
+
       setLoading(false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'An unexpected error occurred';
       setError(message);
       setLoading(false);
     }
-  }, [scriptId]);
+  }, [scriptId, isReviewMode, flagId]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -130,13 +174,41 @@ export function GradingWorkspace({
 
   const isQuestionWise = allocatedQuestionNumber !== undefined && allocatedQuestionNumber !== null;
 
+  const getReasonLabel = (reason?: string) => {
+    switch (reason) {
+      case 'CHEATING_SUSPECTED':
+        return 'Cheating Suspected';
+      case 'ILLEGIBLE':
+        return 'Illegible Handwriting / Scan';
+      case 'OTHER':
+        return 'Other Concern';
+      default:
+        return reason || 'Flagged for Review';
+    }
+  };
+
+  const getStatusBadgeStyle = (status?: string) => {
+    switch (status) {
+      case 'OPEN':
+        return 'bg-amber-100 text-amber-900 border-amber-300';
+      case 'RESOLVED':
+        return 'bg-emerald-100 text-emerald-900 border-emerald-300';
+      case 'ESCALATED':
+        return 'bg-rose-100 text-rose-900 border-rose-300';
+      default:
+        return 'bg-slate-100 text-slate-800 border-slate-300';
+    }
+  };
+
   return (
     <DashboardLayout
-      title="Grading Portal"
+      title={isReviewMode ? 'Flag Review' : 'Grading Portal'}
       description={
-        isQuestionWise
-          ? `Evaluate and grade Question ${allocatedQuestionNumber} on exam submissions.`
-          : 'Evaluate and grade full exam script submissions.'
+        isReviewMode
+          ? 'Read-only review of flagged answer script and TA evaluation.'
+          : isQuestionWise
+            ? `Evaluate and grade Question ${allocatedQuestionNumber} on exam submissions.`
+            : 'Evaluate and grade full exam script submissions.'
       }
       maxWidth="full"
     >
@@ -144,10 +216,14 @@ export function GradingWorkspace({
         {/* Top Context & Navigation Bar */}
         <div className="bg-white border border-slate-200 rounded-brand-lg p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <Link href="/ta">
-              <Button variant="outline" size="sm" aria-label="Back to Work Queue">
+            <Link href={isReviewMode ? '/professor/flags' : '/ta'}>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={isReviewMode ? 'Back to Flag Review Queue' : 'Back to Work Queue'}
+              >
                 <ArrowLeft className="h-4 w-4 mr-1.5" />
-                <span>Back to Work Queue</span>
+                <span>{isReviewMode ? 'Back to Flag Queue' : 'Back to Work Queue'}</span>
               </Button>
             </Link>
 
@@ -169,7 +245,7 @@ export function GradingWorkspace({
               {isQuestionWise ? (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200">
                   <Target className="h-3.5 w-3.5 text-purple-600" />
-                  <span>Question {allocatedQuestionNumber} (Allocated)</span>
+                  <span>Question {allocatedQuestionNumber}</span>
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
@@ -177,9 +253,81 @@ export function GradingWorkspace({
                   <span>Whole Script</span>
                 </span>
               )}
+
+              {isReviewMode && (
+                <span
+                  data-testid="badge-review-mode"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300"
+                >
+                  <Lock className="h-3.5 w-3.5 text-amber-600" />
+                  <span>Read-Only Review Mode</span>
+                </span>
+              )}
             </div>
           </div>
         </div>
+
+        {/* Flag Review Banner (AE-163) */}
+        {isReviewMode && activeFlag && (
+          <div
+            data-testid="flag-review-banner"
+            className="bg-amber-50/90 border border-amber-200 rounded-brand-lg p-4 shadow-sm space-y-3"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200/70 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold shrink-0">
+                  <Flag className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-900 leading-tight">
+                      Flag: {getReasonLabel(activeFlag.reason)}
+                    </h3>
+                    <span
+                      data-testid="flag-banner-status"
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-extrabold tracking-wide uppercase border ${getStatusBadgeStyle(
+                        activeFlag.status
+                      )}`}
+                    >
+                      {activeFlag.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {activeFlag.question ? `Concern reported for Question ${activeFlag.question}` : 'Concern reported for whole script submission'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 text-xs text-slate-600">
+                {typeof activeFlag.raisedBy === 'object' && activeFlag.raisedBy?.name && (
+                  <span className="flex items-center gap-1">
+                    <User className="h-3.5 w-3.5 text-slate-400" />
+                    <span>Flagged by TA: <strong>{activeFlag.raisedBy.name}</strong></span>
+                  </span>
+                )}
+                {activeFlag.createdAt && (
+                  <span className="flex items-center gap-1 text-slate-500">
+                    <Clock className="h-3.5 w-3.5 text-slate-400" />
+                    <span>{new Date(activeFlag.createdAt).toLocaleDateString()}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Flag Note / Rationale */}
+            {activeFlag.note && (
+              <div className="bg-white/80 rounded-brand p-3 border border-amber-200/60 text-xs text-slate-800">
+                <span className="font-bold text-slate-700 block mb-1">TA Note:</span>
+                <p className="whitespace-pre-wrap leading-relaxed">{activeFlag.note}</p>
+              </div>
+            )}
+
+            {/* Read-only notice */}
+            <div className="text-2xs text-amber-900/80 italic">
+              Note: This review view is read-only. Grade modifications, overrides, and flag resolutions belong to AE-164.
+            </div>
+          </div>
+        )}
 
         {/* Main Content Workspace */}
         {loading && (
@@ -212,10 +360,10 @@ export function GradingWorkspace({
                 <RotateCcw className="h-4 w-4 mr-1.5" />
                 <span>Retry</span>
               </Button>
-              <Link href="/ta">
+              <Link href={isReviewMode ? '/professor/flags' : '/ta'}>
                 <Button variant="primary" size="sm">
                   <ArrowLeft className="h-4 w-4 mr-1.5" />
-                  <span>Return to Work Queue</span>
+                  <span>{isReviewMode ? 'Return to Flag Queue' : 'Return to Work Queue'}</span>
                 </Button>
               </Link>
             </div>
@@ -237,10 +385,10 @@ export function GradingWorkspace({
               </p>
             </div>
             <div className="flex gap-3 pt-2">
-              <Link href="/ta">
+              <Link href={isReviewMode ? '/professor/flags' : '/ta'}>
                 <Button variant="outline" size="sm">
                   <ArrowLeft className="h-4 w-4 mr-1.5" />
-                  <span>Return to Work Queue</span>
+                  <span>{isReviewMode ? 'Return to Flag Queue' : 'Return to Work Queue'}</span>
                 </Button>
               </Link>
             </div>
@@ -260,16 +408,16 @@ export function GradingWorkspace({
                 showPageNavigation={true}
                 enablePanZoom={true}
                 showZoomControls={true}
-                enableSelect={true}
-                enablePenTool={true}
-                enableEraserTool={true}
-                enableStamps={true}
-                enableHighlight={true}
-                enableTextNote={true}
-                enableUndoRedo={true}
+                enableSelect={!isReviewMode}
+                enablePenTool={!isReviewMode}
+                enableEraserTool={!isReviewMode}
+                enableStamps={!isReviewMode}
+                enableHighlight={!isReviewMode}
+                enableTextNote={!isReviewMode}
+                enableUndoRedo={!isReviewMode}
                 enableOverlayToggle={true}
                 enableAnnotationLoading={true}
-                enableAutosave={true}
+                enableAutosave={!isReviewMode}
                 onSaveDraft={handleSaveDraft}
                 onSubmitFinal={handleSubmitFinal}
                 onNextQuestion={handleNextQuestion}
@@ -285,6 +433,7 @@ export function GradingWorkspace({
                 scriptId={scriptId}
                 examId={scriptData?.exam}
                 allocatedQuestionNumber={allocatedQuestionNumber}
+                readOnly={isReviewMode}
                 onRubricLoaded={setRubricData}
                 onGradeSaved={handleGradeSaved}
               />

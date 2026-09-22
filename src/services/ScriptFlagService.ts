@@ -1,7 +1,8 @@
 import mongoose from 'mongoose';
-import ScriptFlag, { IScriptFlag, FlagReason, FlagStatus } from '../models/ScriptFlag';
+import ScriptFlag, { IScriptFlag, FlagReason, FlagStatus, IScriptFlagResolution } from '../models/ScriptFlag';
 import AnswerScript from '../models/AnswerScript';
 import Exam from '../models/Exam';
+import Grade from '../models/Grade';
 import AllocationService from './AllocationService';
 import NotificationService from './NotificationService';
 import { NotificationType } from '../models/Notification';
@@ -24,6 +25,72 @@ export interface GetScriptFlagsOptions {
     scriptId: string | mongoose.Types.ObjectId;
     userId: string | mongoose.Types.ObjectId;
     userRole: UserRole | string;
+}
+
+export interface GetProfessorFlagQueueOptions {
+    userId: string | mongoose.Types.ObjectId;
+    userRole: UserRole | string;
+    status?: FlagStatus | string;
+    examId?: string | mongoose.Types.ObjectId;
+    page?: number;
+    limit?: number;
+}
+
+export interface PopulatedFlagQueueItem {
+    _id: string;
+    answerScript: {
+        _id: string;
+        scriptReference?: string;
+        anonymousId?: string;
+        candidateStudentId?: string | null;
+        pageCount?: number;
+        student?: {
+            _id: string;
+            name?: string;
+            email?: string;
+            rollNumber?: string;
+        } | null;
+    };
+    exam: {
+        _id: string;
+        title: string;
+        totalMarks?: number;
+    };
+    question?: number | null;
+    raisedBy: {
+        _id: string;
+        name: string;
+        email: string;
+    };
+    reason: FlagReason;
+    note?: string;
+    status: FlagStatus;
+    resolution?: IScriptFlagResolution | null;
+    createdAt: Date;
+    updatedAt: Date;
+    currentMarks?: {
+        totalScore?: number;
+        marksAwarded?: Array<{ criterionName: string; score: number; feedback?: string }>;
+        feedback?: string;
+        isFinal?: boolean;
+        gradedBy?: string;
+    } | null;
+}
+
+export interface FlagQueueResult {
+    flags: PopulatedFlagQueueItem[];
+    counts: {
+        open: number;
+        resolved: number;
+        escalated: number;
+        total: number;
+    };
+    pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+    };
 }
 
 export class ScriptFlagService {
@@ -270,6 +337,234 @@ export class ScriptFlagService {
         }
 
         return await ScriptFlag.find(query).sort({ createdAt: -1 });
+    }
+
+    /**
+     * Retrieves the Professor Flag Review Queue (AE-163).
+     * Enforces:
+     * - Professor/Admin only access (TAs and Students rejected with 403 Forbidden).
+     * - Scopes flags strictly to exams owned by the logged-in professor (Exam.find({ createdBy: viewer.id })).
+     * - Client-supplied examId is never trusted for authorization; if supplied by a professor, it must belong to their owned exams.
+     * - Two-professor isolation: Professor A cannot see Professor B's flags even when passing Professor B's examId.
+     * - Default filter: OPEN flags, sorted newest first (createdAt: -1).
+     * - Filtering supported for OPEN, RESOLVED, ESCALATED.
+     * - Returns populated flag data, student identity (for professors), TA's current marks, and status counts.
+     */
+    static async getProfessorFlagQueue(options: GetProfessorFlagQueueOptions): Promise<FlagQueueResult> {
+        const { userId, userRole, examId, status, page = 1, limit = 20 } = options;
+
+        if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+            throw new HttpError('Invalid User ID format', 400);
+        }
+
+        const userObjectId = new mongoose.Types.ObjectId(userId);
+        const role = (typeof userRole === 'string' ? userRole.toUpperCase() : userRole) as UserRole;
+
+        // 1. Enforce Role-Based Access Control (RBAC)
+        if (role === UserRole.STUDENT || role === UserRole.TA) {
+            throw new HttpError('Forbidden: Access denied to professor flag review queue', 403);
+        }
+
+        if (role !== UserRole.PROFESSOR && role !== UserRole.ADMIN) {
+            throw new HttpError('Forbidden: Access denied to professor flag review queue', 403);
+        }
+
+        // 2. Server-side Exam Ownership Scoping
+        let examFilter: mongoose.Types.ObjectId | { $in: mongoose.Types.ObjectId[] } | undefined;
+
+        if (role === UserRole.PROFESSOR) {
+            // Scope ownership server-side using Exam.find({ createdBy: viewer.id })
+            const ownedExams = await Exam.find({ createdBy: userObjectId }).select('_id');
+            const ownedExamIds = ownedExams.map((e) => e._id as mongoose.Types.ObjectId);
+
+            if (examId) {
+                if (!mongoose.Types.ObjectId.isValid(examId)) {
+                    throw new HttpError('Invalid Exam ID format', 400);
+                }
+                const requestedExamObjectId = new mongoose.Types.ObjectId(examId);
+                const isOwned = ownedExamIds.some((id) => id.equals(requestedExamObjectId));
+                if (!isOwned) {
+                    // Two-professor isolation: passing another professor's examId must yield no flags
+                    examFilter = { $in: [] };
+                } else {
+                    examFilter = requestedExamObjectId;
+                }
+            } else {
+                examFilter = { $in: ownedExamIds };
+            }
+        } else if (role === UserRole.ADMIN) {
+            if (examId) {
+                if (!mongoose.Types.ObjectId.isValid(examId)) {
+                    throw new HttpError('Invalid Exam ID format', 400);
+                }
+                examFilter = new mongoose.Types.ObjectId(examId);
+            } else {
+                examFilter = undefined;
+            }
+        }
+
+        // 3. Status Filtering (Default: OPEN)
+        let targetStatus = FlagStatus.OPEN;
+        if (status !== undefined && status !== null && String(status).trim() !== '') {
+            const statusUpper = typeof status === 'string' ? status.toUpperCase().trim() : status;
+            if (!Object.values(FlagStatus).includes(statusUpper as FlagStatus)) {
+                throw new HttpError(
+                    `Invalid flag status filter: '${status}'. Supported statuses are: ${Object.values(FlagStatus).join(', ')}`,
+                    400
+                );
+            }
+            targetStatus = statusUpper as FlagStatus;
+        }
+
+        const baseExamQuery = examFilter !== undefined ? { exam: examFilter } : {};
+
+        // 4. Compute Status Counts across the authorized exam scope
+        const [openCount, resolvedCount, escalatedCount] = await Promise.all([
+            ScriptFlag.countDocuments({ ...baseExamQuery, status: FlagStatus.OPEN }),
+            ScriptFlag.countDocuments({ ...baseExamQuery, status: FlagStatus.RESOLVED }),
+            ScriptFlag.countDocuments({ ...baseExamQuery, status: FlagStatus.ESCALATED })
+        ]);
+
+        const totalForStatus =
+            targetStatus === FlagStatus.OPEN
+                ? openCount
+                : targetStatus === FlagStatus.RESOLVED
+                  ? resolvedCount
+                  : escalatedCount;
+
+        // 5. Pagination and Newest-First Sorting
+        const validPage = Math.max(1, Number(page) || 1);
+        const validLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+        const skip = (validPage - 1) * validLimit;
+
+        const query: Record<string, unknown> = {
+            ...baseExamQuery,
+            status: targetStatus
+        };
+
+        const flags = await ScriptFlag.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(validLimit)
+            .populate('exam', 'title totalMarks')
+            .populate('raisedBy', 'name email')
+            .populate({
+                path: 'answerScript',
+                select: 'student scriptReference candidateStudentId pageCount isActive',
+                populate: {
+                    path: 'student',
+                    select: 'name email rollNumber'
+                }
+            })
+            .lean();
+
+        // 6. Fetch TA Grade and Marks for relevant scripts/questions
+        const scriptIds = flags
+            .map((f) => (f.answerScript as { _id?: mongoose.Types.ObjectId } | null)?._id)
+            .filter((id): id is mongoose.Types.ObjectId => Boolean(id));
+
+        const grades = scriptIds.length > 0
+            ? await Grade.find({ answerScript: { $in: scriptIds } }).lean()
+            : [];
+
+        const populatedFlags: PopulatedFlagQueueItem[] = flags.map((flag) => {
+            const script = flag.answerScript as {
+                _id?: mongoose.Types.ObjectId;
+                scriptReference?: string;
+                anonymousId?: string;
+                candidateStudentId?: string | null;
+                pageCount?: number;
+                student?: {
+                    _id?: mongoose.Types.ObjectId;
+                    name?: string;
+                    email?: string;
+                    rollNumber?: string;
+                } | null;
+            } | null;
+
+            const exam = flag.exam as {
+                _id?: mongoose.Types.ObjectId;
+                title?: string;
+                totalMarks?: number;
+            } | null;
+
+            const raisedBy = flag.raisedBy as {
+                _id?: mongoose.Types.ObjectId;
+                name?: string;
+                email?: string;
+            } | null;
+
+            const scriptIdStr = script?._id?.toString();
+            const matchingGrade = grades.find((g) => {
+                const matchesScript = g.answerScript && g.answerScript.toString() === scriptIdStr;
+                if (!matchesScript) return false;
+                if (flag.question !== undefined && flag.question !== null) {
+                    return g.question === flag.question;
+                }
+                return g.question === undefined || g.question === null;
+            }) || grades.find((g) => g.answerScript && g.answerScript.toString() === scriptIdStr);
+
+            return {
+                _id: flag._id.toString(),
+                answerScript: {
+                    _id: scriptIdStr || '',
+                    scriptReference: script?.scriptReference,
+                    anonymousId: script?.anonymousId,
+                    candidateStudentId: script?.candidateStudentId,
+                    pageCount: script?.pageCount,
+                    student: script?.student
+                        ? {
+                              _id: script.student._id?.toString() || '',
+                              name: script.student.name,
+                              email: script.student.email,
+                              rollNumber: script.student.rollNumber
+                          }
+                        : null
+                },
+                exam: {
+                    _id: exam?._id?.toString() || '',
+                    title: exam?.title || 'Exam',
+                    totalMarks: exam?.totalMarks
+                },
+                question: flag.question ?? null,
+                raisedBy: {
+                    _id: raisedBy?._id?.toString() || '',
+                    name: raisedBy?.name || 'TA',
+                    email: raisedBy?.email || ''
+                },
+                reason: flag.reason,
+                note: flag.note,
+                status: flag.status,
+                resolution: flag.resolution ?? null,
+                createdAt: flag.createdAt,
+                updatedAt: flag.updatedAt,
+                currentMarks: matchingGrade
+                    ? {
+                          totalScore: matchingGrade.totalScore,
+                          marksAwarded: matchingGrade.marksAwarded,
+                          feedback: matchingGrade.feedback,
+                          isFinal: matchingGrade.isFinal,
+                          gradedBy: matchingGrade.gradedBy?.toString()
+                      }
+                    : null
+            };
+        });
+
+        return {
+            flags: populatedFlags,
+            counts: {
+                open: openCount,
+                resolved: resolvedCount,
+                escalated: escalatedCount,
+                total: openCount + resolvedCount + escalatedCount
+            },
+            pagination: {
+                page: validPage,
+                limit: validLimit,
+                total: totalForStatus,
+                pages: Math.ceil(totalForStatus / validLimit) || 1
+            }
+        };
     }
 }
 

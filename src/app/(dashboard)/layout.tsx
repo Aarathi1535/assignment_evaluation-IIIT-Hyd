@@ -14,7 +14,8 @@ import {
   Users,
   LucideIcon,
   FileText,
-  Plus
+  Plus,
+  Flag
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 
@@ -122,6 +123,7 @@ export default function DashboardLayout({
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
       { label: 'Courses', href: '/professor/courses', icon: BookOpen },
       { label: 'Exams', href: '/professor/exams', icon: FileText },
+      { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
       { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
       { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
     ],

@@ -63,6 +63,7 @@ export interface RubricSidebarProps {
   initialTags?: CommentTagData[] | null;
   initialFinalized?: Record<number, boolean>;
   allocatedQuestionNumber?: number;
+  readOnly?: boolean;
   onRubricLoaded?: (rubric: RubricData | null) => void;
   onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
   onFeedbackChange?: (questionNumber: number, feedback: string) => void;
@@ -82,6 +83,7 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
     initialTags,
     initialFinalized,
     allocatedQuestionNumber,
+    readOnly = false,
     onRubricLoaded,
     onScoresChange,
     onFeedbackChange,
@@ -549,12 +551,14 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
     ref,
     () => ({
       saveDraft: async () => {
+        if (readOnly) return;
         const q = getTargetQuestion();
         if (q) {
           await handleSaveGrade(q, false);
         }
       },
       submitFinal: async () => {
+        if (readOnly) return;
         const q = getTargetQuestion();
         if (q) {
           await handleFinalizeQuestion(q);
@@ -567,7 +571,7 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
         handlePrevQuestion();
       },
     }),
-    [getTargetQuestion, handleSaveGrade, handleFinalizeQuestion, handleNextQuestion, handlePrevQuestion]
+    [readOnly, getTargetQuestion, handleSaveGrade, handleFinalizeQuestion, handleNextQuestion, handlePrevQuestion]
   );
 
   // Calculations
@@ -678,8 +682,18 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
         {/* Rubric Questions Content */}
         {!loading && !error && rubric && questions.length > 0 && (
           <div data-testid="rubric-questions-list" className="space-y-4">
-            {/* Allocation mode banner */}
-            {isQuestionWise ? (
+            {/* Allocation mode / Review mode banner */}
+            {readOnly ? (
+              <div
+                data-testid="rubric-review-mode-banner"
+                className="bg-amber-50 border border-amber-200 rounded-brand p-2.5 text-xs text-amber-900 flex items-center gap-2"
+              >
+                <Lock className="h-4 w-4 text-amber-600 shrink-0" />
+                <span>
+                  <strong>Read-Only Review Mode:</strong> Viewing script submission criteria. Grade editing is disabled.
+                </span>
+              </div>
+            ) : isQuestionWise ? (
               <div className="bg-purple-50 border border-purple-200 rounded-brand p-2.5 text-xs text-purple-900 flex items-start gap-2">
                 <HelpCircle className="h-4 w-4 text-purple-600 shrink-0 mt-0.5" />
                 <span>
@@ -695,7 +709,7 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
 
             {/* Questions list */}
             {questions.map((q) => {
-              const isAllocated = !isQuestionWise || q.questionNumber === Number(allocatedQuestionNumber);
+              const isAllocated = !readOnly && (!isQuestionWise || q.questionNumber === Number(allocatedQuestionNumber));
               const isFinalized = Boolean(finalizedQuestions[q.questionNumber]);
               const questionScore = getQuestionScore(q);
               const currentAnnouncement = announcements[q.questionNumber];
