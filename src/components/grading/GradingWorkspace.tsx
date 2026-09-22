@@ -54,6 +54,14 @@ export function GradingWorkspace({
     rubricSidebarRef.current?.submitFinal();
   }, []);
 
+  const handleNextQuestion = useCallback(() => {
+    rubricSidebarRef.current?.nextQuestion();
+  }, []);
+
+  const handlePrevQuestion = useCallback(() => {
+    rubricSidebarRef.current?.prevQuestion();
+  }, []);
+
   const handleGradeSaved = useCallback(
     (savedGrade: unknown) => {
       if (!savedGrade || typeof savedGrade !== 'object') return;
@@ -264,6 +272,8 @@ export function GradingWorkspace({
                 enableAutosave={true}
                 onSaveDraft={handleSaveDraft}
                 onSubmitFinal={handleSubmitFinal}
+                onNextQuestion={handleNextQuestion}
+                onPrevQuestion={handlePrevQuestion}
                 className="w-full h-full min-h-[660px] rounded-brand flex-1"
               />
             </div>

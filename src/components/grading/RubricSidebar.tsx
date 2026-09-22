@@ -49,6 +49,8 @@ export interface CriterionGradeEntry {
 export interface RubricSidebarHandle {
   saveDraft: () => Promise<void>;
   submitFinal: () => Promise<void>;
+  nextQuestion: () => void;
+  prevQuestion: () => void;
 }
 
 export interface RubricSidebarProps {
@@ -106,8 +108,15 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
   const [savingStatus, setSavingStatus] = useState<
     Record<number, { saving?: boolean; error?: string; success?: boolean }>
   >({});
+  const [activeQuestionNumber, setActiveQuestionNumber] = useState<number | undefined>(allocatedQuestionNumber);
 
   const isQuestionWise = allocatedQuestionNumber !== undefined && allocatedQuestionNumber !== null;
+
+  useEffect(() => {
+    if (allocatedQuestionNumber !== undefined) {
+      setActiveQuestionNumber(allocatedQuestionNumber);
+    }
+  }, [allocatedQuestionNumber]);
 
   useEffect(() => {
     if (initialRubric) {
@@ -479,12 +488,62 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
         null
       );
     }
+    if (activeQuestionNumber !== undefined) {
+      const found = rubric.questions.find((q) => q.questionNumber === activeQuestionNumber);
+      if (found) return found;
+    }
     return (
       rubric.questions.find((q) => !finalizedQuestions[q.questionNumber]) ||
       rubric.questions[0] ||
       null
     );
-  }, [rubric, isQuestionWise, allocatedQuestionNumber, finalizedQuestions]);
+  }, [rubric, isQuestionWise, allocatedQuestionNumber, activeQuestionNumber, finalizedQuestions]);
+
+  const handleNextQuestion = useCallback(() => {
+    if (!rubric || !rubric.questions || rubric.questions.length === 0) return;
+    if (isQuestionWise) return;
+
+    const questionsList = rubric.questions;
+    const currentTarget = getTargetQuestion();
+    const currentIndex = currentTarget
+      ? questionsList.findIndex((q) => q.questionNumber === currentTarget.questionNumber)
+      : -1;
+
+    const nextIndex = currentIndex < questionsList.length - 1 ? currentIndex + 1 : currentIndex;
+    const nextQ = questionsList[nextIndex];
+    if (nextQ) {
+      setActiveQuestionNumber(nextQ.questionNumber);
+      if (typeof document !== 'undefined') {
+        const el = document.querySelector(`[data-testid="rubric-question-${nextQ.questionNumber}"]`);
+        if (el && typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+    }
+  }, [rubric, isQuestionWise, getTargetQuestion]);
+
+  const handlePrevQuestion = useCallback(() => {
+    if (!rubric || !rubric.questions || rubric.questions.length === 0) return;
+    if (isQuestionWise) return;
+
+    const questionsList = rubric.questions;
+    const currentTarget = getTargetQuestion();
+    const currentIndex = currentTarget
+      ? questionsList.findIndex((q) => q.questionNumber === currentTarget.questionNumber)
+      : 0;
+
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+    const prevQ = questionsList[prevIndex];
+    if (prevQ) {
+      setActiveQuestionNumber(prevQ.questionNumber);
+      if (typeof document !== 'undefined') {
+        const el = document.querySelector(`[data-testid="rubric-question-${prevQ.questionNumber}"]`);
+        if (el && typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+    }
+  }, [rubric, isQuestionWise, getTargetQuestion]);
 
   useImperativeHandle(
     ref,
@@ -501,8 +560,14 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
           await handleFinalizeQuestion(q);
         }
       },
+      nextQuestion: () => {
+        handleNextQuestion();
+      },
+      prevQuestion: () => {
+        handlePrevQuestion();
+      },
     }),
-    [getTargetQuestion, handleSaveGrade, handleFinalizeQuestion]
+    [getTargetQuestion, handleSaveGrade, handleFinalizeQuestion, handleNextQuestion, handlePrevQuestion]
   );
 
   // Calculations
@@ -644,13 +709,22 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
                     scores[k] !== ''
                 ) || Boolean(feedback[q.questionNumber]);
 
+              const isCurrentActive =
+                isAllocated &&
+                (isQuestionWise || getTargetQuestion()?.questionNumber === q.questionNumber);
+
               return (
                 <div
                   key={q.questionNumber}
                   data-testid={`rubric-question-${q.questionNumber}`}
+                  onClick={() => {
+                    if (!isQuestionWise) {
+                      setActiveQuestionNumber(q.questionNumber);
+                    }
+                  }}
                   className={`rounded-brand border transition-all ${
                     isAllocated
-                      ? isQuestionWise
+                      ? isQuestionWise || isCurrentActive
                         ? 'border-brand-primary/50 bg-white ring-2 ring-brand-primary/10 shadow-xs'
                         : 'border-slate-200 bg-white shadow-2xs'
                       : 'border-slate-200 bg-slate-50/70 opacity-80'
