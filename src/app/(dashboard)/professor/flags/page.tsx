@@ -50,6 +50,18 @@ export interface PopulatedQueueItem {
   reason: 'CHEATING_SUSPECTED' | 'ILLEGIBLE' | 'OTHER' | string;
   note?: string;
   status: 'OPEN' | 'RESOLVED' | 'ESCALATED';
+  resolution?: {
+    action?: string;
+    by?: {
+      _id?: string;
+      name?: string;
+      email?: string;
+    } | string | null;
+    at?: string | Date | null;
+    notes?: string;
+    previousScore?: number;
+    newScore?: number;
+  } | null;
   createdAt: string;
   updatedAt: string;
   currentMarks?: {
@@ -58,6 +70,29 @@ export interface PopulatedQueueItem {
     feedback?: string;
     isFinal?: boolean;
     gradedBy?: string;
+  } | null;
+  effectiveGrade?: {
+    totalScore: number;
+    isOverridden: boolean;
+    originalScore?: number;
+    override?: {
+      action?: string;
+      by?: {
+        _id?: string;
+        name?: string;
+        email?: string;
+      } | string | null;
+      at?: string | Date | null;
+      notes?: string;
+      previousScore?: number;
+      newScore?: number;
+      criterionOverrides?: Array<{
+        criterionName: string;
+        score: number;
+        feedback?: string;
+      }>;
+    } | null;
+    marksAwarded?: Array<{ criterionName: string; score: number; feedback?: string }>;
   } | null;
 }
 
@@ -419,10 +454,66 @@ export default function ProfessorFlagQueuePage() {
                           data-testid={`current-marks-${flag._id}`}
                           className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-slate-100 text-slate-800 border border-slate-200"
                         >
-                          <span>TA Score: {flag.currentMarks.totalScore} pts</span>
+                          <span>TA Original: {flag.currentMarks.totalScore} pts</span>
+                        </span>
+                      )}
+
+                      {/* Professor Override Badge (if overridden) */}
+                      {flag.effectiveGrade?.isOverridden && typeof flag.effectiveGrade.totalScore === 'number' && (
+                        <span
+                          data-testid={`override-marks-${flag._id}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-50 text-amber-900 border border-amber-300"
+                        >
+                          <span>Professor Override: {flag.effectiveGrade.totalScore} pts</span>
                         </span>
                       )}
                     </div>
+
+                    {/* Professor Override Details (AE-163 / AE-164) */}
+                    {flag.effectiveGrade?.isOverridden && flag.effectiveGrade.override && (
+                      <div
+                        data-testid={`override-details-${flag._id}`}
+                        className="bg-amber-50/80 rounded p-2.5 text-xs text-amber-950 border border-amber-200/80 font-sans space-y-1"
+                      >
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                          <span className="font-bold text-amber-900">
+                            Professor Override: {flag.effectiveGrade.totalScore} pts
+                            {flag.effectiveGrade.originalScore !== undefined && (
+                              <span className="text-amber-700 font-normal ml-1">
+                                (TA Original: {flag.effectiveGrade.originalScore} pts)
+                              </span>
+                            )}
+                          </span>
+                          {flag.effectiveGrade.override.by && (
+                            <span className="flex items-center gap-1 text-slate-700">
+                              <User className="h-3 w-3 text-amber-700" />
+                              <span>
+                                Changed by:{' '}
+                                <strong>
+                                  {typeof flag.effectiveGrade.override.by === 'object'
+                                    ? flag.effectiveGrade.override.by.name || flag.effectiveGrade.override.by.email || 'Professor'
+                                    : flag.effectiveGrade.override.by}
+                                </strong>
+                              </span>
+                            </span>
+                          )}
+                          {flag.effectiveGrade.override.at && (
+                            <span className="flex items-center gap-1 text-slate-600">
+                              <Clock className="h-3 w-3 text-amber-700" />
+                              <span>
+                                Changed at: {new Date(flag.effectiveGrade.override.at).toLocaleString()}
+                              </span>
+                            </span>
+                          )}
+                        </div>
+                        {flag.effectiveGrade.override.notes && (
+                          <div className="text-xs text-slate-600">
+                            <span className="font-semibold text-slate-700">Resolution Note:</span>{' '}
+                            <span className="italic">{flag.effectiveGrade.override.notes}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Exam and Student details */}
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">

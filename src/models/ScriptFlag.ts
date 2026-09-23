@@ -15,7 +15,8 @@ export enum FlagReason {
 export enum FlagResolutionAction {
     OVERRIDE = 'OVERRIDE',
     CLEAR = 'CLEAR',
-    ESCALATE = 'ESCALATE'
+    ESCALATE = 'ESCALATE',
+    DISMISSED = 'DISMISSED'
 }
 
 export interface ICriterionOverride {
@@ -26,7 +27,7 @@ export interface ICriterionOverride {
 
 export interface IScriptFlagResolution {
     action?: FlagResolutionAction | string;
-    by?: mongoose.Types.ObjectId;
+    by?: mongoose.Types.ObjectId | { _id?: string | mongoose.Types.ObjectId; name?: string; email?: string };
     at?: Date;
     notes?: string;
     previousScore?: number;
@@ -71,23 +72,18 @@ const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
     {
         action: {
             type: String,
-            enum: Object.values(FlagResolutionAction),
-            required: true,
             trim: true
         },
         by: {
             type: Schema.Types.ObjectId,
-            ref: 'User',
-            required: true
+            ref: 'User'
         },
         at: {
             type: Date,
-            required: true,
             default: Date.now
         },
         notes: {
             type: String,
-            required: true,
             trim: true,
             maxlength: 2000
         },

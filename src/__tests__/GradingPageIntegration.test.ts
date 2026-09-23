@@ -15,7 +15,7 @@ import GradingPage from '../app/(dashboard)/grading/[scriptId]/page';
 
 let mockSessionUser: any = null;
 let mockParams: { scriptId?: string; questionNumber?: string } = {};
-let mockSearchParams: URLSearchParams = new URLSearchParams();
+let mockSearchParams = new URLSearchParams();
 
 vi.mock('next-auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('next-auth')>();
@@ -62,6 +62,7 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
   });
 
   beforeEach(async () => {
+    mockSearchParams = new URLSearchParams();
     await User.deleteMany({});
     await Course.deleteMany({});
     await Exam.deleteMany({});
