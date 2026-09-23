@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { NextRequest } from 'next/server';
-import ScriptFlag, { FlagReason, FlagStatus } from '../models/ScriptFlag';
+import ScriptFlag, { FlagReason, FlagStatus, FlagResolutionAction } from '../models/ScriptFlag';
 import AnswerScript from '../models/AnswerScript';
 import Exam, { ExamStatus } from '../models/Exam';
 import Course from '../models/Course';
@@ -652,6 +652,274 @@ describe('AE-163: Professor Flag Review Queue Tests', () => {
       expect(json.success).toBe(true);
       expect(json.data.flags).toHaveLength(1);
       expect(json.data.counts.open).toBe(1);
+    });
+  });
+
+  describe('AE-163 Review Requirement: TA Original vs Professor Override Visibility', () => {
+    it('no override: original and effective values match and TA grade is preserved', async () => {
+      // 1. Seed TA Grade with 8.0 marks
+      const rubricId = new mongoose.Types.ObjectId();
+      await new Grade({
+        answerScript: scriptA1Id,
+        rubric: rubricId,
+        gradedBy: taId,
+        question: 1,
+        marksAwarded: [
+          { criterionName: 'Logic', score: 8.0, feedback: 'Well structured' },
+        ],
+        totalScore: 8.0,
+        feedback: 'Good work',
+        isFinal: true,
+      }).save();
+
+      // 2. Seed OPEN Flag (no override resolution)
+      await new ScriptFlag({
+        answerScript: scriptA1Id,
+        exam: examAId,
+        question: 1,
+        raisedBy: taId,
+        reason: FlagReason.OTHER,
+        note: 'Check question 1 logic',
+        status: FlagStatus.OPEN,
+        resolution: null,
+      }).save();
+
+      const result = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+      });
+
+      expect(result.flags).toHaveLength(1);
+      const flagItem = result.flags[0];
+
+      // Original TA marks
+      expect(flagItem.currentMarks).toBeDefined();
+      expect(flagItem.currentMarks?.totalScore).toBe(8.0);
+      expect(flagItem.currentMarks?.marksAwarded?.[0]?.score).toBe(8.0);
+
+      // Effective grade matches original
+      expect(flagItem.effectiveGrade).toBeDefined();
+      expect(flagItem.effectiveGrade?.totalScore).toBe(8.0);
+      expect(flagItem.effectiveGrade?.isOverridden).toBe(false);
+      expect(flagItem.effectiveGrade?.originalScore).toBe(8.0);
+      expect(flagItem.effectiveGrade?.override).toBeNull();
+
+      // Original Grade document in DB is untouched
+      const dbGrade = await Grade.findOne({ answerScript: scriptA1Id, question: 1 });
+      expect(dbGrade?.totalScore).toBe(8.0);
+      expect(dbGrade?.gradedBy?.toString()).toBe(taId.toString());
+    });
+
+    it('override: original and effective values differ without mutating original TA Grade', async () => {
+      // 1. Seed TA Grade with 8.0 marks
+      const rubricId = new mongoose.Types.ObjectId();
+      await new Grade({
+        answerScript: scriptA1Id,
+        rubric: rubricId,
+        gradedBy: taId,
+        question: 1,
+        marksAwarded: [
+          { criterionName: 'Logic', score: 8.0, feedback: 'Well structured' },
+        ],
+        totalScore: 8.0,
+        feedback: 'TA evaluation',
+        isFinal: true,
+      }).save();
+
+      // 2. Seed RESOLVED Flag with OVERRIDE resolution (9.0 marks)
+      const overrideTime = new Date('2026-09-23T10:00:00Z');
+      await new ScriptFlag({
+        answerScript: scriptA1Id,
+        exam: examAId,
+        question: 1,
+        raisedBy: taId,
+        reason: FlagReason.OTHER,
+        note: 'Need second opinion on step 3',
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: profAId,
+          at: overrideTime,
+          notes: 'Awarded extra 1.0 point for alternate correct formulation',
+          previousScore: 8.0,
+          newScore: 9.0,
+          criterionOverrides: [
+            { criterionName: 'Logic', score: 9.0, feedback: 'Alternate proof is fully valid' }
+          ]
+        },
+      }).save();
+
+      const result = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.RESOLVED,
+      });
+
+      expect(result.flags).toHaveLength(1);
+      const flagItem = result.flags[0];
+
+      // 1. TA Original Marks
+      expect(flagItem.currentMarks).toBeDefined();
+      expect(flagItem.currentMarks?.totalScore).toBe(8.0);
+      expect(flagItem.currentMarks?.marksAwarded?.[0]?.score).toBe(8.0);
+
+      // 2. Effective / Professor Override
+      expect(flagItem.effectiveGrade).toBeDefined();
+      expect(flagItem.effectiveGrade?.isOverridden).toBe(true);
+      expect(flagItem.effectiveGrade?.totalScore).toBe(9.0);
+      expect(flagItem.effectiveGrade?.originalScore).toBe(8.0);
+      expect(flagItem.effectiveGrade?.marksAwarded?.[0]?.score).toBe(9.0);
+      expect(flagItem.effectiveGrade?.marksAwarded?.[0]?.criterionName).toBe('Logic');
+
+      // 3. Preserve original TA Grade data unchanged in DB
+      const dbGrade = await Grade.findOne({ answerScript: scriptA1Id, question: 1 });
+      expect(dbGrade?.totalScore).toBe(8.0);
+      expect(dbGrade?.gradedBy?.toString()).toBe(taId.toString());
+    });
+
+    it('override actor and timestamp are available in effectiveGrade and resolution payload', async () => {
+      const rubricId = new mongoose.Types.ObjectId();
+      await new Grade({
+        answerScript: scriptA1Id,
+        rubric: rubricId,
+        gradedBy: taId,
+        question: 1,
+        marksAwarded: [{ criterionName: 'Proof', score: 6.0 }],
+        totalScore: 6.0,
+        isFinal: true,
+      }).save();
+
+      const resolutionTimestamp = new Date('2026-09-23T11:15:30Z');
+      await new ScriptFlag({
+        answerScript: scriptA1Id,
+        exam: examAId,
+        question: 1,
+        raisedBy: taId,
+        reason: FlagReason.OTHER,
+        note: 'Please verify lemma 2',
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: profAId,
+          at: resolutionTimestamp,
+          notes: 'Professor adjusted score from 6.0 to 7.5',
+          previousScore: 6.0,
+          newScore: 7.5,
+        },
+      }).save();
+
+      // Test direct service method
+      const effective = await ScriptFlagService.getEffectiveGrade(scriptA1Id, 1);
+      expect(effective.isOverridden).toBe(true);
+      expect(effective.totalScore).toBe(7.5);
+      expect(effective.override).toBeDefined();
+      expect(new Date(effective.override!.at!).toISOString()).toBe(resolutionTimestamp.toISOString());
+      expect((effective.override!.by as any).name).toBe('Professor Albus Dumbledore');
+      expect((effective.override!.by as any).email).toBe('dumbledore@hogwarts.edu');
+      expect(effective.override!.notes).toBe('Professor adjusted score from 6.0 to 7.5');
+
+      // Test queue payload
+      const queueResult = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.RESOLVED,
+      });
+
+      expect(queueResult.flags).toHaveLength(1);
+      const item = queueResult.flags[0];
+      expect(item.effectiveGrade?.override?.at).toBeDefined();
+      expect(new Date(item.effectiveGrade!.override!.at!).toISOString()).toBe(resolutionTimestamp.toISOString());
+      expect((item.effectiveGrade!.override!.by as any).name).toBe('Professor Albus Dumbledore');
+      expect((item.resolution?.by as any).name).toBe('Professor Albus Dumbledore');
+    });
+
+    it('professor ownership isolation remains enforced with overrides across multiple professors', async () => {
+      // Professor A exam grade and override flag
+      const rubricIdA = new mongoose.Types.ObjectId();
+      await new Grade({
+        answerScript: scriptA1Id,
+        rubric: rubricIdA,
+        gradedBy: taId,
+        question: 1,
+        marksAwarded: [{ criterionName: 'Transfiguration Theory', score: 8.0 }],
+        totalScore: 8.0,
+      }).save();
+
+      await new ScriptFlag({
+        answerScript: scriptA1Id,
+        exam: examAId,
+        question: 1,
+        raisedBy: taId,
+        reason: FlagReason.OTHER,
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: profAId,
+          at: new Date(),
+          previousScore: 8.0,
+          newScore: 9.0,
+        },
+      }).save();
+
+      // Professor B exam grade and override flag
+      const rubricIdB = new mongoose.Types.ObjectId();
+      await new Grade({
+        answerScript: scriptB1Id,
+        rubric: rubricIdB,
+        gradedBy: taId,
+        question: 2,
+        marksAwarded: [{ criterionName: 'Potion Ingredients', score: 5.0 }],
+        totalScore: 5.0,
+      }).save();
+
+      await new ScriptFlag({
+        answerScript: scriptB1Id,
+        exam: examBId,
+        question: 2,
+        raisedBy: taId,
+        reason: FlagReason.OTHER,
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: profBId,
+          at: new Date(),
+          previousScore: 5.0,
+          newScore: 7.0,
+        },
+      }).save();
+
+      // Prof A requests their queue
+      const profAResult = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.RESOLVED,
+      });
+
+      expect(profAResult.flags).toHaveLength(1);
+      expect(profAResult.flags[0].exam._id).toBe(examAId.toString());
+      expect(profAResult.flags[0].currentMarks?.totalScore).toBe(8.0);
+      expect(profAResult.flags[0].effectiveGrade?.totalScore).toBe(9.0);
+
+      // Prof B requests their queue
+      const profBResult = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profBId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.RESOLVED,
+      });
+
+      expect(profBResult.flags).toHaveLength(1);
+      expect(profBResult.flags[0].exam._id).toBe(examBId.toString());
+      expect(profBResult.flags[0].currentMarks?.totalScore).toBe(5.0);
+      expect(profBResult.flags[0].effectiveGrade?.totalScore).toBe(7.0);
+
+      // Prof A requests with Prof B examId -> yields 0 results (strict isolation)
+      const isolatedResult = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        examId: examBId.toString(),
+        status: FlagStatus.RESOLVED,
+      });
+      expect(isolatedResult.flags).toHaveLength(0);
     });
   });
 });

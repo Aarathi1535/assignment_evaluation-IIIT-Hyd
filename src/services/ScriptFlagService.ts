@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import ScriptFlag, { IScriptFlag, FlagReason, FlagStatus, IScriptFlagResolution } from '../models/ScriptFlag';
+import ScriptFlag, { IScriptFlag, FlagReason, FlagStatus, FlagResolutionAction, IScriptFlagResolution } from '../models/ScriptFlag';
 import AnswerScript from '../models/AnswerScript';
 import Exam from '../models/Exam';
 import Grade from '../models/Grade';
@@ -34,6 +34,30 @@ export interface GetProfessorFlagQueueOptions {
     examId?: string | mongoose.Types.ObjectId;
     page?: number;
     limit?: number;
+}
+
+export interface EffectiveGradeResult {
+    totalScore: number;
+    isOverridden: boolean;
+    originalScore?: number;
+    override?: {
+        action?: FlagResolutionAction | string;
+        by?: {
+            _id?: string;
+            name?: string;
+            email?: string;
+        } | mongoose.Types.ObjectId | string | null;
+        at?: Date | string | null;
+        notes?: string;
+        previousScore?: number;
+        newScore?: number;
+        criterionOverrides?: Array<{
+            criterionName: string;
+            score: number;
+            feedback?: string;
+        }>;
+    } | null;
+    marksAwarded?: Array<{ criterionName: string; score: number; feedback?: string }>;
 }
 
 export interface PopulatedFlagQueueItem {
@@ -75,6 +99,7 @@ export interface PopulatedFlagQueueItem {
         isFinal?: boolean;
         gradedBy?: string;
     } | null;
+    effectiveGrade?: EffectiveGradeResult | null;
 }
 
 export interface FlagQueueResult {
@@ -448,6 +473,7 @@ export class ScriptFlagService {
             .limit(validLimit)
             .populate('exam', 'title totalMarks')
             .populate('raisedBy', 'name email')
+            .populate('resolution.by', 'name email')
             .populate({
                 path: 'answerScript',
                 select: 'student scriptReference candidateStudentId pageCount isActive',
@@ -467,88 +493,97 @@ export class ScriptFlagService {
             ? await Grade.find({ answerScript: { $in: scriptIds } }).lean()
             : [];
 
-        const populatedFlags: PopulatedFlagQueueItem[] = flags.map((flag) => {
-            const script = flag.answerScript as {
-                _id?: mongoose.Types.ObjectId;
-                scriptReference?: string;
-                anonymousId?: string;
-                candidateStudentId?: string | null;
-                pageCount?: number;
-                student?: {
+        const populatedFlags: PopulatedFlagQueueItem[] = await Promise.all(
+            flags.map(async (flag) => {
+                const script = flag.answerScript as {
+                    _id?: mongoose.Types.ObjectId;
+                    scriptReference?: string;
+                    anonymousId?: string;
+                    candidateStudentId?: string | null;
+                    pageCount?: number;
+                    student?: {
+                        _id?: mongoose.Types.ObjectId;
+                        name?: string;
+                        email?: string;
+                        rollNumber?: string;
+                    } | null;
+                } | null;
+
+                const exam = flag.exam as {
+                    _id?: mongoose.Types.ObjectId;
+                    title?: string;
+                    totalMarks?: number;
+                } | null;
+
+                const raisedBy = flag.raisedBy as {
                     _id?: mongoose.Types.ObjectId;
                     name?: string;
                     email?: string;
-                    rollNumber?: string;
                 } | null;
-            } | null;
 
-            const exam = flag.exam as {
-                _id?: mongoose.Types.ObjectId;
-                title?: string;
-                totalMarks?: number;
-            } | null;
+                const scriptIdStr = script?._id?.toString() || '';
+                const matchingGrade = grades.find((g) => {
+                    const matchesScript = g.answerScript && g.answerScript.toString() === scriptIdStr;
+                    if (!matchesScript) return false;
+                    if (flag.question !== undefined && flag.question !== null) {
+                        return g.question === flag.question;
+                    }
+                    return g.question === undefined || g.question === null;
+                }) || grades.find((g) => g.answerScript && g.answerScript.toString() === scriptIdStr);
 
-            const raisedBy = flag.raisedBy as {
-                _id?: mongoose.Types.ObjectId;
-                name?: string;
-                email?: string;
-            } | null;
-
-            const scriptIdStr = script?._id?.toString();
-            const matchingGrade = grades.find((g) => {
-                const matchesScript = g.answerScript && g.answerScript.toString() === scriptIdStr;
-                if (!matchesScript) return false;
-                if (flag.question !== undefined && flag.question !== null) {
-                    return g.question === flag.question;
+                // Use ScriptFlagService.getEffectiveGrade() to compute effective grade without duplicating logic
+                let effectiveGrade: EffectiveGradeResult | null = null;
+                if (scriptIdStr) {
+                    effectiveGrade = await ScriptFlagService.getEffectiveGrade(scriptIdStr, flag.question);
                 }
-                return g.question === undefined || g.question === null;
-            }) || grades.find((g) => g.answerScript && g.answerScript.toString() === scriptIdStr);
 
-            return {
-                _id: flag._id.toString(),
-                answerScript: {
-                    _id: scriptIdStr || '',
-                    scriptReference: script?.scriptReference,
-                    anonymousId: script?.anonymousId,
-                    candidateStudentId: script?.candidateStudentId,
-                    pageCount: script?.pageCount,
-                    student: script?.student
+                return {
+                    _id: flag._id.toString(),
+                    answerScript: {
+                        _id: scriptIdStr,
+                        scriptReference: script?.scriptReference,
+                        anonymousId: script?.anonymousId,
+                        candidateStudentId: script?.candidateStudentId,
+                        pageCount: script?.pageCount,
+                        student: script?.student
+                            ? {
+                                  _id: script.student._id?.toString() || '',
+                                  name: script.student.name,
+                                  email: script.student.email,
+                                  rollNumber: script.student.rollNumber
+                              }
+                            : null
+                    },
+                    exam: {
+                        _id: exam?._id?.toString() || '',
+                        title: exam?.title || 'Exam',
+                        totalMarks: exam?.totalMarks
+                    },
+                    question: flag.question ?? null,
+                    raisedBy: {
+                        _id: raisedBy?._id?.toString() || '',
+                        name: raisedBy?.name || 'TA',
+                        email: raisedBy?.email || ''
+                    },
+                    reason: flag.reason,
+                    note: flag.note,
+                    status: flag.status,
+                    resolution: (flag.resolution as unknown as IScriptFlagResolution) ?? null,
+                    createdAt: flag.createdAt,
+                    updatedAt: flag.updatedAt,
+                    currentMarks: matchingGrade
                         ? {
-                              _id: script.student._id?.toString() || '',
-                              name: script.student.name,
-                              email: script.student.email,
-                              rollNumber: script.student.rollNumber
+                              totalScore: matchingGrade.totalScore,
+                              marksAwarded: matchingGrade.marksAwarded,
+                              feedback: matchingGrade.feedback,
+                              isFinal: matchingGrade.isFinal,
+                              gradedBy: matchingGrade.gradedBy?.toString()
                           }
-                        : null
-                },
-                exam: {
-                    _id: exam?._id?.toString() || '',
-                    title: exam?.title || 'Exam',
-                    totalMarks: exam?.totalMarks
-                },
-                question: flag.question ?? null,
-                raisedBy: {
-                    _id: raisedBy?._id?.toString() || '',
-                    name: raisedBy?.name || 'TA',
-                    email: raisedBy?.email || ''
-                },
-                reason: flag.reason,
-                note: flag.note,
-                status: flag.status,
-                resolution: flag.resolution ?? null,
-                createdAt: flag.createdAt,
-                updatedAt: flag.updatedAt,
-                currentMarks: matchingGrade
-                    ? {
-                          totalScore: matchingGrade.totalScore,
-                          marksAwarded: matchingGrade.marksAwarded,
-                          feedback: matchingGrade.feedback,
-                          isFinal: matchingGrade.isFinal,
-                          gradedBy: matchingGrade.gradedBy?.toString()
-                      }
-                    : null
-            };
-        });
+                        : null,
+                    effectiveGrade
+                };
+            })
+        );
 
         return {
             flags: populatedFlags,
@@ -564,6 +599,65 @@ export class ScriptFlagService {
                 total: totalForStatus,
                 pages: Math.ceil(totalForStatus / validLimit) || 1
             }
+        };
+    }
+
+    /**
+     * Computes the effective grade for an answer script / question,
+     * giving precedence to audited professor overrides stored in ScriptFlag.resolution (AE-164).
+     * Never mutates the underlying TA Grade document.
+     */
+    static async getEffectiveGrade(
+        scriptId: string | mongoose.Types.ObjectId,
+        question?: number | null
+    ): Promise<EffectiveGradeResult> {
+        if (!scriptId || !mongoose.Types.ObjectId.isValid(scriptId)) {
+            throw new HttpError('Invalid AnswerScript ID format', 400);
+        }
+
+        const scriptObjectId = new mongoose.Types.ObjectId(scriptId);
+
+        // 1. Fetch original Grade
+        const gradeQuery: Record<string, unknown> = {
+            answerScript: scriptObjectId
+        };
+        if (question !== undefined && question !== null) {
+            gradeQuery.question = question;
+        }
+        const originalGrade = await Grade.findOne(gradeQuery).lean();
+
+        // 2. Fetch latest resolved OVERRIDE flag
+        const flagQuery: Record<string, unknown> = {
+            answerScript: scriptObjectId,
+            status: FlagStatus.RESOLVED,
+            'resolution.action': FlagResolutionAction.OVERRIDE
+        };
+        if (question !== undefined && question !== null) {
+            flagQuery.question = question;
+        }
+        const overrideFlag = await ScriptFlag.findOne(flagQuery)
+            .sort({ 'resolution.at': -1, updatedAt: -1 })
+            .populate('resolution.by', 'name email')
+            .lean();
+
+        if (overrideFlag?.resolution && typeof overrideFlag.resolution.newScore === 'number') {
+            return {
+                totalScore: overrideFlag.resolution.newScore,
+                isOverridden: true,
+                originalScore: originalGrade?.totalScore,
+                override: overrideFlag.resolution as unknown as EffectiveGradeResult['override'],
+                marksAwarded: (overrideFlag.resolution as any).criterionOverrides?.length
+                    ? (overrideFlag.resolution as any).criterionOverrides
+                    : originalGrade?.marksAwarded
+            };
+        }
+
+        return {
+            totalScore: originalGrade?.totalScore ?? 0,
+            isOverridden: false,
+            originalScore: originalGrade?.totalScore,
+            override: null,
+            marksAwarded: originalGrade?.marksAwarded
         };
     }
 }
