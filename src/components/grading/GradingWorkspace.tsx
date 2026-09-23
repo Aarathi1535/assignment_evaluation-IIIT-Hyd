@@ -41,7 +41,17 @@ export interface FlagDetail {
   reason: string;
   note?: string;
   status: string;
+  resolution?: {
+    action?: string;
+    by?: string;
+    at?: string;
+    notes?: string;
+    previousScore?: number;
+    newScore?: number;
+    criterionOverrides?: Array<{ criterionName: string; score: number; feedback?: string }>;
+  } | null;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface GradingWorkspaceProps {
@@ -66,6 +76,69 @@ export function GradingWorkspace({
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
   const [activeFlag, setActiveFlag] = useState<FlagDetail | null>(null);
+
+  // Resolution controls state (AE-164)
+  const [resolutionAction, setResolutionAction] = useState<'CLEAR' | 'OVERRIDE' | 'ESCALATE'>('CLEAR');
+  const [resolutionNotes, setResolutionNotes] = useState<string>('');
+  const [overrideScore, setOverrideScore] = useState<string>('');
+  const [isResolving, setIsResolving] = useState<boolean>(false);
+  const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const [resolutionSuccess, setResolutionSuccess] = useState<string | null>(null);
+
+  const handleResolveFlag = async () => {
+    if (!activeFlag) return;
+    setIsResolving(true);
+    setResolutionError(null);
+    setResolutionSuccess(null);
+
+    try {
+      const payload: {
+        action: string;
+        notes: string;
+        newScore?: number;
+      } = {
+        action: resolutionAction,
+        notes: resolutionNotes.trim(),
+      };
+
+      if (resolutionAction === 'OVERRIDE') {
+        const scoreNum = parseFloat(overrideScore);
+        if (isNaN(scoreNum)) {
+          throw new Error('Please enter a valid override score.');
+        }
+        payload.newScore = scoreNum;
+      }
+
+      if (!payload.notes) {
+        throw new Error('Resolution notes are required.');
+      }
+
+      const res = await fetch(`/api/professor/flags/${encodeURIComponent(activeFlag._id)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.message || `Failed to resolve flag (${res.status})`);
+      }
+
+      const json = await res.json();
+      setActiveFlag(json.data);
+      setResolutionSuccess(
+        resolutionAction === 'ESCALATE'
+          ? 'Flag has been escalated to Admin.'
+          : resolutionAction === 'OVERRIDE'
+          ? 'Grade override recorded and flag resolved.'
+          : 'Flag cleared and marked as resolved.'
+      );
+    } catch (err: unknown) {
+      setResolutionError(err instanceof Error ? err.message : 'Failed to resolve flag.');
+    } finally {
+      setIsResolving(false);
+    }
+  };
 
   const handleSaveDraft = useCallback(() => {
     if (isReviewMode) return;
@@ -267,11 +340,11 @@ export function GradingWorkspace({
           </div>
         </div>
 
-        {/* Flag Review Banner (AE-163) */}
+        {/* Flag Review & Resolution Banner (AE-163 & AE-164) */}
         {isReviewMode && activeFlag && (
           <div
             data-testid="flag-review-banner"
-            className="bg-amber-50/90 border border-amber-200 rounded-brand-lg p-4 shadow-sm space-y-3"
+            className="bg-amber-50/90 border border-amber-200 rounded-brand-lg p-4 shadow-sm space-y-4"
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200/70 pb-3">
               <div className="flex items-center gap-2.5">
@@ -322,10 +395,172 @@ export function GradingWorkspace({
               </div>
             )}
 
-            {/* Read-only notice */}
-            <div className="text-2xs text-amber-900/80 italic">
-              Note: This review view is read-only. Grade modifications, overrides, and flag resolutions belong to AE-164.
-            </div>
+            {/* AE-164: Flag Resolution Controls (for OPEN flags) */}
+            {activeFlag.status === 'OPEN' && (
+              <div
+                data-testid="flag-resolution-controls"
+                className="bg-white rounded-brand-lg p-4 border border-amber-300/80 shadow-xs space-y-3"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                    Resolve Flag (Professor / Admin Action)
+                  </h4>
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-brand text-xs font-semibold">
+                    <button
+                      type="button"
+                      data-testid="btn-action-clear"
+                      onClick={() => setResolutionAction('CLEAR')}
+                      className={`px-2.5 py-1 rounded text-xs transition-all ${
+                        resolutionAction === 'CLEAR'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Clear Flag
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-action-override"
+                      onClick={() => setResolutionAction('OVERRIDE')}
+                      className={`px-2.5 py-1 rounded text-xs transition-all ${
+                        resolutionAction === 'OVERRIDE'
+                          ? 'bg-brand-primary text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Override Grade
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-action-escalate"
+                      onClick={() => setResolutionAction('ESCALATE')}
+                      className={`px-2.5 py-1 rounded text-xs transition-all ${
+                        resolutionAction === 'ESCALATE'
+                          ? 'bg-rose-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Escalate to Admin
+                    </button>
+                  </div>
+                </div>
+
+                {/* OVERRIDE Score Input */}
+                {resolutionAction === 'OVERRIDE' && (
+                  <div className="bg-brand-primary/5 border border-brand-primary/20 rounded p-3 space-y-2">
+                    <label
+                      htmlFor="override-score"
+                      className="block text-xs font-bold text-slate-800"
+                    >
+                      New Audited Score:
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        id="override-score"
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        data-testid="override-new-score-input"
+                        value={overrideScore}
+                        onChange={(e) => setOverrideScore(e.target.value)}
+                        placeholder="Enter overridden score..."
+                        className="w-48 text-xs font-mono font-bold bg-white border border-slate-300 rounded px-2.5 py-1.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
+                      />
+                      <span className="text-2xs text-slate-500 italic">
+                        The original TA score will be preserved; this override score becomes authoritative.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Resolution Notes Textarea */}
+                <div className="space-y-1">
+                  <label
+                    htmlFor="resolution-notes"
+                    className="block text-xs font-bold text-slate-800"
+                  >
+                    Resolution Notes (Required):
+                  </label>
+                  <textarea
+                    id="resolution-notes"
+                    rows={2}
+                    data-testid="resolution-notes-textarea"
+                    value={resolutionNotes}
+                    onChange={(e) => setResolutionNotes(e.target.value)}
+                    placeholder="Provide justification or instructions regarding this resolution..."
+                    className="w-full text-xs bg-slate-50 border border-slate-300 rounded p-2.5 text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-primary/30 focus:bg-white"
+                  />
+                </div>
+
+                {resolutionError && (
+                  <p
+                    data-testid="resolution-error-msg"
+                    className="text-xs text-rose-600 font-semibold"
+                  >
+                    {resolutionError}
+                  </p>
+                )}
+
+                {resolutionSuccess && (
+                  <p
+                    data-testid="resolution-success-msg"
+                    className="text-xs text-emerald-700 font-semibold"
+                  >
+                    {resolutionSuccess}
+                  </p>
+                )}
+
+                <div className="flex justify-end pt-1">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    data-testid="submit-flag-resolution-btn"
+                    disabled={isResolving || !resolutionNotes.trim()}
+                    onClick={handleResolveFlag}
+                    className="text-xs font-bold"
+                  >
+                    {isResolving ? 'Resolving...' : `Submit ${resolutionAction}`}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Resolved/Escalated Summary Box */}
+            {activeFlag.status !== 'OPEN' && activeFlag.resolution && (
+              <div
+                data-testid="flag-resolution-summary"
+                className="bg-white rounded-brand-lg p-3.5 border border-slate-200 shadow-xs space-y-2 text-xs"
+              >
+                <div className="flex items-center justify-between font-bold text-slate-800">
+                  <span className="uppercase tracking-wider text-2xs text-slate-500">
+                    Resolution Status: <strong className="text-slate-900">{activeFlag.status}</strong>
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-3xs font-mono font-extrabold bg-slate-100 text-slate-700 border border-slate-300">
+                    Action: {activeFlag.resolution.action}
+                  </span>
+                </div>
+
+                {activeFlag.resolution.action === 'OVERRIDE' && (
+                  <div
+                    data-testid="resolution-score-diff"
+                    className="flex items-center gap-3 font-mono text-xs bg-amber-50 p-2 rounded border border-amber-200 text-amber-900 font-bold"
+                  >
+                    <span>Previous Score: {activeFlag.resolution.previousScore ?? 'N/A'} pts</span>
+                    <span>→</span>
+                    <span className="text-emerald-700">
+                      New Override Score: {activeFlag.resolution.newScore ?? 'N/A'} pts
+                    </span>
+                  </div>
+                )}
+
+                {activeFlag.resolution.notes && (
+                  <div className="text-slate-700">
+                    <span className="font-bold text-slate-800">Resolution Notes: </span>
+                    <span className="italic">{activeFlag.resolution.notes}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

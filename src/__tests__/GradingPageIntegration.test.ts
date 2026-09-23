@@ -193,6 +193,7 @@ describe('Grading Page & AnswerSheetCanvas Integration', () => {
       role: UserRole.TA,
     };
     mockParams = { scriptId: answerScript._id.toString() };
+    mockSearchParams = new URLSearchParams();
   });
 
   describe('1. Server-Side Script & Pages Authorization API', () => {

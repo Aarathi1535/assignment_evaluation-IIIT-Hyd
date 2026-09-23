@@ -295,7 +295,7 @@ describe('AE-162: ScriptFlag Model, Service, and API Tests', () => {
         reason: FlagReason.ILLEGIBLE,
         status: FlagStatus.RESOLVED,
         resolution: {
-          action: 'DECIDED',
+          action: 'CLEAR',
           by: professorId,
           at: new Date(),
           notes: 'Script re-scanned clearly',

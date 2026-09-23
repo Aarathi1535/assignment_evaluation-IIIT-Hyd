@@ -13,9 +13,16 @@ export enum FlagReason {
 }
 
 export enum FlagResolutionAction {
-    DISMISSED = 'DISMISSED',
     OVERRIDE = 'OVERRIDE',
-    ESCALATE = 'ESCALATE'
+    CLEAR = 'CLEAR',
+    ESCALATE = 'ESCALATE',
+    DISMISSED = 'DISMISSED'
+}
+
+export interface ICriterionOverride {
+    criterionName: string;
+    score: number;
+    feedback?: string;
 }
 
 export interface IScriptFlagResolution {
@@ -25,11 +32,7 @@ export interface IScriptFlagResolution {
     notes?: string;
     previousScore?: number;
     newScore?: number;
-    criterionOverrides?: Array<{
-        criterionName: string;
-        score: number;
-        feedback?: string;
-    }>;
+    criterionOverrides?: ICriterionOverride[];
 }
 
 export interface IScriptFlag extends Document {
@@ -40,10 +43,30 @@ export interface IScriptFlag extends Document {
     reason: FlagReason;
     note?: string;
     status: FlagStatus;
-    resolution?: IScriptFlagResolution;
+    resolution?: IScriptFlagResolution | null;
     createdAt: Date;
     updatedAt: Date;
 }
+
+const CriterionOverrideSchema = new Schema<ICriterionOverride>(
+    {
+        criterionName: {
+            type: String,
+            required: true,
+            trim: true
+        },
+        score: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        feedback: {
+            type: String,
+            trim: true
+        }
+    },
+    { _id: false }
+);
 
 const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
     {
@@ -56,11 +79,13 @@ const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
             ref: 'User'
         },
         at: {
-            type: Date
+            type: Date,
+            default: Date.now
         },
         notes: {
             type: String,
-            trim: true
+            trim: true,
+            maxlength: 2000
         },
         previousScore: {
             type: Number
@@ -68,13 +93,7 @@ const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
         newScore: {
             type: Number
         },
-        criterionOverrides: [
-            {
-                criterionName: { type: String, trim: true },
-                score: { type: Number },
-                feedback: { type: String, trim: true }
-            }
-        ]
+        criterionOverrides: [CriterionOverrideSchema]
     },
     { _id: false }
 );
