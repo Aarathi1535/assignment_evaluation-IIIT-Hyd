@@ -646,8 +646,8 @@ export class ScriptFlagService {
                 isOverridden: true,
                 originalScore: originalGrade?.totalScore,
                 override: overrideFlag.resolution as unknown as EffectiveGradeResult['override'],
-                marksAwarded: (overrideFlag.resolution as any).criterionOverrides?.length
-                    ? (overrideFlag.resolution as any).criterionOverrides
+                marksAwarded: overrideFlag.resolution.criterionOverrides?.length
+                    ? overrideFlag.resolution.criterionOverrides
                     : originalGrade?.marksAwarded
             };
         }
