@@ -12,13 +12,24 @@ export enum FlagReason {
     OTHER = 'OTHER'
 }
 
+export enum FlagResolutionAction {
+    DISMISSED = 'DISMISSED',
+    OVERRIDE = 'OVERRIDE',
+    ESCALATE = 'ESCALATE'
+}
+
 export interface IScriptFlagResolution {
-    action?: string;
-    by?: mongoose.Types.ObjectId;
+    action?: FlagResolutionAction | string;
+    by?: mongoose.Types.ObjectId | { _id?: string | mongoose.Types.ObjectId; name?: string; email?: string };
     at?: Date;
     notes?: string;
     previousScore?: number;
     newScore?: number;
+    criterionOverrides?: Array<{
+        criterionName: string;
+        score: number;
+        feedback?: string;
+    }>;
 }
 
 export interface IScriptFlag extends Document {
@@ -56,7 +67,14 @@ const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
         },
         newScore: {
             type: Number
-        }
+        },
+        criterionOverrides: [
+            {
+                criterionName: { type: String, trim: true },
+                score: { type: Number },
+                feedback: { type: String, trim: true }
+            }
+        ]
     },
     { _id: false }
 );
