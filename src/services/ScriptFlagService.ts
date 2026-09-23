@@ -1014,9 +1014,13 @@ export class ScriptFlagService {
             .populate('resolution.by', 'name email')
             .lean();
 
-        const overrideAt = overrideFlag?.resolution?.at
+        const resolutionAt = overrideFlag?.resolution?.at
             ? new Date(overrideFlag.resolution.at).getTime()
-            : (overrideFlag?.updatedAt ? new Date(overrideFlag.updatedAt).getTime() : 0);
+            : 0;
+        const flagUpdatedAt = overrideFlag?.updatedAt
+            ? new Date(overrideFlag.updatedAt).getTime()
+            : 0;
+        const overrideAt = Math.max(resolutionAt, flagUpdatedAt);
         const gradeUpdatedAt = originalGrade?.updatedAt ? new Date(originalGrade.updatedAt).getTime() : 0;
 
         const isOverrideActive = Boolean(
