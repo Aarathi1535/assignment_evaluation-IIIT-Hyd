@@ -12,7 +12,30 @@ import ProgressEventService from './ProgressEventService';
 import Notification, { NotificationType } from '../models/Notification';
 import Rubric, { IRubric } from '../models/Rubric';
 import { Anonymizer } from '../lib/anonymizer';
-import { renderNotificationTemplate } from '../templates/notificationTemplates';
+import { renderNotificationTemplate, renderReopenTemplate } from '../templates/notificationTemplates';
+import { writeAuditLog } from '../lib/audit';
+
+export interface ReopenAllocationOptions {
+    allocationId: string | mongoose.Types.ObjectId;
+    userId: string | mongoose.Types.ObjectId;
+    userRole: UserRole | string;
+    reason: string;
+    ipAddress?: string;
+}
+
+export interface ReopenAllocationResult {
+    allocationId: string;
+    status: AllocationStatus;
+    answerScriptId: string;
+    examId: string;
+    taId: string;
+    question?: number | null;
+    reopenedBy: string;
+    reopenedAt: Date;
+    reason: string;
+    reopenedGradesCount: number;
+}
+
 export class AllocationService {
     /**
      * Checks whether an allocation satisfies completion readiness:
@@ -1129,6 +1152,189 @@ export class AllocationService {
         }
 
         return allocation;
+    }
+
+    /**
+     * Reopens a completed grading allocation (AE-167).
+     * Enforces:
+     * - Only the exam-owning professor or an admin can reopen an allocation.
+     * - Rejects non-owning professors, TAs, and students (403 Forbidden).
+     * - Reopens ONLY the specified allocation (leaves other TAs' allocations for the same script unchanged).
+     * - Requires a non-empty reopen reason (400 Bad Request if missing).
+     * - Validates allocation is currently COMPLETED (409 Conflict if not completed).
+     * - Atomically transitions Grade.isFinal (true -> false), Allocation.status (COMPLETED -> IN_PROGRESS),
+     *   clears completedAt, preserves pre-reopen grade snapshot in AuditLog, and creates a TA notification.
+     * - Emits post-commit progress event.
+     */
+    static async reopenAllocation(options: ReopenAllocationOptions): Promise<ReopenAllocationResult> {
+        const { allocationId, userId, userRole, reason, ipAddress } = options;
+
+        if (!allocationId || !mongoose.Types.ObjectId.isValid(allocationId.toString())) {
+            throw new HttpError('Invalid Allocation ID format', 400);
+        }
+
+        if (!userId || !mongoose.Types.ObjectId.isValid(userId.toString())) {
+            throw new HttpError('Invalid User ID format', 400);
+        }
+
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+            throw new HttpError('Reopen reason is required.', 400);
+        }
+
+        const role = (typeof userRole === 'string' ? userRole.toUpperCase() : userRole) as UserRole;
+        if (role === UserRole.STUDENT || role === UserRole.TA) {
+            throw new HttpError('Forbidden: Only the exam-owning professor or an admin can reopen an allocation.', 403);
+        }
+
+        if (role !== UserRole.PROFESSOR && role !== UserRole.ADMIN) {
+            throw new HttpError('Forbidden: Access denied to reopen allocations.', 403);
+        }
+
+        const allocationObjectId = new mongoose.Types.ObjectId(allocationId.toString());
+        const userObjectId = new mongoose.Types.ObjectId(userId.toString());
+
+        const allocation = await Allocation.findById(allocationObjectId);
+        if (!allocation) {
+            throw new HttpError('Allocation not found', 404);
+        }
+
+        const exam = await Exam.findById(allocation.exam);
+        if (!exam) {
+            throw new HttpError('Exam associated with this allocation not found', 404);
+        }
+
+        if (role === UserRole.PROFESSOR) {
+            if (!exam.createdBy || !exam.createdBy.equals(userObjectId)) {
+                await writeAuditLog({
+                    user: userObjectId,
+                    action: 'ALLOCATION_REOPEN_DENIED',
+                    outcome: 'FAILURE',
+                    entityId: allocationObjectId,
+                    entityType: 'Allocation',
+                    details: {
+                        reason: 'Professor does not own the exam',
+                        examId: exam._id.toString(),
+                        createdBy: exam.createdBy?.toString(),
+                    },
+                    ipAddress,
+                });
+                throw new HttpError('Forbidden: You do not own the exam for this allocation.', 403);
+            }
+        }
+
+        if (allocation.status !== AllocationStatus.COMPLETED) {
+            throw new HttpError('Cannot reopen allocation: Allocation is not completed.', 409);
+        }
+
+        const gradeQuery: Record<string, unknown> = {
+            answerScript: allocation.answerScript,
+        };
+        if (allocation.question !== undefined && allocation.question !== null) {
+            gradeQuery.question = allocation.question;
+        }
+
+        const reopenResult = await this.runInTransaction(async (session) => {
+            // 1. Capture pre-reopen grade snapshots
+            const existingGrades = await Grade.find(gradeQuery).session(session || null);
+            const preReopenGrades = existingGrades.map((g) => ({
+                question: g.question,
+                marksAwarded: g.marksAwarded,
+                totalScore: g.totalScore,
+                feedback: g.feedback,
+                gradedBy: g.gradedBy.toString(),
+                isFinal: g.isFinal,
+            }));
+
+            // 2. Unfinalize grades associated with this allocation
+            const gradeUpdateResult = await Grade.updateMany(
+                { ...gradeQuery, isFinal: true },
+                { $set: { isFinal: false } },
+                { session }
+            );
+
+            // 3. Transition allocation status COMPLETED -> IN_PROGRESS and unset completedAt
+            const updatedAlloc = await Allocation.findOneAndUpdate(
+                { _id: allocationObjectId, status: AllocationStatus.COMPLETED },
+                {
+                    $set: { status: AllocationStatus.IN_PROGRESS },
+                    $unset: { completedAt: 1 }
+                },
+                { new: true, session: session ?? null }
+            );
+
+            if (!updatedAlloc) {
+                throw new HttpError('Cannot reopen allocation: Allocation is no longer completed.', 409);
+            }
+
+            const reopenedAt = new Date();
+
+            // 4. Record AuditLog
+            await writeAuditLog({
+                user: userObjectId,
+                action: 'ALLOCATION_REOPENED',
+                outcome: 'SUCCESS',
+                entityId: allocationObjectId,
+                entityType: 'Allocation',
+                details: {
+                    reason: reason.trim(),
+                    allocationId: allocationObjectId.toString(),
+                    examId: allocation.exam.toString(),
+                    answerScriptId: allocation.answerScript.toString(),
+                    taId: allocation.ta.toString(),
+                    question: allocation.question,
+                    reopenedBy: userId.toString(),
+                    role: userRole,
+                    preReopenGrades,
+                    gradesUnfinalized: gradeUpdateResult.modifiedCount,
+                },
+                ipAddress,
+            });
+
+            // 5. Notify affected TA
+            const rendered = renderReopenTemplate({
+                exam: exam._id,
+                examTitle: exam.title,
+                allocation: allocation._id,
+                answerScript: allocation.answerScript,
+                question: allocation.question,
+                reason: reason.trim(),
+                recipient: allocation.ta,
+            });
+
+            await Notification.create([{
+                recipient: allocation.ta,
+                type: rendered.type,
+                title: rendered.title,
+                message: rendered.message,
+                allocation: allocation._id,
+                exam: allocation.exam,
+                answerScript: allocation.answerScript,
+                question: allocation.question,
+                read: false,
+            }], { session: session ?? undefined });
+
+            return {
+                allocationId: allocation._id.toString(),
+                status: AllocationStatus.IN_PROGRESS,
+                answerScriptId: allocation.answerScript.toString(),
+                examId: allocation.exam.toString(),
+                taId: allocation.ta.toString(),
+                question: allocation.question,
+                reopenedBy: userId.toString(),
+                reopenedAt,
+                reason: reason.trim(),
+                reopenedGradesCount: gradeUpdateResult.modifiedCount,
+            };
+        });
+
+        // Emit live progress event post-commit
+        try {
+            await ProgressEventService.dispatchProgressEvent(allocation.exam.toString(), allocation.ta.toString());
+        } catch (eventErr) {
+            console.error('Failed to emit progress event on allocation reopen:', eventErr);
+        }
+
+        return reopenResult;
     }
 
     /**

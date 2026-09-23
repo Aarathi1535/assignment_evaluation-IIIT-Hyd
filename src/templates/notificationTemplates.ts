@@ -48,6 +48,17 @@ export interface FlagTemplatePayload {
     recipient?: string | mongoose.Types.ObjectId;
 }
 
+export interface ReopenTemplatePayload {
+    exam?: string | mongoose.Types.ObjectId;
+    examTitle?: string | null;
+    allocation?: string | mongoose.Types.ObjectId;
+    answerScript?: string | mongoose.Types.ObjectId;
+    question?: number | null;
+    reason?: string | null;
+    reopenedByName?: string | null;
+    recipient?: string | mongoose.Types.ObjectId;
+}
+
 export type NotificationPayloadMap = {
     [NotificationType.ASSIGNMENT]: AssignmentTemplatePayload;
     [NotificationType.REASSIGNMENT]: ReassignmentTemplatePayload;
@@ -117,6 +128,22 @@ export function renderPublishTemplate(payload?: PublishTemplatePayload | null): 
         message: examTitle
             ? `Grades have been published for ${examTitle}.`
             : 'Grades have been published for your exam.'
+    };
+}
+
+/**
+ * Renders the notification title and message for reopened allocations (AE-167).
+ */
+export function renderReopenTemplate(payload?: ReopenTemplatePayload | null): RenderedNotification {
+    const q = extractValidQuestion(payload?.question);
+    const reasonText = payload?.reason ? ` Reason: ${payload.reason}` : '';
+
+    return {
+        type: NotificationType.ASSIGNMENT,
+        title: 'Allocation Reopened for Grading',
+        message: q !== null
+            ? `Your grading allocation for question ${q} has been reopened.${reasonText}`
+            : `Your grading allocation for this answer script has been reopened.${reasonText}`
     };
 }
 

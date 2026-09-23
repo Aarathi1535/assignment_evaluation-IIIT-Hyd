@@ -1014,7 +1014,18 @@ export class ScriptFlagService {
             .populate('resolution.by', 'name email')
             .lean();
 
-        if (overrideFlag?.resolution && typeof overrideFlag.resolution.newScore === 'number') {
+        const overrideAt = overrideFlag?.resolution?.at
+            ? new Date(overrideFlag.resolution.at).getTime()
+            : (overrideFlag?.updatedAt ? new Date(overrideFlag.updatedAt).getTime() : 0);
+        const gradeUpdatedAt = originalGrade?.updatedAt ? new Date(originalGrade.updatedAt).getTime() : 0;
+
+        const isOverrideActive = Boolean(
+            overrideFlag?.resolution &&
+            typeof overrideFlag.resolution.newScore === 'number' &&
+            overrideAt >= gradeUpdatedAt
+        );
+
+        if (isOverrideActive && overrideFlag?.resolution && typeof overrideFlag.resolution.newScore === 'number') {
             return {
                 totalScore: overrideFlag.resolution.newScore,
                 isOverridden: true,
