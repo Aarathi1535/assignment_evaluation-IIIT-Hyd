@@ -4,6 +4,7 @@ import AnswerScript from '../models/AnswerScript';
 import Exam from '../models/Exam';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
+import User from '../models/User';
 import AllocationService from './AllocationService';
 import NotificationService from './NotificationService';
 import { NotificationType } from '../models/Notification';
@@ -887,6 +888,30 @@ export class ScriptFlagService {
             },
             ipAddress
         });
+
+        // 12. Dispatch Admin Notification upon ESCALATE
+        if (action === FlagResolutionAction.ESCALATE) {
+            try {
+                const admins = await User.find({ role: UserRole.ADMIN, isActive: true });
+                if (admins.length > 0) {
+                    const qText = flag.question !== undefined && flag.question !== null
+                        ? `Question ${flag.question}`
+                        : 'Answer Script';
+                    const notifications = admins.map((admin) => ({
+                        recipient: admin._id as mongoose.Types.ObjectId,
+                        type: NotificationType.FLAG,
+                        title: 'Flag Escalated to Admin',
+                        message: `A flag on ${qText} has been escalated for administrative review: "${trimmedNotes}"`,
+                        exam: flag.exam as mongoose.Types.ObjectId,
+                        answerScript: flag.answerScript as mongoose.Types.ObjectId,
+                        question: flag.question ?? null
+                    }));
+                    await NotificationService.createNotifications(notifications);
+                }
+            } catch (notifyErr) {
+                console.error('Failed to dispatch admin escalation notification:', notifyErr);
+            }
+        }
 
         return flag;
     }

@@ -9,14 +9,13 @@ import Course from '../models/Course';
 import User, { UserRole } from '../models/User';
 import Allocation from '../models/Allocation';
 import AuditLog from '../models/AuditLog';
-import Notification from '../models/Notification';
+import Notification, { NotificationType } from '../models/Notification';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
 import ScriptFlagService from '../services/ScriptFlagService';
 import examService from '../services/ExamService';
 import { GradingService } from '../services/GradingService';
 import { POST as resolveRoutePOST } from '../app/api/professor/flags/[id]/resolve/route';
-import { POST as genericResolveRoutePOST } from '../app/api/flags/[id]/resolve/route';
 
 let mockSessionUser: any = null;
 
@@ -641,9 +640,20 @@ describe('AE-164: Flag Resolution / Audited Grade Override Tests', () => {
     });
   });
 
-  describe('API Route Integration (POST /api/professor/flags/[id]/resolve & /api/flags/[id]/resolve)', () => {
-    it('should resolve flag via POST /api/professor/flags/[id]/resolve', async () => {
-      const flag = await new ScriptFlag({
+  describe('API Route Integration (POST /api/professor/flags/[id]/resolve)', () => {
+    it('generic /api/flags/[id]/resolve route no longer exists', async () => {
+      let moduleImportError: any = null;
+      try {
+        // @ts-expect-error Deleted route should not resolve
+        await import('../app/api/flags/[id]/resolve/route');
+      } catch (err) {
+        moduleImportError = err;
+      }
+      expect(moduleImportError).toBeDefined();
+    });
+
+    it('should resolve flag via POST /api/professor/flags/[id]/resolve for professor and admin', async () => {
+      const flagProf = await new ScriptFlag({
         answerScript: scriptAId,
         exam: examAId,
         question: 1,
@@ -654,8 +664,8 @@ describe('AE-164: Flag Resolution / Audited Grade Override Tests', () => {
 
       mockSessionUser = { id: profAId.toString(), role: UserRole.PROFESSOR };
 
-      const req = new NextRequest(
-        `http://localhost/api/professor/flags/${flag._id}/resolve`,
+      const reqProf = new NextRequest(
+        `http://localhost/api/professor/flags/${flagProf._id}/resolve`,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -665,21 +675,20 @@ describe('AE-164: Flag Resolution / Audited Grade Override Tests', () => {
         }
       );
 
-      const res = await resolveRoutePOST(req, {
-        params: Promise.resolve({ id: flag._id.toString() }),
+      const resProf = await resolveRoutePOST(reqProf, {
+        params: Promise.resolve({ id: flagProf._id.toString() }),
       });
-      expect(res.status).toBe(200);
+      expect(resProf.status).toBe(200);
 
-      const json = await res.json();
-      expect(json.success).toBe(true);
-      expect(json.data.status).toBe(FlagStatus.RESOLVED);
-    });
+      const jsonProf = await resProf.json();
+      expect(jsonProf.success).toBe(true);
+      expect(jsonProf.data.status).toBe(FlagStatus.RESOLVED);
 
-    it('should resolve flag via generic POST /api/flags/[id]/resolve', async () => {
-      const flag = await new ScriptFlag({
+      // Admin resolution via professor route
+      const flagAdmin = await new ScriptFlag({
         answerScript: scriptAId,
         exam: examAId,
-        question: 1,
+        question: 2,
         raisedBy: taId,
         reason: FlagReason.OTHER,
         status: FlagStatus.OPEN,
@@ -687,27 +696,26 @@ describe('AE-164: Flag Resolution / Audited Grade Override Tests', () => {
 
       mockSessionUser = { id: adminId.toString(), role: UserRole.ADMIN };
 
-      const req = new NextRequest(
-        `http://localhost/api/flags/${flag._id}/resolve`,
+      const reqAdmin = new NextRequest(
+        `http://localhost/api/professor/flags/${flagAdmin._id}/resolve`,
         {
           method: 'POST',
           body: JSON.stringify({
             action: FlagResolutionAction.OVERRIDE,
             newScore: 8.0,
-            notes: 'Admin score override',
+            notes: 'Admin score override via professor resolve endpoint',
           }),
         }
       );
 
-      const res = await genericResolveRoutePOST(req, {
-        params: Promise.resolve({ id: flag._id.toString() }),
+      const resAdmin = await resolveRoutePOST(reqAdmin, {
+        params: Promise.resolve({ id: flagAdmin._id.toString() }),
       });
-      expect(res.status).toBe(200);
-
-      const json = await res.json();
-      expect(json.success).toBe(true);
-      expect(json.data.status).toBe(FlagStatus.RESOLVED);
-      expect(json.data.resolution.newScore).toBe(8.0);
+      expect(resAdmin.status).toBe(200);
+      const jsonAdmin = await resAdmin.json();
+      expect(jsonAdmin.success).toBe(true);
+      expect(jsonAdmin.data.status).toBe(FlagStatus.RESOLVED);
+      expect(jsonAdmin.data.resolution.newScore).toBe(8.0);
     });
 
     it('should return 400 when notes are missing or score is invalid in API request', async () => {
@@ -741,6 +749,99 @@ describe('AE-164: Flag Resolution / Audited Grade Override Tests', () => {
       const json = await res.json();
       expect(json.success).toBe(false);
       expect(json.message).toMatch(/notes are required/i);
+    });
+  });
+
+  describe('Actionable Flag Escalation Workflow', () => {
+    it('professor can ESCALATE, creating expected audit entry, admin notification, and queue visibility', async () => {
+      const flag = await new ScriptFlag({
+        answerScript: scriptAId,
+        exam: examAId,
+        question: 1,
+        raisedBy: taId,
+        reason: FlagReason.CHEATING_SUSPECTED,
+        note: 'Severe irregularity detected',
+        status: FlagStatus.OPEN,
+      }).save();
+
+      // Professor escalates the flag
+      const escalated = await ScriptFlagService.resolveFlag({
+        flagId: flag._id,
+        action: FlagResolutionAction.ESCALATE,
+        notes: 'Escalating to Exam Disciplinary Board for investigation',
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        ipAddress: '192.168.1.100',
+      });
+
+      // 1. Verify flag state
+      expect(escalated.status).toBe(FlagStatus.ESCALATED);
+      expect(escalated.resolution?.action).toBe(FlagResolutionAction.ESCALATE);
+      expect(escalated.resolution?.notes).toBe('Escalating to Exam Disciplinary Board for investigation');
+
+      // 2. Verify AuditLog entry
+      const auditLog = await AuditLog.findOne({
+        entityId: flag._id,
+        action: 'SCRIPT_FLAG_ESCALATE',
+      });
+      expect(auditLog).toBeDefined();
+      expect(auditLog?.user?.toString()).toBe(profAId.toString());
+      expect(auditLog?.details?.status).toBe(FlagStatus.ESCALATED);
+      expect(auditLog?.details?.action).toBe(FlagResolutionAction.ESCALATE);
+
+      // 3. Verify ADMIN Notification
+      const adminNotification = await Notification.findOne({
+        recipient: adminId,
+        type: NotificationType.FLAG,
+      });
+      expect(adminNotification).toBeDefined();
+      expect(adminNotification?.title).toContain('Escalated');
+      expect(adminNotification?.message).toContain('Escalating to Exam Disciplinary Board');
+
+      // 4. Verify ADMIN can see escalated flags in global review queue
+      const adminQueue = await ScriptFlagService.getProfessorFlagQueue({
+        userId: adminId,
+        userRole: UserRole.ADMIN,
+        status: FlagStatus.ESCALATED,
+      });
+      expect(adminQueue.flags).toHaveLength(1);
+      expect(adminQueue.flags[0]._id).toBe(flag._id.toString());
+      expect(adminQueue.flags[0].status).toBe(FlagStatus.ESCALATED);
+      expect(adminQueue.counts.escalated).toBe(1);
+
+      // 5. Verify PROFESSOR remains scoped to their owned exams
+      const profAQueue = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.ESCALATED,
+      });
+      expect(profAQueue.flags).toHaveLength(1);
+      expect(profAQueue.flags[0]._id).toBe(flag._id.toString());
+
+      // Professor B cannot see Professor A's escalated flag
+      const profBQueue = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profBId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.ESCALATED,
+      });
+      expect(profBQueue.flags).toHaveLength(0);
+
+      // 6. Verify TA and STUDENT remain denied
+      await expect(
+        ScriptFlagService.getProfessorFlagQueue({
+          userId: taId,
+          userRole: UserRole.TA,
+          status: FlagStatus.ESCALATED,
+        })
+      ).rejects.toThrow(/Forbidden/i);
+
+      await expect(
+        ScriptFlagService.getProfessorFlagQueue({
+          userId: studentId,
+          userRole: UserRole.STUDENT,
+          status: FlagStatus.ESCALATED,
+        })
+      ).rejects.toThrow(/Forbidden/i);
     });
   });
 });
