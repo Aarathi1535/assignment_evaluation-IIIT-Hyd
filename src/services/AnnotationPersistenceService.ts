@@ -12,6 +12,7 @@ import Page, { type IPage } from '../models/Page';
 import IngestionPage, { type IIngestionPage } from '../models/IngestionPage';
 import ExamRepository from '../repositories/ExamRepository';
 import AllocationService from './AllocationService';
+import { AllocationStatus } from '../models/Allocation';
 import { UserRole } from '../constants/permissions';
 import {
   validateAnnotationDocument,
@@ -289,6 +290,13 @@ export class AnnotationPersistenceService {
       );
       if (!allocation) {
         throw new HttpError('Forbidden: You are not allocated to grade this answer script', 403);
+      }
+
+      if (allocation.status === AllocationStatus.COMPLETED) {
+        throw new HttpError(
+          'Cannot save annotations: This script allocation has already been submitted and locked.',
+          409
+        );
       }
     }
 

@@ -5,7 +5,8 @@ import AnswerScript from '../models/AnswerScript';
 import CommentTag, { TagScope } from '../models/CommentTag';
 import ExamRepository from '../repositories/ExamRepository';
 import AllocationService, { NextAllocationResult } from './AllocationService';
-import Allocation, { AllocationStatus } from '../models/Allocation';
+import ProgressEventService from './ProgressEventService';
+import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
 import { UserRole } from '../constants/permissions';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
@@ -56,6 +57,25 @@ export interface SaveGradeOptions {
 export interface SavedGradeWithNext extends IGrade {
     allocationCompleted?: boolean;
     nextAllocation?: NextAllocationResult | null;
+}
+
+export interface SubmitScriptOptions {
+    scriptId: string | mongoose.Types.ObjectId;
+    userId: string | mongoose.Types.ObjectId;
+    userRole: UserRole | string;
+    question?: number | null;
+    ipAddress?: string;
+}
+
+export interface SubmitScriptResult {
+    scriptId: string;
+    isSubmitted: boolean;
+    submittedAt: Date;
+    submittedBy: string;
+    totalScore: number;
+    finalizedQuestions: number[];
+    allocationCompleted: boolean;
+    nextAllocation: NextAllocationResult | null;
 }
 
 export class GradingService {
@@ -632,7 +652,236 @@ export class GradingService {
         const grades = await Grade.find(gradesQuery).sort({ question: 1 });
         return grades;
     }
+
+    /**
+     * Submits and locks a graded answer script (AE-166).
+     * Enforces:
+     * - Only allocated TAs or authorized Professors/Admins can submit.
+     * - Rejects unallocated TAs and Students (403 Forbidden).
+     * - Verifies all required/allocated questions have valid saved grades.
+     * - Finalizes all relevant Grade documents (isFinal = true).
+     * - Transitions TA allocation to COMPLETED with completedAt timestamp.
+     * - Server-side locks the script for the TA (subsequent edits rejected with 409).
+     * - Safe & idempotent handling for already-submitted scripts.
+     * - Authoritative audit logging (SCRIPT_SUBMITTED).
+     * - Auto-advance next allocation resolution.
+     */
+    async submitScript(options: SubmitScriptOptions): Promise<SubmitScriptResult> {
+        const { scriptId, userId, userRole, question, ipAddress } = options;
+
+        if (!scriptId || !mongoose.Types.ObjectId.isValid(scriptId.toString())) {
+            throw new HttpError('Invalid AnswerScript ID format.', 400);
+        }
+
+        if (!userId || !mongoose.Types.ObjectId.isValid(userId.toString())) {
+            throw new HttpError('Invalid User ID format.', 400);
+        }
+
+        const role = (typeof userRole === 'string' ? userRole.toUpperCase() : userRole) as UserRole;
+        if (role === UserRole.STUDENT) {
+            throw new HttpError('Forbidden: Students cannot submit grades.', 403);
+        }
+
+        const scriptObjectId = new mongoose.Types.ObjectId(scriptId.toString());
+        const userObjectId = new mongoose.Types.ObjectId(userId.toString());
+
+        const script = await AnswerScript.findOne({ _id: scriptObjectId, isActive: true });
+        if (!script) {
+            throw new HttpError('Answer script not found.', 404);
+        }
+
+        const isProfessorOrAdmin = role === UserRole.PROFESSOR || role === UserRole.ADMIN;
+        let allocationDoc: IAllocation | null = null;
+        let matchingAllocations: IAllocation[] = [];
+
+        if (isProfessorOrAdmin) {
+            const exam = await ExamRepository.getExamById(
+                script.exam.toString(),
+                userId.toString(),
+                userRole
+            );
+            if (!exam) {
+                throw new HttpError('Forbidden: Access denied to the exam for this answer script.', 403);
+            }
+        } else {
+            // TA role: verify allocation
+            allocationDoc = await AllocationService.verifyTaAllocation(
+                script._id,
+                userObjectId,
+                question
+            );
+
+            if (!allocationDoc) {
+                throw new HttpError(
+                    'Forbidden: You are not allocated to grade this answer script.',
+                    403
+                );
+            }
+
+            const query: Record<string, unknown> = {
+                answerScript: script._id,
+                ta: userObjectId,
+            };
+            if (question !== undefined && question !== null) {
+                query.question = question;
+            }
+            matchingAllocations = await Allocation.find(query);
+            if (matchingAllocations.length === 0) {
+                matchingAllocations = [allocationDoc];
+            }
+        }
+
+        // Load active Rubric
+        const rubric = await Rubric.findOne({ exam: script.exam, isActive: true });
+        if (!rubric || !rubric.questions || rubric.questions.length === 0) {
+            throw new HttpError(
+                'No active rubric configured for this exam. Grading cannot proceed without a rubric.',
+                409
+            );
+        }
+
+        // Determine required question numbers to finalize
+        let requiredQuestions: number[];
+        if (allocationDoc && allocationDoc.question !== undefined && allocationDoc.question !== null) {
+            requiredQuestions = [allocationDoc.question];
+        } else if (question !== undefined && question !== null) {
+            requiredQuestions = [question];
+        } else if (matchingAllocations.length > 0 && !matchingAllocations.some((a) => a.question == null)) {
+            requiredQuestions = matchingAllocations
+                .map((a) => a.question)
+                .filter((q): q is number => typeof q === 'number');
+        } else {
+            // Whole script
+            requiredQuestions = rubric.questions.map((q) => q.questionNumber);
+        }
+
+        // Check if all matching allocations are ALREADY COMPLETED (repeated submission rejection)
+        const allAlreadyCompleted =
+            matchingAllocations.length > 0 &&
+            matchingAllocations.every((a) => a.status === AllocationStatus.COMPLETED);
+
+        if (allAlreadyCompleted) {
+            throw new HttpError(
+                'Cannot submit script: This script allocation has already been submitted and completed.',
+                409
+            );
+        }
+
+        // Verify that all required questions have existing grades
+        const existingGrades = await Grade.find({
+            answerScript: script._id,
+            question: { $in: requiredQuestions },
+        });
+
+        const existingQSet = new Set(existingGrades.map((g) => g.question));
+        const missingQuestions = requiredQuestions.filter((q) => !existingQSet.has(q));
+
+        if (missingQuestions.length > 0) {
+            throw new HttpError(
+                `Cannot submit script: Question(s) ${missingQuestions.join(', ')} must be graded before submission.`,
+                409
+            );
+        }
+
+        const examIdStr = script.exam.toString();
+
+        // Execute submission in a transaction
+        const submissionResult = await AllocationService.runInTransaction(async (session) => {
+            const finalizedQuestions: number[] = [];
+            let totalScore = 0;
+
+            for (const gradeDoc of existingGrades) {
+                if (!gradeDoc.isFinal) {
+                    await Grade.updateOne(
+                        { _id: gradeDoc._id },
+                        { $set: { isFinal: true } },
+                        { session }
+                    );
+                }
+                if (typeof gradeDoc.question === 'number') {
+                    finalizedQuestions.push(gradeDoc.question);
+                }
+                totalScore += gradeDoc.totalScore || 0;
+            }
+
+            const submittedAt = new Date();
+            let nextAllocation: NextAllocationResult | null = null;
+
+            if (matchingAllocations.length > 0) {
+                for (const alloc of matchingAllocations) {
+                    const freshAlloc = await Allocation.findById(alloc._id).session(session || null);
+                    if (freshAlloc) {
+                        if (freshAlloc.status === AllocationStatus.PENDING) {
+                            try {
+                                await AllocationService.claimAllocation(freshAlloc._id.toString(), userId.toString(), { session });
+                            } catch {
+                                // Ignore concurrent claim
+                            }
+                        }
+                        if (freshAlloc.status !== AllocationStatus.COMPLETED) {
+                            await AllocationService.markCompleted(
+                                freshAlloc._id.toString(),
+                                { id: userId.toString(), role: userRole },
+                                { session }
+                            );
+                        }
+                    }
+                }
+
+                nextAllocation = await AllocationService.getNextAllocation(
+                    userId.toString(),
+                    script.exam,
+                    matchingAllocations[0]._id,
+                    session || undefined
+                );
+            }
+
+            const roundedTotalScore = Math.round(totalScore * 100) / 100;
+
+            await writeAuditLog({
+                user: userId.toString(),
+                action: 'SCRIPT_SUBMITTED',
+                outcome: 'SUCCESS',
+                entityId: script._id as mongoose.Types.ObjectId,
+                entityType: 'AnswerScript',
+                details: {
+                    examId: examIdStr,
+                    scriptId: script._id.toString(),
+                    submittedBy: userId.toString(),
+                    role: userRole,
+                    totalScore: roundedTotalScore,
+                    finalizedQuestions,
+                    allocationCount: matchingAllocations.length,
+                },
+                ipAddress,
+            });
+
+            return {
+                scriptId: script._id.toString(),
+                isSubmitted: true,
+                submittedAt,
+                submittedBy: userId.toString(),
+                totalScore: roundedTotalScore,
+                finalizedQuestions,
+                allocationCompleted: matchingAllocations.length > 0,
+                nextAllocation,
+            };
+        });
+
+        // Emit post-commit progress event so SSE subscribers and dashboard receive accurate aggregated state
+        if (matchingAllocations.length > 0) {
+            try {
+                await ProgressEventService.dispatchProgressEvent(examIdStr, userId.toString());
+            } catch (eventErr) {
+                console.error('Failed to emit progress event on submit:', eventErr);
+            }
+        }
+
+        return submissionResult;
+    }
 }
 
 export const gradingService = new GradingService();
 export default gradingService;
+
+
