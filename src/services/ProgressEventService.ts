@@ -77,7 +77,9 @@ export class ProgressEventService {
                 {
                     $match: {
                         operationType: { $in: ['update', 'replace'] },
-                        'updateDescription.updatedFields.status': AllocationStatus.COMPLETED
+                        'updateDescription.updatedFields.status': {
+                            $in: [AllocationStatus.COMPLETED, AllocationStatus.IN_PROGRESS]
+                        }
                     }
                 }
             ];
