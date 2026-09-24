@@ -482,15 +482,60 @@ describe('AE-167: Allocation-Level Reopen (Service & API)', () => {
   });
 
   describe('4. Day 1 Professor Override Precedence', () => {
-    it('respects professor override until TA submits a fresh edit post-reopen', async () => {
-      // 0. Ensure initial Grade has an older updatedAt
-      await Grade.updateOne(
-        { answerScript: scriptId, question: 1 },
-        { $set: { updatedAt: new Date(Date.now() - 60000) } },
-        { timestamps: false }
-      );
-
+    it('respects active professor override before reopen and marks override superseded upon reopen', async () => {
       // 1. Professor overrides Question 1 score to 9.0 via ScriptFlag resolution
+      const flag1 = await ScriptFlag.create({
+        exam: examId,
+        answerScript: scriptId,
+        question: 1,
+        raisedBy: professorId,
+        reason: FlagReason.OTHER,
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: professorId,
+          at: new Date(),
+          notes: 'Professor adjusted technique criterion',
+          previousScore: 8.5,
+          newScore: 9.0,
+          criterionOverrides: [
+            { criterionName: 'Brewing Technique', score: 5.0 },
+            { criterionName: 'Color & Viscosity', score: 4.0 },
+          ],
+          superseded: false,
+        },
+      });
+
+      // A. Override before reopen: getEffectiveGrade() returns the professor's override (9.0)
+      let effective = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
+      expect(effective.isOverridden).toBe(true);
+      expect(effective.totalScore).toBe(9.0);
+
+      // B. Reopen supersedes override
+      const reopenTimeBefore = Date.now();
+      await AllocationService.reopenAllocation({
+        allocationId: alloc1Id.toString(),
+        userId: professorId.toString(),
+        userRole: UserRole.PROFESSOR,
+        reason: 'Reopened for TA to revise marks',
+      });
+
+      // Assert ScriptFlag resolution was explicitly marked superseded
+      const updatedFlag = await ScriptFlag.findById(flag1._id);
+      expect(updatedFlag?.resolution?.superseded).toBe(true);
+      expect(updatedFlag?.resolution?.supersededAt).toBeDefined();
+      expect(new Date(updatedFlag!.resolution!.supersededAt!).getTime()).toBeGreaterThanOrEqual(reopenTimeBefore);
+      expect(updatedFlag?.resolution?.supersededBy?.toString()).toBe(professorId.toString());
+      expect(updatedFlag?.resolution?.supersedeReason).toBe('Reopened for TA to revise marks');
+
+      // getEffectiveGrade() immediately returns the underlying TA grade (8.5)
+      effective = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
+      expect(effective.isOverridden).toBe(false);
+      expect(effective.totalScore).toBe(8.5);
+    });
+
+    it('mentor requirement: TA no-op draft save after reopen preserves explicit superseded decision without timestamp reliance', async () => {
+      // 1. Professor overrides Question 1 score to 9.0
       await ScriptFlag.create({
         exam: examId,
         answerScript: scriptId,
@@ -501,50 +546,118 @@ describe('AE-167: Allocation-Level Reopen (Service & API)', () => {
         resolution: {
           action: FlagResolutionAction.OVERRIDE,
           by: professorId,
-          at: new Date(Date.now() - 30000),
-          notes: 'Professor adjusted technique criterion',
+          at: new Date(Date.now() - 10000),
+          notes: 'Professor override prior to reopen',
           previousScore: 8.5,
           newScore: 9.0,
-          criterionOverrides: [
-            { criterionName: 'Brewing Technique', score: 5.0 },
-            { criterionName: 'Color & Viscosity', score: 4.0 },
-          ],
+          superseded: false,
         },
       });
 
-      // Prior to TA edit, getEffectiveGrade() returns the professor's override (9.0)
-      let effective = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
-      expect(effective.isOverridden).toBe(true);
-      expect(effective.totalScore).toBe(9.0);
-
-      // 2. Professor reopens TA1 allocation
+      // 2. Reopen allocation
       await AllocationService.reopenAllocation({
         allocationId: alloc1Id.toString(),
         userId: professorId.toString(),
         userRole: UserRole.PROFESSOR,
-        reason: 'Reopened for TA to revise marks',
+        reason: 'Reopened for revisions',
       });
 
-      // 3. TA edits marks to 10.0 (updatedAt at current Date.now() > override at)
+      // 3. TA performs a no-op draft save (same marks 8.5, isFinal: false, updates updatedAt)
+      const oldGrade = await Grade.findOne({ answerScript: scriptId, question: 1 });
+      const oldUpdatedAt = oldGrade!.updatedAt;
+
+      // Small forced timestamp to verify updatedAt change
       await Grade.updateOne(
         { answerScript: scriptId, question: 1 },
         {
           $set: {
-            totalScore: 10.0,
-            marksAwarded: [
-              { criterionName: 'Brewing Technique', score: 5.0 },
-              { criterionName: 'Color & Viscosity', score: 5.0 },
-            ],
-            updatedAt: new Date(),
+            feedback: 'TA reviewed scan again, no score change yet',
+            updatedAt: new Date(Date.now() + 5000),
           },
         },
         { timestamps: false }
       );
 
-      // Post-reopen TA edit now takes precedence (10.0)
-      effective = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
+      const refreshedGrade = await Grade.findOne({ answerScript: scriptId, question: 1 });
+      expect(refreshedGrade!.updatedAt.getTime()).toBeGreaterThan(oldUpdatedAt.getTime());
+
+      // 4. getEffectiveGrade() still reads explicit stored superseded decision (returns 8.5, not 9.0, isOverridden: false)
+      const effective = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
       expect(effective.isOverridden).toBe(false);
-      expect(effective.totalScore).toBe(10.0);
+      expect(effective.totalScore).toBe(8.5);
+      expect(effective.override).toBeNull();
+    });
+
+    it('question isolation: reopening Question 1 supersedes Q1 override but leaves Question 2 override active', async () => {
+      // Create overrides for Question 1 and Question 2
+      const flagQ1 = await ScriptFlag.create({
+        exam: examId,
+        answerScript: scriptId,
+        question: 1,
+        raisedBy: professorId,
+        reason: FlagReason.OTHER,
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: professorId,
+          at: new Date(),
+          notes: 'Q1 override',
+          previousScore: 8.5,
+          newScore: 9.5,
+          superseded: false,
+        },
+      });
+
+      const flagQ2 = await ScriptFlag.create({
+        exam: examId,
+        answerScript: scriptId,
+        question: 2,
+        raisedBy: professorId,
+        reason: FlagReason.OTHER,
+        status: FlagStatus.RESOLVED,
+        resolution: {
+          action: FlagResolutionAction.OVERRIDE,
+          by: professorId,
+          at: new Date(),
+          notes: 'Q2 override',
+          previousScore: 9.5,
+          newScore: 10.0,
+          superseded: false,
+        },
+      });
+
+      // Both are active initially
+      let effQ1 = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
+      let effQ2 = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 2);
+      expect(effQ1.isOverridden).toBe(true);
+      expect(effQ1.totalScore).toBe(9.5);
+      expect(effQ2.isOverridden).toBe(true);
+      expect(effQ2.totalScore).toBe(10.0);
+
+      // Reopen only Question 1 allocation
+      await AllocationService.reopenAllocation({
+        allocationId: alloc1Id.toString(),
+        userId: professorId.toString(),
+        userRole: UserRole.PROFESSOR,
+        reason: 'Reopened Q1 only',
+      });
+
+      // Assert Q1 flag is superseded
+      const updatedQ1 = await ScriptFlag.findById(flagQ1._id);
+      expect(updatedQ1?.resolution?.superseded).toBe(true);
+      expect(updatedQ1?.resolution?.supersedeReason).toBe('Reopened Q1 only');
+
+      // Assert Q2 flag is NOT superseded
+      const updatedQ2 = await ScriptFlag.findById(flagQ2._id);
+      expect(updatedQ2?.resolution?.superseded).toBe(false);
+
+      // Effective grade for Q1 is TA grade (8.5), for Q2 is still professor override (10.0)
+      effQ1 = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 1);
+      effQ2 = await ScriptFlagService.getEffectiveGrade(scriptId.toString(), 2);
+      expect(effQ1.isOverridden).toBe(false);
+      expect(effQ1.totalScore).toBe(8.5);
+      expect(effQ2.isOverridden).toBe(true);
+      expect(effQ2.totalScore).toBe(10.0);
     });
   });
 

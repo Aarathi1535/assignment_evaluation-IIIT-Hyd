@@ -7,6 +7,7 @@ import Course, { ICourse } from '../models/Course';
 import { HttpError } from '../lib/errors';
 import AuditLog from '../models/AuditLog';
 import User from '../models/User';
+import ScriptFlag, { FlagStatus, FlagResolutionAction } from '../models/ScriptFlag';
 import { UserRole } from '../constants/permissions';
 import ProgressEventService from './ProgressEventService';
 import Notification, { NotificationType } from '../models/Notification';
@@ -1252,6 +1253,32 @@ export class AllocationService {
                 { session }
             );
 
+            const reopenedAt = new Date();
+
+            // 2.5. Explicitly supersede active resolved OVERRIDE flags for this allocation (AE-167)
+            const flagQuery: Record<string, unknown> = {
+                answerScript: allocation.answerScript,
+                status: FlagStatus.RESOLVED,
+                'resolution.action': FlagResolutionAction.OVERRIDE,
+                'resolution.superseded': { $ne: true }
+            };
+            if (allocation.question !== undefined && allocation.question !== null) {
+                flagQuery.question = allocation.question;
+            }
+
+            await ScriptFlag.updateMany(
+                flagQuery,
+                {
+                    $set: {
+                        'resolution.superseded': true,
+                        'resolution.supersededAt': reopenedAt,
+                        'resolution.supersededBy': userObjectId,
+                        'resolution.supersedeReason': reason.trim()
+                    }
+                },
+                { session }
+            );
+
             // 3. Transition allocation status COMPLETED -> IN_PROGRESS and unset completedAt
             const updatedAlloc = await Allocation.findOneAndUpdate(
                 { _id: allocationObjectId, status: AllocationStatus.COMPLETED },
@@ -1265,8 +1292,6 @@ export class AllocationService {
             if (!updatedAlloc) {
                 throw new HttpError('Cannot reopen allocation: Allocation is no longer completed.', 409);
             }
-
-            const reopenedAt = new Date();
 
             // 4. Record AuditLog
             await writeAuditLog({
