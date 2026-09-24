@@ -33,6 +33,10 @@ export interface IScriptFlagResolution {
     previousScore?: number;
     newScore?: number;
     criterionOverrides?: ICriterionOverride[];
+    superseded?: boolean;
+    supersededAt?: Date;
+    supersededBy?: mongoose.Types.ObjectId | { _id?: string | mongoose.Types.ObjectId; name?: string; email?: string };
+    supersedeReason?: string;
 }
 
 export interface IScriptFlag extends Document {
@@ -93,7 +97,23 @@ const ScriptFlagResolutionSchema = new Schema<IScriptFlagResolution>(
         newScore: {
             type: Number
         },
-        criterionOverrides: [CriterionOverrideSchema]
+        criterionOverrides: [CriterionOverrideSchema],
+        superseded: {
+            type: Boolean,
+            default: false
+        },
+        supersededAt: {
+            type: Date
+        },
+        supersededBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        supersedeReason: {
+            type: String,
+            trim: true,
+            maxlength: 2000
+        }
     },
     { _id: false }
 );

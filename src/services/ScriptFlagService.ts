@@ -920,7 +920,8 @@ export class ScriptFlagService {
             notes: trimmedNotes,
             previousScore,
             newScore: calculatedNewScore,
-            criterionOverrides: validatedCriterionOverrides
+            criterionOverrides: validatedCriterionOverrides,
+            superseded: false
         };
 
         await flag.save();
@@ -1000,11 +1001,12 @@ export class ScriptFlagService {
         }
         const originalGrade = await Grade.findOne(gradeQuery).lean();
 
-        // 2. Fetch latest resolved OVERRIDE flag
+        // 2. Fetch latest active (non-superseded) resolved OVERRIDE flag
         const flagQuery: Record<string, unknown> = {
             answerScript: scriptObjectId,
             status: FlagStatus.RESOLVED,
-            'resolution.action': FlagResolutionAction.OVERRIDE
+            'resolution.action': FlagResolutionAction.OVERRIDE,
+            'resolution.superseded': { $ne: true }
         };
         if (question !== undefined && question !== null) {
             flagQuery.question = question;
@@ -1014,7 +1016,13 @@ export class ScriptFlagService {
             .populate('resolution.by', 'name email')
             .lean();
 
-        if (overrideFlag?.resolution && typeof overrideFlag.resolution.newScore === 'number') {
+        const isOverrideActive = Boolean(
+            overrideFlag?.resolution &&
+            typeof overrideFlag.resolution.newScore === 'number' &&
+            !overrideFlag.resolution.superseded
+        );
+
+        if (isOverrideActive && overrideFlag?.resolution && typeof overrideFlag.resolution.newScore === 'number') {
             return {
                 totalScore: overrideFlag.resolution.newScore,
                 isOverridden: true,
