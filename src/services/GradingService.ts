@@ -7,11 +7,14 @@ import ExamRepository from '../repositories/ExamRepository';
 import AllocationService, { NextAllocationResult } from './AllocationService';
 import ProgressEventService from './ProgressEventService';
 import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
+import ScriptFlag, { FlagStatus } from '../models/ScriptFlag';
 import { UserRole } from '../constants/permissions';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
 
 export const DEFAULT_SCORE_STEP = 0.5;
+export const DEFAULT_BULK_LIMIT = 50;
+export const MAX_BULK_LIMIT = 100;
 
 /**
  * Precision-safe helper to verify if a score falls on a configured step size.
@@ -57,6 +60,45 @@ export interface SaveGradeOptions {
 export interface SavedGradeWithNext extends IGrade {
     allocationCompleted?: boolean;
     nextAllocation?: NextAllocationResult | null;
+}
+
+export interface BulkSubmitOptions {
+    examId: string | mongoose.Types.ObjectId;
+    userId: string | mongoose.Types.ObjectId;
+    userRole: string;
+    allocationIds?: string[];
+    preview?: boolean;
+    confirmed?: boolean;
+    limit?: number;
+    ipAddress?: string;
+}
+
+export interface BulkSubmitItemDetail {
+    allocationId: string;
+    answerScriptId: string;
+    question?: number | null;
+    totalScore?: number;
+    finalizedQuestions?: number[];
+    missingQuestions?: number[];
+    flagId?: string;
+    flagReason?: string;
+    error?: string;
+}
+
+export interface BulkSubmitResult {
+    examId: string;
+    totalProcessed: number;
+    submittedCount: number;
+    alreadySubmittedCount: number;
+    incompleteCount: number;
+    openFlagCount: number;
+    failedCount: number;
+    submitted: BulkSubmitItemDetail[];
+    alreadySubmitted: BulkSubmitItemDetail[];
+    incompleteSkipped: BulkSubmitItemDetail[];
+    openFlagSkipped: BulkSubmitItemDetail[];
+    failed: BulkSubmitItemDetail[];
+    preview: boolean;
 }
 
 export interface SubmitScriptOptions {
@@ -878,6 +920,277 @@ export class GradingService {
         }
 
         return submissionResult;
+    }
+
+    /**
+     * Bulk-submits and finalizes eligible allocations for an exam (AE-169).
+     *
+     * Core Rules & Requirements:
+     * - Reuses existing AE-166 submission logic.
+     * - Allows an allocated TA to bulk-submit eligible allocations.
+     * - An allocation is eligible only when every question required by the exam rubric
+     *   has a saved draft grade with marks.
+     * - Incomplete allocations are skipped and reported in incompleteSkipped.
+     * - Allocations with OPEN flags are skipped and reported in openFlagSkipped.
+     * - Already completed allocations are reported in alreadySubmitted.
+     * - One failed item does not abort the remaining batch.
+     * - Operation is idempotent.
+     * - Only the requesting allocated TA's allocations are affected.
+     * - Students and unallocated users receive 403 Forbidden.
+     * - Preview mode (preview: true) computes and returns counts without performing mutations.
+     * - Explicit confirmation (confirmed: true) is required to execute mutations.
+     * - Capped with a batch limit (default 50, max 100).
+     * - Authoritative audit logging (BULK_SCRIPTS_SUBMITTED).
+     * - Live SSE progress updates emitted post-execution.
+     */
+    async bulkSubmit(options: BulkSubmitOptions): Promise<BulkSubmitResult> {
+        const { examId, userId, userRole, allocationIds, preview = false, confirmed = false, limit, ipAddress } = options;
+
+        if (!examId || !mongoose.Types.ObjectId.isValid(examId.toString())) {
+            throw new HttpError('Invalid Exam ID format.', 400);
+        }
+
+        if (!userId || !mongoose.Types.ObjectId.isValid(userId.toString())) {
+            throw new HttpError('Invalid User ID format.', 400);
+        }
+
+        const role = (typeof userRole === 'string' ? userRole.toUpperCase() : userRole) as UserRole;
+        if (role === UserRole.STUDENT) {
+            throw new HttpError('Forbidden: Students cannot submit grades.', 403);
+        }
+
+        const examObjectId = new mongoose.Types.ObjectId(examId.toString());
+        const userObjectId = new mongoose.Types.ObjectId(userId.toString());
+
+        // Validate exam access for professors / admins
+        const isProfessorOrAdmin = role === UserRole.PROFESSOR || role === UserRole.ADMIN;
+        if (isProfessorOrAdmin) {
+            const exam = await ExamRepository.getExamById(examObjectId.toString(), userId.toString(), userRole);
+            if (!exam) {
+                throw new HttpError('Forbidden: Access denied to the exam.', 403);
+            }
+        }
+
+        // Enforce batch cap
+        const effectiveLimit = Math.min(Math.max(1, limit || DEFAULT_BULK_LIMIT), MAX_BULK_LIMIT);
+
+        // Fetch target allocations for this TA and exam
+        const allocQuery: Record<string, unknown> = {
+            exam: examObjectId,
+            ta: userObjectId,
+        };
+        if (allocationIds && Array.isArray(allocationIds) && allocationIds.length > 0) {
+            allocQuery._id = { $in: allocationIds.map((id) => new mongoose.Types.ObjectId(id)) };
+        }
+
+        const allocations = await Allocation.find(allocQuery).sort({ createdAt: 1 }).lean();
+
+        // If specific allocation IDs were requested but none matched the TA
+        if (allocationIds && allocationIds.length > 0 && allocations.length === 0) {
+            const otherAllocations = await Allocation.find({
+                _id: { $in: allocationIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            }).lean();
+            if (otherAllocations.length > 0) {
+                throw new HttpError('Forbidden: You are not allocated to grade these answer scripts.', 403);
+            }
+        }
+
+        // Load active Rubric
+        const rubric = await Rubric.findOne({ exam: examObjectId, isActive: true }).lean();
+        if (!rubric || !rubric.questions || rubric.questions.length === 0) {
+            throw new HttpError('No active rubric configured for this exam. Bulk grading cannot proceed.', 409);
+        }
+        const allRubricQuestions = rubric.questions.map((q) => q.questionNumber);
+
+        const scriptIds = Array.from(new Set(allocations.map((a) => a.answerScript.toString())));
+
+        // Fetch OPEN flags for candidate scripts
+        const openFlags = await ScriptFlag.find({
+            answerScript: { $in: scriptIds.map((id) => new mongoose.Types.ObjectId(id)) },
+            status: FlagStatus.OPEN,
+        }).lean();
+
+        // Fetch saved grades for candidate scripts
+        const existingGrades = await Grade.find({
+            answerScript: { $in: scriptIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        }).lean();
+
+        // Categorize allocations
+        const alreadySubmitted: BulkSubmitItemDetail[] = [];
+        const openFlagSkipped: BulkSubmitItemDetail[] = [];
+        const incompleteSkipped: BulkSubmitItemDetail[] = [];
+        const eligible: Array<{
+            allocation: typeof allocations[0];
+            answerScriptId: string;
+            question?: number | null;
+        }> = [];
+
+        for (const alloc of allocations) {
+            const allocIdStr = alloc._id.toString();
+            const scriptIdStr = alloc.answerScript.toString();
+            const allocQuestion = alloc.question ?? null;
+
+            // 1. Already Submitted
+            if (alloc.status === AllocationStatus.COMPLETED) {
+                alreadySubmitted.push({
+                    allocationId: allocIdStr,
+                    answerScriptId: scriptIdStr,
+                    question: allocQuestion,
+                });
+                continue;
+            }
+
+            // 2. Open Flags check
+            const scriptFlags = openFlags.filter((f) => f.answerScript.toString() === scriptIdStr);
+            const matchingOpenFlag = scriptFlags.find((f) => {
+                if (allocQuestion !== null) {
+                    return f.question === allocQuestion || f.question === undefined || f.question === null;
+                }
+                return true;
+            });
+
+            if (matchingOpenFlag) {
+                openFlagSkipped.push({
+                    allocationId: allocIdStr,
+                    answerScriptId: scriptIdStr,
+                    question: allocQuestion,
+                    flagId: matchingOpenFlag._id.toString(),
+                    flagReason: matchingOpenFlag.reason,
+                });
+                continue;
+            }
+
+            // 3. Completeness check
+            const requiredQuestions = allocQuestion !== null ? [allocQuestion] : allRubricQuestions;
+            const scriptGrades = existingGrades.filter((g) => g.answerScript.toString() === scriptIdStr);
+            const gradedQuestionSet = new Set(
+                scriptGrades
+                    .filter((g) => g.marksAwarded && g.marksAwarded.length > 0 && typeof g.totalScore === 'number')
+                    .map((g) => g.question)
+                    .filter((q): q is number => typeof q === 'number')
+            );
+            const missingQuestions = requiredQuestions.filter((q) => !gradedQuestionSet.has(q));
+
+            if (missingQuestions.length > 0) {
+                incompleteSkipped.push({
+                    allocationId: allocIdStr,
+                    answerScriptId: scriptIdStr,
+                    question: allocQuestion,
+                    missingQuestions,
+                });
+                continue;
+            }
+
+            // 4. Eligible
+            eligible.push({
+                allocation: alloc,
+                answerScriptId: scriptIdStr,
+                question: allocQuestion,
+            });
+        }
+
+        // If preview mode, return immediately
+        if (preview) {
+            return {
+                examId: examObjectId.toString(),
+                totalProcessed: allocations.length,
+                submittedCount: eligible.length,
+                alreadySubmittedCount: alreadySubmitted.length,
+                incompleteCount: incompleteSkipped.length,
+                openFlagCount: openFlagSkipped.length,
+                failedCount: 0,
+                submitted: eligible.map((e) => ({
+                    allocationId: e.allocation._id.toString(),
+                    answerScriptId: e.answerScriptId,
+                    question: e.question,
+                })),
+                alreadySubmitted,
+                incompleteSkipped,
+                openFlagSkipped,
+                failed: [],
+                preview: true,
+            };
+        }
+
+        // Require explicit confirmation if not preview
+        if (!confirmed) {
+            throw new HttpError('Explicit confirmation is required to execute bulk submission. Pass confirmed: true.', 400);
+        }
+
+        // Execute submissions for eligible items up to effectiveLimit
+        const batchToSubmit = eligible.slice(0, effectiveLimit);
+        const submitted: BulkSubmitItemDetail[] = [];
+        const failed: BulkSubmitItemDetail[] = [];
+
+        for (const item of batchToSubmit) {
+            try {
+                const subResult = await this.submitScript({
+                    scriptId: item.answerScriptId,
+                    userId: userId.toString(),
+                    userRole,
+                    question: item.question ?? undefined,
+                    ipAddress,
+                });
+
+                submitted.push({
+                    allocationId: item.allocation._id.toString(),
+                    answerScriptId: item.answerScriptId,
+                    question: item.question,
+                    totalScore: subResult.totalScore,
+                    finalizedQuestions: subResult.finalizedQuestions,
+                });
+            } catch (err: unknown) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                failed.push({
+                    allocationId: item.allocation._id.toString(),
+                    answerScriptId: item.answerScriptId,
+                    question: item.question,
+                    error: errorMessage,
+                });
+            }
+        }
+
+        // Audit Logging
+        await writeAuditLog({
+            user: userId.toString(),
+            action: 'BULK_SCRIPTS_SUBMITTED',
+            outcome: 'SUCCESS',
+            entityId: examObjectId,
+            entityType: 'Exam',
+            details: {
+                examId: examObjectId.toString(),
+                submittedCount: submitted.length,
+                alreadySubmittedCount: alreadySubmitted.length,
+                incompleteCount: incompleteSkipped.length,
+                openFlagCount: openFlagSkipped.length,
+                failedCount: failed.length,
+                totalProcessed: allocations.length,
+            },
+            ipAddress,
+        });
+
+        // Trigger live progress update
+        try {
+            await ProgressEventService.dispatchProgressEvent(examObjectId.toString(), userId.toString());
+        } catch (eventErr) {
+            console.error('Failed to emit progress event on bulk submit:', eventErr);
+        }
+
+        return {
+            examId: examObjectId.toString(),
+            totalProcessed: allocations.length,
+            submittedCount: submitted.length,
+            alreadySubmittedCount: alreadySubmitted.length,
+            incompleteCount: incompleteSkipped.length,
+            openFlagCount: openFlagSkipped.length,
+            failedCount: failed.length,
+            submitted,
+            alreadySubmitted,
+            incompleteSkipped,
+            openFlagSkipped,
+            failed,
+            preview: false,
+        };
     }
 }
 
