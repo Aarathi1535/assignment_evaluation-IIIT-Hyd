@@ -34,6 +34,9 @@ export interface SavePageAnnotationsOptions {
   userRole: string;
   question?: number | null;
   ipAddress?: string;
+  expectedUpdatedAt?: string | number | Date | null;
+  baseUpdatedAt?: string | number | Date | null;
+  force?: boolean;
 }
 
 export interface SavePageAnnotationsResult {
@@ -45,6 +48,7 @@ export interface SavePageAnnotationsResult {
   totalAnnotations: number;
   totalStrokes: number;
   savedAt: string;
+  updatedAt?: string;
 }
 
 export interface GetPageAnnotationsOptions {
@@ -367,11 +371,31 @@ export class AnnotationPersistenceService {
       targetPageId.toString()
     );
 
+    // AE-171: Detect concurrency conflict if expectedUpdatedAt/baseUpdatedAt is provided
+    const baseUpdated = options.expectedUpdatedAt ?? options.baseUpdatedAt;
+    if (baseUpdated && !options.force) {
+      const baseTime = new Date(baseUpdated).getTime();
+      const currentDocTime = pageDoc?.updatedAt
+        ? new Date(pageDoc.updatedAt).getTime()
+        : ingestionDoc?.updatedAt
+        ? new Date(ingestionDoc.updatedAt).getTime()
+        : null;
+
+      if (currentDocTime !== null && !isNaN(baseTime) && !isNaN(currentDocTime) && currentDocTime > baseTime) {
+        throw new HttpError(
+          'Conflict: Annotations have been modified on the server since your draft was loaded.',
+          409
+        );
+      }
+    }
+
     // 7. Persist vector data directly onto Page (single source of truth) without altering image storage
+    let updatedDocTimestamp: Date = new Date();
     if (pageDoc) {
       pageDoc.annotations = normalizedPageData;
       pageDoc.annotatedBy = new mongoose.Types.ObjectId(userId);
       await pageDoc.save();
+      updatedDocTimestamp = pageDoc.updatedAt || new Date();
     } else if (ingestionDoc) {
       ingestionDoc.metadata = {
         ...(ingestionDoc.metadata || {}),
@@ -379,6 +403,7 @@ export class AnnotationPersistenceService {
         annotatedBy: userId,
       };
       await ingestionDoc.save();
+      updatedDocTimestamp = ingestionDoc.updatedAt || new Date();
     }
 
     // 8. Record audit log
@@ -406,6 +431,7 @@ export class AnnotationPersistenceService {
       totalAnnotations: normalizedPageData.annotations.length,
       totalStrokes: normalizedPageData.strokes.length,
       savedAt: new Date().toISOString(),
+      updatedAt: updatedDocTimestamp.toISOString(),
     };
   }
 

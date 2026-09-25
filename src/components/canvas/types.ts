@@ -36,7 +36,7 @@ import type {
 
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing' | 'conflict' | 'recovery_available' | 'submitted';
 
 export type {
   CanvasViewState,
@@ -310,18 +310,50 @@ export interface AnswerSheetCanvasProps {
   debounceDelayMs?: number;
   /** Custom URL builder for saving page annotations (AE-137) */
   saveAnnotationsUrl?: (scriptId: string, pageNumber: number) => string;
-  /** Custom saver function for sending serialized page annotations (AE-137) */
+  /** Custom saver function for sending serialized page annotations (AE-137 / AE-171) */
   saveAnnotations?: (params: {
     scriptId: string;
     pageNumber: number;
     data: SerializedPageAnnotations;
-  }) => Promise<{ success: boolean; error?: string }>;
-  /** Callback fired when save status changes ('idle' | 'saving' | 'saved' | 'error', AE-137) */
+    baseUpdatedAt?: string | number | null;
+    force?: boolean;
+  }) => Promise<{
+    success: boolean;
+    conflict?: boolean;
+    serverData?: SerializedPageAnnotations | null;
+    serverUpdatedAt?: string | number | null;
+    error?: string;
+  }>;
+  /** Callback fired when save status changes ('idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing' | 'conflict', AE-137 / AE-171) */
   onSaveStatusChange?: (status: SaveStatus) => void;
   /** Callback fired when autosave succeeds (AE-137) */
   onSaveSuccess?: (pageNumber: number) => void;
   /** Callback fired when autosave fails (AE-137) */
   onSaveError?: (pageNumber: number, error: Error) => void;
+  /** Callback fired when a concurrent edit conflict is detected (AE-171) */
+  onConflict?: (conflictInfo: {
+    scriptId: string;
+    pageNumber: number;
+    localData: SerializedPageAnnotations;
+    serverData?: SerializedPageAnnotations | null;
+    serverUpdatedAt?: string | number | null;
+  }) => void;
+  /** Callback fired when a conflict is resolved (AE-171) */
+  onResolveConflict?: (
+    action: 'keep_local' | 'load_server',
+    pageNumber: number
+  ) => void;
+  /** Callback fired when an unsynced recoverable local draft is detected on load (AE-172) */
+  onRecoverableDraftFound?: (info: {
+    scriptId: string;
+    pageNumber: number;
+    draft: SerializedPageAnnotations;
+    serverData?: SerializedPageAnnotations | null;
+  }) => void;
+  /** Callback fired when a recovered local draft is restored (AE-172) */
+  onDraftRestored?: (pageNumber: number) => void;
+  /** Callback fired when a recovered local draft is discarded (AE-172) */
+  onDraftDiscarded?: (pageNumber: number) => void;
   /** Authoritative shortcut action listener (AE-154) */
   onShortcutAction?: (action: ShortcutAction, event: KeyboardEvent) => void;
   /** Save draft trigger handler (AE-154) */

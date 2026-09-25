@@ -101,6 +101,18 @@ export async function PUT(
       question = (body as Record<string, unknown>).question as number;
     }
 
+    const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
+    const ifUnmodifiedSince = req.headers.get('if-unmodified-since');
+    const expectedUpdatedAt =
+      (bodyObj?.expectedUpdatedAt as string | number | undefined) ||
+      (bodyObj?.baseUpdatedAt as string | number | undefined) ||
+      ifUnmodifiedSince ||
+      searchParams.get('expectedUpdatedAt') ||
+      searchParams.get('baseUpdatedAt') ||
+      undefined;
+
+    const force = Boolean(bodyObj?.force || searchParams.get('force') === 'true');
+
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
     const result = await annotationPersistenceService.savePageAnnotations({
@@ -111,6 +123,8 @@ export async function PUT(
       userRole: user.role,
       question,
       ipAddress,
+      expectedUpdatedAt,
+      force,
     });
 
     return NextResponse.json(
@@ -124,9 +138,11 @@ export async function PUT(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
+    const isConflict = status === 409;
     return NextResponse.json(
       {
         success: false,
+        conflict: isConflict,
         message,
         data: null,
       },
