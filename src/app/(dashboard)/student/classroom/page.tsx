@@ -53,6 +53,9 @@ interface EvaluationResult {
   imagePath: string;
   submittedAt: string;
   evaluatedAt: string;
+  status?: 'PENDING' | 'EVALUATING' | 'EVALUATED' | 'FAILED';
+  errorMessage?: string;
+  confidence?: number;
 }
 
 export default function StudentClassroomAssessmentPage() {
@@ -81,7 +84,15 @@ export default function StudentClassroomAssessmentPage() {
         const subRes = await fetch(`/api/classroom/submissions?questionId=${json.data._id}`);
         const subJson = await subRes.json();
         if (subJson.success && Array.isArray(subJson.data) && subJson.data.length > 0) {
-          setEvaluationResult(subJson.data[0]);
+          const latestSub = subJson.data[0];
+          if (latestSub.status === 'EVALUATED') {
+            setEvaluationResult(latestSub);
+          } else if (latestSub.status === 'FAILED') {
+            setEvaluationResult(null);
+            setErrorMessage(`Previous evaluation failed: ${latestSub.errorMessage || 'Automated evaluation error'}. Please upload and try again.`);
+          } else {
+            setEvaluationResult(null);
+          }
         } else {
           setEvaluationResult(null);
         }
@@ -110,7 +121,15 @@ export default function StudentClassroomAssessmentPage() {
           const subRes = await fetch(`/api/classroom/submissions?questionId=${json.data._id}`);
           const subJson = await subRes.json();
           if (!ignore && subJson.success && Array.isArray(subJson.data) && subJson.data.length > 0) {
-            setEvaluationResult(subJson.data[0]);
+            const latestSub = subJson.data[0];
+            if (latestSub.status === 'EVALUATED') {
+              setEvaluationResult(latestSub);
+            } else if (latestSub.status === 'FAILED') {
+              setEvaluationResult(null);
+              setErrorMessage(`Previous evaluation failed: ${latestSub.errorMessage || 'Automated evaluation error'}. Please upload and try again.`);
+            } else {
+              setEvaluationResult(null);
+            }
           } else if (!ignore) {
             setEvaluationResult(null);
           }
@@ -191,6 +210,10 @@ export default function StudentClassroomAssessmentPage() {
       const json = await res.json();
       if (!res.ok || !json.success) {
         setErrorMessage(json.message || 'Submission failed. Please try again.');
+        setEvaluationResult(null);
+      } else if (json.data && json.data.status === 'FAILED') {
+        setErrorMessage(`Evaluation failed: ${json.data.errorMessage || 'Automated evaluation error'}`);
+        setEvaluationResult(null);
       } else {
         setEvaluationResult(json.data);
         setSelectedFile(null);
@@ -222,15 +245,15 @@ export default function StudentClassroomAssessmentPage() {
     },
     {
       title: 'Submission Status',
-      value: evaluationResult ? 'Evaluated' : activeQuestion ? 'Open' : 'No Activity',
-      icon: evaluationResult ? CheckCircle2 : ArrowRight,
-      color: evaluationResult ? 'text-emerald-600' : 'text-amber-600',
+      value: evaluationResult?.status === 'EVALUATED' ? 'Evaluated' : activeQuestion ? 'Open' : 'No Activity',
+      icon: evaluationResult?.status === 'EVALUATED' ? CheckCircle2 : ArrowRight,
+      color: evaluationResult?.status === 'EVALUATED' ? 'text-emerald-600' : 'text-amber-600',
       borderColor: 'border-slate-200',
-      iconBg: evaluationResult ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600',
+      iconBg: evaluationResult?.status === 'EVALUATED' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600',
     },
     {
       title: 'Assigned Score',
-      value: evaluationResult ? `${evaluationResult.score} / ${evaluationResult.maxMarks}` : '—',
+      value: evaluationResult && evaluationResult.status === 'EVALUATED' ? `${evaluationResult.score} / ${evaluationResult.maxMarks}` : '—',
       icon: Award,
       color: 'text-purple-600',
       borderColor: 'border-slate-200',
@@ -317,7 +340,7 @@ export default function StudentClassroomAssessmentPage() {
 
             {/* Right Column: Upload Form OR Evaluation Result */}
             <div className="lg:col-span-7">
-              {evaluationResult ? (
+              {evaluationResult && evaluationResult.status === 'EVALUATED' ? (
                 /* Evaluation Result Display */
                 <Card className="border border-emerald-200 bg-emerald-50/20 p-6 space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-emerald-100 pb-4">
@@ -331,13 +354,23 @@ export default function StudentClassroomAssessmentPage() {
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-brand shadow-xs">
-                      <Award className="h-5 w-5" />
-                      <div className="text-right">
-                        <p className="text-3xs font-extrabold uppercase tracking-wider">Score Awarded</p>
-                        <p className="text-xl font-black leading-none">
-                          {evaluationResult.score} <span className="text-sm font-normal">/ {evaluationResult.maxMarks}</span>
-                        </p>
+                    <div className="flex items-center gap-3">
+                      {evaluationResult.confidence !== undefined && evaluationResult.confidence !== null && (
+                        <div className="hidden sm:flex flex-col items-end text-right">
+                          <span className="text-3xs font-bold text-emerald-800 uppercase tracking-wider">Confidence</span>
+                          <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300">
+                            {Math.round(evaluationResult.confidence * 100)}%
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-brand shadow-xs">
+                        <Award className="h-5 w-5" />
+                        <div className="text-right">
+                          <p className="text-3xs font-extrabold uppercase tracking-wider">Score Awarded</p>
+                          <p className="text-xl font-black leading-none">
+                            {evaluationResult.score} <span className="text-sm font-normal">/ {evaluationResult.maxMarks}</span>
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>

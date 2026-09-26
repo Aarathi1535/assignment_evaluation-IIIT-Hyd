@@ -627,6 +627,204 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
       expect(capturedPayload.systemInstruction).toContain('CRITICAL EVALUATION RULES:');
     });
 
+    it('Scenario J: Gemini wraps JSON in markdown code fences (```json ... ```) - successfully parsed and evaluated', async () => {
+      const q = await createTestQuestion();
+      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
+
+      // Markdown code fenced JSON response from Gemini
+      classroomEvaluationService.setGeminiCaller(async () => {
+        return '```json\n' + JSON.stringify({
+          criteria: [
+            {
+              criterion: 'Formula & Integral Setup',
+              maxMarks: 4,
+              awardedMarks: 4,
+              evidence: 'Integral setup clearly visible in handwriting.'
+            },
+            {
+              criterion: 'Integration & Limit Evaluation',
+              maxMarks: 4,
+              awardedMarks: 3.5,
+              evidence: 'Upper limit evaluated to zero, lower limit arithmetic correct.'
+            },
+            {
+              criterion: 'Final Expression',
+              maxMarks: 2,
+              awardedMarks: 2,
+              evidence: 'Expression 1/(2+jw) clearly indicated.'
+            }
+          ],
+          totalMarks: 9.5,
+          maxMarks: 10,
+          overallFeedback: 'Strong mathematical derivation with accurate calculus steps.',
+          confidence: 0.94
+        }) + '\n```';
+      });
+
+      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
+      const body = await res.json();
+
+      expect(res.status).toBe(201);
+      expect(body.success).toBe(true);
+      expect(body.data.score).toBe(9.5);
+      expect(body.data.feedback).toBe('Strong mathematical derivation with accurate calculus steps.');
+      expect(body.data.confidence).toBe(0.94);
+      expect(body.data.criterionScores).toHaveLength(3);
+    });
+
+    it('Scenario K: Gemini uses property variations (rubricCriteria, marksAwarded, overall_feedback) - correctly normalized', async () => {
+      const q = await createTestQuestion();
+      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
+
+      // Schema variations: rubricCriteria, marksAwarded, overall_feedback, confidenceScore
+      classroomEvaluationService.setGeminiCaller(async () => {
+        return JSON.stringify({
+          rubricCriteria: [
+            {
+              criterionName: 'Formula & Integral Setup',
+              maxMarks: 4,
+              marksAwarded: 3.5,
+              observation: 'Correct integral definition written on paper.'
+            },
+            {
+              criterionName: 'Integration & Limit Evaluation',
+              maxMarks: 4,
+              marksAwarded: 4,
+              observation: 'All limit substitutions complete.'
+            },
+            {
+              criterionName: 'Final Expression',
+              maxMarks: 2,
+              marksAwarded: 1.5,
+              observation: 'Final answer boxed with minor notation quirk.'
+            }
+          ],
+          overall_feedback: 'Well articulated derivation matching the rubric closely.',
+          confidenceScore: 0.88
+        });
+      });
+
+      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
+      const body = await res.json();
+
+      expect(res.status).toBe(201);
+      expect(body.success).toBe(true);
+      expect(body.data.score).toBe(9); // 3.5 + 4 + 1.5 = 9.0
+      expect(body.data.feedback).toBe('Well articulated derivation matching the rubric closely.');
+      expect(body.data.confidence).toBe(0.88);
+      expect(body.data.criterionScores[0].marksAwarded).toBe(3.5);
+      expect(body.data.criterionScores[0].evidence).toBe('Correct integral definition written on paper.');
+    });
+
+    it('Scenario L: Deterministic regression test for real Gemini evaluation output shape', async () => {
+      // Create question matching live classroom question
+      const q = await ClassroomQuestion.create({
+        title: 'What is AI?',
+        questionPrompt: 'Generate ai related scenario based questions',
+        maxMarks: 10,
+        rubricCriteria: [
+          { criterionName: 'Formulation & Steps', points: 5, description: 'Correct setup of initial formulas' },
+          { criterionName: 'Calculation & Accuracy', points: 5, description: 'Final numerical result and clarity' }
+        ],
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
+
+      // Exact output structure returned by Gemini 2.5 Flash
+      classroomEvaluationService.setGeminiCaller(async () => {
+        return JSON.stringify({
+          criteria: [
+            {
+              criterion: 'Formulation & Steps',
+              maxMarks: 5,
+              awardedMarks: 0,
+              evidence: "The student's answer provides a definition of AI, which does not involve the setup of initial formulas or steps as required by this criterion. The question asked for scenario-based questions, not a definition."
+            },
+            {
+              criterion: 'Calculation & Accuracy',
+              maxMarks: 5,
+              awardedMarks: 0,
+              evidence: 'The student\'s answer is a definition and does not present any numerical results or calculations. While the definition of AI itself is clear and accurate, it is irrelevant to the question asked, which required generating scenario-based questions.'
+            }
+          ],
+          totalMarks: 0,
+          maxMarks: 10,
+          overallFeedback: "The student's answer defines 'What is AI?' instead of addressing the actual question, which was to 'Generate AI related scenario based questions'. The provided answer is completely off-topic and does not meet any of the rubric criteria, which are focused on formulas, steps, and calculations. Therefore, no marks can be awarded.",
+          confidence: 1.0
+        });
+      });
+
+      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
+      const body = await res.json();
+
+      expect(res.status).toBe(201);
+      expect(body.success).toBe(true);
+      expect(body.data.score).toBe(0);
+      expect(body.data.feedback).toContain("The student's answer defines 'What is AI?'");
+      expect(body.data.confidence).toBe(1.0);
+      expect(body.data.criterionScores).toHaveLength(2);
+      expect(body.data.criterionScores[0].evidence).toContain('provides a definition of AI');
+      expect(body.data.criterionScores[1].evidence).toContain('does not present any numerical results');
+    });
+
+    it('Scenario M: Gemini output without confidence or evidence does not fabricate them', async () => {
+      const q = await createTestQuestion();
+      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
+
+      // Gemini returns criteria without evidence, and no confidence field
+      classroomEvaluationService.setGeminiCaller(async () => {
+        return JSON.stringify({
+          criteria: [
+            { criterion: 'Formula & Integral Setup', maxMarks: 4, awardedMarks: 4 },
+            { criterion: 'Integration & Limit Evaluation', maxMarks: 4, awardedMarks: 4 },
+            { criterion: 'Final Expression', maxMarks: 2, awardedMarks: 2 }
+          ],
+          totalMarks: 10,
+          overallFeedback: 'All criteria satisfied.'
+        });
+      });
+
+      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
+      const body = await res.json();
+
+      expect(res.status).toBe(201);
+      expect(body.success).toBe(true);
+      // Evidence should be undefined, not fabricated
+      expect(body.data.criterionScores[0].evidence).toBeUndefined();
+      // Confidence should not be fabricated
+      expect(body.data.confidence).toBeUndefined();
+    });
+
+    it('Scenario N: Model returning non-numeric marks fails safely with controlled error, NOT silently 0/10', async () => {
+      const q = await createTestQuestion();
+      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
+
+      // Malformed criterion score (null / undefined / invalid string)
+      classroomEvaluationService.setGeminiCaller(async () => {
+        return JSON.stringify({
+          criteria: [
+            { criterion: 'Formula & Integral Setup', maxMarks: 4, awardedMarks: 'NOT_A_NUMBER' },
+            { criterion: 'Integration & Limit Evaluation', maxMarks: 4, awardedMarks: 4 },
+            { criterion: 'Final Expression', maxMarks: 2, awardedMarks: 2 }
+          ],
+          overallFeedback: 'Partial evaluation.'
+        });
+      });
+
+      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
+      const body = await res.json();
+
+      expect(res.status).toBe(500);
+      expect(body.success).toBe(false);
+      expect(body.message).toContain('Missing or non-numeric marks');
+
+      const failedSub = await ClassroomSubmission.findOne({ question: q._id, student: studentId });
+      expect(failedSub?.status).toBe('FAILED');
+    });
+
     it('rejects submission when no active question exists for the question ID', async () => {
       const inactiveQ = await ClassroomQuestion.create({
         title: 'Closed Question',

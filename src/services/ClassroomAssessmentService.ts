@@ -292,6 +292,7 @@ export class ClassroomAssessmentService {
             existingSubmission.fileSize = input.fileBuffer.length;
             existingSubmission.mimeType = input.mimeType;
             existingSubmission.status = 'EVALUATING';
+            existingSubmission.errorMessage = undefined;
             existingSubmission.submittedAt = new Date();
             submission = await existingSubmission.save();
         } else {
@@ -327,6 +328,7 @@ export class ClassroomAssessmentService {
             submission.criterionScores = evaluationResult.criterionScores;
             submission.confidence = evaluationResult.confidence;
             submission.evaluatedAt = new Date();
+            submission.errorMessage = undefined;
             await submission.save();
 
             await writeAuditLog({
