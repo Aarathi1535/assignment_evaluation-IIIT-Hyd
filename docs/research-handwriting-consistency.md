@@ -337,3 +337,130 @@ sequenceDiagram
 ### 9.8 Research-Only Integrity Disclaimer
 
 The system never issues automated accusations of "Plagiarism" or "Cheating". All outputs are restricted to objective geometric and statistical divergence states (`MATCH`, `REVIEW_REQUIRED`, `INSUFFICIENT_SAMPLE`, `INCONCLUSIVE`, `UNASSESSED`) intended solely to support human instructor oversight.
+
+---
+
+## 10. Phase 4: Real Answer-Sheet Handwriting Integration
+
+> [!IMPORTANT]
+> **Production Isolation & Calibration Disclaimer**
+> Phase 4 connects the existing persistent handwriting consistency workflow to actual stored/rendered answer-sheet pages and segmented answer regions. It strictly reuses existing infrastructure (`DerivedStorageService`, `Page`, `IngestionPage`, `AnswerScript`) without duplicating storage or rendering logic.
+>
+> **"Real production handwriting samples have not yet been calibrated."**
+> Document-analysis features (ink density, projection variances, stroke-width proxies, contour gradient slant) describe geometric properties of digitized ink and do **NOT** claim biometric accuracy or forensic identity proof. All decision thresholds remain provisional engineering heuristics subject to human instructor oversight.
+
+### 10.1 Architecture Overview
+
+Phase 4 introduces three isolated, research-only adapters/services in `src/services/handwriting/`:
+
+```mermaid
+flowchart TD
+    subgraph Storage & Production Data Layer
+        AS[AnswerScript Document]
+        P[Page / IngestionPage Model]
+        DSS[DerivedStorageService]
+    end
+
+    subgraph Phase 4 Adapters
+        ASA[AnswerSheetSourceAdapter]
+        ARR[AnswerRegionResolver]
+        ASHIS[AnswerSheetHandwritingIntegrationService]
+    end
+
+    subgraph Direction 3
+        RA[ReconstructedAnswerLike / Segments]
+    end
+
+    subgraph Phase 3 Handwriting Consistency Workflow
+        HCWS[HandwritingConsistencyWorkflowService]
+        HS[HandwritingSample Document]
+        HP[HandwritingProfile Document]
+        HC[HandwritingComparison Document]
+    end
+
+    AS -->|1. resolveAnswerScriptStudent| ASA
+    P -->|2. resolvePageSource| ASA
+    DSS -->|Fetch rendered PNG/JPEG buffer| ASA
+    RA -->|Resolve bounding boxes & pages| ARR
+    ASA & ARR -->|Orchestrate region samples| ASHIS
+    ASHIS -->|registerSample / compareSample| HCWS
+    HCWS --> HS
+    HCWS --> HP
+    HCWS --> HC
+```
+
+### 10.2 Trusted Student Identity Resolution (`AnswerSheetSourceAdapter`)
+
+To prevent spoofing or unauthorized access, student identity **MUST** originate from the trusted `AnswerScript` record in the database:
+- **`resolveAnswerScriptStudent(answerScriptId, expectedStudentId?)`**:
+  - Queries `AnswerScript` by ID.
+  - Verifies `identificationStatus === IdentificationStatus.IDENTIFIED` and ensures `script.student` is populated.
+  - If `identificationStatus !== IDENTIFIED` or student reference is missing, fails safely with HTTP 422 (`Unprocessable Entity: AnswerScript is not yet identified to a student`). Never creates fallback or synthetic student identities.
+  - If a client or calling routine supplies an `expectedStudentId`, it is strictly verified against `script.student._id`. If they do not match, the adapter throws HTTP 403 (`Forbidden: Supplied student does not match trusted AnswerScript student`), preventing arbitrary student ID overrides.
+
+### 10.3 Physical Page & Image Source Resolution
+
+Rendered page images are resolved using existing project storage without introducing secondary storage or file-system duplication:
+- **`resolvePageSource(answerScriptId, pageNumber)`**:
+  - Locates the corresponding `Page` record for the `answerScript` and `pageNumber`. If not yet migrated or created, falls back to `IngestionPage` associated with the script's `batchId` and `fileIndex`.
+  - Retrieves the high-resolution image buffer directly through `DerivedStorageService.readDerivedPage(pageDoc.imagePath)`.
+  - Returns:
+    - `answerScriptId`
+    - `studentId`
+    - `pageId`
+    - `pageNumber`
+    - `sourceReference`
+    - `imageBuffer`
+    - `sourceMetadata` (dimensions, mimeType, storageKey)
+
+### 10.4 Answer Region Resolution & Direction 3 Integration (`AnswerRegionResolver`)
+
+Student handwriting is extracted from specific answer regions rather than entire pages:
+- **`resolveRegions(options)`**:
+  - Segments pages into targeted answer regions using normalized bounding boxes `IBoundingBox = { x, y, width, height }` with coordinates in `[0, 1]`.
+  - Validates bounding boxes: coordinates must fall within `[0, 1]`, and width/height must be strictly positive.
+  - **Explicit Failure Handling**: If a region cannot be confidently resolved (invalid box, missing coordinates, or confidence score of 0), the resolver returns `{ resolved: false, unresolvedReason: '...' }`. The system **NEVER** silently falls back to using the whole page as a proxy.
+- **Direction 3 `ReconstructedAnswer` Support**:
+  - `resolveReconstructedAnswerRegions(answerScriptId, reconstructedAnswer)` accepts reconstructed answer structures from Direction 3 (`segments: Array<{ pageNumber, box, confidence? }>`).
+  - Converts each segment into a resolved answer region referencing the associated `questionNumber` and `subQuestion`.
+
+### 10.5 Multi-Page Answers & Multiple Answers Per Page
+
+1. **Multi-Page Answers (Continuation Segments)**:
+   - When an answer spans multiple pages (e.g. Q1 on Page 1 and continuation on Page 7), the resolver treats each segment as an independent `IResolvedAnswerRegion`.
+   - The integration service extracts handwriting features independently from each physical region without stitching synthetic composite images.
+   - All continuation regions retain the exact same `answerScriptId`, `studentId`, and `questionNumber`.
+2. **Multiple Answers on One Page**:
+   - If a page contains multiple answers (e.g. Q1 top half, Q2 bottom half), bounding boxes ensure each region is cropped and processed in isolation.
+   - The integration service guarantees distinct samples are created with unique source references, ensuring ink from different questions does not bleed together.
+
+### 10.6 Handwriting Sample Adapter & Workflow Orchestration (`AnswerSheetHandwritingIntegrationService`)
+
+- **Deterministic Source References**:
+  Every resolved region receives a deterministic source reference:
+  `script_${answerScriptId}_p${pageNumber}_q${qNum}_${subQ}_r${regionId}_b${x}_${y}_${w}_${h}`
+  Processing the same region multiple times is completely idempotent and deduplicated by `HandwritingConsistencyWorkflowService.registerSample()`.
+- **Baseline Registration Flow**:
+  `processAnswerScriptRegionsForBaseline()` takes resolved answer regions from an identified script, registers each through `HandwritingConsistencyWorkflowService`, and updates the student's baseline profile if the sample is usable.
+- **Comparison Flow**:
+  `compareAnswerScriptRegion()` evaluates a candidate answer region against the student's existing profile:
+  - If the student has $< 3$ usable baseline samples, returns `INSUFFICIENT_SAMPLE`. No synthetic baseline is manufactured.
+  - If the candidate region is poor quality (blank, insufficient strokes, diagram), the quality result is preserved and comparison returns `UNASSESSED`.
+  - If an established profile exists, computes multi-feature divergence and persists an immutable `HandwritingComparison` record referencing the exact `profileVersion`.
+- **Direction 3 Reconstructed Answer Comparison**:
+  `compareReconstructedAnswer()` evaluates all segments of a reconstructed question and returns segment-by-segment comparisons.
+
+### 10.7 Source Traceability & Security Invariants
+
+- **Full Provenance Traceability**:
+  Every generated `HandwritingSample` references `answerScriptId`, `pageNumber`, `boundingBox`, `sourceReference`, and pipeline `extractionVersion` (`1.0.0`).
+- **Profile Version Immutability**:
+  Historical comparisons remain tied to the specific `profileVersion` active at comparison time; subsequent additions to baseline increment version numbers without mutating past records.
+- **Strict Role-Based Authorization**:
+  All operations require an authorized `HandwritingAuthContext`. Students cannot register or inspect handwriting data of other students (enforced with HTTP 403).
+
+### 10.8 Limitations & Future Work
+
+1. **Uncalibrated Feature Thresholds**: As noted, current distance ($0.38 / 0.50$) and $z$-score ($2.5$) thresholds are engineering defaults that must be calibrated against real academic handwriting datasets across diverse writing instruments.
+2. **Scanner Artifacts & Resolution**: Variations in scanner DPI, compression noise, and contrast can slightly alter stroke-width proxies. Normalization reduces this effect, but consistent scanning standards are recommended.
+3. **No Forensic or Biometric Claims**: Features reflect geometric surface statistics, not forensic biometric identification. Outputs serve strictly as human decision support (`REVIEW_REQUIRED`), never automated penalty.
