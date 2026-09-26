@@ -207,12 +207,133 @@ export const DEFAULT_COMPARISON_THRESHOLDS: HandwritingComparisonThresholds = {
 3. **Absence of Real Pressure Transducers**: Scans measure optical ink absorption and run-length stroke thickness, not kinematic stylus pressure.
 4. **Single-Feature Robustness**: An isolated change (e.g. changing slant due to desk angle) must not flag a student; multi-feature corroboration is strictly required.
 
-### 8.7 Future Integration (Persistence & Service Orchestration)
+### 8.7 Transition to Phase 3 Persistence
 
-1. **Persistence Integration**:
-   - `HandwritingProfile` Mongoose model persists established baseline vectors, sample references, and update timestamps.
-   - `HandwritingComparison` Mongoose model records comparison runs, distance scores, confidence, anomaly breakdowns, and human review actions (`PENDING_REVIEW`, `VERIFIED_AUTHENTIC`, `FLAGGED_MISMATCH`).
-2. **Asynchronous Processing**:
-   - Baseline profile updates and post-ingestion comparisons can run asynchronously during background batch processing without blocking grading workflows.
-3. **Instructor Review Support**:
-   - Discrepancies flagged as `REVIEW_REQUIRED` can feed into the grading workflow as non-blocking informational advisories requiring manual teacher confirmation.
+With the mathematical models and deterministic comparison engines established in Phase 1 and Phase 2, Phase 3 introduces the persistent data layer, explicit profile versioning, and secure student-scoped workflow orchestration.
+
+---
+
+## 9. Phase 3: Persistent Handwriting Sample, Profile, and Comparison Workflow
+
+> [!IMPORTANT]
+> **Production Isolation Disclaimer**
+> Phase 3 implements a research-only persistence and workflow orchestration backend. It does **NOT** alter the production grading pipeline, `AnswerScript`, `Allocation`, `Grade`, or `ScriptFlag` behaviors, and does not introduce production grading API endpoints or frontend UI components.
+
+### 9.1 Persisted Handwriting Sample Representation (`HandwritingSample.ts`)
+
+Each analyzed handwriting region is persisted as an independent `HandwritingSamplePersistence` document:
+- **`student`**: Foreign key to `User` model, strictly indexed.
+- **`sourceReference`**: Optional unique identifier (e.g. `script_id:page_num`) enabling deterministic duplicate detection.
+- **`sampleType`**: Classification tag (`EXAM_SCRIPT`, `HOMEWORK`, `BASELINE_UPLOAD`, `GENERAL_SUBMISSION`).
+- **`isUsable`**: Boolean flag indicating whether the sample meets quality thresholds (`status === VALID && quality.isSufficient`) to contribute to baseline profile statistics.
+- **`rawVector`**: 8-element normalized numerical feature vector (stored only when valid).
+- **`quality`**: Contrast, sharpness score, noise ratio, and stroke count metadata.
+- **`extractionVersion`**: Version string (`1.0.0`) tracking pipeline feature definitions.
+
+### 9.2 Storage Boundary (No Raw Bytes in Mongo)
+
+In accordance with architectural storage policies, raw image buffers are **never** stored directly in MongoDB documents:
+- Source images are managed by existing project storage infrastructure (`ImmutableStorageService` or derived storage paths).
+- Handwriting documents store solely metadata, source references, bounding box coordinates, and extracted mathematical feature vectors.
+
+### 9.3 Profile Persistence & Explicit Versioning (`HandwritingProfile.ts`)
+
+To prevent historical comparisons from having their evidentiary basis silently altered when a student submits new work, handwriting profiles utilize **strict immutable versioning**:
+- **`profileVersion`**: Integer version counter ($1, 2, 3, \dots$).
+- **`isCurrent`**: Boolean flag marking the latest active version.
+- **`{ student: 1, profileVersion: 1 }`**: Unique compound index guaranteeing that historical versions are preserved and can never be overwritten.
+- **Versioning Strategy**:
+  - While sample count $< 3$ (`PROVISIONAL`), the provisional profile remains Version 1 and is updated in place.
+  - Upon reaching $\ge 3$ valid samples, the profile transitions to `ESTABLISHED` as **Version 1**.
+  - Subsequent addition of valid samples (e.g. sample 4) automatically increments to **Version 2**, marking Version 1 as `isCurrent = false`.
+  - Rebuilding without adding or removing usable samples is idempotent and reuses the existing profile version.
+
+### 9.4 Comparison Persistence (`HandwritingComparison.ts`)
+
+Each comparison event is recorded immutably:
+- **`student`**: Student identity.
+- **`profile` & `profileVersion`**: Exact foreign key and integer version of the profile against which the sample was compared.
+- **`sample`**: Foreign key to the evaluated candidate sample document.
+- **`status`**: Outcome state (`MATCH`, `REVIEW_REQUIRED`, `INSUFFICIENT_SAMPLE`, `INCONCLUSIVE`, `UNASSESSED`).
+- **`distance` & `confidence`**: Numerical distance and quality-derived confidence score.
+- **`featureDeviations`**: Feature-level breakdown of baseline means, standard deviations, observed values, normalized deviations, and contribution shares.
+- **`anomalyFactors`**: Explanatory diagnostic strings.
+- **Historical Immutability**: Historical comparison records are never updated when later profile versions are generated.
+
+### 9.5 Workflow Orchestration (`HandwritingConsistencyWorkflowService.ts`)
+
+The workflow service orchestrates end-to-end processing across three primary actions:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Authorized Client (Staff / Student)
+    participant WS as HandwritingConsistencyWorkflowService
+    participant Extractor as HandwritingFeatureExtractor
+    participant SRepo as HandwritingSampleRepository
+    participant Builder as HandwritingProfileBuilder
+    participant PRepo as HandwritingProfileRepository
+    participant Engine as HandwritingComparisonEngine
+    participant CRepo as HandwritingComparisonRepository
+
+    %% 1. Register Sample
+    Note over Client, WS: 1. Register Sample Workflow
+    Client->>WS: registerSample(studentId, imageBuffer / features, authContext)
+    WS->>WS: verifyAccess(authContext, studentId)
+    WS->>SRepo: findBySourceReference(studentId, ref)
+    alt Duplicate Detected
+        SRepo-->>WS: existingSample
+        WS-->>Client: return { sample: existingSample, isDuplicate: true }
+    else New Sample
+        WS->>Extractor: extractFeatures(imageBuffer)
+        Extractor-->>WS: extractionResult
+        WS->>SRepo: create(sampleDoc)
+        opt Sample isUsable && autoRebuildProfile
+            WS->>WS: rebuildProfile(studentId)
+        end
+        WS-->>Client: return { sample, isDuplicate: false, profile }
+    end
+
+    %% 2. Rebuild Profile
+    Note over Client, WS: 2. Rebuild Profile Workflow
+    Client->>WS: rebuildProfile(studentId, authContext)
+    WS->>SRepo: findByStudent(studentId, { usableOnly: true })
+    WS->>PRepo: findByStudent(studentId)
+    alt Usable Samples Unchanged
+        WS-->>Client: return currentProfile (Idempotent reuse)
+    else Samples Changed
+        WS->>Builder: buildProfile(studentId, usableSamples)
+        Builder-->>WS: profileBuildResult
+        WS->>PRepo: markPreviousAsOld(studentId)
+        WS->>PRepo: create(newProfileVersion)
+        WS-->>Client: return newProfileVersion
+    end
+
+    %% 3. Compare Sample
+    Note over Client, WS: 3. Compare Sample Workflow
+    Client->>WS: compareSample(studentId, sampleInput, authContext)
+    WS->>WS: verifyAccess(authContext, studentId)
+    WS->>PRepo: findByStudent(studentId)
+    WS->>Engine: compare(profileData, candidateSample)
+    Engine-->>WS: comparisonResult
+    WS->>CRepo: create(comparisonDoc referencing exact profileVersion)
+    WS-->>Client: return comparisonDoc
+```
+
+### 9.6 Security & Student Privacy
+
+- **Student Isolation**: All repository queries and service methods strictly enforce `studentId` scoping.
+- **Role-Based Authorization (`HandwritingAuthContext`)**:
+  - `STUDENT`: May **only** access their own profile, samples, and comparisons (`userId === studentId`). Accessing another student's ID immediately returns `403 Forbidden`.
+  - `PROFESSOR`, `ADMIN`, `TA`, `SYSTEM`: Explicitly authorized staff roles permitted to audit student handwriting data.
+- **Fail-Closed Validation**: Invalid ObjectId formats (non-24 hex characters) are rejected with `400 Bad Request`.
+- **Data Protection**: Handwriting feature vectors and comparison records are never leaked across student boundaries.
+
+### 9.7 Transaction and Consistency Model
+
+- Multi-document operations (profile deprecation + new version creation) execute within MongoDB sessions and transactions where the topology supports it (Replica Sets, Sharded clusters).
+- On standalone environments (such as in-memory test databases), operations execute sequentially with fail-safe rollback logic to prevent profile destruction on error.
+
+### 9.8 Research-Only Integrity Disclaimer
+
+The system never issues automated accusations of "Plagiarism" or "Cheating". All outputs are restricted to objective geometric and statistical divergence states (`MATCH`, `REVIEW_REQUIRED`, `INSUFFICIENT_SAMPLE`, `INCONCLUSIVE`, `UNASSESSED`) intended solely to support human instructor oversight.
