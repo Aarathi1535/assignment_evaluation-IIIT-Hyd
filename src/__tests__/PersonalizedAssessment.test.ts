@@ -9,7 +9,11 @@ import personalizedAssessmentService from '../services/PersonalizedAssessmentSer
 import syllabusProcessingService from '../services/SyllabusProcessingService';
 import personalizedQuestionGenerationService from '../services/PersonalizedQuestionGenerationService';
 import personalizationService from '../services/PersonalizationService';
-import { MockAIQuestionGenerationProvider } from '../services/ai/AIQuestionGenerationProvider';
+import {
+    MockAIQuestionGenerationProvider,
+    GeminiAIQuestionGenerationProvider,
+    parseGeneratedQuestions
+} from '../services/ai/AIQuestionGenerationProvider';
 import { UserRole } from '../constants/permissions';
 import {
     createPersonalizedQuestionSchema,
@@ -147,22 +151,24 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
     // 2 & 3. Question Pool Sizing & Pre-Validation Checks
     // =========================================================================
     describe('2 & 3. Question Pool Boundary Validations', () => {
-        it('refuses schedule creation if question pool size < 100', async () => {
+        it('allows schedule creation with available question pool when pool size < 100', async () => {
             const smallPool = seededQuestionPool.slice(0, 50).map((q) => q._id.toString());
 
-            await expect(
-                personalizedAssessmentService.createSchedule(
-                    {
-                        course: testCourse._id.toString(),
-                        title: 'Invalid Small Pool Schedule',
-                        startDate: '2026-08-01',
-                        activeDaysOfWeek: [1, 2, 3, 4, 5, 6, 0],
-                        enrolledStudents: [studentUserA._id.toString()],
-                        questionPool: smallPool
-                    },
-                    professorUser._id.toString()
-                )
-            ).rejects.toThrow(/Question pool size .* is insufficient/);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Small Pool Schedule',
+                    startDate: '2026-08-01',
+                    activeDaysOfWeek: [1, 2, 3, 4, 5, 6, 0],
+                    enrolledStudents: [studentUserA._id.toString()],
+                    questionPool: smallPool
+                },
+                professorUser._id.toString()
+            );
+
+            expect(schedule).toBeDefined();
+            expect(schedule.status).toBe('ACTIVE');
+            expect(schedule.questionPool.length).toBe(50);
         });
 
         it('refuses schedule creation if enrolled students > question pool size', async () => {
@@ -183,6 +189,68 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
                     professorUser._id.toString()
                 )
             ).rejects.toThrow(/Question pool size .* is insufficient/);
+        });
+
+        // -----------------------------------------------------------------------
+        // Regression test: 15-question pool (matches current live DB capacity)
+        // Verifies the fix for the VALIDATION_FAILED null-in-enrolledStudents bug
+        // where course?.enrolledStudents.map(s => s._id) produced null elements
+        // because the /api/courses endpoint returns unpopulated ObjectId strings.
+        // -----------------------------------------------------------------------
+        it('REGRESSION: activates schedule with 15-question pool (current live DB size) and 1 student', async () => {
+            const pool15 = seededQuestionPool.slice(0, 15).map((q) => q._id.toString());
+
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Regression: 15-Question Pool Schedule',
+                    startDate: '2026-09-01',
+                    activeDaysOfWeek: [1, 2, 3, 4, 5, 6, 0],
+                    dailyWindowStartTime: '09:00',
+                    dailyWindowEndTime: '22:00',
+                    enrolledStudents: [studentUserA._id.toString()],
+                    questionPool: pool15
+                },
+                professorUser._id.toString()
+            );
+
+            expect(schedule).toBeDefined();
+            expect(schedule.status).toBe('ACTIVE');
+            // Pool size is capped to 15, so 15 assignments created (one per day)
+            expect(schedule.questionPool.length).toBe(15);
+
+            const assignments = await PersonalizedStudentAssignment.find({
+                schedule: schedule._id,
+                student: studentUserA._id
+            });
+            expect(assignments.length).toBe(15);
+            // All assignments have valid scheduled dates and are initially LOCKED
+            for (const a of assignments) {
+                expect(a.scheduledDate).toBeInstanceOf(Date);
+                expect(a.status).toBe('LOCKED');
+            }
+        });
+
+        it('REGRESSION: Zod schema rejects null elements in enrolledStudents with field path in error', () => {
+            const badPayload = {
+                course: new mongoose.Types.ObjectId().toString(),
+                title: 'Null Student Schedule',
+                startDate: '2026-09-01',
+                activeDaysOfWeek: [1, 2, 3],
+                enrolledStudents: [null]  // simulates s._id === undefined serialised to null
+            };
+
+            const result = createPersonalizedScheduleSchema.safeParse(badPayload);
+            expect(result.success).toBe(false);
+            if (!result.success) {
+                const firstIssue = result.error.issues[0];
+                // Path should point into enrolledStudents[0]
+                expect(firstIssue.path.join('.')).toMatch(/enrolledStudents/);
+                // The message must NOT be the bare opaque "Invalid input" without context
+                const fieldPath = firstIssue.path.length ? firstIssue.path.join('.') : 'unknown';
+                const enriched = `Field '${fieldPath}': ${firstIssue.message}`;
+                expect(enriched).toContain('enrolledStudents');
+            }
         });
     });
 
@@ -874,6 +942,271 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
             expect(result.totalInPool).toBeGreaterThanOrEqual(120);
             expect(result.difficultyBreakdown.EASY).toBeGreaterThanOrEqual(40);
             expect(result.questions[0].sourceSyllabusTopic).toBeDefined();
+        });
+
+        it('Gemini provider resolves model dynamically defaulting to gemini-3.8-flash and avoiding gemini-1.5-flash', () => {
+            const originalPersonalized = process.env.GEMINI_PERSONALIZED_MODEL;
+            const originalClassroom = process.env.GEMINI_CLASSROOM_MODEL;
+            const originalLegacy = process.env.GEMINI_MODEL;
+
+            try {
+                delete process.env.GEMINI_PERSONALIZED_MODEL;
+                delete process.env.GEMINI_CLASSROOM_MODEL;
+                delete process.env.GEMINI_MODEL;
+
+                const provider = new GeminiAIQuestionGenerationProvider();
+                expect(provider.getModelName()).toBe('gemini-3.8-flash');
+
+                process.env.GEMINI_PERSONALIZED_MODEL = 'gemini-3.8-flash';
+                expect(provider.getModelName()).toBe('gemini-3.8-flash');
+
+                // Deprecated model should be bypassed in favor of default
+                process.env.GEMINI_PERSONALIZED_MODEL = 'gemini-1.5-flash';
+                expect(provider.getModelName()).toBe('gemini-3.8-flash');
+
+                // Classroom model fallback
+                delete process.env.GEMINI_PERSONALIZED_MODEL;
+                process.env.GEMINI_CLASSROOM_MODEL = 'gemini-2.5-flash';
+                expect(provider.getModelName()).toBe('gemini-2.5-flash');
+            } finally {
+                if (originalPersonalized !== undefined) process.env.GEMINI_PERSONALIZED_MODEL = originalPersonalized;
+                else delete process.env.GEMINI_PERSONALIZED_MODEL;
+
+                if (originalClassroom !== undefined) process.env.GEMINI_CLASSROOM_MODEL = originalClassroom;
+                else delete process.env.GEMINI_CLASSROOM_MODEL;
+
+                if (originalLegacy !== undefined) process.env.GEMINI_MODEL = originalLegacy;
+                else delete process.env.GEMINI_MODEL;
+            }
+        });
+
+        it('valid structured JSON response: parses and validates schema-compliant question bank output', () => {
+            const validPayload = JSON.stringify({
+                questions: [
+                    {
+                        title: 'Gradient Descent Formulation',
+                        topic: 'Gradient Descent and Convexity',
+                        unit: 'Unit 1: Linear Models & Optimization',
+                        difficulty: 'MEDIUM',
+                        questionPrompt: 'Explain how step size affects gradient descent convergence on convex functions.',
+                        expectedConcepts: ['Gradient Descent', 'Convexity', 'Step Size'],
+                        maxMarks: 10,
+                        hints: ['Think about oscillations versus slow progress.'],
+                        referenceAnswer: 'A large step size causes divergence; a small step size leads to slow convergence.',
+                        rubricCriteria: [
+                            { criterionName: 'Convergence explanation', points: 5, description: 'Clear analysis of step size' },
+                            { criterionName: 'Convexity relation', points: 5, description: 'Links to convex curvature' }
+                        ]
+                    }
+                ]
+            });
+
+            const units = [
+                {
+                    unitNumber: 1,
+                    unitTitle: 'Unit 1: Linear Models & Optimization',
+                    topics: ['Gradient Descent and Convexity']
+                }
+            ];
+
+            const parsed = parseGeneratedQuestions(validPayload, units);
+            expect(parsed).toHaveLength(1);
+            expect(parsed[0].title).toBe('Gradient Descent Formulation');
+            expect(parsed[0].difficulty).toBe('MEDIUM');
+            expect(parsed[0].maxMarks).toBe(10);
+            expect(parsed[0].rubricCriteria).toHaveLength(2);
+            expect(parsed[0].sourceSyllabusTopic).toBe('Gradient Descent and Convexity');
+        });
+
+        it('malformed JSON response: rejects unparseable text with controlled 502 error', () => {
+            const malformedPayload = 'pseudocode... this is not valid JSON at all';
+            const units = [
+                {
+                    unitNumber: 1,
+                    unitTitle: 'Unit 1: Linear Models & Optimization',
+                    topics: ['Gradient Descent and Convexity']
+                }
+            ];
+
+            expect(() => parseGeneratedQuestions(malformedPayload, units)).toThrow(
+                /Gemini question generation returned malformed JSON/i
+            );
+        });
+
+        it('schema-invalid JSON response: rejects output missing required fields or having invalid enum values', () => {
+            // Missing questionPrompt and invalid difficulty
+            const invalidPayload = JSON.stringify({
+                questions: [
+                    {
+                        title: 'Invalid Question',
+                        topic: 'Gradient Descent and Convexity',
+                        difficulty: 'SUPER_HARD', // Invalid difficulty
+                        maxMarks: 10
+                    }
+                ]
+            });
+
+            const units = [
+                {
+                    unitNumber: 1,
+                    unitTitle: 'Unit 1: Linear Models & Optimization',
+                    topics: ['Gradient Descent and Convexity']
+                }
+            ];
+
+            expect(() => parseGeneratedQuestions(invalidPayload, units)).toThrow(
+                /Gemini question generation response failed schema validation/i
+            );
+        });
+
+        it('empty response: rejects empty string or empty questions array with controlled 502 error', () => {
+            const units = [
+                {
+                    unitNumber: 1,
+                    unitTitle: 'Unit 1: Linear Models & Optimization',
+                    topics: ['Gradient Descent and Convexity']
+                }
+            ];
+
+            expect(() => parseGeneratedQuestions('', units)).toThrow(
+                /Gemini question generation returned an empty response/i
+            );
+
+            expect(() => parseGeneratedQuestions('   ', units)).toThrow(
+                /Gemini question generation returned an empty response/i
+            );
+
+            expect(() => parseGeneratedQuestions(JSON.stringify({ questions: [] }), units)).toThrow(
+                /Gemini question generation response failed schema validation/i
+            );
+        });
+
+        it('Gemini/API error: refuses to fabricate fallback questions and returns clear controlled error', async () => {
+            const originalApiKey = process.env.GEMINI_API_KEY;
+            process.env.GEMINI_API_KEY = 'test-gemini-key-placeholder';
+
+            try {
+                const failingProvider = new GeminiAIQuestionGenerationProvider();
+                failingProvider.setGeminiCaller(async () => {
+                    throw new Error('Google Generative AI service unavailable (simulated 500 error)');
+                });
+
+                await expect(
+                    personalizedQuestionGenerationService.generateQuestionBank(
+                        {
+                            courseId: testCourse._id.toString(),
+                            targetCount: 5,
+                            userId: professorUser._id.toString()
+                        },
+                        failingProvider
+                    )
+                ).rejects.toThrow(/Google Generative AI service unavailable/i);
+            } finally {
+                if (originalApiKey !== undefined) process.env.GEMINI_API_KEY = originalApiKey;
+                else delete process.env.GEMINI_API_KEY;
+            }
+        });
+
+        it('syllabus-grounded question generation request: verifies grounding against course syllabus', async () => {
+            const originalApiKey = process.env.GEMINI_API_KEY;
+            process.env.GEMINI_API_KEY = 'test-gemini-key-placeholder';
+
+            try {
+                const geminiProvider = new GeminiAIQuestionGenerationProvider();
+                geminiProvider.setGeminiCaller(async () => {
+                    return JSON.stringify({
+                        questions: [
+                            {
+                                title: 'Ridge vs Lasso Derivation',
+                                topic: 'Ridge & Lasso Regularization',
+                                unit: 'Unit 1: Linear Models & Optimization',
+                                difficulty: 'HARD',
+                                questionPrompt: 'Derive the optimization formulation for L1 vs L2 regularization and contrast their sparsity properties.',
+                                expectedConcepts: ['L1 Norm', 'L2 Norm', 'Sparsity', 'Subgradient'],
+                                maxMarks: 10,
+                                hints: ['Consider the shape of the L1 diamond vs L2 circle constraint regions.'],
+                                referenceAnswer: 'L1 regularization produces sparse weights due to corner intersections on the axis.',
+                                rubricCriteria: [
+                                    { criterionName: 'Formulation correctness', points: 5, description: 'L1/L2 loss expressions' },
+                                    { criterionName: 'Sparsity geometric proof', points: 5, description: 'Corner constraint explanation' }
+                                ]
+                            }
+                        ]
+                    });
+                });
+
+                const result = await personalizedQuestionGenerationService.generateQuestionBank(
+                    {
+                        courseId: testCourse._id.toString(),
+                        targetCount: 1,
+                        userId: professorUser._id.toString()
+                    },
+                    geminiProvider
+                );
+
+                expect(result.totalGenerated).toBe(1);
+                expect(result.questions[0].topic).toBe('Ridge & Lasso Regularization');
+                expect(result.questions[0].sourceSyllabusTopic).toBe('Ridge & Lasso Regularization');
+                expect(result.questions[0].unit).toContain('Linear Models');
+                expect(result.questions[0].difficulty).toBe('HARD');
+            } finally {
+                if (originalApiKey !== undefined) process.env.GEMINI_API_KEY = originalApiKey;
+                else delete process.env.GEMINI_API_KEY;
+            }
+        });
+
+        it('successful generation of multiple questions: generates and stores batch of questions across units', async () => {
+            const originalApiKey = process.env.GEMINI_API_KEY;
+            process.env.GEMINI_API_KEY = 'test-gemini-key-placeholder';
+
+            try {
+                const geminiProvider = new GeminiAIQuestionGenerationProvider();
+                geminiProvider.setGeminiCaller(async () => {
+                    return JSON.stringify({
+                        questions: [
+                            {
+                                title: 'Gradient Descent Rate',
+                                topic: 'Gradient Descent and Convexity',
+                                unit: 'Unit 1: Linear Models & Optimization',
+                                difficulty: 'EASY',
+                                questionPrompt: 'Explain how learning rate influences convergence in gradient descent.',
+                                expectedConcepts: ['Learning Rate', 'Convergence'],
+                                maxMarks: 10,
+                                hints: ['Consider small vs large values.'],
+                                referenceAnswer: 'Too small leads to slow convergence, too large causes oscillation or divergence.'
+                            },
+                            {
+                                title: 'Backpropagation Gradient Flow',
+                                topic: 'Loss Functions & Activations',
+                                unit: 'Unit 2: Neural Networks & Backpropagation',
+                                difficulty: 'MEDIUM',
+                                questionPrompt: 'Derive the chain rule application for gradient flow through a sigmoid activation function.',
+                                expectedConcepts: ['Sigmoid', 'Chain Rule', 'Gradient'],
+                                maxMarks: 10,
+                                hints: ['Note that sigmoid derivative is s * (1 - s).'],
+                                referenceAnswer: 'd/dx sigma(x) = sigma(x)(1 - sigma(x)). Gradient backpropagates by multiplying upstream gradient.'
+                            }
+                        ]
+                    });
+                });
+
+                const result = await personalizedQuestionGenerationService.generateQuestionBank(
+                    {
+                        courseId: testCourse._id.toString(),
+                        targetCount: 2,
+                        userId: professorUser._id.toString()
+                    },
+                    geminiProvider
+                );
+
+                expect(result.totalGenerated).toBe(2);
+                expect(result.questions).toHaveLength(2);
+                expect(result.topicBreakdown['Gradient Descent and Convexity']).toBeGreaterThanOrEqual(1);
+                expect(result.topicBreakdown['Loss Functions & Activations']).toBeGreaterThanOrEqual(1);
+            } finally {
+                if (originalApiKey !== undefined) process.env.GEMINI_API_KEY = originalApiKey;
+                else delete process.env.GEMINI_API_KEY;
+            }
         });
     });
 

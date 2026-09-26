@@ -97,7 +97,10 @@ export async function POST(req: NextRequest) {
 
         const validation = createPersonalizedScheduleSchema.safeParse(body);
         if (!validation.success) {
-            const firstError = validation.error.issues[0]?.message || 'Validation failed';
+            const firstIssue = validation.error.issues[0];
+            const fieldPath = firstIssue?.path?.length ? firstIssue.path.join('.') : 'unknown';
+            const rawMessage = firstIssue?.message || 'Validation failed';
+            const firstError = `Field '${fieldPath}': ${rawMessage}`;
             return NextResponse.json(
                 {
                     success: false,
