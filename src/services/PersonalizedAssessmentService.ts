@@ -158,21 +158,26 @@ export class PersonalizedAssessmentService {
     ): Map<string, string[]> {
         const N = studentIds.length;
         const M = questionIds.length;
+        const effectiveSlots = Math.min(targetSlots, M);
 
-        if (M < Math.max(N, targetSlots)) {
+        if (M === 0) {
+            throw new HttpError('Question pool is empty. Please add questions before activating schedule.', 400);
+        }
+
+        if (M < N) {
             throw new HttpError(
-                `Question pool size (${M}) must be at least max(enrolledStudents=${N}, targetSlots=${targetSlots}) to guarantee collision-free cyclic allocation`,
+                `Question pool size (${M}) is insufficient for enrolled students (${N}). Need at least ${N} questions to guarantee collision-free cyclic allocation.`,
                 400
             );
         }
 
-        const allocation = new Map<string, string[]>(); // studentId -> questionId[] (length targetSlots)
+        const allocation = new Map<string, string[]>(); // studentId -> questionId[] (length effectiveSlots)
 
         for (let s = 0; s < N; s++) {
             const studentId = studentIds[s];
             const assignedQuestions: string[] = [];
 
-            for (let d = 0; d < targetSlots; d++) {
+            for (let d = 0; d < effectiveSlots; d++) {
                 const questionIndex = (s * k + d) % M;
                 assignedQuestions.push(questionIds[questionIndex]);
             }
@@ -181,7 +186,7 @@ export class PersonalizedAssessmentService {
         }
 
         // Validate the matrix rigorously before returning
-        this.validateAllocationMatrix(studentIds, questionIds, allocation, targetSlots);
+        this.validateAllocationMatrix(studentIds, questionIds, allocation, effectiveSlots);
 
         return allocation;
     }
@@ -226,7 +231,7 @@ export class PersonalizedAssessmentService {
             const uniqueQuestions = new Set(studentQuestions);
             if (uniqueQuestions.size !== targetSlots) {
                 throw new HttpError(
-                    `Schedule matrix collision detected: Student ${studentId} has duplicate questions across their 100 slots`,
+                    `Schedule matrix collision detected: Student ${studentId} has duplicate questions across their ${targetSlots} slots`,
                     400
                 );
             }
@@ -355,18 +360,18 @@ export class PersonalizedAssessmentService {
         const N = input.enrolledStudents.length;
         const M = questionPoolIds.length;
 
-        // Requirement check: Pool size >= max(N, 100)
-        if (M < Math.max(N, totalSlots)) {
+        if (M === 0) {
+            throw new HttpError('Question pool is empty. Please add questions before activating schedule.', 400);
+        }
+
+        if (M < N) {
             throw new HttpError(
-                `Question pool size (${M}) is insufficient. Required at least max(students=${N}, slots=${totalSlots}) = ${Math.max(
-                    N,
-                    totalSlots
-                )} questions in the pool.`,
+                `Question pool size (${M}) is insufficient. Required at least enrolled students (${N}) to guarantee collision-free assignment.`,
                 400
             );
         }
 
-        // 2. Generate 100 Schedule Dates on active weekdays
+        // 2. Generate Schedule Dates on active weekdays (preserves 16-week / daily timetable)
         const slotDates = this.generateAssessmentDates(
             input.startDate,
             totalWeeks,
@@ -374,11 +379,12 @@ export class PersonalizedAssessmentService {
             totalSlots
         );
 
-        // 3. Generate and validate allocation matrix
+        // 3. Generate and validate allocation matrix for currently available questions
+        const assignableSlots = Math.min(totalSlots, M);
         const allocation = this.generateAllocationMatrix(
             input.enrolledStudents,
             questionPoolIds,
-            totalSlots
+            assignableSlots
         );
 
         // 4. Create Schedule Document
@@ -400,13 +406,13 @@ export class PersonalizedAssessmentService {
             createdBy: new mongoose.Types.ObjectId(professorId)
         });
 
-        // 5. Batch build and insert assignments
+        // 5. Batch build and insert assignments for available slots
         const assignmentsToInsert: Array<Partial<IPersonalizedStudentAssignment>> = [];
 
         for (const studentId of input.enrolledStudents) {
             const studentQuestions = allocation.get(studentId)!;
 
-            for (let d = 0; d < totalSlots; d++) {
+            for (let d = 0; d < assignableSlots; d++) {
                 const scheduledDate = slotDates[d];
                 const { windowStart, windowEnd } = this.computeWindowTimes(scheduledDate, startTime, endTime);
 

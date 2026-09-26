@@ -391,7 +391,14 @@ export default function ProfessorPersonalizedAssessmentPage() {
         setCreating(true);
 
         const course = courses.find((c) => c._id === selectedCourseId);
-        const enrolled = course?.enrolledStudents?.map((s) => s._id) || [];
+        // NOTE: /api/courses returns enrolledStudents as raw ObjectId strings (not populated
+        // {_id, name, email} objects). Normalise to always extract a 24-char hex string so
+        // Zod's objectIdSchema never receives null/undefined.
+        const enrolled = (course?.enrolledStudents || [])
+            .map((s: string | { _id?: string; id?: string }) =>
+                typeof s === 'string' ? s : (s?._id ?? s?.id ?? '')
+            )
+            .filter((id): id is string => /^[0-9a-fA-F]{24}$/.test(id));
 
         if (enrolled.length === 0) {
             setFormError('[VALIDATION_FAILED] The selected course has no enrolled students. Please enroll students first.');
@@ -446,8 +453,7 @@ export default function ProfessorPersonalizedAssessmentPage() {
 
     const currentCourse = courses.find((c) => c._id === selectedCourseId);
     const enrolledCount = currentCourse?.enrolledStudents?.length || 0;
-    const requiredPoolSize = Math.max(100, enrolledCount);
-    const isPoolSufficient = questions.length >= requiredPoolSize;
+    const hasQuestions = questions.length > 0;
 
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-8">
@@ -526,8 +532,8 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 >
                     <Layers className="h-4 w-4" />
                     <span>2. Question Bank ({questions.length})</span>
-                    {isPoolSufficient && (
-                        <span className="h-2 w-2 rounded-full bg-emerald-500 ml-1" title="Pool Capacity Ready" />
+                    {hasQuestions && (
+                        <span className="h-2 w-2 rounded-full bg-emerald-500 ml-1" title="Question Bank Ready" />
                     )}
                 </button>
                 <button
@@ -722,10 +728,10 @@ Unit 4: Advanced Data Structures
                         </Card>
                         <Card className="p-4 bg-white border-slate-200">
                             <p className="text-xs font-bold text-slate-400 uppercase">Capacity Status</p>
-                            <p className={`text-sm font-bold mt-2 ${isPoolSufficient ? 'text-emerald-600' : 'text-amber-600'}`}>
-                                {isPoolSufficient
-                                    ? `✓ Meets ${requiredPoolSize} required capacity`
-                                    : `Requires ${requiredPoolSize} for ${enrolledCount} students`}
+                            <p className={`text-sm font-bold mt-2 ${questions.length > 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                {questions.length > 0
+                                    ? `✓ ${questions.length} questions available`
+                                    : `No questions generated yet`}
                             </p>
                         </Card>
                         <Card className="p-4 bg-white border-slate-200">
@@ -995,7 +1001,7 @@ Unit 4: Advanced Data Structures
                                     className="w-full rounded-xl border border-slate-300 p-2.5 text-sm font-semibold"
                                 />
                                 <p className="text-2xs text-slate-400 mt-1">
-                                    Recommended: At least {requiredPoolSize} questions for {enrolledCount} enrolled students.
+                                    Target quantity to generate for {enrolledCount} enrolled students.
                                 </p>
                             </div>
 
@@ -1185,13 +1191,13 @@ Unit 4: Advanced Data Structures
 
                             {/* Pool Capacity Status */}
                             <div className={`p-3 rounded-xl border text-xs space-y-1 ${
-                                isPoolSufficient
+                                hasQuestions
                                     ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                                     : 'bg-amber-50 border-amber-200 text-amber-900'
                             }`}>
                                 <p className="font-bold">Question Bank Capacity Status:</p>
                                 <p>• Current question pool: <strong>{questions.length} questions</strong></p>
-                                <p>• Enrolled cohort: <strong>{enrolledCount} students</strong> (Requires at least {requiredPoolSize} questions)</p>
+                                <p>• Enrolled cohort: <strong>{enrolledCount} students</strong></p>
                             </div>
 
                             <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -1207,7 +1213,7 @@ Unit 4: Advanced Data Structures
                                     variant="primary"
                                     size="md"
                                     type="submit"
-                                    disabled={creating || !isPoolSufficient}
+                                    disabled={creating || questions.length === 0 || enrolledCount === 0}
                                 >
                                     <span>{creating ? 'Validating & Activating...' : 'Activate Assessment Schedule'}</span>
                                 </Button>
