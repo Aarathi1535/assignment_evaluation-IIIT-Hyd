@@ -110,6 +110,39 @@ export enum ProfileStatus {
     STALE = 'STALE'                // Profile requires refresh
 }
 
+export const HANDWRITING_FEATURE_NAMES = [
+    'inkDensity',
+    'horizontalProjectionVariance',
+    'verticalProjectionVariance',
+    'estimatedLineSpacing',
+    'strokeWidthMean',
+    'strokeWidthVariance',
+    'dominantSlantAngle',
+    'connectedComponentAspectRatio'
+] as const;
+
+export type HandwritingFeatureName = typeof HANDWRITING_FEATURE_NAMES[number];
+
+export interface IHandwritingSampleMetadata {
+    sampleId: string;
+    answerScriptId?: string;
+    pageNumber?: number;
+    extractedAt?: Date;
+    quality?: ISampleQuality;
+}
+
+export interface IHandwritingProfileData {
+    studentId: string;
+    sampleCount: number;
+    featureMeans: number[];        // Mean values for each feature in rawVector (length 8)
+    featureStdDevs: number[];     // Intra-student standard deviations (natural variance)
+    status: ProfileStatus;
+    samplesUsed: string[];        // Array of sample identifiers
+    sampleMetadata?: IHandwritingSampleMetadata[];
+    createdAt: Date;
+    updatedAt: Date;
+}
+
 export interface IHandwritingProfile extends Document {
     student: mongoose.Types.ObjectId;
     sampleCount: number;
@@ -117,6 +150,8 @@ export interface IHandwritingProfile extends Document {
     featureStdDevs: number[];     // Intra-student standard deviations (natural variance)
     status: ProfileStatus;
     samplesUsed: mongoose.Types.ObjectId[];
+    sampleIds?: string[];
+    sampleMetadata?: IHandwritingSampleMetadata[];
     updatedAt: Date;
     createdAt: Date;
 }
@@ -127,6 +162,26 @@ export enum ComparisonMatchState {
     INSUFFICIENT_SAMPLE = 'INSUFFICIENT_SAMPLE',
     INCONCLUSIVE = 'INCONCLUSIVE',
     UNASSESSED = 'UNASSESSED'
+}
+
+export interface IFeatureDeviation {
+    feature: HandwritingFeatureName | string;
+    baselineMean: number;
+    baselineStdDev: number;
+    observed: number;
+    normalizedDeviation: number;
+    contribution: number;
+}
+
+export interface IHandwritingComparisonResult {
+    status: ComparisonMatchState;
+    distance: number;
+    confidence: number;
+    sampleQuality?: ISampleQuality;
+    featureDeviations: IFeatureDeviation[];
+    anomalyFactors: string[];
+    comparedAt: Date;
+    disqualificationReason?: string;
 }
 
 export interface IHandwritingComparison extends Document {

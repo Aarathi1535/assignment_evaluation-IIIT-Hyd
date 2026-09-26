@@ -109,15 +109,110 @@ To comply with data privacy policies and ensure fully reproducible, deterministi
 
 ---
 
-## 8. Future Work (Phase 2 & Beyond)
+## 8. Phase 2: Multi-Sample Profile Construction & Comparison Engine
 
-1. **Handwriting Profile Builder (`HandwritingProfileService.ts`)**:
-   - Aggregate $\ge 3$ verified `HandwritingSample` records for a student.
-   - Calculate intra-student feature means ($\mu_k$) and standard deviations ($\sigma_k$).
-   - Transition profile status from `PROVISIONAL` to `ESTABLISHED`.
-2. **Handwriting Similarity Engine (`HandwritingComparisonService.ts`)**:
-   - Compute Mahalanobis or weighted normalized Euclidean distance against the student's profile.
-   - Classify into `MATCH`, `REVIEW_REQUIRED`, `INCONCLUSIVE`, or `INSUFFICIENT_SAMPLE`.
-3. **Comparison APIs & Review UI**:
-   - Teacher/TA interface displaying side-by-side sample overlays and radar chart breakdowns of anomaly factors.
-   - ScriptFlag integration with manual override controls for instructors.
+Phase 2 builds upon the feature extraction pipeline established in Phase 1 to construct empirical multi-sample student handwriting profiles (`HandwritingProfileBuilder.ts`) and evaluate new submissions via a deterministic handwriting comparison engine (`HandwritingComparisonEngine.ts`).
+
+### 8.1 Profile Construction & Minimum Sample Count
+
+A student handwriting profile represents empirical baseline statistics constructed from verified historical handwritten submissions.
+
+- **Candidate Sample Processing**: Input samples may be supplied as raw image buffers (which are processed through `HandwritingFeatureExtractor`) or as validated pre-extracted feature objects.
+- **Sample Quality Filtering**: Any sample that fails validation (status `BLANK`, `INSUFFICIENT_SAMPLE`, `DIAGRAM_REJECTED`, or `ERROR`) is excluded from profile statistics and recorded under `rejectedSamples`.
+- **Minimum Sample Count Rules**:
+  - **Fewer than 3 valid samples ($N < 3$)**: Status is set to `PROVISIONAL`. Intra-writer natural variance cannot yet be reliably established; comparison against a provisional profile yields `INSUFFICIENT_SAMPLE`.
+  - **3 or more valid samples ($N \ge 3$)**: Status transitions to `ESTABLISHED`. Intra-writer feature statistics are considered sufficient for consistency assessment.
+- **Traceability Metadata**: The profile preserves sample identifiers (`samplesUsed`) and sample metadata (`sampleMetadata`) indicating source answer scripts, page numbers, extraction timestamps, and quality metrics to allow full auditability.
+- **Immutability**: Profile construction never mutates original sample inputs or database documents.
+
+### 8.2 Feature Statistics Formulation
+
+For $N$ accepted samples with 8-element normalized feature vectors $v_j \in [0, 1]^8$ ($j = 1 \dots N$):
+
+1. **Feature Means ($\mu_k$)**:
+   $$\mu_k = \frac{1}{N} \sum_{j=1}^N v_{j, k} \quad \text{for } k \in \{0, \dots, 7\}$$
+   Rounded to 4 decimal places for deterministic precision.
+
+2. **Feature Standard Deviations ($\sigma_k$)**:
+   - For $N = 1$: Standard deviation cannot be computed across multiple samples and defaults to $0.0000$.
+   - For $N \ge 2$: Calculated using Bessel-corrected sample standard deviation:
+     $$s_k = \sqrt{\frac{1}{N - 1} \sum_{j=1}^N (v_{j, k} - \mu_k)^2}$$
+     (Population standard deviation with denominator $N$ is optionally supported via builder configuration).
+   - Near-zero variance handling: If all samples have identical feature values, $\sigma_k = 0.0000$. Safe floors prevent numerical instability downstream.
+
+### 8.3 Comparison Method & Distance Calculation
+
+When a new handwriting sample is evaluated against an established profile:
+
+1. **Validation & Extraction**: The new sample is verified. If poor-quality or invalid (blank, diagram, insufficient strokes), the comparison terminates early with `UNASSESSED`.
+2. **Baseline Sufficiency Check**: If the profile has fewer than 3 samples or is `PROVISIONAL`, the engine returns `INSUFFICIENT_SAMPLE`.
+3. **Variance-Normalized Deviations ($z_k$)**:
+   To prevent division-by-zero or excessive score magnification from near-zero baseline variance, an effective standard deviation floor ($\sigma_{\text{floor}} = 0.02$) is enforced:
+   $$\sigma_{\text{eff}, k} = \max(\sigma_k, \sigma_{\text{floor}})$$
+   $$z_k = \frac{|x_k - \mu_k|}{\sigma_{\text{eff}, k}}$$
+4. **Multi-Feature Soft-Capped Distance**:
+   To ensure that a single unusual feature cannot disproportionately force an anomalous outcome, each feature's divergence component is bounded:
+   $$c_k = \min\left(1.0, \frac{|x_k - \mu_k|}{3 \cdot \sigma_{\text{eff}, k}}\right)$$
+   The aggregate distance is computed as the root-mean-square of these bounded components:
+   $$D = \sqrt{\frac{1}{8} \sum_{k=0}^7 c_k^2} \in [0.0, 1.0]$$
+5. **Feature Contribution Ranking**:
+   Each feature's squared standardized divergence contributes to total divergence:
+   $$\text{contribution}_k = \frac{z_k^2}{\sum_{j=0}^7 z_j^2}$$
+   Features are sorted in descending order of contribution with alphabetical tie-breaking to guarantee deterministic ranking.
+6. **Confidence Scoring**:
+   Confidence combines baseline profile maturity with the new sample's image quality metrics:
+   $$C = C_{\text{samples}} \times C_{\text{quality}}$$
+   $$C_{\text{samples}} = \min(1.0, 0.5 + 0.1 \times N)$$
+   $$C_{\text{quality}} = \min(1.0, \text{contrast} \times 0.6 + \text{sharpness} \times 0.4) \times (1.0 - \text{noiseRatio})$$
+
+### 8.4 Comparison Result States & Semantics
+
+| Result State | Semantic Definition | Trigger Conditions |
+| :--- | :--- | :--- |
+| **`MATCH`** | New sample is consistent with the established baseline profile. | $D \le 0.38$, deviating features $< 2$, and confidence $\ge 0.45$. |
+| **`REVIEW_REQUIRED`** | Multiple meaningful deviations from baseline profile indicate manual verification is warranted. | $\ge 2$ features with $z_k \ge 2.5$ (and $|x_k - \mu_k| \ge 0.04$) AND $D \ge 0.50$. |
+| **`INSUFFICIENT_SAMPLE`** | Insufficient baseline samples to establish a reliable baseline profile. | Profile has $< 3$ valid baseline samples or is `PROVISIONAL`. |
+| **`INCONCLUSIVE`** | Evidence is ambiguous, internally inconsistent, or confidence is degraded. | Single isolated feature deviation with elevated distance, or $D$ between thresholds, or confidence $< 0.45$. |
+| **`UNASSESSED`** | Comparison could not be meaningfully performed. | New sample is blank, diagram-heavy, insufficient strokes, or decode failed. |
+
+> [!NOTE]
+> Under no circumstances does the engine report "Plagiarism" or "Cheating". Results strictly represent objective geometric consistency and anomaly evidence for human verification.
+
+### 8.5 Provisional Engineering Thresholds
+
+All thresholds are centralized in `DEFAULT_COMPARISON_THRESHOLDS` and fully configurable via constructor injection:
+
+```typescript
+export const DEFAULT_COMPARISON_THRESHOLDS: HandwritingComparisonThresholds = {
+    minBaselineSamples: 3,
+    minStdDevFloor: 0.02,
+    matchDistanceThreshold: 0.38,
+    reviewDistanceThreshold: 0.50,
+    featureDeviationZThreshold: 2.5,
+    minAbsoluteDiff: 0.04,
+    minDeviatingFeaturesForReview: 2,
+    minConfidenceThreshold: 0.45
+};
+```
+
+> [!WARNING]
+> **Provisional Engineering Status & Calibration Requirement**
+> These thresholds are provisional engineering heuristics configured for deterministic unit tests and pipeline validation. They are **NOT** scientifically or forensically validated biometric cutoffs.
+> Real-world deployment requires calibration on verified, multi-institution handwriting corpora across varied writing instruments (ballpoint, fountain, gel, pencil) and scanner resolutions (150–600 DPI).
+
+### 8.6 Limitations
+
+1. **Instrument Variance**: Writing with a thick marker vs. a micro-point pen causes natural stroke-width shifts. Multiple writing instruments per student should ideally be tracked across distinct instrument clusters.
+2. **Postural & Fatigue Variation**: Student handwriting naturally deteriorates over long multi-hour examinations; slant and line spacing variance increases toward the end of an exam script.
+3. **Absence of Real Pressure Transducers**: Scans measure optical ink absorption and run-length stroke thickness, not kinematic stylus pressure.
+4. **Single-Feature Robustness**: An isolated change (e.g. changing slant due to desk angle) must not flag a student; multi-feature corroboration is strictly required.
+
+### 8.7 Future Integration (Persistence & Service Orchestration)
+
+1. **Persistence Integration**:
+   - `HandwritingProfile` Mongoose model persists established baseline vectors, sample references, and update timestamps.
+   - `HandwritingComparison` Mongoose model records comparison runs, distance scores, confidence, anomaly breakdowns, and human review actions (`PENDING_REVIEW`, `VERIFIED_AUTHENTIC`, `FLAGGED_MISMATCH`).
+2. **Asynchronous Processing**:
+   - Baseline profile updates and post-ingestion comparisons can run asynchronously during background batch processing without blocking grading workflows.
+3. **Instructor Review Support**:
+   - Discrepancies flagged as `REVIEW_REQUIRED` can feed into the grading workflow as non-blocking informational advisories requiring manual teacher confirmation.
