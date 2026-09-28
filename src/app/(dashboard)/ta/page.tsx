@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight, Bell } from 'lucide-react';
+import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight, Bell, Send } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Card } from '@/components/ui/Card';
 import NotificationPanel from '@/components/NotificationPanel';
+import { BulkSubmitModal } from '@/components/grading/BulkSubmitModal';
 import Link from 'next/link';
 
 interface AnswerScript {
@@ -45,6 +46,8 @@ export default function TaDashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
 
   const fetchAllocations = async (pageToFetch: number) => {
     setIsLoading(true);
@@ -145,6 +148,22 @@ export default function TaDashboardPage() {
         <Clock className="h-4 w-4 text-slate-500" aria-hidden="true" />
         <span>Refresh Queue</span>
       </Button>
+      {allocations.length > 0 && (
+        <Button
+          type="button"
+          variant="primary"
+          size="md"
+          data-testid="bulk-submit-exam-button"
+          onClick={() => {
+            setSelectedExamId(allocations[0]?.exam || null);
+            setIsBulkModalOpen(true);
+          }}
+          className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+        >
+          <Send className="h-4 w-4" />
+          <span>Bulk Submit Exam</span>
+        </Button>
+      )}
     </div>
   );
 
@@ -361,6 +380,18 @@ export default function TaDashboardPage() {
         onClose={() => setIsNotificationPanelOpen(false)}
         onNotificationsUpdated={(count) => setUnreadNotificationCount(count)}
       />
+
+      {/* Bulk Submit Modal (AE-169 / AE-173) */}
+      {selectedExamId && (
+        <BulkSubmitModal
+          isOpen={isBulkModalOpen}
+          onClose={() => setIsBulkModalOpen(false)}
+          examId={selectedExamId}
+          onComplete={() => {
+            fetchAllocations(currentPage);
+          }}
+        />
+      )}
     </DashboardLayout>
   );
 }

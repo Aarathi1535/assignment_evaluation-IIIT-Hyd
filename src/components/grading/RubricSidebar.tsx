@@ -69,6 +69,7 @@ export interface RubricSidebarProps {
   onScoresChange?: (marksAwarded: CriterionGradeEntry[]) => void;
   onFeedbackChange?: (questionNumber: number, feedback: string) => void;
   onGradeSaved?: (savedGrade: unknown) => void;
+  onFinalizedStateChange?: (allFinalized: boolean) => void;
   onAutoAdvance?: (nextUrl: string) => void;
   className?: string;
 }
@@ -89,6 +90,7 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
     onScoresChange,
     onFeedbackChange,
     onGradeSaved,
+    onFinalizedStateChange,
     onAutoAdvance,
     className = '',
   }: RubricSidebarProps,
@@ -245,6 +247,11 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
           setScores((prev) => ({ ...loadedScores, ...prev }));
           setTagIds((prev) => ({ ...loadedTagIds, ...prev }));
           setFinalizedQuestions((prev) => ({ ...loadedFinalized, ...prev }));
+
+          if (onFinalizedStateChange && json.data.length > 0) {
+            const isAllFinal = json.data.every((g: { isFinal?: boolean }) => g.isFinal);
+            onFinalizedStateChange(isAllFinal);
+          }
         }
       } catch {
         // Non-blocking grade loading failure
@@ -256,7 +263,7 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
     return () => {
       isMounted = false;
     };
-  }, [scriptId]);
+  }, [scriptId, onFinalizedStateChange]);
 
   const handleRetry = useCallback(() => {
     setLoading(true);

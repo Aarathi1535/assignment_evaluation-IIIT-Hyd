@@ -45,7 +45,8 @@ export type SaveStatus =
   | 'syncing'
   | 'conflict'
   | 'locked'
-  | 'recovery_available';
+  | 'recovery_available'
+  | 'submitted';
 
 export type {
   CanvasViewState,
