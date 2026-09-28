@@ -11,6 +11,8 @@ export interface IHandwritingProfileDocument extends Document {
     profileVersion: number;
     extractionVersion: string;
     isCurrent: boolean;
+    retentionExpiresAt?: Date;
+    retentionPolicy?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -74,6 +76,13 @@ const HandwritingProfileSchema = new Schema<IHandwritingProfileDocument>(
             required: true,
             default: true,
             index: true
+        },
+        retentionExpiresAt: {
+            type: Date,
+            index: true
+        },
+        retentionPolicy: {
+            type: String
         }
     },
     {
@@ -85,6 +94,7 @@ const HandwritingProfileSchema = new Schema<IHandwritingProfileDocument>(
 HandwritingProfileSchema.index({ student: 1, profileVersion: 1 }, { unique: true });
 HandwritingProfileSchema.index({ student: 1, isCurrent: 1 });
 HandwritingProfileSchema.index({ student: 1, profileVersion: -1 });
+HandwritingProfileSchema.index({ student: 1, retentionExpiresAt: 1 });
 
 export const HandwritingProfileModel: Model<IHandwritingProfileDocument> =
     mongoose.models.HandwritingProfilePersistence ||

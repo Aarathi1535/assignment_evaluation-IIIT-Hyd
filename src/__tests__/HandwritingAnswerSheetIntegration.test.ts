@@ -8,6 +8,9 @@ import IngestionPage from '../models/IngestionPage';
 import HandwritingSampleModel from '../models/HandwritingSample';
 import HandwritingProfileModel from '../models/HandwritingProfile';
 import HandwritingComparisonModel from '../models/HandwritingComparison';
+import HandwritingConsentModel from '../models/HandwritingConsent';
+import { handwritingConsentRepository } from '../repositories/HandwritingConsentRepository';
+
 import { AnswerSheetSourceAdapter } from '../services/handwriting/AnswerSheetSourceAdapter';
 import { AnswerRegionResolver } from '../services/handwriting/AnswerRegionResolver';
 import { AnswerSheetHandwritingIntegrationService } from '../services/handwriting/AnswerSheetHandwritingIntegrationService';
@@ -45,6 +48,7 @@ describe('HandwritingAnswerSheetIntegration (Phase 4)', () => {
         await HandwritingSampleModel.deleteMany({});
         await HandwritingProfileModel.deleteMany({});
         await HandwritingComparisonModel.deleteMany({});
+        await HandwritingConsentModel.deleteMany({});
         await AnswerScript.deleteMany({});
         await Page.deleteMany({});
         await IngestionPage.deleteMany({});
@@ -92,6 +96,10 @@ describe('HandwritingAnswerSheetIntegration (Phase 4)', () => {
             role: UserRole.PROFESSOR
         });
 
+        // Seed active consent for students (required by HandwritingConsistencyWorkflowService)
+        await handwritingConsentRepository.setConsent(studentAUser._id.toString(), true);
+        await handwritingConsentRepository.setConsent(studentBUser._id.toString(), true);
+
         courseDoc = await Course.create({
             courseCode: 'CS101',
             courseName: 'Intro to CS',
@@ -130,6 +138,7 @@ describe('HandwritingAnswerSheetIntegration (Phase 4)', () => {
             role: UserRole.PROFESSOR
         };
     });
+
 
     describe('1. Trusted Student Identity & Security Resolution', () => {
         it('1. AnswerScript resolves to the correct trusted student', async () => {

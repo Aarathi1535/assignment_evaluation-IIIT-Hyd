@@ -19,29 +19,48 @@ export class HandwritingProfileRepository {
 
     /**
      * Finds the current active profile for a student.
+     * Excludes expired profiles by default.
      * Falls back to the highest profileVersion if no isCurrent document is marked.
      */
-    async findByStudent(studentId: string): Promise<IHandwritingProfileDocument | null> {
+    async findByStudent(
+        studentId: string,
+        options?: { includeExpired?: boolean }
+    ): Promise<IHandwritingProfileDocument | null> {
         if (!this.isValidObjectId(studentId)) {
             return null;
         }
 
         const studentOid = new mongoose.Types.ObjectId(studentId);
+        const now = new Date();
 
-        // First attempt to find the current active profile
-        const currentProfile = await HandwritingProfileModel.findOne({
+        // Query for active current profile
+        const currentQuery: any = {
             student: studentOid,
             isCurrent: true
-        });
+        };
+        if (!options?.includeExpired) {
+            currentQuery.$or = [
+                { retentionExpiresAt: { $exists: false } },
+                { retentionExpiresAt: { $gt: now } }
+            ];
+        }
+
+        const currentProfile = await HandwritingProfileModel.findOne(currentQuery);
 
         if (currentProfile) {
             return currentProfile;
         }
 
         // Fallback: return the highest version profile for this student
-        return await HandwritingProfileModel.findOne({
-            student: studentOid
-        }).sort({ profileVersion: -1 });
+        const fallbackQuery: any = { student: studentOid };
+        if (!options?.includeExpired) {
+            fallbackQuery.$or = [
+                { retentionExpiresAt: { $exists: false } },
+                { retentionExpiresAt: { $gt: now } }
+            ];
+        }
+
+        return await HandwritingProfileModel.findOne(fallbackQuery).sort({ profileVersion: -1 });
     }
 
     /**
@@ -109,6 +128,21 @@ export class HandwritingProfileRepository {
         return await HandwritingProfileModel.find({
             student: new mongoose.Types.ObjectId(studentId)
         }).sort({ profileVersion: 1 });
+    }
+
+    /**
+     * In-architecture purge of expired profiles for a student or globally.
+     */
+    async purgeExpired(studentId?: string): Promise<number> {
+        const now = new Date();
+        const query: any = {
+            retentionExpiresAt: { $lte: now }
+        };
+        if (studentId && this.isValidObjectId(studentId)) {
+            query.student = new mongoose.Types.ObjectId(studentId);
+        }
+        const res = await HandwritingProfileModel.deleteMany(query);
+        return res.deletedCount || 0;
     }
 }
 

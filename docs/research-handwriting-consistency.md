@@ -1,27 +1,28 @@
-# Research Direction 4: Handwriting Consistency & Identity Verification (Phase 1)
+# Research Direction 4: Handwriting Consistency Analysis & Empirical Evaluation
 
 ## 1. Objective
 
-Research Direction 4 addresses the challenge of verifying handwriting consistency across student submissions:
+Research Direction 4 addresses the challenge of analyzing handwriting consistency across student submissions:
 - Associating handwritten answer scripts with individual student profiles.
-- Constructing an empirical handwriting representation (profile) from verified historical samples.
-- Comparing subsequent answer scripts against the student's profile.
+- Constructing an empirical handwriting representation (profile) from consented historical samples.
+- Comparing subsequent answer scripts against the student's profile to evaluate consistency variance.
 - Generating soft investigative flags (`REVIEW_REQUIRED`, `INCONCLUSIVE`) for human review when anomalous variance is detected.
+- Never claiming mathematical, biometric, or legal proof of authorship.
 
 **Phase 1 Focus:**
 Phase 1 establishes the mathematical foundation and deterministic document-analysis feature extraction layer (`HandwritingFeatureExtractor.ts`), along with the isolated data models (`HandwritingConsistency.ts`) and deterministic synthetic test fixtures (`HandwritingFixtureGenerator.ts`).
 
 ---
 
-## 2. Distinction: Document-Analysis Features vs. Biometric Identity
+## 2. Distinction: Document-Analysis Features vs. Authorship Proof
 
 > [!IMPORTANT]
-> **Explicit Architectural Disclaimer**
+> **Explicit Architectural & Non-Authorship Disclaimer**
 > Classical image document-analysis features (ink density, horizontal/vertical projection profiles, stroke-width proxies, contour gradient slant) describe geometric and statistical properties of scanned ink on paper.
 >
-> They do **NOT** constitute biometric identity proof or forensic forensic handwriting identification. Real pen pressure cannot be directly measured from 2D static images without hardware-level digitized stylus transducers; stroke thickness is therefore strictly treated and modeled as an observational proxy (`strokeWidthProxy`) for pen nib geometry and writing weight.
+> They do **NOT** prove authorship or constitute forensic handwriting identification. Real pen pressure cannot be directly measured from 2D static images without hardware-level digitized stylus transducers; stroke thickness is strictly treated and modeled as an observational proxy (`strokeWidthProxy`) for pen nib geometry and writing weight.
 >
-> High feature divergence indicates an **investigative anomaly** warranting human instructor or TA review, never an automated accusation of plagiarism or cheating.
+> High feature divergence indicates an **investigative anomaly** warranting human instructor or TA review, never an automated accusation or proof of authorship.
 
 ---
 
@@ -464,3 +465,53 @@ Student handwriting is extracted from specific answer regions rather than entire
 1. **Uncalibrated Feature Thresholds**: As noted, current distance ($0.38 / 0.50$) and $z$-score ($2.5$) thresholds are engineering defaults that must be calibrated against real academic handwriting datasets across diverse writing instruments.
 2. **Scanner Artifacts & Resolution**: Variations in scanner DPI, compression noise, and contrast can slightly alter stroke-width proxies. Normalization reduces this effect, but consistent scanning standards are recommended.
 3. **No Forensic or Biometric Claims**: Features reflect geometric surface statistics, not forensic biometric identification. Outputs serve strictly as human decision support (`REVIEW_REQUIRED`), never automated penalty.
+
+---
+
+## 11. Consent, Retention, and Empirical False-Positive Evaluation
+
+### 11.1 Explicit Student Consent Handling (`HandwritingConsent.ts`)
+
+To ensure compliance with privacy regulations and institutional ethics guidelines:
+- **Mandatory Opt-In**: Handwriting consistency profiling and comparison **cannot** be executed without active, verified student consent.
+- **Data Model**: The `HandwritingConsent` model stores:
+  - `student`: ObjectId reference to `User` (unique index).
+  - `hasConsented`: Boolean indicating explicit consent.
+  - `consentedAt`: Timestamp recorded when consent was granted.
+  - `revokedAt`: Timestamp recorded if consent is revoked.
+  - `retentionDays`: Configured retention duration (default 365 days / 1 academic year).
+  - `retentionExpiresAt`: Timestamp after which samples and profile are expired.
+- **Fail-Closed Gatekeeper**: `HandwritingConsistencyWorkflowService` verifies consent on every entry point (`registerSample`, `rebuildProfile`, `compareSample`). If consent is absent or expired, the operation rejects immediately with `403 Forbidden`.
+- **UI & API Exposure**: Dedicated endpoints (`GET /api/research/handwriting/consent`, `POST /api/research/handwriting/consent`) and user-facing controls (`HandwritingConsentCard`) allow students and instructors to view status and grant or revoke consent.
+
+### 11.2 Explicit Retention Policy (365-Day Academic Year)
+
+- **Retention Lifespan**: All handwriting samples and profile representations are retained for a maximum of 365 days from acquisition (`HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS`), or until explicit revocation.
+- **Active Evidence Guarantee**: Expired samples and profiles are strictly filtered out from database queries (`retentionExpiresAt: { $gt: now }`) during baseline profile aggregation and candidate comparison. Expired data is **never** treated as active evidence.
+- **Within-Architecture Implementation**: Retention and expiry are managed purely through standard MongoDB timestamp queries and internal maintenance methods (`purgeExpired`). No external deletion infrastructure, cron daemons, or cloud-specific storage lifecycles are required.
+
+### 11.3 Neutral Review Status (`REVIEWED_CONSISTENT`)
+
+To prevent unwarranted or overclaiming identity inferences:
+- The legacy review status `VERIFIED_AUTHENTIC` has been systematically replaced with **`REVIEWED_CONSISTENT`**.
+- Status values are strictly neutral:
+  - `PENDING_REVIEW`: Awaiting human instructor or TA inspection.
+  - `REVIEWED_CONSISTENT`: Reviewed by human instructor as consistent with the student's known writing baseline.
+  - `FLAGGED_MISMATCH`: Flagged by human instructor for further investigation.
+- The system never claims to "verify authenticity", "confirm writer", or "prove authorship".
+
+### 11.4 Empirical False-Positive Rate (FPR) Measurement
+
+To scientifically quantify the accuracy of the multi-feature distance heuristics without overclaiming, the system implements an empirical evaluation engine (`HandwritingEvaluationService`):
+
+1. **Pairwise Evaluation Methodology**:
+   - **Same-Student Evaluations**: Candidate sample from Student $A$ compared against Student $A$'s established baseline profile.
+   - **Different-Student Evaluations**: Candidate sample from Student $B$ compared against Student $A$'s established baseline profile ($A \neq B$).
+2. **False-Positive Rate Formulation**:
+   $$\text{FPR} = \frac{\text{Different-student comparisons incorrectly accepted as MATCH}}{\text{Total different-student comparisons}}$$
+3. **No Metric Inflation from Same-Student Samples**:
+   The denominator of the false-positive rate is strictly the total number of cross-student (different-student) pairs evaluated. Same-student samples are measured separately under True Positive Rate / Match Rate and cannot mathematically alter or inflate the different-student FPR.
+4. **Prominent Empirical Disclaimer**:
+   All metrics exposed via API (`GET /api/research/handwriting/evaluation`) and dashboard (`HandwritingEvaluationDashboard`) carry an explicit disclaimer:
+   > *"Empirical evaluation metric based on tested sample distribution. This metric measures geometric and statistical consistency heuristics and does NOT constitute mathematical, biometric, or legal proof of authorship."*
+

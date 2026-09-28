@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import HandwritingSampleModel from '../models/HandwritingSample';
 import HandwritingProfileModel from '../models/HandwritingProfile';
 import HandwritingComparisonModel from '../models/HandwritingComparison';
+import HandwritingConsentModel from '../models/HandwritingConsent';
+import { handwritingConsentRepository } from '../repositories/HandwritingConsentRepository';
 import {
     HandwritingConsistencyWorkflowService,
     HandwritingAuthContext
@@ -40,6 +42,9 @@ describe('HandwritingConsistencyWorkflowService (Phase 3)', () => {
         await HandwritingSampleModel.deleteMany({});
         await HandwritingProfileModel.deleteMany({});
         await HandwritingComparisonModel.deleteMany({});
+        await HandwritingConsentModel.deleteMany({});
+        await handwritingConsentRepository.setConsent(studentAId, true);
+        await handwritingConsentRepository.setConsent(studentBId, true);
     });
 
     describe('1. Sample Registration & Profile Establishment', () => {
@@ -249,6 +254,9 @@ describe('HandwritingConsistencyWorkflowService (Phase 3)', () => {
                 role: UserRole.STUDENT
             };
 
+            // Seed consent for the new student (no baseline samples will be present)
+            await handwritingConsentRepository.setConsent(newStudentId, true);
+
             const comp = await workflow.compareSample(newStudentId, {
                 sourceReference: 'no-baseline-test',
                 imageBuffer: HandwritingFixtureGenerator.createConsistentSample(1)
@@ -258,6 +266,7 @@ describe('HandwritingConsistencyWorkflowService (Phase 3)', () => {
             expect(comp.profileVersion).toBeUndefined();
             expect(comp.distance).toBe(0);
         });
+
 
         it('14. Poor-quality comparison sample is handled correctly and persisted as UNASSESSED', async () => {
             // Create established profile for student A

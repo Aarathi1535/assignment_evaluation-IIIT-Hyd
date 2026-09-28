@@ -10,9 +10,14 @@ import {
 import { IHandwritingSampleDocument, HandwritingSampleType } from '../../models/HandwritingSample';
 import { IHandwritingProfileDocument } from '../../models/HandwritingProfile';
 import { IHandwritingComparisonDocument } from '../../models/HandwritingComparison';
+import {
+    IHandwritingConsentDocument,
+    HANDWRITING_RETENTION_POLICY
+} from '../../models/HandwritingConsent';
 import { HandwritingSampleRepository, handwritingSampleRepository } from '../../repositories/HandwritingSampleRepository';
 import { HandwritingProfileRepository, handwritingProfileRepository } from '../../repositories/HandwritingProfileRepository';
 import { HandwritingComparisonRepository, handwritingComparisonRepository } from '../../repositories/HandwritingComparisonRepository';
+import { HandwritingConsentRepository, handwritingConsentRepository, SetConsentOptions } from '../../repositories/HandwritingConsentRepository';
 import { HandwritingFeatureExtractor } from './HandwritingFeatureExtractor';
 import { HandwritingProfileBuilder, HandwritingSampleInput } from './HandwritingProfileBuilder';
 import { HandwritingComparisonEngine } from './HandwritingComparisonEngine';
@@ -87,7 +92,9 @@ export class HandwritingConsistencyWorkflowService {
         private readonly comparisonRepo: HandwritingComparisonRepository = handwritingComparisonRepository,
         private readonly featureExtractor: HandwritingFeatureExtractor = new HandwritingFeatureExtractor(),
         private readonly profileBuilder: HandwritingProfileBuilder = new HandwritingProfileBuilder(),
-        private readonly comparisonEngine: HandwritingComparisonEngine = new HandwritingComparisonEngine()
+        private readonly comparisonEngine: HandwritingComparisonEngine = new HandwritingComparisonEngine(),
+        private readonly consentRepo: HandwritingConsentRepository = handwritingConsentRepository,
+        private readonly requireConsent: boolean = true
     ) {}
 
     private isValidObjectId(id: string): boolean {
@@ -101,6 +108,42 @@ export class HandwritingConsistencyWorkflowService {
         if (!isAuthorizedForStudent(authContext, studentId)) {
             throw new HttpError('Unauthorized: access denied to student handwriting data', 403);
         }
+    }
+
+    /**
+     * Enforces explicit, active consent before handwriting analysis or profile comparison.
+     * Throws 403 if consent is missing or expired.
+     */
+    public async verifyConsent(studentId: string): Promise<IHandwritingConsentDocument> {
+        if (!this.requireConsent) {
+            const existing = await this.consentRepo.findByStudent(studentId);
+            if (existing) return existing;
+            return {
+                student: new mongoose.Types.ObjectId(studentId),
+                hasConsented: true,
+                consentedAt: new Date(),
+                retentionDays: HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS,
+                retentionExpiresAt: new Date(Date.now() + HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+                consentVersion: '1.0'
+            } as unknown as IHandwritingConsentDocument;
+        }
+
+        const consent = await this.consentRepo.findByStudent(studentId);
+        if (!consent || !consent.hasConsented) {
+            throw new HttpError(
+                'Handwriting consent required: Student has not provided active consent for handwriting consistency analysis.',
+                403
+            );
+        }
+
+        if (consent.retentionExpiresAt && consent.retentionExpiresAt.getTime() <= Date.now()) {
+            throw new HttpError(
+                'Handwriting consent expired: The consent retention period for this student has expired.',
+                403
+            );
+        }
+
+        return consent;
     }
 
     /**
@@ -153,6 +196,7 @@ export class HandwritingConsistencyWorkflowService {
         authContext: HandwritingAuthContext
     ): Promise<RegisterSampleWorkflowResult> {
         this.verifyAccess(authContext, input.studentId);
+        const consent = await this.verifyConsent(input.studentId);
 
         const studentOid = new mongoose.Types.ObjectId(input.studentId);
 
@@ -196,6 +240,9 @@ export class HandwritingConsistencyWorkflowService {
 
         const isUsable = status === SampleExtractionStatus.VALID && (features?.quality?.isSufficient ?? false);
 
+        const retentionDays = consent.retentionDays || HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS;
+        const retentionExpiresAt = consent.retentionExpiresAt ?? new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000);
+
         const sampleDocData: Partial<IHandwritingSampleDocument> = {
             student: studentOid,
             sourceReference: input.sourceReference?.trim(),
@@ -211,7 +258,9 @@ export class HandwritingConsistencyWorkflowService {
             rawVector: isUsable && features ? features.rawVector : undefined,
             features,
             quality: features?.quality,
-            extractionVersion: '1.0.0'
+            extractionVersion: '1.0.0',
+            retentionExpiresAt,
+            retentionPolicy: HANDWRITING_RETENTION_POLICY.POLICY_NAME
         };
 
         const savedSample = await this.sampleRepo.create(sampleDocData);
@@ -244,6 +293,7 @@ export class HandwritingConsistencyWorkflowService {
         authContext: HandwritingAuthContext
     ): Promise<IHandwritingProfileDocument> {
         this.verifyAccess(authContext, studentId);
+        const consent = await this.verifyConsent(studentId);
 
         const usableSamples = await this.sampleRepo.findByStudent(studentId, { usableOnly: true, sortOrder: 'asc' });
         const currentProfile = await this.profileRepo.findByStudent(studentId);
@@ -283,6 +333,8 @@ export class HandwritingConsistencyWorkflowService {
             currentProfile.status = builtProfile.status;
             currentProfile.profileVersion = 1;
             currentProfile.isCurrent = true;
+            currentProfile.retentionExpiresAt = consent.retentionExpiresAt;
+            currentProfile.retentionPolicy = HANDWRITING_RETENTION_POLICY.POLICY_NAME;
             return await currentProfile.save();
         }
 
@@ -297,7 +349,9 @@ export class HandwritingConsistencyWorkflowService {
                 status: builtProfile.status,
                 profileVersion: 1,
                 extractionVersion: '1.0.0',
-                isCurrent: true
+                isCurrent: true,
+                retentionExpiresAt: consent.retentionExpiresAt,
+                retentionPolicy: HANDWRITING_RETENTION_POLICY.POLICY_NAME
             };
             return await this.profileRepo.create(profileToCreate);
         }
@@ -320,7 +374,9 @@ export class HandwritingConsistencyWorkflowService {
                 status: builtProfile.status,
                 profileVersion: newVersionNumber,
                 extractionVersion: '1.0.0',
-                isCurrent: true
+                isCurrent: true,
+                retentionExpiresAt: consent.retentionExpiresAt,
+                retentionPolicy: HANDWRITING_RETENTION_POLICY.POLICY_NAME
             };
 
             return await this.profileRepo.create(profileToCreate, session);
@@ -338,6 +394,7 @@ export class HandwritingConsistencyWorkflowService {
         authContext: HandwritingAuthContext
     ): Promise<IHandwritingComparisonDocument> {
         this.verifyAccess(authContext, studentId);
+        await this.verifyConsent(studentId);
 
         const currentProfile = await this.profileRepo.findByStudent(studentId);
 
@@ -469,6 +526,48 @@ export class HandwritingConsistencyWorkflowService {
     ): Promise<IHandwritingSampleDocument[]> {
         this.verifyAccess(authContext, studentId);
         return await this.sampleRepo.findByStudent(studentId, options);
+    }
+
+    /**
+     * 7. getStudentConsent()
+     * Retrieves consent record for a student.
+     */
+    public async getStudentConsent(
+        studentId: string,
+        authContext: HandwritingAuthContext
+    ): Promise<IHandwritingConsentDocument | null> {
+        this.verifyAccess(authContext, studentId);
+        return await this.consentRepo.findByStudent(studentId);
+    }
+
+    /**
+     * 8. setStudentConsent()
+     * Records or updates explicit student consent.
+     */
+    public async setStudentConsent(
+        studentId: string,
+        hasConsented: boolean,
+        authContext: HandwritingAuthContext,
+        options?: SetConsentOptions
+    ): Promise<IHandwritingConsentDocument> {
+        this.verifyAccess(authContext, studentId);
+        return await this.consentRepo.setConsent(studentId, hasConsented, options);
+    }
+
+    /**
+     * 9. purgeExpiredData()
+     * Cleans up expired samples and profiles within the existing architecture.
+     */
+    public async purgeExpiredData(
+        studentId?: string,
+        authContext?: HandwritingAuthContext
+    ): Promise<{ samplesPurged: number; profilesPurged: number }> {
+        if (studentId && authContext) {
+            this.verifyAccess(authContext, studentId);
+        }
+        const samplesPurged = await this.sampleRepo.purgeExpired(studentId);
+        const profilesPurged = await this.profileRepo.purgeExpired(studentId);
+        return { samplesPurged, profilesPurged };
     }
 }
 

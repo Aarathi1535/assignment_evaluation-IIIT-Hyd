@@ -22,6 +22,8 @@ export interface IHandwritingSampleDocument extends Document {
     features?: IHandwritingFeatures;
     quality?: ISampleQuality;
     extractionVersion: string;
+    retentionExpiresAt?: Date;
+    retentionPolicy?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -104,6 +106,13 @@ const HandwritingSampleSchema = new Schema<IHandwritingSampleDocument>(
             type: String,
             required: true,
             default: '1.0.0'
+        },
+        retentionExpiresAt: {
+            type: Date,
+            index: true
+        },
+        retentionPolicy: {
+            type: String
         }
     },
     {
@@ -117,6 +126,7 @@ HandwritingSampleSchema.index(
     { unique: true, sparse: true }
 );
 HandwritingSampleSchema.index({ student: 1, isUsable: 1, createdAt: 1 });
+HandwritingSampleSchema.index({ student: 1, retentionExpiresAt: 1 });
 
 export const HandwritingSampleModel: Model<IHandwritingSampleDocument> =
     mongoose.models.HandwritingSamplePersistence ||

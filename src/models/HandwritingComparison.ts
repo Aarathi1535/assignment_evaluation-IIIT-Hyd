@@ -5,6 +5,8 @@ import {
     ISampleQuality
 } from './HandwritingConsistency';
 
+export type HandwritingReviewStatus = 'PENDING_REVIEW' | 'REVIEWED_CONSISTENT' | 'FLAGGED_MISMATCH';
+
 export interface IHandwritingComparisonDocument extends Document {
     student: mongoose.Types.ObjectId;
     profile?: mongoose.Types.ObjectId;
@@ -17,6 +19,11 @@ export interface IHandwritingComparisonDocument extends Document {
     anomalyFactors: string[];
     sampleQuality?: ISampleQuality;
     comparedAt: Date;
+    /** Human review status. REVIEWED_CONSISTENT replaces the former VERIFIED_AUTHENTIC label. */
+    reviewStatus: HandwritingReviewStatus;
+    reviewedBy?: mongoose.Types.ObjectId;
+    reviewedAt?: Date;
+    reviewNotes?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -106,6 +113,22 @@ const HandwritingComparisonSchema = new Schema<IHandwritingComparisonDocument>(
             required: true,
             default: Date.now,
             index: true
+        },
+        reviewStatus: {
+            type: String,
+            enum: ['PENDING_REVIEW', 'REVIEWED_CONSISTENT', 'FLAGGED_MISMATCH'],
+            default: 'PENDING_REVIEW',
+            index: true
+        },
+        reviewedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        reviewedAt: {
+            type: Date
+        },
+        reviewNotes: {
+            type: String
         }
     },
     {

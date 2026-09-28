@@ -5,6 +5,7 @@ export interface FindSamplesOptions {
     usableOnly?: boolean;
     limit?: number;
     sortOrder?: 'asc' | 'desc';
+    includeExpired?: boolean;
 }
 
 export class HandwritingSampleRepository {
@@ -25,10 +26,12 @@ export class HandwritingSampleRepository {
 
     /**
      * Finds a sample by ID, optionally scoped to a specific student for security.
+     * By default, excludes expired samples unless includeExpired is true.
      */
     async findById(
         sampleId: string,
-        studentId?: string
+        studentId?: string,
+        options?: { includeExpired?: boolean }
     ): Promise<IHandwritingSampleDocument | null> {
         if (!this.isValidObjectId(sampleId)) {
             return null;
@@ -45,11 +48,20 @@ export class HandwritingSampleRepository {
             query.student = new mongoose.Types.ObjectId(studentId);
         }
 
+        if (!options?.includeExpired) {
+            const now = new Date();
+            query.$or = [
+                { retentionExpiresAt: { $exists: false } },
+                { retentionExpiresAt: { $gt: now } }
+            ];
+        }
+
         return await HandwritingSampleModel.findOne(query);
     }
 
     /**
-     * Finds samples for a student, optionally filtered by usability and ordered.
+     * Finds samples for a student, filtered by usability, ordered,
+     * and excluding expired samples by default.
      */
     async findByStudent(
         studentId: string,
@@ -67,6 +79,14 @@ export class HandwritingSampleRepository {
             query.isUsable = true;
         }
 
+        if (!options?.includeExpired) {
+            const now = new Date();
+            query.$or = [
+                { retentionExpiresAt: { $exists: false } },
+                { retentionExpiresAt: { $gt: now } }
+            ];
+        }
+
         const sortDirection = options?.sortOrder === 'desc' ? -1 : 1;
         let q = HandwritingSampleModel.find(query).sort({ createdAt: sortDirection });
 
@@ -78,17 +98,27 @@ export class HandwritingSampleRepository {
     }
 
     /**
-     * Counts the total number of usable baseline samples for a student.
+     * Counts the total number of usable, non-expired baseline samples for a student.
      */
-    async countUsableSamples(studentId: string): Promise<number> {
+    async countUsableSamples(studentId: string, options?: { includeExpired?: boolean }): Promise<number> {
         if (!this.isValidObjectId(studentId)) {
             return 0;
         }
 
-        return await HandwritingSampleModel.countDocuments({
+        const query: QueryFilter<IHandwritingSampleDocument> = {
             student: new mongoose.Types.ObjectId(studentId),
             isUsable: true
-        });
+        };
+
+        if (!options?.includeExpired) {
+            const now = new Date();
+            query.$or = [
+                { retentionExpiresAt: { $exists: false } },
+                { retentionExpiresAt: { $gt: now } }
+            ];
+        }
+
+        return await HandwritingSampleModel.countDocuments(query);
     }
 
     /**
@@ -107,6 +137,21 @@ export class HandwritingSampleRepository {
             student: new mongoose.Types.ObjectId(studentId),
             sourceReference: sourceReference.trim()
         });
+    }
+
+    /**
+     * In-architecture purge of expired samples for a student or globally.
+     */
+    async purgeExpired(studentId?: string): Promise<number> {
+        const now = new Date();
+        const query: QueryFilter<IHandwritingSampleDocument> = {
+            retentionExpiresAt: { $lte: now }
+        };
+        if (studentId && this.isValidObjectId(studentId)) {
+            query.student = new mongoose.Types.ObjectId(studentId);
+        }
+        const res = await HandwritingSampleModel.deleteMany(query);
+        return res.deletedCount || 0;
     }
 }
 

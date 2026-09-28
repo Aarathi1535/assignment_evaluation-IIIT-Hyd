@@ -102,6 +102,8 @@ export interface IHandwritingSample extends Document {
     features?: IHandwritingFeatures;
     disqualificationReason?: string;
     extractedAt: Date;
+    retentionExpiresAt?: Date;
+    retentionPolicy?: string;
 }
 
 export enum ProfileStatus {
@@ -139,6 +141,8 @@ export interface IHandwritingProfileData {
     status: ProfileStatus;
     samplesUsed: string[];        // Array of sample identifiers
     sampleMetadata?: IHandwritingSampleMetadata[];
+    retentionExpiresAt?: Date;
+    retentionPolicy?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -152,6 +156,8 @@ export interface IHandwritingProfile extends Document {
     samplesUsed: mongoose.Types.ObjectId[];
     sampleIds?: string[];
     sampleMetadata?: IHandwritingSampleMetadata[];
+    retentionExpiresAt?: Date;
+    retentionPolicy?: string;
     updatedAt: Date;
     createdAt: Date;
 }
@@ -193,7 +199,7 @@ export interface IHandwritingComparison extends Document {
     distanceScore: number;         // Normalized distance from profile (0.0 to 1.0+)
     confidence: number;            // Heuristic confidence score (0.0 to 1.0)
     anomalyFactors: string[];      // Explanatory breakdown of deviating features
-    reviewStatus: 'PENDING_REVIEW' | 'VERIFIED_AUTHENTIC' | 'FLAGGED_MISMATCH';
+    reviewStatus: 'PENDING_REVIEW' | 'REVIEWED_CONSISTENT' | 'FLAGGED_MISMATCH';
     reviewedBy?: mongoose.Types.ObjectId;
     reviewedAt?: Date;
     reviewNotes?: string;
@@ -261,6 +267,8 @@ const HandwritingSampleSchema = new Schema<IHandwritingSample>({
     status: { type: String, enum: Object.values(SampleExtractionStatus), required: true },
     features: { type: HandwritingFeaturesSchema },
     disqualificationReason: { type: String },
+    retentionExpiresAt: { type: Date, index: true },
+    retentionPolicy: { type: String },
     extractedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
@@ -270,7 +278,9 @@ const HandwritingProfileSchema = new Schema<IHandwritingProfile>({
     featureMeans: { type: [Number], default: [] },
     featureStdDevs: { type: [Number], default: [] },
     status: { type: String, enum: Object.values(ProfileStatus), default: ProfileStatus.PROVISIONAL },
-    samplesUsed: [{ type: Schema.Types.ObjectId, ref: 'HandwritingSample' }]
+    samplesUsed: [{ type: Schema.Types.ObjectId, ref: 'HandwritingSample' }],
+    retentionExpiresAt: { type: Date, index: true },
+    retentionPolicy: { type: String }
 }, { timestamps: true });
 
 const HandwritingComparisonSchema = new Schema<IHandwritingComparison>({
@@ -282,7 +292,7 @@ const HandwritingComparisonSchema = new Schema<IHandwritingComparison>({
     distanceScore: { type: Number, required: true },
     confidence: { type: Number, required: true },
     anomalyFactors: { type: [String], default: [] },
-    reviewStatus: { type: String, enum: ['PENDING_REVIEW', 'VERIFIED_AUTHENTIC', 'FLAGGED_MISMATCH'], default: 'PENDING_REVIEW' },
+    reviewStatus: { type: String, enum: ['PENDING_REVIEW', 'REVIEWED_CONSISTENT', 'FLAGGED_MISMATCH'], default: 'PENDING_REVIEW' },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: { type: Date },
     reviewNotes: { type: String }
