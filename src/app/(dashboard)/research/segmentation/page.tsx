@@ -1,38 +1,59 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
-import React, { useState } from 'react';
-import { 
-  FileText, 
-  AlertTriangle, 
-  CheckCircle, 
-  Layers, 
-  Search, 
+import React, { useState, useRef } from 'react';
+import {
+  FileText,
+  AlertTriangle,
+  CheckCircle2,
+  Layers,
+  Search,
   RefreshCw,
-  ArrowRight
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  Tag,
+  ShieldCheck,
+  HelpCircle,
+  Eye
 } from 'lucide-react';
 
-interface Segment {
+interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface TaggedRegion {
+  _id: string;
+  answerScript: string;
+  exam: string;
+  questionNumber: number;
+  subQuestion?: string | null;
+  pageNumber: number;
+  pageId?: string | null;
+  box: BoundingBox;
+  sequenceIndex: number;
+  segmentType: 'START' | 'CONTINUATION' | 'ISOLATED' | 'UNCERTAIN';
+  isGroundTruth: boolean;
+  taggedBy: string;
+  taggedAt: string;
+  notes?: string | null;
+}
+
+interface AnswerSegment {
   segmentId: string;
   pageNumber: number;
+  box?: BoundingBox;
   segmentType: 'START' | 'CONTINUATION' | 'ISOLATED' | 'UNCERTAIN';
   sequenceIndex: number;
   extractedText?: string;
   detectedHeader?: string;
-  continuationMarker?: string;
+  subQuestion?: string;
   confidence: number;
   evidence: string[];
-  boundingBox?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-}
-
-interface CandidateAssociation {
-  questionNumber: number;
-  score: number;
-  reason: string;
+  isGroundTruth?: boolean;
 }
 
 interface ReconstructedAnswer {
@@ -40,471 +61,712 @@ interface ReconstructedAnswer {
   answerScript: string;
   exam: string;
   questionNumber: number;
-  segments: Segment[];
+  subQuestion?: string;
+  segments: AnswerSegment[];
   totalSegments: number;
   pagesInvolved: number[];
   isNonConsecutive: boolean;
   isAmbiguous: boolean;
   ambiguityReason?: string;
-  candidateAssociations?: CandidateAssociation[];
   reconstructionConfidence: number;
-  status: 'AUTO_RECONSTRUCTED' | 'NEEDS_REVIEW' | 'VERIFIED';
+  status: 'AUTO_RECONSTRUCTED' | 'NEEDS_REVIEW' | 'VERIFIED' | 'GROUND_TRUTH';
+  isGroundTruth?: boolean;
   verifiedAt?: string;
-  verificationNotes?: string;
+  reviewNotes?: string;
 }
 
-export default function SegmentationResearchViewer() {
-  const [scriptId, setScriptId] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [answers, setAnswers] = useState<ReconstructedAnswer[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<number | 'all'>('all');
+interface PageData {
+  id: string;
+  pageNumber: number;
+  imageUrl: string;
+  thumbnailUrl?: string | null;
+  width?: number;
+  height?: number;
+}
 
-  const fetchSegmentation = async (id: string) => {
-    if (!id.trim()) return;
+const QUESTION_COLORS = [
+  { border: 'border-blue-500', bg: 'bg-blue-500/20', text: 'text-blue-400', hex: '#3b82f6' },
+  { border: 'border-emerald-500', bg: 'bg-emerald-500/20', text: 'text-emerald-400', hex: '#10b981' },
+  { border: 'border-purple-500', bg: 'bg-purple-500/20', text: 'text-purple-400', hex: '#a855f7' },
+  { border: 'border-amber-500', bg: 'bg-amber-500/20', text: 'text-amber-400', hex: '#f59e0b' },
+  { border: 'border-rose-500', bg: 'bg-rose-500/20', text: 'text-rose-400', hex: '#f43f5e' },
+  { border: 'border-cyan-500', bg: 'bg-cyan-500/20', text: 'text-cyan-400', hex: '#06b6d4' }
+];
+
+function getQuestionColor(qNum: number) {
+  const index = Math.max(0, qNum - 1) % QUESTION_COLORS.length;
+  return QUESTION_COLORS[index];
+}
+
+export default function AnswerSegmentationWorkspace() {
+  const [scriptId, setScriptId] = useState('');
+  const [activeScriptId, setActiveScriptId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Script Data
+  const [pages, setPages] = useState<PageData[]>([]);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [taggedRegions, setTaggedRegions] = useState<TaggedRegion[]>([]);
+  const [reconstructedAnswers, setReconstructedAnswers] = useState<ReconstructedAnswer[]>([]);
+
+  // Tagger tool controls
+  const [selectedQuestion, setSelectedQuestion] = useState<number>(1);
+  const [selectedSegmentType, setSelectedSegmentType] = useState<'START' | 'CONTINUATION' | 'ISOLATED'>('START');
+  const [regionNotes, setRegionNotes] = useState('');
+
+  // Interactive Bounding Box drawing state
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
+  const [currentBox, setCurrentBox] = useState<BoundingBox | null>(null);
+
+  const currentPage = pages[currentPageIndex] || null;
+
+  // Load Script Details & Workspace
+  const loadScriptWorkspace = async (id: string) => {
+    const trimmedId = id.trim();
+    if (!trimmedId) return;
+
     setIsLoading(true);
     setError(null);
+    setSuccessMessage(null);
+    setCurrentBox(null);
+
     try {
-      const res = await fetch(`/api/research/segmentation/${encodeURIComponent(id.trim())}`);
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Failed to fetch reconstructed answers');
+      // 1. Fetch pages for this script
+      const pagesRes = await fetch(`/api/scripts/${encodeURIComponent(trimmedId)}/pages`);
+      const pagesData = await pagesRes.json();
+      if (!pagesRes.ok) {
+        throw new Error(pagesData.message || 'Failed to load script pages');
       }
-      setAnswers(data.data || []);
-      if (data.data?.length > 0) {
-        setActiveTab(data.data[0].questionNumber);
+
+      const scriptPages: PageData[] = pagesData.data || [];
+      if (scriptPages.length === 0) {
+        // Fallback placeholder pages for research demonstration if none ingested
+        setPages([
+          { id: 'p1', pageNumber: 1, imageUrl: '', width: 800, height: 1100 },
+          { id: 'p2', pageNumber: 2, imageUrl: '', width: 800, height: 1100 },
+          { id: 'p3', pageNumber: 3, imageUrl: '', width: 800, height: 1100 },
+          { id: 'p4', pageNumber: 4, imageUrl: '', width: 800, height: 1100 },
+          { id: 'p5', pageNumber: 5, imageUrl: '', width: 800, height: 1100 }
+        ]);
+      } else {
+        setPages(scriptPages);
       }
+      setCurrentPageIndex(0);
+
+      // 2. Fetch tagged regions
+      const regionsRes = await fetch(`/api/research/segmentation/${encodeURIComponent(trimmedId)}/regions`);
+      const regionsData = await regionsRes.json();
+      if (regionsRes.ok && regionsData.success) {
+        setTaggedRegions(regionsData.data || []);
+      }
+
+      // 3. Fetch reconstructed answers
+      const answersRes = await fetch(`/api/research/segmentation/${encodeURIComponent(trimmedId)}`);
+      const answersData = await answersRes.json();
+      if (answersRes.ok && answersData.success) {
+        setReconstructedAnswers(answersData.data || []);
+        if (answersData.data?.length > 0) {
+          setSelectedQuestion(answersData.data[0].questionNumber);
+        }
+      }
+
+      setActiveScriptId(trimmedId);
+      setSuccessMessage('Answer script loaded successfully.');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-      setAnswers([]);
+      setError(err instanceof Error ? err.message : 'Failed to initialize segmentation workspace');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const verifyQuestion = async (qNum: number) => {
-    if (!scriptId) return;
+  const reloadData = async () => {
+    if (!activeScriptId) return;
     try {
-      const res = await fetch(`/api/research/segmentation/${encodeURIComponent(scriptId)}/question/${qNum}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: 'Verified via Answer Reconstruction Viewer' })
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        alert(data.message || 'Failed to verify');
-        return;
+      const [regionsRes, answersRes] = await Promise.all([
+        fetch(`/api/research/segmentation/${encodeURIComponent(activeScriptId)}/regions`),
+        fetch(`/api/research/segmentation/${encodeURIComponent(activeScriptId)}`)
+      ]);
+      const regionsData = await regionsRes.json();
+      const answersData = await answersRes.json();
+
+      if (regionsRes.ok && regionsData.success) {
+        setTaggedRegions(regionsData.data || []);
       }
-      setAnswers(prev => prev.map(a => a.questionNumber === qNum ? data.data : a));
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Verification failed');
+      if (answersRes.ok && answersData.success) {
+        setReconstructedAnswers(answersData.data || []);
+      }
+    } catch {
+      // quiet refresh
     }
   };
 
-  const loadSyntheticDemo = () => {
-    // Interactive demo data showcasing answer reconstruction
-    const demoAnswers: ReconstructedAnswer[] = [
-      {
-        answerScript: 'sample_script_001',
-        exam: 'demo_exam',
-        questionNumber: 1,
-        totalSegments: 2,
-        pagesInvolved: [1, 7],
-        isNonConsecutive: true,
-        isAmbiguous: false,
-        reconstructionConfidence: 0.96,
-        status: 'AUTO_RECONSTRUCTED',
-        segments: [
-          {
-            segmentId: 'seg-q1-p1',
-            pageNumber: 1,
-            segmentType: 'START',
-            sequenceIndex: 1,
-            detectedHeader: 'Q1',
-            extractedText: 'Question 1: Explain the difference between CNN and Vision Transformer architectures...\n(Answer begins with mathematical formulation)',
-            confidence: 0.95,
-            evidence: ['EXPLICIT_HEADER:Q1', 'RUBRIC_MATCH:Q1'],
-            boundingBox: { x: 0.05, y: 0.05, width: 0.9, height: 0.85 }
-          },
-          {
-            segmentId: 'seg-q1-p7',
-            pageNumber: 7,
-            segmentType: 'CONTINUATION',
-            sequenceIndex: 2,
-            detectedHeader: 'Q1 (cont.)',
-            continuationMarker: 'continued from page 1',
-            extractedText: 'Q1 (cont.) continued from page 1:\nHence, self-attention scales quadratically with sequence length O(N^2) whereas standard convolutions maintain local receptive fields.',
-            confidence: 0.97,
-            evidence: ['EXPLICIT_CONTINUATION_MARKER:continued from page 1', 'EXPLICIT_HEADER:Q1 (cont.)', 'FORWARD_CHAIN_VALIDATED:P1->P7'],
-            boundingBox: { x: 0.05, y: 0.1, width: 0.9, height: 0.75 }
-          }
-        ]
-      },
-      {
-        answerScript: 'sample_script_001',
-        exam: 'demo_exam',
-        questionNumber: 2,
-        totalSegments: 1,
-        pagesInvolved: [2],
-        isNonConsecutive: false,
-        isAmbiguous: false,
-        reconstructionConfidence: 0.95,
-        status: 'AUTO_RECONSTRUCTED',
-        segments: [
-          {
-            segmentId: 'seg-q2-p2',
-            pageNumber: 2,
-            segmentType: 'START',
-            sequenceIndex: 1,
-            detectedHeader: 'Q2',
-            extractedText: 'Question 2: State the Universal Approximation Theorem and its significance.',
-            confidence: 0.95,
-            evidence: ['EXPLICIT_HEADER:Q2', 'RUBRIC_MATCH:Q2'],
-            boundingBox: { x: 0.05, y: 0.05, width: 0.9, height: 0.9 }
-          }
-        ]
-      },
-      {
-        answerScript: 'sample_script_001',
-        exam: 'demo_exam',
-        questionNumber: 3,
-        totalSegments: 1,
-        pagesInvolved: [3],
-        isNonConsecutive: false,
-        isAmbiguous: false,
-        reconstructionConfidence: 0.95,
-        status: 'AUTO_RECONSTRUCTED',
-        segments: [
-          {
-            segmentId: 'seg-q3-p3',
-            pageNumber: 3,
-            segmentType: 'START',
-            sequenceIndex: 1,
-            detectedHeader: 'Q3',
-            extractedText: 'Question 3: Derive backpropagation equations for a 2-layer perceptron.',
-            confidence: 0.95,
-            evidence: ['EXPLICIT_HEADER:Q3', 'RUBRIC_MATCH:Q3']
-          }
-        ]
-      },
-      {
-        answerScript: 'sample_script_001',
-        exam: 'demo_exam',
-        questionNumber: 4,
-        totalSegments: 1,
-        pagesInvolved: [8],
-        isNonConsecutive: false,
-        isAmbiguous: true,
-        ambiguityReason: 'Multiple question candidates plausible: Q2 (0.55), Q4 (0.45)',
-        candidateAssociations: [
-          { questionNumber: 2, score: 0.55, reason: 'Topic similarity with optimization algorithms' },
-          { questionNumber: 4, score: 0.45, reason: 'Consecutive question slot in rubric' }
-        ],
-        reconstructionConfidence: 0.55,
-        status: 'NEEDS_REVIEW',
-        segments: [
-          {
-            segmentId: 'seg-q4-p8',
-            pageNumber: 8,
-            segmentType: 'UNCERTAIN',
-            sequenceIndex: 1,
-            extractedText: '...moreover the learning rate schedule cosine annealing helps avoid local minima.\n(Header omitted by student)',
-            confidence: 0.55,
-            evidence: ['UNLABELLED_DISTAL_TEXT', 'NO_FORWARD_POINTER', 'MULTIPLE_CANDIDATES:Q2,Q4']
-          }
-        ]
-      }
-    ];
+  // Mouse Handlers for Bounding Box Drawing on Page Canvas
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!imageContainerRef.current) return;
+    const rect = imageContainerRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
 
-    setAnswers(demoAnswers);
-    setScriptId('demo-script-distal-continuation');
-    setActiveTab(1);
-    setError(null);
+    setIsDrawing(true);
+    setDrawStart({ x, y });
+    setCurrentBox({ x, y, width: 0.01, height: 0.01 });
   };
 
-  const displayedAnswers = activeTab === 'all' 
-    ? answers 
-    : answers.filter(a => a.questionNumber === activeTab);
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDrawing || !drawStart || !imageContainerRef.current) return;
+    const rect = imageContainerRef.current.getBoundingClientRect();
+    const currentX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const currentY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+
+    const left = Math.min(drawStart.x, currentX);
+    const top = Math.min(drawStart.y, currentY);
+    const width = Math.abs(currentX - drawStart.x);
+    const height = Math.abs(currentY - drawStart.y);
+
+    setCurrentBox({
+      x: Number(left.toFixed(4)),
+      y: Number(top.toFixed(4)),
+      width: Number(Math.max(0.01, width).toFixed(4)),
+      height: Number(Math.max(0.01, height).toFixed(4))
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDrawing(false);
+    setDrawStart(null);
+  };
+
+  // Save the currently drawn region
+  const handleSaveCurrentRegion = async () => {
+    if (!activeScriptId || !currentBox || !currentPage) return;
+    if (currentBox.width < 0.02 || currentBox.height < 0.02) {
+      alert('Drawn region is too small. Please drag to select a visible box.');
+      return;
+    }
+
+    setIsSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/research/segmentation/${encodeURIComponent(activeScriptId)}/regions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionNumber: selectedQuestion,
+          pageNumber: currentPage.pageNumber,
+          pageId: currentPage.id.startsWith('p') ? null : currentPage.id,
+          box: currentBox,
+          segmentType: selectedSegmentType,
+          notes: regionNotes.trim() || undefined
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to save tagged region');
+      }
+
+      setCurrentBox(null);
+      setRegionNotes('');
+      setSuccessMessage(`Region tagged on Page ${currentPage.pageNumber} for Q${selectedQuestion} (Ground Truth).`);
+      await reloadData();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error tagging region');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Delete a tagged region
+  const handleDeleteRegion = async (regionId: string) => {
+    if (!activeScriptId) return;
+    if (!confirm('Are you sure you want to remove this ground-truth region?')) return;
+
+    try {
+      const res = await fetch(
+        `/api/research/segmentation/${encodeURIComponent(activeScriptId)}/regions/${encodeURIComponent(regionId)}`,
+        { method: 'DELETE' }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to delete region');
+      }
+      setSuccessMessage('Tagged region removed and answer re-reconstructed.');
+      await reloadData();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Error deleting region');
+    }
+  };
+
+  // Verify / Confirm ground truth for a question
+  const handleVerifyQuestion = async (qNum: number) => {
+    if (!activeScriptId) return;
+    try {
+      const res = await fetch(
+        `/api/research/segmentation/${encodeURIComponent(activeScriptId)}/question/${qNum}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes: 'Confirmed and verified by Teaching Assistant' })
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to verify question');
+      }
+      setSuccessMessage(`Question ${qNum} marked as Verified Ground Truth.`);
+      await reloadData();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Error verifying question');
+    }
+  };
+
+  // Regions on the currently viewed page
+  const currentPageRegions = taggedRegions.filter(
+    (r) => currentPage && r.pageNumber === currentPage.pageNumber
+  );
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8 space-y-6">
-      {/* Feature Header */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 text-white shadow-xl border border-indigo-900/50">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-2">
-            <h1 className="text-2xl font-bold tracking-tight">
-              Question–Answer Reconstruction &amp; Segmentation Viewer
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex flex-col gap-6">
+      {/* Top Header & Script Selector */}
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-slate-900/80 border border-slate-800 p-6 rounded-2xl shadow-xl backdrop-blur-md">
+        <div>
+          <div className="flex items-center gap-3">
+            <span className="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              <Layers className="w-5 h-5" />
+            </span>
+            <h1 className="text-2xl font-bold tracking-tight text-white">
+              TA-Assisted Question-Region Tagging & Reconstruction
             </h1>
-            <p className="text-sm text-indigo-200 max-w-3xl leading-relaxed">
-              Automatically reconstruct complete answers across pages, including non-consecutive and out-of-order responses, before evaluation.
-            </p>
+          </div>
+          <p className="text-sm text-slate-400 mt-1">
+            Tag ground-truth question bounding boxes across pages, link continuations, and reconstruct unified answer sequences.
+          </p>
+        </div>
+
+        {/* Script Selection Input */}
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="relative flex-1 md:w-80">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Enter AnswerScript ID..."
+              value={scriptId}
+              onChange={(e) => setScriptId(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
           <button
-            onClick={loadSyntheticDemo}
-            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-sm transition shadow-lg flex items-center gap-2 self-start md:self-center shrink-0 border border-indigo-400/40"
+            onClick={() => loadScriptWorkspace(scriptId)}
+            disabled={isLoading || !scriptId.trim()}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-sm font-semibold flex items-center gap-2 transition"
           >
-            <Layers className="w-4 h-4" />
-            Load Sample Preview
+            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Open Sheet'}
           </button>
         </div>
-
-        {/* Info Banner */}
-        <div className="mt-4 pt-4 border-t border-indigo-800/60 flex items-start gap-2.5 text-xs text-amber-200/90">
-          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-          <span>
-            <strong>Review required:</strong> Ambiguous page associations are preserved and clearly flagged for manual verification.
-          </span>
-        </div>
       </div>
 
-      {/* Script Search & Actions */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex flex-col sm:flex-row gap-3 items-center">
-        <div className="relative flex-1 w-full">
-          <Search className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Enter AnswerScript MongoDB ObjectId (e.g., 60c72b2f9b1d8b2bad58...) "
-            value={scriptId}
-            onChange={(e) => setScriptId(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
-          />
-        </div>
-        <button
-          onClick={() => fetchSegmentation(scriptId)}
-          disabled={isLoading || !scriptId.trim()}
-          className="w-full sm:w-auto px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-medium transition disabled:opacity-50 flex items-center justify-center gap-2 shrink-0"
-        >
-          {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          Reconstruct / Inspect
-        </button>
-      </div>
-
+      {/* Notifications */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 shrink-0 text-red-500" />
+        <div className="p-4 rounded-xl bg-red-950/60 border border-red-800 text-red-200 text-sm flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
           <span>{error}</span>
         </div>
       )}
-
-      {/* Questions Tabs */}
-      {answers.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 border-b border-slate-200">
-          <button
-            onClick={() => setActiveTab('all')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-              activeTab === 'all'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            All Questions ({answers.length})
+      {successMessage && (
+        <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-200 text-sm flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+            <span>{successMessage}</span>
+          </div>
+          <button onClick={() => setSuccessMessage(null)} className="text-emerald-400 hover:underline text-xs">
+            Dismiss
           </button>
-          {answers.map(ans => (
-            <button
-              key={ans.questionNumber}
-              onClick={() => setActiveTab(ans.questionNumber)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition flex items-center gap-2 shrink-0 ${
-                activeTab === ans.questionNumber
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:bg-slate-100 border border-slate-200'
-              }`}
-            >
-              <span>Question {ans.questionNumber}</span>
-              {ans.isNonConsecutive && (
-                <span className="w-2 h-2 rounded-full bg-amber-400" title="Non-consecutive distal pages" />
-              )}
-              {ans.isAmbiguous && (
-                <span className="w-2 h-2 rounded-full bg-red-400" title="Ambiguous / Needs Review" />
-              )}
-            </button>
-          ))}
         </div>
       )}
 
-      {/* Reconstructed Answer Cards */}
-      <div className="space-y-6">
-        {displayedAnswers.map(ans => (
-          <div 
-            key={ans.questionNumber} 
-            className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition"
-          >
-            {/* Card Header */}
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 font-bold text-lg flex items-center justify-center">
-                  Q{ans.questionNumber}
+      {/* Workspace Area */}
+      {activeScriptId && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* LEFT 7 COLS: Page Viewer & Interactive Region Tagger */}
+          <div className="lg:col-span-7 flex flex-col gap-4">
+            {/* Tagging Control Bar */}
+            <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3 flex-wrap">
+                {/* Question Picker */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Question:</span>
+                  <select
+                    value={selectedQuestion}
+                    onChange={(e) => setSelectedQuestion(Number(e.target.value))}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-sm font-bold text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((q) => (
+                      <option key={q} value={q}>
+                        Q{q}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-semibold text-slate-900">
-                      Question {ans.questionNumber}
-                    </h2>
-                    {ans.isNonConsecutive && (
-                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-semibold rounded-full border border-amber-300">
-                        ⚡ Non-Consecutive Pages ({ans.pagesInvolved.join(', ')})
-                      </span>
-                    )}
-                    {ans.isAmbiguous ? (
-                      <span className="px-2 py-0.5 bg-red-100 text-red-800 text-xs font-semibold rounded-full border border-red-300 flex items-center gap-1">
-                        <AlertTriangle className="w-3 h-3" /> Needs Review
-                      </span>
-                    ) : ans.status === 'VERIFIED' ? (
-                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-xs font-semibold rounded-full border border-emerald-300 flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3" /> Verified
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-semibold rounded-full border border-blue-300">
-                        Auto Reconstructed
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {ans.totalSegments} segment{ans.totalSegments !== 1 ? 's' : ''} across page{ans.pagesInvolved.length !== 1 ? 's' : ''} {ans.pagesInvolved.join(', ')}
-                  </p>
+
+                {/* Segment Type Picker */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Type:</span>
+                  <select
+                    value={selectedSegmentType}
+                    onChange={(e) => setSelectedSegmentType(e.target.value as 'START' | 'CONTINUATION' | 'ISOLATED')}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-slate-200 focus:outline-none"
+                  >
+                    <option value="START">Start</option>
+                    <option value="CONTINUATION">Continuation</option>
+                    <option value="ISOLATED">Isolated</option>
+                  </select>
                 </div>
+
+                {/* Notes Input */}
+                <input
+                  type="text"
+                  placeholder="Optional notes / header..."
+                  value={regionNotes}
+                  onChange={(e) => setRegionNotes(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1 text-xs text-slate-200 placeholder-slate-500 w-44 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
               </div>
 
-              {/* Confidence & Verification */}
-              <div className="flex items-center gap-3">
-                <div className="text-right">
-                  <div className="text-xs text-slate-400 font-medium">Confidence Score</div>
-                  <div className="text-sm font-bold font-mono text-slate-700">
-                    {(ans.reconstructionConfidence * 100).toFixed(0)}%
-                  </div>
-                </div>
-
-                {ans.status !== 'VERIFIED' && (
+              {/* Tag Action Button */}
+              <div className="flex items-center gap-2">
+                {currentBox && (
                   <button
-                    onClick={() => verifyQuestion(ans.questionNumber)}
-                    className="px-3 py-1.5 bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-300 hover:border-emerald-300 rounded-lg text-xs font-medium transition flex items-center gap-1.5"
+                    onClick={() => setCurrentBox(null)}
+                    className="px-3 py-1 text-xs text-slate-400 hover:text-white transition"
                   >
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                    Verify
+                    Clear Box
                   </button>
                 )}
+                <button
+                  onClick={handleSaveCurrentRegion}
+                  disabled={!currentBox || isSaving}
+                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-lg shadow-emerald-900/30"
+                >
+                  <Tag className="w-3.5 h-3.5" />
+                  {isSaving ? 'Saving...' : `Tag for Q${selectedQuestion}`}
+                </button>
               </div>
             </div>
 
-            {/* Ambiguity Alert Box */}
-            {ans.isAmbiguous && ans.ambiguityReason && (
-              <div className="mx-6 mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm">
-                <div className="flex items-center gap-2 text-amber-900 font-semibold mb-1">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  Ambiguity Detected — Segment Preserved Without Loss
-                </div>
-                <p className="text-amber-800 text-xs leading-relaxed mb-2">
-                  {ans.ambiguityReason}
-                </p>
-                {ans.candidateAssociations && ans.candidateAssociations.length > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-xs font-semibold text-amber-900">Plausible Candidate Questions:</span>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {ans.candidateAssociations.map((c, idx) => (
-                        <div key={idx} className="bg-white/80 border border-amber-300 px-2.5 py-1 rounded text-xs font-mono text-amber-900">
-                          Q{c.questionNumber}: {(c.score * 100).toFixed(0)}% ({c.reason})
-                        </div>
-                      ))}
+            {/* Page Navigation Header */}
+            <div className="flex items-center justify-between bg-slate-900/50 border border-slate-800 px-4 py-2.5 rounded-xl">
+              <button
+                onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
+                disabled={currentPageIndex === 0}
+                className="p-1 rounded-lg hover:bg-slate-800 disabled:opacity-30 text-slate-300 transition"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+
+              <span className="text-sm font-medium text-slate-200">
+                Page <span className="font-bold text-white">{currentPage?.pageNumber || 1}</span> of{' '}
+                <span className="text-slate-400">{pages.length || 1}</span>
+              </span>
+
+              <button
+                onClick={() => setCurrentPageIndex((prev) => Math.min(pages.length - 1, prev + 1))}
+                disabled={currentPageIndex >= pages.length - 1}
+                className="p-1 rounded-lg hover:bg-slate-800 disabled:opacity-30 text-slate-300 transition"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Interactive Canvas Viewport */}
+            <div className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col items-center p-4">
+              <div
+                ref={imageContainerRef}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                className="relative w-full max-w-2xl aspect-[3/4] bg-slate-950 border border-slate-800 rounded-xl overflow-hidden cursor-crosshair select-none shadow-inner flex items-center justify-center"
+              >
+                {/* Background Page Image or Document Placeholder */}
+                {currentPage?.imageUrl ? (
+                  <img
+                    src={currentPage.imageUrl}
+                    alt={`Page ${currentPage.pageNumber}`}
+                    className="w-full h-full object-contain pointer-events-none"
+                  />
+                ) : (
+                  <div className="text-center p-8 pointer-events-none">
+                    <FileText className="w-16 h-16 text-slate-700 mx-auto mb-3" />
+                    <p className="text-sm font-medium text-slate-400">Page {currentPage?.pageNumber || 1}</p>
+                    <p className="text-xs text-slate-600 mt-1">Click and drag cursor to tag a question bounding box region</p>
+                  </div>
+                )}
+
+                {/* SVG Overlay: Render Existing Tagged Regions on this Page */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                  {currentPageRegions.map((reg) => {
+                    const color = getQuestionColor(reg.questionNumber);
+                    const xPct = `${(reg.box.x * 100).toFixed(2)}%`;
+                    const yPct = `${(reg.box.y * 100).toFixed(2)}%`;
+                    const wPct = `${(reg.box.width * 100).toFixed(2)}%`;
+                    const hPct = `${(reg.box.height * 100).toFixed(2)}%`;
+
+                    return (
+                      <g key={reg._id}>
+                        <rect
+                          x={xPct}
+                          y={yPct}
+                          width={wPct}
+                          height={hPct}
+                          fill={color.hex}
+                          fillOpacity="0.18"
+                          stroke={color.hex}
+                          strokeWidth="2.5"
+                          rx="4"
+                        />
+                      </g>
+                    );
+                  })}
+                </svg>
+
+                {/* HTML Badges for Tagged Regions on this Page */}
+                {currentPageRegions.map((reg) => {
+                  const color = getQuestionColor(reg.questionNumber);
+                  return (
+                    <div
+                      key={reg._id}
+                      style={{
+                        left: `${(reg.box.x * 100).toFixed(2)}%`,
+                        top: `${(reg.box.y * 100).toFixed(2)}%`
+                      }}
+                      className="absolute -translate-y-full mb-1 z-20 flex items-center gap-1.5 bg-slate-900/90 border border-slate-700 text-xs px-2 py-0.5 rounded shadow-lg"
+                    >
+                      <span className={`font-bold ${color.text}`}>Q{reg.questionNumber}</span>
+                      <span className="text-[10px] text-slate-400">
+                        ({reg.segmentType.toLowerCase()} #{reg.sequenceIndex})
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteRegion(reg._id);
+                        }}
+                        title="Remove region"
+                        className="text-red-400 hover:text-red-300 ml-1 p-0.5"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     </div>
+                  );
+                })}
+
+                {/* Currently Drawing Box */}
+                {currentBox && (
+                  <div
+                    style={{
+                      left: `${(currentBox.x * 100).toFixed(2)}%`,
+                      top: `${(currentBox.y * 100).toFixed(2)}%`,
+                      width: `${(currentBox.width * 100).toFixed(2)}%`,
+                      height: `${(currentBox.height * 100).toFixed(2)}%`
+                    }}
+                    className="absolute border-2 border-dashed border-blue-400 bg-blue-500/25 pointer-events-none rounded z-30"
+                  >
+                    <span className="absolute -top-6 left-0 bg-blue-600 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">
+                      Q{selectedQuestion} Selection: {(currentBox.width * 100).toFixed(0)}% x {(currentBox.height * 100).toFixed(0)}%
+                    </span>
                   </div>
                 )}
               </div>
-            )}
 
-            {/* Segments Timeline / Breakdown */}
-            <div className="p-6 space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Reconstructed Segment Sequence
-              </h3>
-
-              <div className="space-y-3 relative before:absolute before:left-4 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
-                {ans.segments.map((seg) => (
-                  <div key={seg.segmentId} className="relative pl-9">
-                    {/* Step Icon */}
-                    <div className="absolute left-2 top-2 -translate-x-1/2 w-5 h-5 rounded-full bg-white border-2 border-indigo-600 text-indigo-600 flex items-center justify-center text-[10px] font-bold">
-                      {seg.sequenceIndex}
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 hover:border-indigo-300 transition">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-slate-900">
-                            Page {seg.pageNumber}
-                          </span>
-                          {seg.segmentType === 'START' && (
-                            <span className="px-2 py-0.5 bg-blue-100 text-blue-800 text-[11px] font-medium rounded">
-                              Start
-                            </span>
-                          )}
-                          {seg.segmentType === 'CONTINUATION' && (
-                            <span className="px-2 py-0.5 bg-purple-100 text-purple-800 text-[11px] font-medium rounded flex items-center gap-1">
-                              <ArrowRight className="w-3 h-3" /> Continued
-                            </span>
-                          )}
-                          {seg.segmentType === 'UNCERTAIN' && (
-                            <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[11px] font-medium rounded">
-                              Uncertain
-                            </span>
-                          )}
-                          {seg.detectedHeader && (
-                            <span className="text-xs font-mono bg-slate-200 px-2 py-0.5 rounded text-slate-700">
-                              Header: {seg.detectedHeader}
-                            </span>
-                          )}
-                          {seg.continuationMarker && (
-                            <span className="text-xs font-mono bg-purple-100 text-purple-800 px-2 py-0.5 rounded">
-                              Marker: {seg.continuationMarker}
-                            </span>
-                          )}
-                        </div>
-
-                        {seg.boundingBox && (
-                          <span className="text-[11px] font-mono text-slate-400">
-                            Box: [{seg.boundingBox.x}, {seg.boundingBox.y}, {seg.boundingBox.width}, {seg.boundingBox.height}]
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Extracted Text */}
-                      {seg.extractedText && (
-                        <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-700 font-mono whitespace-pre-wrap leading-relaxed">
-                          {seg.extractedText}
-                        </div>
+              {/* Page Thumbnails Selector */}
+              <div className="flex items-center gap-2 mt-4 overflow-x-auto w-full py-2 px-1">
+                {pages.map((p, idx) => {
+                  const hasTags = taggedRegions.some((r) => r.pageNumber === p.pageNumber);
+                  const isCurrent = idx === currentPageIndex;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => setCurrentPageIndex(idx)}
+                      className={`flex-shrink-0 w-16 h-20 rounded-lg border text-xs flex flex-col items-center justify-center transition relative ${
+                        isCurrent
+                          ? 'border-blue-500 bg-blue-500/10 text-white ring-2 ring-blue-500/40'
+                          : 'border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <FileText className="w-5 h-5 mb-1" />
+                      <span className="font-semibold">P. {p.pageNumber}</span>
+                      {hasTags && (
+                        <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400" />
                       )}
-
-                      {/* Evidence Tags */}
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                        <span className="text-[11px] font-semibold text-slate-400">Evidence:</span>
-                        {seg.evidence.map((ev, evIdx) => (
-                          <span 
-                            key={evIdx}
-                            className="px-2 py-0.5 bg-slate-200/80 text-slate-700 text-[10px] font-mono rounded"
-                          >
-                            {ev}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
-        ))}
 
-        {answers.length === 0 && !isLoading && !error && (
-          <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-3">
-            <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
-              <FileText className="w-6 h-6" />
+          {/* RIGHT 5 COLS: Question-Wise Reconstructed Answers */}
+          <div className="lg:col-span-5 flex flex-col gap-4">
+            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                  <h2 className="font-bold text-white text-base">Reconstructed Question Answers</h2>
+                </div>
+                <button
+                  onClick={reloadData}
+                  title="Refresh reconstruction"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-slate-400">Ground-Truth Confirmed:</span>
+                  <div className="text-lg font-bold text-emerald-400 mt-0.5">
+                    {reconstructedAnswers.filter((a) => a.isGroundTruth || a.status === 'GROUND_TRUTH' || a.status === 'VERIFIED').length} / {reconstructedAnswers.length}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <span className="text-slate-400">Pending Review:</span>
+                  <div className="text-lg font-bold text-amber-400 mt-0.5">
+                    {reconstructedAnswers.filter((a) => a.isAmbiguous || a.status === 'NEEDS_REVIEW').length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Reconstructed Questions List */}
+              <div className="flex flex-col gap-3 max-h-[620px] overflow-y-auto pr-1">
+                {reconstructedAnswers.length === 0 ? (
+                  <div className="text-center py-10 text-slate-500 text-sm">
+                    No questions reconstructed yet. Tag a region on the canvas to begin.
+                  </div>
+                ) : (
+                  reconstructedAnswers.map((ans) => {
+                    const isConfirmed = ans.status === 'GROUND_TRUTH' || ans.status === 'VERIFIED' || ans.isGroundTruth;
+                    const color = getQuestionColor(ans.questionNumber);
+
+                    return (
+                      <div
+                        key={ans.questionNumber}
+                        className={`p-4 rounded-xl border transition flex flex-col gap-3 ${
+                          selectedQuestion === ans.questionNumber
+                            ? 'bg-slate-900 border-blue-500/60 ring-1 ring-blue-500/30'
+                            : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        {/* Header: Question Number & Status */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded text-xs font-extrabold ${color.bg} ${color.text} border ${color.border}`}>
+                              Question {ans.questionNumber}
+                            </span>
+                            {ans.isNonConsecutive && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                                Non-Consecutive
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Status Badge */}
+                          {isConfirmed ? (
+                            <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded-full">
+                              <CheckCircle2 className="w-3 h-3" /> Ground Truth
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-[11px] font-semibold text-amber-400 bg-amber-950/60 border border-amber-800 px-2 py-0.5 rounded-full">
+                              <HelpCircle className="w-3 h-3" /> Needs Tagging
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Involved Pages */}
+                        <div className="text-xs text-slate-400 flex items-center justify-between">
+                          <span>
+                            Pages:{' '}
+                            <span className="text-white font-medium">
+                              {ans.pagesInvolved.length > 0 ? ans.pagesInvolved.join(', ') : 'None'}
+                            </span>
+                          </span>
+                          <span className="text-slate-500 text-[11px]">
+                            {ans.totalSegments} {ans.totalSegments === 1 ? 'region' : 'regions'}
+                          </span>
+                        </div>
+
+                        {/* Ambiguity Reason if any */}
+                        {ans.isAmbiguous && ans.ambiguityReason && (
+                          <div className="p-2 rounded-lg bg-amber-950/30 border border-amber-900/50 text-amber-300 text-[11px]">
+                            {ans.ambiguityReason}
+                          </div>
+                        )}
+
+                        {/* Segments List */}
+                        {ans.segments.length > 0 && (
+                          <div className="flex flex-col gap-1.5 mt-1 border-t border-slate-800/80 pt-2">
+                            {ans.segments.map((seg, idx) => (
+                              <div
+                                key={seg.segmentId || idx}
+                                className="flex items-center justify-between text-xs bg-slate-900 px-2.5 py-1.5 rounded-lg border border-slate-800"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-300">#{seg.sequenceIndex}</span>
+                                  <span className="text-slate-400">Page {seg.pageNumber}</span>
+                                  <span className="text-[10px] uppercase font-semibold text-blue-400">
+                                    {seg.segmentType}
+                                  </span>
+                                </div>
+
+                                <button
+                                  onClick={() => {
+                                    const pageIdx = pages.findIndex((p) => p.pageNumber === seg.pageNumber);
+                                    if (pageIdx !== -1) setCurrentPageIndex(pageIdx);
+                                  }}
+                                  className="text-[11px] text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                                >
+                                  <Eye className="w-3 h-3" /> View
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            onClick={() => {
+                              setSelectedQuestion(ans.questionNumber);
+                              const targetPage = ans.pagesInvolved[0] || currentPage?.pageNumber || 1;
+                              const pIdx = pages.findIndex((p) => p.pageNumber === targetPage);
+                              if (pIdx !== -1) setCurrentPageIndex(pIdx);
+                            }}
+                            className="px-3 py-1 text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition"
+                          >
+                            Tag More Regions
+                          </button>
+                          {!isConfirmed && ans.segments.length > 0 && (
+                            <button
+                              onClick={() => handleVerifyQuestion(ans.questionNumber)}
+                              className="px-3 py-1 text-xs font-semibold text-emerald-300 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-800 rounded-lg transition"
+                            >
+                              Confirm Ground Truth
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
-            <h3 className="text-base font-semibold text-slate-900">
-              No Reconstructed Answers Loaded
-            </h3>
-            <p className="text-sm text-slate-500 max-w-md mx-auto">
-              Enter an AnswerScript ID above to reconstruct and inspect answer segments, or click &ldquo;Load Sample Preview&rdquo; to explore answer reconstruction.
-            </p>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

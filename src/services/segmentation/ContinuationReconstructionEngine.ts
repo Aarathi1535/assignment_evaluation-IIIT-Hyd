@@ -4,7 +4,8 @@ import {
     IAnswerSegment,
     IReconstructedAnswer,
     ICandidateAssociation,
-    ReconstructionStatus
+    ReconstructionStatus,
+    SegmentType
 } from '../../models/AnswerSegmentation';
 import { SegmentHeadingDetector } from './SegmentHeadingDetector';
 
@@ -421,5 +422,138 @@ export class ContinuationReconstructionEngine {
             /^[=+\-*/∑∫√]/.test(trimmedCurr);
 
         return endsWithoutPeriod && startsWithContinuation;
+    }
+
+    /**
+     * Reconstructs question-wise answers from TA-tagged regions (human ground truth).
+     * Supports:
+     * - Multiple questions on one page
+     * - One question continuing across multiple pages
+     * - Non-consecutive continuation pages
+     * - Arbitrary page counts and arbitrary question numbers
+     * - Ambiguity handling for expected questions not yet tagged
+     */
+    static reconstructFromTaggedRegions(input: {
+        answerScriptId: string | mongoose.Types.ObjectId;
+        examId: string | mongoose.Types.ObjectId;
+        taggedRegions: Array<{
+            _id?: mongoose.Types.ObjectId | string;
+            questionNumber: number;
+            subQuestion?: string | null;
+            pageNumber: number;
+            pageId?: mongoose.Types.ObjectId | string | null;
+            box: IBoundingBox;
+            sequenceIndex?: number;
+            segmentType?: SegmentType;
+            isGroundTruth?: boolean;
+            taggedBy?: mongoose.Types.ObjectId | string | null;
+            taggedAt?: Date | null;
+            notes?: string | null;
+        }>;
+        expectedQuestions?: number[];
+    }): IReconstructedAnswer[] {
+        const { answerScriptId, examId, taggedRegions, expectedQuestions = [] } = input;
+
+        const questionMap = new Map<number, typeof taggedRegions>();
+        for (const reg of taggedRegions) {
+            const list = questionMap.get(reg.questionNumber) || [];
+            list.push(reg);
+            questionMap.set(reg.questionNumber, list);
+        }
+
+        const allQuestionNumbers = Array.from(
+            new Set([...expectedQuestions, ...Array.from(questionMap.keys())])
+        ).sort((a, b) => a - b);
+
+        const results: IReconstructedAnswer[] = [];
+
+        for (const qNum of allQuestionNumbers) {
+            const regions = questionMap.get(qNum) || [];
+
+            if (regions.length === 0) {
+                results.push({
+                    answerScript: new mongoose.Types.ObjectId(answerScriptId.toString()),
+                    exam: new mongoose.Types.ObjectId(examId.toString()),
+                    questionNumber: qNum,
+                    subQuestion: undefined,
+                    segments: [],
+                    totalSegments: 0,
+                    pagesInvolved: [],
+                    isNonConsecutive: false,
+                    isAmbiguous: true,
+                    ambiguityReason: 'Pending TA region tagging: No ground-truth regions tagged for this question yet.',
+                    reconstructionConfidence: 0.0,
+                    status: 'NEEDS_REVIEW',
+                    isGroundTruth: false
+                } as unknown as IReconstructedAnswer);
+                continue;
+            }
+
+            regions.sort((a, b) => {
+                if (a.sequenceIndex !== undefined && b.sequenceIndex !== undefined && a.sequenceIndex !== b.sequenceIndex) {
+                    return a.sequenceIndex - b.sequenceIndex;
+                }
+                if (a.pageNumber !== b.pageNumber) {
+                    return a.pageNumber - b.pageNumber;
+                }
+                const yA = a.box?.y ?? 0;
+                const yB = b.box?.y ?? 0;
+                if (yA !== yB) return yA - yB;
+                return (a.box?.x ?? 0) - (b.box?.x ?? 0);
+            });
+
+            const segments: IAnswerSegment[] = regions.map((reg, idx) => {
+                const total = regions.length;
+                let segType: SegmentType = reg.segmentType || (idx === 0 ? (total === 1 ? 'ISOLATED' : 'START') : 'CONTINUATION');
+                if (total > 1 && idx === 0 && segType === 'ISOLATED') {
+                    segType = 'START';
+                }
+
+                return {
+                    segmentId: reg._id ? reg._id.toString() : `seg_gt_q${qNum}_p${reg.pageNumber}_${idx + 1}`,
+                    pageNumber: reg.pageNumber,
+                    pageId: reg.pageId ?? undefined,
+                    box: reg.box,
+                    segmentType: segType,
+                    sequenceIndex: idx + 1,
+                    extractedText: reg.notes || '',
+                    detectedHeader: `Q${qNum}`,
+                    subQuestion: reg.subQuestion || undefined,
+                    confidence: 1.0,
+                    evidence: [
+                        'TA_TAGGED_GROUND_TRUTH',
+                        `PAGE:${reg.pageNumber}`,
+                        reg.taggedBy ? `TAGGED_BY:${reg.taggedBy}` : 'HUMAN_VERIFIED'
+                    ],
+                    isGroundTruth: true,
+                    taggedBy: reg.taggedBy ? new mongoose.Types.ObjectId(reg.taggedBy.toString()) : undefined,
+                    taggedAt: reg.taggedAt || new Date()
+                };
+            });
+
+            const pagesInvolved = Array.from(new Set(segments.map((s) => s.pageNumber))).sort((a, b) => a - b);
+            const isNonConsecutive = pagesInvolved.some((p, i, arr) => i > 0 && p > arr[i - 1] + 1);
+            const latestRegion = regions[regions.length - 1];
+
+            results.push({
+                answerScript: new mongoose.Types.ObjectId(answerScriptId.toString()),
+                exam: new mongoose.Types.ObjectId(examId.toString()),
+                questionNumber: qNum,
+                subQuestion: regions[0]?.subQuestion || undefined,
+                segments,
+                totalSegments: segments.length,
+                pagesInvolved,
+                isNonConsecutive,
+                isAmbiguous: false,
+                ambiguityReason: undefined,
+                reconstructionConfidence: 1.0,
+                status: 'GROUND_TRUTH',
+                isGroundTruth: true,
+                verifiedBy: latestRegion.taggedBy ? new mongoose.Types.ObjectId(latestRegion.taggedBy.toString()) : undefined,
+                verifiedAt: latestRegion.taggedAt || new Date()
+            } as unknown as IReconstructedAnswer);
+        }
+
+        return results;
     }
 }

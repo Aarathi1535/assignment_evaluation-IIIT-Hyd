@@ -34,9 +34,30 @@ export interface IAnswerSegment {
     confidence: number; // Heuristic confidence score 0.0 - 1.0
     evidence: string[]; // e.g. ["EXPLICIT_HEADER:Q1", "EXPLICIT_CONTD_MARKER:page_7"]
     candidateAssociations?: ICandidateAssociation[];
+    isGroundTruth?: boolean;
+    taggedBy?: mongoose.Types.ObjectId;
+    taggedAt?: Date;
 }
 
-export type ReconstructionStatus = 'AUTO_RECONSTRUCTED' | 'NEEDS_REVIEW' | 'VERIFIED';
+export type ReconstructionStatus = 'AUTO_RECONSTRUCTED' | 'NEEDS_REVIEW' | 'VERIFIED' | 'GROUND_TRUTH';
+
+export interface ITaggedRegion extends Document {
+    answerScript: mongoose.Types.ObjectId;
+    exam: mongoose.Types.ObjectId;
+    questionNumber: number;
+    subQuestion?: string;
+    pageNumber: number;
+    pageId?: mongoose.Types.ObjectId | string;
+    box: IBoundingBox;
+    sequenceIndex: number;
+    segmentType: SegmentType;
+    isGroundTruth: boolean;
+    taggedBy: mongoose.Types.ObjectId;
+    taggedAt: Date;
+    notes?: string;
+    createdAt: Date;
+    updatedAt: Date;
+}
 
 export interface IReconstructedAnswer extends Document {
     answerScript: mongoose.Types.ObjectId;
@@ -51,6 +72,7 @@ export interface IReconstructedAnswer extends Document {
     ambiguityReason?: string;
     reconstructionConfidence: number; // Aggregate heuristic score 0.0 - 1.0
     status: ReconstructionStatus;
+    isGroundTruth?: boolean;
     reviewNotes?: string;
     verifiedBy?: mongoose.Types.ObjectId;
     verifiedAt?: Date;
@@ -95,10 +117,94 @@ const AnswerSegmentSchema = new Schema<IAnswerSegment>(
         continuationMarker: { type: String, default: null },
         confidence: { type: Number, required: true, min: 0, max: 1 },
         evidence: { type: [String], default: [] },
-        candidateAssociations: { type: [CandidateAssociationSchema], default: [] }
+        candidateAssociations: { type: [CandidateAssociationSchema], default: [] },
+        isGroundTruth: { type: Boolean, default: false },
+        taggedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+        taggedAt: { type: Date, default: null }
     },
     { _id: false }
 );
+
+export const TaggedRegionSchema = new Schema<ITaggedRegion>(
+    {
+        answerScript: {
+            type: Schema.Types.ObjectId,
+            ref: 'AnswerScript',
+            required: true,
+            index: true
+        },
+        exam: {
+            type: Schema.Types.ObjectId,
+            ref: 'Exam',
+            required: true,
+            index: true
+        },
+        questionNumber: {
+            type: Number,
+            required: true,
+            min: 1,
+            index: true
+        },
+        subQuestion: {
+            type: String,
+            default: null,
+            trim: true
+        },
+        pageNumber: {
+            type: Number,
+            required: true,
+            min: 1
+        },
+        pageId: {
+            type: Schema.Types.ObjectId,
+            ref: 'IngestionPage',
+            default: null
+        },
+        box: {
+            type: BoundingBoxSchema,
+            required: true
+        },
+        sequenceIndex: {
+            type: Number,
+            required: true,
+            min: 1,
+            default: 1
+        },
+        segmentType: {
+            type: String,
+            enum: ['START', 'CONTINUATION', 'ISOLATED', 'UNCERTAIN'],
+            default: 'START'
+        },
+        isGroundTruth: {
+            type: Boolean,
+            default: true,
+            index: true
+        },
+        taggedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        taggedAt: {
+            type: Date,
+            default: Date.now
+        },
+        notes: {
+            type: String,
+            default: null
+        }
+    },
+    {
+        timestamps: true
+    }
+);
+
+TaggedRegionSchema.index({ answerScript: 1, questionNumber: 1 });
+TaggedRegionSchema.index({ answerScript: 1, pageNumber: 1 });
+
+export const TaggedRegion: Model<ITaggedRegion> =
+    mongoose.models.TaggedRegion ||
+    mongoose.model<ITaggedRegion>('TaggedRegion', TaggedRegionSchema);
 
 const ReconstructedAnswerSchema = new Schema<IReconstructedAnswer>(
     {
@@ -161,8 +267,13 @@ const ReconstructedAnswerSchema = new Schema<IReconstructedAnswer>(
         },
         status: {
             type: String,
-            enum: ['AUTO_RECONSTRUCTED', 'NEEDS_REVIEW', 'VERIFIED'],
+            enum: ['AUTO_RECONSTRUCTED', 'NEEDS_REVIEW', 'VERIFIED', 'GROUND_TRUTH'],
             default: 'AUTO_RECONSTRUCTED',
+            index: true
+        },
+        isGroundTruth: {
+            type: Boolean,
+            default: false,
             index: true
         },
         reviewNotes: {

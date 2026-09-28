@@ -6,16 +6,16 @@ import answerSegmentationService from '@/services/AnswerSegmentationService';
 import { verifyScriptAccess } from '@/app/api/research/segmentation/auth';
 import { HttpError } from '@/lib/errors';
 
-export async function GET(
+export async function PUT(
     req: NextRequest,
-    context: { params: Promise<{ scriptId: string }> }
+    context: { params: Promise<{ scriptId: string; regionId: string }> }
 ) {
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
     }
 
-    const { scriptId } = await context.params;
+    const { scriptId, regionId } = await context.params;
 
     if (!scriptId || !MongooseTypes.ObjectId.isValid(scriptId)) {
         return NextResponse.json(
@@ -24,26 +24,29 @@ export async function GET(
         );
     }
 
+    if (!regionId || !MongooseTypes.ObjectId.isValid(regionId)) {
+        return NextResponse.json(
+            { success: false, message: 'Invalid Region ID format', data: null },
+            { status: 400 }
+        );
+    }
+
     try {
         await connectDB();
         await verifyScriptAccess(scriptId, auth.user);
 
-        let answers = await answerSegmentationService.getReconstructedAnswers(scriptId);
-
-        // If no reconstructed answers exist yet, trigger reconstruction on-demand
-        if (answers.length === 0) {
-            answers = await answerSegmentationService.reconstructScript(scriptId, {
-                actingUserId: auth.user.id,
-                actingUserRole: auth.user.role,
-                ipAddress: req.headers.get('x-forwarded-for') || undefined
-            });
-        }
+        const body = await req.json();
+        const updated = await answerSegmentationService.updateRegion(
+            regionId,
+            body,
+            auth.user.id
+        );
 
         return NextResponse.json(
             {
                 success: true,
-                message: `Retrieved ${answers.length} reconstructed question answers`,
-                data: answers
+                message: 'Successfully updated tagged region',
+                data: updated
             },
             { status: 200 }
         );
@@ -51,26 +54,22 @@ export async function GET(
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         return NextResponse.json(
-            {
-                success: false,
-                message,
-                data: null
-            },
+            { success: false, message, data: null },
             { status }
         );
     }
 }
 
-export async function POST(
+export async function DELETE(
     req: NextRequest,
-    context: { params: Promise<{ scriptId: string }> }
+    context: { params: Promise<{ scriptId: string; regionId: string }> }
 ) {
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
     }
 
-    const { scriptId } = await context.params;
+    const { scriptId, regionId } = await context.params;
 
     if (!scriptId || !MongooseTypes.ObjectId.isValid(scriptId)) {
         return NextResponse.json(
@@ -79,29 +78,27 @@ export async function POST(
         );
     }
 
+    if (!regionId || !MongooseTypes.ObjectId.isValid(regionId)) {
+        return NextResponse.json(
+            { success: false, message: 'Invalid Region ID format', data: null },
+            { status: 400 }
+        );
+    }
+
     try {
         await connectDB();
         await verifyScriptAccess(scriptId, auth.user);
 
-        let body: { regions?: unknown } = {};
-        try {
-            body = await req.json();
-        } catch {
-            // body is optional
-        }
-
-        const answers = await answerSegmentationService.reconstructScript(scriptId, {
-            overrideRegions: Array.isArray(body.regions) ? body.regions : undefined,
-            actingUserId: auth.user.id,
-            actingUserRole: auth.user.role,
-            ipAddress: req.headers.get('x-forwarded-for') || undefined
-        });
+        const result = await answerSegmentationService.removeRegion(
+            regionId,
+            auth.user.id
+        );
 
         return NextResponse.json(
             {
                 success: true,
-                message: `Successfully executed answer reconstruction for ${answers.length} questions`,
-                data: answers
+                message: 'Successfully removed tagged region',
+                data: result
             },
             { status: 200 }
         );
@@ -109,11 +106,7 @@ export async function POST(
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         return NextResponse.json(
-            {
-                success: false,
-                message,
-                data: null
-            },
+            { success: false, message, data: null },
             { status }
         );
     }

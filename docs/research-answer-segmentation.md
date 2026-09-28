@@ -61,6 +61,34 @@ In the production pipeline:
 
 ---
 
+## 3B. TA-Assisted Question-Region Tagging Starting Point (Mentor-Reviewed Update)
+
+To solve the production absence of automated handwritten OCR without relying on synthetic fixtures or hardcoded PDF page mappings, the architecture establishes a **real, product-grade TA-assisted Question-Region Tagging workflow**:
+
+1. **Human Ground Truth via TA Bounding Boxes:**
+   - Instead of guessing question boundaries via uncalibrated OCR heuristics, a Teaching Assistant (TA) selects an answer sheet and interactively tags bounding boxes directly onto page images.
+   - Tagged regions specify `questionNumber`, `subQuestion`, `pageNumber`, `sequenceIndex`, and normalized bounding box coordinates `[x, y, width, height]`.
+   - Each tagged region is recorded in MongoDB (`TaggedRegion` collection) with `isGroundTruth: true` and linked to the acting TA's identity.
+
+2. **Multi-Region & Non-Consecutive Continuation Support:**
+   - **Multiple Questions per Page:** Multiple distinct regions on a single physical page can be tagged to different questions (e.g. upper half for $Q_1$, lower half for $Q_2$).
+   - **Continuation Across Pages:** A question can have multiple regions tagged across arbitrary pages (e.g. Page 1 $\to$ Page 7), supporting both consecutive and non-consecutive distal continuations.
+   - **Arbitrary Page & Question Counts:** Any number of questions and pages are supported dynamically without hardcoding.
+
+3. **Question-Wise Answer Reconstruction from Ground Truth:**
+   - The reconstruction engine (`ContinuationReconstructionEngine.reconstructFromTaggedRegions`) unifies the TA's tagged regions into structured question-wise answers (`ReconstructedAnswer`).
+   - Tagged answers achieve `status: 'GROUND_TRUTH'`, `reconstructionConfidence: 1.0`, and `isAmbiguous: false`.
+   - **Ambiguity Preservation:** Expected questions from the exam rubric that have not yet been tagged by a TA are preserved with `status: 'NEEDS_REVIEW'`, `isAmbiguous: true`, and an explanatory `ambiguityReason` ("Pending TA region tagging").
+
+4. **REST APIs for Tagging Workflow:**
+   - `GET /api/research/segmentation/:scriptId/regions`: Retrieve all tagged regions for a script (filterable by question).
+   - `POST /api/research/segmentation/:scriptId/regions`: Tag a new region (creates `TaggedRegion`, triggers ground-truth reconstruction).
+   - `PUT /api/research/segmentation/:scriptId/regions/:regionId`: Update existing region coordinates or metadata.
+   - `DELETE /api/research/segmentation/:scriptId/regions/:regionId`: Remove a tagged region and re-reconstruct answers.
+   - `PUT /api/research/segmentation/:scriptId/question/:questionNumber`: Batch save all regions for a specific question.
+
+---
+
 ## 4. Reconstruction Architecture
 
 The Direction 3 reconstruction layer operates downstream of page ingestion without modifying it:

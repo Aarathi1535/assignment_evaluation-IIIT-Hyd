@@ -28,22 +28,17 @@ export async function GET(
         await connectDB();
         await verifyScriptAccess(scriptId, auth.user);
 
-        let answers = await answerSegmentationService.getReconstructedAnswers(scriptId);
+        const url = new URL(req.url);
+        const qParam = url.searchParams.get('questionNumber');
+        const questionNumber = qParam ? parseInt(qParam, 10) : undefined;
 
-        // If no reconstructed answers exist yet, trigger reconstruction on-demand
-        if (answers.length === 0) {
-            answers = await answerSegmentationService.reconstructScript(scriptId, {
-                actingUserId: auth.user.id,
-                actingUserRole: auth.user.role,
-                ipAddress: req.headers.get('x-forwarded-for') || undefined
-            });
-        }
+        const regions = await answerSegmentationService.getTaggedRegions(scriptId, questionNumber);
 
         return NextResponse.json(
             {
                 success: true,
-                message: `Retrieved ${answers.length} reconstructed question answers`,
-                data: answers
+                message: `Retrieved ${regions.length} tagged regions`,
+                data: regions
             },
             { status: 200 }
         );
@@ -51,11 +46,7 @@ export async function GET(
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         return NextResponse.json(
-            {
-                success: false,
-                message,
-                data: null
-            },
+            { success: false, message, data: null },
             { status }
         );
     }
@@ -83,37 +74,34 @@ export async function POST(
         await connectDB();
         await verifyScriptAccess(scriptId, auth.user);
 
-        let body: { regions?: unknown } = {};
-        try {
-            body = await req.json();
-        } catch {
-            // body is optional
+        const body = await req.json();
+
+        if (!body || typeof body !== 'object') {
+            return NextResponse.json(
+                { success: false, message: 'Request body must be an object', data: null },
+                { status: 400 }
+            );
         }
 
-        const answers = await answerSegmentationService.reconstructScript(scriptId, {
-            overrideRegions: Array.isArray(body.regions) ? body.regions : undefined,
-            actingUserId: auth.user.id,
-            actingUserRole: auth.user.role,
-            ipAddress: req.headers.get('x-forwarded-for') || undefined
-        });
+        const result = await answerSegmentationService.tagRegion(
+            scriptId,
+            body,
+            auth.user.id
+        );
 
         return NextResponse.json(
             {
                 success: true,
-                message: `Successfully executed answer reconstruction for ${answers.length} questions`,
-                data: answers
+                message: `Successfully tagged region on page ${body.pageNumber} for question ${body.questionNumber}`,
+                data: result
             },
-            { status: 200 }
+            { status: 201 }
         );
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         return NextResponse.json(
-            {
-                success: false,
-                message,
-                data: null
-            },
+            { success: false, message, data: null },
             { status }
         );
     }

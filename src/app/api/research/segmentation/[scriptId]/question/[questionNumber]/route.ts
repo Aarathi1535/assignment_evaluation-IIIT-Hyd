@@ -3,35 +3,8 @@ import { Types as MongooseTypes } from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { requireAuth } from '@/lib/apiAuth';
 import answerSegmentationService from '@/services/AnswerSegmentationService';
-import AnswerScript from '@/models/AnswerScript';
-import ExamRepository from '@/repositories/ExamRepository';
-import AllocationService from '@/services/AllocationService';
-import { UserRole } from '@/constants/permissions';
+import { verifyScriptAccess } from '@/app/api/research/segmentation/auth';
 import { HttpError } from '@/lib/errors';
-
-async function verifyScriptAccess(scriptId: string, user: { id: string; role: string }) {
-    const script = await AnswerScript.findById(scriptId);
-    if (!script) {
-        throw new HttpError('AnswerScript not found', 404);
-    }
-
-    const role = user.role?.toUpperCase();
-    if (role === UserRole.PROFESSOR || role === UserRole.ADMIN) {
-        const exam = await ExamRepository.getExamById(script.exam.toString(), user.id, user.role);
-        if (!exam) {
-            throw new HttpError('Forbidden: Access denied to exam for this script', 403);
-        }
-    } else if (role === UserRole.TA) {
-        const allocation = await AllocationService.verifyTaAllocation(script._id, user.id);
-        if (!allocation) {
-            throw new HttpError('Forbidden: You are not allocated to this answer script', 403);
-        }
-    } else {
-        throw new HttpError('Forbidden: Unauthorized role', 403);
-    }
-
-    return script;
-}
 
 export async function GET(
     req: NextRequest,
@@ -159,6 +132,69 @@ export async function PATCH(
                 success: true,
                 message: `Reconstructed answer for Question ${questionNumber} marked as verified`,
                 data: updated
+            },
+            { status: 200 }
+        );
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+        const status = error instanceof HttpError ? error.statusCode : 500;
+        return NextResponse.json(
+            {
+                success: false,
+                message,
+                data: null
+            },
+            { status }
+        );
+    }
+}
+
+export async function PUT(
+    req: NextRequest,
+    context: { params: Promise<{ scriptId: string; questionNumber: string }> }
+) {
+    const auth = await requireAuth();
+    if (!auth.authorized) {
+        return auth.response;
+    }
+
+    const { scriptId, questionNumber: qParam } = await context.params;
+
+    if (!scriptId || !MongooseTypes.ObjectId.isValid(scriptId)) {
+        return NextResponse.json(
+            { success: false, message: 'Invalid AnswerScript ID format', data: null },
+            { status: 400 }
+        );
+    }
+
+    const questionNumber = parseInt(qParam, 10);
+    if (isNaN(questionNumber) || questionNumber < 1) {
+        return NextResponse.json(
+            { success: false, message: 'Invalid questionNumber parameter', data: null },
+            { status: 400 }
+        );
+    }
+
+    try {
+        await connectDB();
+        await verifyScriptAccess(scriptId, auth.user);
+
+        const body = await req.json();
+        const regions = Array.isArray(body.regions) ? body.regions : [];
+
+        const updatedAnswer = await answerSegmentationService.saveQuestionRegions(
+            scriptId,
+            questionNumber,
+            regions,
+            auth.user.id,
+            body.subQuestion
+        );
+
+        return NextResponse.json(
+            {
+                success: true,
+                message: `Successfully saved ${regions.length} regions for Question ${questionNumber}`,
+                data: updatedAnswer
             },
             { status: 200 }
         );
