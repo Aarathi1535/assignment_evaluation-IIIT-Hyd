@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useReducer, useEffect } from 'react';
 import { ShieldCheck, ShieldAlert, Clock, AlertCircle } from 'lucide-react';
 
 interface ConsentData {
@@ -18,70 +18,128 @@ interface HandwritingConsentCardProps {
     readOnly?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// State / Reducer (all setState calls go through dispatch — never directly in
+// the useEffect body, satisfying react-hooks/set-state-in-effect).
+// ---------------------------------------------------------------------------
+
+type ConsentState = {
+    consent: ConsentData | null;
+    loading: boolean;
+    saving: boolean;
+    message: string | null;
+    error: string | null;
+    /** Incrementing this value causes the fetch effect to re-run. */
+    fetchTrigger: number;
+};
+
+type ConsentAction =
+    | { type: 'FETCH_SUCCESS'; payload: ConsentData }
+    | { type: 'FETCH_ERROR'; payload: string }
+    | { type: 'SAVE_START' }
+    | { type: 'SAVE_SUCCESS'; payload: ConsentData; message: string }
+    | { type: 'SAVE_ERROR'; payload: string }
+    | { type: 'SAVE_END' }
+    | { type: 'REFETCH' };
+
+const initialState: ConsentState = {
+    consent: null,
+    loading: true,
+    saving: false,
+    message: null,
+    error: null,
+    fetchTrigger: 0
+};
+
+function reducer(state: ConsentState, action: ConsentAction): ConsentState {
+    switch (action.type) {
+        case 'FETCH_SUCCESS':
+            return { ...state, loading: false, consent: action.payload, error: null };
+        case 'FETCH_ERROR':
+            return { ...state, loading: false, error: action.payload };
+        case 'SAVE_START':
+            return { ...state, saving: true, message: null, error: null };
+        case 'SAVE_SUCCESS':
+            return { ...state, saving: false, consent: action.payload, message: action.message };
+        case 'SAVE_ERROR':
+            return { ...state, saving: false, error: action.payload };
+        case 'SAVE_END':
+            return { ...state, saving: false };
+        case 'REFETCH':
+            return { ...state, loading: true, error: null, fetchTrigger: state.fetchTrigger + 1 };
+        default:
+            return state;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export const HandwritingConsentCard: React.FC<HandwritingConsentCardProps> = ({
     studentId,
     readOnly = false
 }) => {
-    const [consent, setConsent] = useState<ConsentData | null>(null);
-    const [loading, setLoading] = useState<boolean>(true);
-    const [saving, setSaving] = useState<boolean>(false);
-    const [message, setMessage] = useState<string | null>(null);
-    const [error, setError] = useState<string | null>(null);
-
-    const fetchConsent = async () => {
-        try {
-            setLoading(true);
-            const url = studentId
-                ? `/api/research/handwriting/consent?studentId=${studentId}`
-                : '/api/research/handwriting/consent';
-            const res = await fetch(url);
-            const json = await res.json();
-            if (json.success && json.data) {
-                setConsent(json.data);
-            } else {
-                setError(json.message || 'Failed to fetch consent data');
-            }
-        } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : 'Network error');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const [state, dispatch] = useReducer(reducer, initialState);
+    const { consent, loading, saving, message, error, fetchTrigger } = state;
 
     useEffect(() => {
-        fetchConsent();
-    }, [studentId]);
+        const controller = new AbortController();
+        const url = studentId
+            ? `/api/research/handwriting/consent?studentId=${studentId}`
+            : '/api/research/handwriting/consent';
+
+        // All state updates happen inside promise callbacks — never synchronously
+        // in the effect body — satisfying react-hooks/set-state-in-effect.
+        fetch(url, { signal: controller.signal })
+            .then((res) => res.json())
+            .then((json: { success: boolean; data?: ConsentData; message?: string }) => {
+                if (json.success && json.data) {
+                    dispatch({ type: 'FETCH_SUCCESS', payload: json.data });
+                } else {
+                    dispatch({ type: 'FETCH_ERROR', payload: json.message ?? 'Failed to fetch consent data' });
+                }
+            })
+            .catch((err: unknown) => {
+                if (err instanceof Error && err.name === 'AbortError') return;
+                dispatch({
+                    type: 'FETCH_ERROR',
+                    payload: err instanceof Error ? err.message : 'Network error'
+                });
+            });
+
+        return () => {
+            controller.abort();
+        };
+    }, [studentId, fetchTrigger]);
 
     const handleToggleConsent = async (newConsentValue: boolean) => {
+        dispatch({ type: 'SAVE_START' });
         try {
-            setSaving(true);
-            setMessage(null);
-            setError(null);
-
             const res = await fetch('/api/research/handwriting/consent', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    studentId,
-                    hasConsented: newConsentValue,
-                    retentionDays: 365
-                })
+                body: JSON.stringify({ studentId, hasConsented: newConsentValue, retentionDays: 365 })
             });
-            const json = await res.json();
+            const json = await res.json() as { success: boolean; data?: ConsentData; message?: string };
             if (json.success && json.data) {
-                setConsent(json.data);
-                setMessage(
-                    newConsentValue
+                dispatch({
+                    type: 'SAVE_SUCCESS',
+                    payload: json.data,
+                    message: newConsentValue
                         ? 'Consent recorded. Retention period set to 365 days.'
                         : 'Consent revoked. Active analysis disabled.'
-                );
+                });
+                // Trigger a re-fetch to confirm persisted state from the server
+                dispatch({ type: 'REFETCH' });
             } else {
-                setError(json.message || 'Failed to update consent');
+                dispatch({ type: 'SAVE_ERROR', payload: json.message ?? 'Failed to update consent' });
             }
         } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : 'Error updating consent');
-        } finally {
-            setSaving(false);
+            dispatch({
+                type: 'SAVE_ERROR',
+                payload: err instanceof Error ? err.message : 'Error updating consent'
+            });
         }
     };
 

@@ -1,5 +1,6 @@
-import mongoose from 'mongoose';
+import mongoose, { QueryFilter } from 'mongoose';
 import HandwritingProfileModel, { IHandwritingProfileDocument } from '../models/HandwritingProfile';
+
 
 export class HandwritingProfileRepository {
     private isValidObjectId(id: string): boolean {
@@ -34,7 +35,7 @@ export class HandwritingProfileRepository {
         const now = new Date();
 
         // Query for active current profile
-        const currentQuery: any = {
+        const currentQuery: QueryFilter<IHandwritingProfileDocument> = {
             student: studentOid,
             isCurrent: true
         };
@@ -52,7 +53,7 @@ export class HandwritingProfileRepository {
         }
 
         // Fallback: return the highest version profile for this student
-        const fallbackQuery: any = { student: studentOid };
+        const fallbackQuery: QueryFilter<IHandwritingProfileDocument> = { student: studentOid };
         if (!options?.includeExpired) {
             fallbackQuery.$or = [
                 { retentionExpiresAt: { $exists: false } },
@@ -135,7 +136,7 @@ export class HandwritingProfileRepository {
      */
     async purgeExpired(studentId?: string): Promise<number> {
         const now = new Date();
-        const query: any = {
+        const query: QueryFilter<IHandwritingProfileDocument> = {
             retentionExpiresAt: { $lte: now }
         };
         if (studentId && this.isValidObjectId(studentId)) {
