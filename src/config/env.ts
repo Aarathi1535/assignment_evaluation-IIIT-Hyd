@@ -7,7 +7,15 @@ const envSchema = z.object({
     ORIGINAL_STORAGE_HMAC_SECRET: z.string().min(1, 'ORIGINAL_STORAGE_HMAC_SECRET is required'),
     ORIGINAL_STORAGE_KEY_ID: z.string().default('v1'),
     ORIGINAL_STORAGE_PATH: z.string().optional(),
-    DERIVED_PAGE_STORAGE_BUCKET: z.string().trim().min(1).optional()
+    DERIVED_PAGE_STORAGE_BUCKET: z.string().trim().min(1).optional(),
+    FEATURE_CLASSROOM_ASSESSMENT: z.string().optional().default('false'),
+    FEATURE_PERSONALIZED_ASSESSMENT: z.string().optional().default('false'),
+    NEXT_PUBLIC_FEATURE_CLASSROOM_ASSESSMENT: z.string().optional().default('false'),
+    NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT: z.string().optional().default('false'),
+    VERTEX_AI_REGION: z.string().optional().default('asia-south1'),
+    GOOGLE_CLOUD_PROJECT: z.string().optional().default('assignment-evaluator-iiith'),
+    GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
+    GOOGLE_SERVICE_ACCOUNT_KEY: z.string().optional()
 });
 
 export function validateEnv() {

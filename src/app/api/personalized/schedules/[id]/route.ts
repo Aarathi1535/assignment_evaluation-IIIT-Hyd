@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../../../lib/db';
 import personalizedAssessmentService from '../../../../../services/PersonalizedAssessmentService';
-import { requireAuth } from '../../../../../lib/apiAuth';
+import { requireAuth, requireFeature } from '../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../lib/errors';
 
 export async function GET(
     _req: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
+    const featureCheck = requireFeature('PERSONALIZED_ASSESSMENT');
+    if (!featureCheck.authorized) {
+        return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
