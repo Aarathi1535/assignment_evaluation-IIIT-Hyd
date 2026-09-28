@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { HttpError } from '../../lib/errors';
 import { QuestionDifficulty } from '../../models/PersonalizedQuestion';
+import { vertexAIService, VertexAIService } from './VertexAIService';
 
 export const generatedRubricCriterionSchema = z
     .object({
@@ -383,7 +384,7 @@ export function parseGeneratedQuestions(
  * Connects to Google Generative Language API with retry, fallback, and strict syllabus grounding.
  */
 export class GeminiAIQuestionGenerationProvider implements IAIQuestionGenerationProvider {
-    readonly providerName = 'GeminiAI';
+    readonly providerName: string = 'GeminiAI';
     private customGeminiCaller: GeminiQuestionCaller | null = null;
 
     /**
@@ -414,6 +415,9 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
     }
 
     isConfigured(): boolean {
+        if (vertexAIService.isConfigured()) {
+            return true;
+        }
         const key = this.getApiKey();
         return typeof key === 'string' && key.length > 0;
     }
@@ -693,6 +697,26 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             return parseGeneratedQuestions(rawOutput, syllabusUnits);
         }
 
+        // Live Vertex AI Service call when configured via Google Cloud credentials
+        if (vertexAIService.isConfigured()) {
+            const promptText = this.buildUserPrompt({
+                courseTitle,
+                syllabusUnits,
+                targetCount,
+                difficultyDistribution,
+                selectedTopics,
+                learningObjectives
+            });
+            const rawText = await vertexAIService.generateContent({
+                systemInstruction,
+                promptText,
+                responseMimeType: 'application/json',
+                temperature: 0.2
+            });
+            const items = parseGeneratedQuestions(rawText, syllabusUnits);
+            return items.slice(0, targetCount);
+        }
+
         // Live Gemini API call with chunked batching
         const BATCH_SIZE = 10;
         const allGenerated: GeneratedQuestionItem[] = [];
@@ -827,3 +851,65 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
         return questions;
     }
 }
+
+/**
+ * Shared Vertex AI question generation provider for Personalized Assessment.
+ * Delegates all live AI calls to the centralized VertexAIService.
+ * Does NOT require or read GEMINI_API_KEY.
+ */
+export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerationProvider {
+    override readonly providerName = 'VertexAI';
+    private sharedAiService: VertexAIService;
+
+    constructor(aiService: VertexAIService = vertexAIService) {
+        super();
+        this.sharedAiService = aiService;
+    }
+
+    override isConfigured(): boolean {
+        return this.sharedAiService.isConfigured();
+    }
+
+    override getModelName(): string {
+        return this.sharedAiService.getModelName();
+    }
+
+    getRegion(): string {
+        return this.sharedAiService.getRegion();
+    }
+
+    setCustomCaller(caller: ((payload: { model: string; region: string; systemInstruction: string; promptText: string }) => Promise<string>) | null): void {
+        this.sharedAiService.setCustomCaller(caller);
+    }
+
+    override async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
+        if (!this.isConfigured()) {
+            throw new HttpError(
+                'Vertex AI question generation is not configured. Please configure Google Cloud service account credentials via GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SERVICE_ACCOUNT_KEY.',
+                503
+            );
+        }
+
+        const { syllabusUnits, targetCount } = params;
+        if (!syllabusUnits || syllabusUnits.length === 0) {
+            throw new HttpError('Syllabus contains no units to generate questions from', 400);
+        }
+
+        const systemInstruction = this.buildSystemInstruction();
+        const promptText = this.buildUserPrompt(params);
+
+        const rawText = await this.sharedAiService.generateContent({
+            systemInstruction,
+            promptText,
+            responseMimeType: 'application/json',
+            temperature: 0.2
+        });
+
+        const questions = parseGeneratedQuestions(rawText, syllabusUnits);
+        return questions.slice(0, targetCount);
+    }
+}
+
+export const AIQuestionGenerationProvider = VertexAIQuestionGenerationProvider;
+export const GeminiQuestionGenerationProvider = GeminiAIQuestionGenerationProvider;
+

@@ -3,10 +3,15 @@ import { Types as MongooseTypes } from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import personalizedAssessmentService from '../../../../services/PersonalizedAssessmentService';
 import { createPersonalizedScheduleSchema } from '../../../../validations/personalizedAssessmentValidation';
-import { requireAuth } from '../../../../lib/apiAuth';
+import { requireAuth, requireFeature } from '../../../../lib/apiAuth';
 import { HttpError } from '../../../../lib/errors';
 
 export async function GET() {
+    const featureCheck = requireFeature('PERSONALIZED_ASSESSMENT');
+    if (!featureCheck.authorized) {
+        return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
@@ -62,6 +67,11 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+    const featureCheck = requireFeature('PERSONALIZED_ASSESSMENT');
+    if (!featureCheck.authorized) {
+        return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;

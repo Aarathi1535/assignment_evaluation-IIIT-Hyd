@@ -6,6 +6,10 @@ import { IPersonalizedStudentAssignment, AssignmentStatus } from '../models/Pers
 import Course from '../models/Course';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
+import classroomEvaluationService, {
+    EvaluateClassroomAnswerInput,
+    ValidatedEvaluationOutcome
+} from './ClassroomEvaluationService';
 
 export interface CreatePersonalizedQuestionInput {
     course: string;
@@ -638,6 +642,10 @@ export class PersonalizedAssessmentService {
         referenceNow: Date = new Date(),
         auditCtx?: AuditContext
     ) {
+        if (typeof answerText !== 'string' || answerText.trim().length === 0) {
+            throw new HttpError('Daily personalized assessment answer must be non-empty text', 400);
+        }
+
         const assignment = await personalizedAssessmentRepository.getAssignmentById(assignmentId);
         if (!assignment) {
             throw new HttpError('Assignment not found', 404);
@@ -666,8 +674,12 @@ export class PersonalizedAssessmentService {
             throw new HttpError('Submission rejected: The window for this question has not opened yet.', 403);
         }
 
+        // Daily personalized assessment answers are strictly TEXT-ONLY and UNGRADED:
+        // Responses are preserved as typed text learning records; do not grade or run AI evaluation.
         assignment.status = 'SUBMITTED';
-        assignment.studentAnswer = answerText;
+        assignment.studentAnswer = answerText.trim();
+        assignment.score = null;
+        assignment.feedback = null;
         assignment.submittedAt = referenceNow;
         await assignment.save();
 
@@ -678,7 +690,7 @@ export class PersonalizedAssessmentService {
             details: {
                 assignmentId,
                 dayNumber: assignment.dayNumber,
-                answerLength: answerText.length,
+                answerLength: assignment.studentAnswer.length,
                 ipAddress: auditCtx?.ipAddress
             }
         });
@@ -690,6 +702,17 @@ export class PersonalizedAssessmentService {
             status: 'SUBMITTED',
             question: redactedQuestion
         };
+    }
+
+    /**
+     * Evaluates a handwritten/photo answer by delegating directly to the existing
+     * Classroom Evaluation Service. Reuses the shared Classroom evaluation pipeline
+     * when handwritten answer assessment is required, avoiding duplicate evaluators.
+     */
+    async evaluateHandwrittenAnswer(
+        options: EvaluateClassroomAnswerInput
+    ): Promise<ValidatedEvaluationOutcome> {
+        return classroomEvaluationService.evaluateHandwrittenAnswer(options);
     }
 
     async getMySchedule(

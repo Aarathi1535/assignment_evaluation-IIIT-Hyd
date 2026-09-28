@@ -1,14 +1,34 @@
 import { withAuth } from 'next-auth/middleware';
 import { NextResponse } from 'next/server';
 import { hasPermission, Permission, UserRole } from './constants/permissions';
+import { isFeatureEnabled } from './config/features';
 
-export default withAuth(
-  function middleware(req) {
-    const token = req.nextauth.token;
-    const path = req.nextUrl.pathname;
+import type { JWT } from 'next-auth/jwt';
+
+export function proxyMiddleware(req: {
+  nextUrl: { pathname: string };
+  nextauth?: { token?: JWT | Record<string, unknown> | null };
+  url: string;
+}) {
+  const token = req.nextauth?.token;
+  const path = req.nextUrl.pathname;
 
     // API route protection (JSON 401 instead of redirecting)
     if (path.startsWith('/api')) {
+      // Research feature flag protection for API endpoints
+      if (path.startsWith('/api/classroom') && !isFeatureEnabled('CLASSROOM_ASSESSMENT')) {
+        return NextResponse.json(
+          { success: false, message: 'Classroom assessment feature is disabled', data: null },
+          { status: 404 }
+        );
+      }
+      if (path.startsWith('/api/personalized') && !isFeatureEnabled('PERSONALIZED_ASSESSMENT')) {
+        return NextResponse.json(
+          { success: false, message: 'Personalized assessment feature is disabled', data: null },
+          { status: 404 }
+        );
+      }
+
       // Allow public access ONLY to /api/auth/** and /api/health
       if (path.startsWith('/api/auth') || path === '/api/health') {
         return;
@@ -53,6 +73,20 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
+      // Feature flag route protection for research pages
+      if (
+        (path.startsWith('/professor/classroom') || path.startsWith('/student/classroom')) &&
+        !isFeatureEnabled('CLASSROOM_ASSESSMENT')
+      ) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+      if (
+        (path.startsWith('/professor/personalized') || path.startsWith('/student/personalized')) &&
+        !isFeatureEnabled('PERSONALIZED_ASSESSMENT')
+      ) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+
       // Map routes to their required permissions using RolePermissions/hasPermission
       let requiredPermission: Permission | null = null;
       if (path.startsWith('/admin')) {
@@ -70,7 +104,10 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
     }
-  },
+}
+
+export default withAuth(
+  proxyMiddleware,
   {
     callbacks: {
       authorized: ({ token, req }) => {
