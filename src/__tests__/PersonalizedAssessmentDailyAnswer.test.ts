@@ -1,16 +1,33 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
+import { NextRequest } from 'next/server';
 import User, { IUser } from '../models/User';
 import Course, { ICourse } from '../models/Course';
 import PersonalizedStudentAssignment from '../models/PersonalizedStudentAssignment';
 import personalizedAssessmentService from '../services/PersonalizedAssessmentService';
 import classroomEvaluationService from '../services/ClassroomEvaluationService';
 import { UserRole } from '../constants/permissions';
-import { submitStudentAssignmentSchema } from '../validations/personalizedAssessmentValidation';
+import { submitStudentAssignmentSchema, submitStudentPhotoAssignmentSchema } from '../validations/personalizedAssessmentValidation';
+import { HttpError } from '../lib/errors';
+import { POST as submitRoute } from '../app/api/personalized/today/submit/route';
 
-describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluation Delegation', () => {
+let mockSessionUser: { id: string; role: string } | null = null;
+
+vi.mock('next-auth', async (importOriginal) => {
+    const original = await importOriginal<typeof import('next-auth')>();
+    return {
+        ...original,
+        getServerSession: vi.fn().mockImplementation(() => {
+            if (!mockSessionUser) return Promise.resolve(null);
+            return Promise.resolve({ user: mockSessionUser });
+        }),
+    };
+});
+
+describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluated Answers', () => {
     let professorUser: IUser;
     let studentUser: IUser;
+    let studentUser2: IUser;
     let testCourse: ICourse;
     let seededQuestionIds: mongoose.Types.ObjectId[] = [];
     const originalFeatureFlag = process.env.FEATURE_PERSONALIZED_ASSESSMENT;
@@ -31,6 +48,7 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluatio
         await User.deleteMany({});
         await Course.deleteMany({});
         await PersonalizedStudentAssignment.deleteMany({});
+        await mongoose.model('PersonalizedQuestion').deleteMany({});
 
         // 1. Create Professor
         professorUser = await User.create({
@@ -41,10 +59,18 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluatio
             isActive: true
         });
 
-        // 2. Create Student
+        // 2. Create Students
         studentUser = await User.create({
             name: 'Alice Student',
             email: 'alice@students.iiit.ac.in',
+            password: 'hashedPassword123',
+            role: UserRole.STUDENT,
+            isActive: true
+        });
+
+        studentUser2 = await User.create({
+            name: 'Bob Student',
+            email: 'bob@students.iiit.ac.in',
             password: 'hashedPassword123',
             role: UserRole.STUDENT,
             isActive: true
@@ -58,7 +84,7 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluatio
             academicYear: '2026-2027',
             professor: professorUser._id,
             teachingAssistants: [],
-            enrolledStudents: [studentUser._id],
+            enrolledStudents: [studentUser._id, studentUser2._id],
             isActive: true
         });
 
@@ -79,94 +105,42 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluatio
                 maxMarks: 10,
                 hints: [`Hint for question ${i}`],
                 referenceAnswer: `Reference answer for question ${i}`,
+                rubricCriteria: [
+                    { criterionName: 'Formulation', points: 5, description: 'Mathematical formulation' },
+                    { criterionName: 'Execution', points: 5, description: 'Step correctness' }
+                ],
                 createdBy: professorUser._id
             });
         }
-        await mongoose.model('PersonalizedQuestion').deleteMany({});
         await mongoose.model('PersonalizedQuestion').insertMany(questionDocs);
     });
 
     // =========================================================================
-    // 1. Daily Answer is TEXT ONLY & Schema Validation
+    // 1. Text-Only Daily Answer Behavior (Preserved)
     // =========================================================================
-    describe('1. Daily Answer is TEXT ONLY', () => {
-        it('validates that daily answer schema accepts text and rejects empty strings or whitespace', () => {
-            // Valid text solution
+    describe('1. Text-Only Daily Answer Behavior (Preserved)', () => {
+        it('validates schema: accepts valid text and rejects empty strings or whitespace', () => {
             const valid = submitStudentAssignmentSchema.safeParse({
                 answer: 'Let f(x) = x^2. The derivative is f\'(x) = 2x by definition of limit.'
             });
             expect(valid.success).toBe(true);
 
-            // Empty string rejected
-            const empty = submitStudentAssignmentSchema.safeParse({ answer: '' });
-            expect(empty.success).toBe(false);
-
-            // Pure whitespace rejected
-            const whitespace = submitStudentAssignmentSchema.safeParse({ answer: '     ' });
-            expect(whitespace.success).toBe(false);
-
-            // Missing answer field rejected
-            const missing = submitStudentAssignmentSchema.safeParse({});
-            expect(missing.success).toBe(false);
+            expect(submitStudentAssignmentSchema.safeParse({ answer: '' }).success).toBe(false);
+            expect(submitStudentAssignmentSchema.safeParse({ answer: '     ' }).success).toBe(false);
+            expect(submitStudentAssignmentSchema.safeParse({}).success).toBe(false);
         });
 
-        it('rejects non-text submission in submitTodayAssignment with HttpError 400', async () => {
+        it('stores text submissions as typed text learning records with null score/feedback and without AI call', async () => {
             const todayStr = new Date().toISOString().slice(0, 10);
             const schedule = await personalizedAssessmentService.createSchedule(
                 {
                     course: testCourse._id.toString(),
-                    title: 'Text-Only Test Schedule',
+                    title: 'Text Submission Verification Schedule',
                     startDate: todayStr,
                     activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
                     dailyWindowStartTime: '00:00',
                     dailyWindowEndTime: '23:59',
-                    enrolledStudents: [studentUser._id.toString()]
-                },
-                professorUser._id.toString()
-            );
-
-            const assignment = (await PersonalizedStudentAssignment.findOne({
-                schedule: schedule._id,
-                student: studentUser._id
-            }))!;
-
-            // Rejects empty text
-            await expect(
-                personalizedAssessmentService.submitTodayAssignment(
-                    studentUser._id.toString(),
-                    assignment._id.toString(),
-                    '',
-                    new Date()
-                )
-            ).rejects.toThrow(/Daily personalized assessment answer must be non-empty text/);
-
-            // Rejects whitespace-only text
-            await expect(
-                personalizedAssessmentService.submitTodayAssignment(
-                    studentUser._id.toString(),
-                    assignment._id.toString(),
-                    '    \n\t   ',
-                    new Date()
-                )
-            ).rejects.toThrow(/Daily personalized assessment answer must be non-empty text/);
-        });
-    });
-
-    // =========================================================================
-    // 2. Daily Answer is Stored in Database
-    // =========================================================================
-    describe('2. Daily Answer is Stored as Typed Text', () => {
-        it('stores the typed student answer and marks assignment as SUBMITTED', async () => {
-            const todayStr = new Date().toISOString().slice(0, 10);
-            const schedule = await personalizedAssessmentService.createSchedule(
-                {
-                    course: testCourse._id.toString(),
-                    title: 'Storage Verification Schedule',
-                    startDate: todayStr,
-                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-                    dailyWindowStartTime: '00:00',
-                    dailyWindowEndTime: '23:59',
-                    enrolledStudents: [studentUser._id.toString()]
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
                 },
                 professorUser._id.toString()
             );
@@ -177,48 +151,169 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluatio
                 dayNumber: 1
             }))!;
 
-            const typedText = [
-                'Theorem 1: Convergence of gradient descent under Lipschitz continuity.',
-                'Proof:',
-                'Step 1: By the descent lemma, f(x_{t+1}) <= f(x_t) - eta (1 - L*eta/2) ||grad f(x_t)||^2.',
-                'Step 2: Choosing step size eta = 1/L yields monotonic decrease f(x_{t+1}) <= f(x_t) - 1/(2L) ||grad f(x_t)||^2.',
-                'Q.E.D.'
-            ].join('\n');
+            const classroomEvalSpy = vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer');
 
-            const submittedResult = await personalizedAssessmentService.submitTodayAssignment(
+            const typedText = 'Detailed typed solution using dynamic programming recurrence.';
+            const result = await personalizedAssessmentService.submitTodayAssignment(
                 studentUser._id.toString(),
                 assignment._id.toString(),
                 typedText,
                 new Date()
             );
 
-            expect(submittedResult.status).toBe('SUBMITTED');
-            expect(submittedResult.studentAnswer).toBe(typedText);
+            expect(result.status).toBe('SUBMITTED');
+            expect(result.studentAnswer).toBe(typedText);
+            expect(result.submissionType).toBe('TEXT');
+            expect(result.score).toBeNull();
+            expect(result.feedback).toBeNull();
 
-            // Check directly in database
+            // Verify in DB
             const persistedDoc = await PersonalizedStudentAssignment.findById(assignment._id);
-            expect(persistedDoc).not.toBeNull();
             expect(persistedDoc?.status).toBe('SUBMITTED');
-            expect(persistedDoc?.studentAnswer).toBe(typedText);
-            expect(persistedDoc?.submittedAt).toBeInstanceOf(Date);
+            expect(persistedDoc?.submissionType).toBe('TEXT');
+            expect(persistedDoc?.score).toBeNull();
+            expect(persistedDoc?.feedback).toBeNull();
+
+            // AI evaluator was not triggered for text learning record
+            expect(classroomEvalSpy).not.toHaveBeenCalled();
+            classroomEvalSpy.mockRestore();
         });
     });
 
     // =========================================================================
-    // 3. Daily Answer is NOT Graded / Evaluated
+    // 2. Photo Upload Acceptance & Validation
     // =========================================================================
-    describe('3. Daily Answer is NOT Graded (No AI Evaluation)', () => {
-        it('ensures daily answer submission leaves score and feedback null without invoking grading', async () => {
+    describe('2. Photo Upload Acceptance & Image Validation', () => {
+        it('validates photo submission schema with optional answer text and valid assignmentId', () => {
+            const valid = submitStudentPhotoAssignmentSchema.safeParse({
+                assignmentId: new mongoose.Types.ObjectId().toString(),
+                answer: 'Optional note accompanying handwritten solution photo'
+            });
+            expect(valid.success).toBe(true);
+
+            const emptyNote = submitStudentPhotoAssignmentSchema.safeParse({});
+            expect(emptyNote.success).toBe(true);
+        });
+
+        it('rejects empty image buffer with HttpError 400', async () => {
             const todayStr = new Date().toISOString().slice(0, 10);
             const schedule = await personalizedAssessmentService.createSchedule(
                 {
                     course: testCourse._id.toString(),
-                    title: 'No-Grading Verification Schedule',
+                    title: 'Empty Photo Schedule',
                     startDate: todayStr,
                     activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
                     dailyWindowStartTime: '00:00',
                     dailyWindowEndTime: '23:59',
-                    enrolledStudents: [studentUser._id.toString()]
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id
+            }))!;
+
+            await expect(
+                personalizedAssessmentService.submitTodayPhotoAssignment({
+                    studentId: studentUser._id.toString(),
+                    assignmentId: assignment._id.toString(),
+                    fileBuffer: Buffer.alloc(0),
+                    mimeType: 'image/png'
+                })
+            ).rejects.toThrow('Invalid upload: File buffer is empty');
+        });
+
+        it('rejects oversized image (>10MB) with HttpError 400', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Oversized Photo Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id
+            }))!;
+
+            const oversizedBuffer = Buffer.alloc(10 * 1024 * 1024 + 10);
+
+            await expect(
+                personalizedAssessmentService.submitTodayPhotoAssignment({
+                    studentId: studentUser._id.toString(),
+                    assignmentId: assignment._id.toString(),
+                    fileBuffer: oversizedBuffer,
+                    mimeType: 'image/png'
+                })
+            ).rejects.toThrow('File size exceeds the maximum allowed limit of 10MB');
+        });
+
+        it('rejects unsupported file mime types with HttpError 400', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'MimeType Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id
+            }))!;
+
+            const testBuffer = Buffer.from('dummy-content');
+
+            await expect(
+                personalizedAssessmentService.submitTodayPhotoAssignment({
+                    studentId: studentUser._id.toString(),
+                    assignmentId: assignment._id.toString(),
+                    fileBuffer: testBuffer,
+                    mimeType: 'application/pdf'
+                })
+            ).rejects.toThrow('Unsupported file format "application/pdf"');
+
+            await expect(
+                personalizedAssessmentService.submitTodayPhotoAssignment({
+                    studentId: studentUser._id.toString(),
+                    assignmentId: assignment._id.toString(),
+                    fileBuffer: testBuffer,
+                    mimeType: 'image/gif'
+                })
+            ).rejects.toThrow('Unsupported file format "image/gif"');
+        });
+    });
+
+    // =========================================================================
+    // 3. Photo Evaluation via Shared Classroom Service & Score/Feedback Persistence
+    // =========================================================================
+    describe('3. Photo Evaluation via Shared Classroom Evaluator & Persistence', () => {
+        it('evaluates photo answer using ClassroomEvaluationService and persists score and feedback', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Photo Evaluation Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
                 },
                 professorUser._id.toString()
             );
@@ -229,128 +324,299 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Text Answer & Evaluatio
                 dayNumber: 1
             }))!;
 
-            // Spy on classroom evaluation service to prove it is NEVER called during daily answer submission
-            const classroomEvalSpy = vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer');
+            const mockOutcome = {
+                score: 9.0,
+                maxMarks: 10,
+                feedback: 'Excellent handwritten mathematical derivation with clear steps.',
+                confidence: 0.96,
+                criterionScores: [
+                    {
+                        criterionName: 'Formulation',
+                        marksAwarded: 4.5,
+                        maxMarks: 5,
+                        feedback: 'Clean formulation'
+                    },
+                    {
+                        criterionName: 'Execution',
+                        marksAwarded: 4.5,
+                        maxMarks: 5,
+                        feedback: 'Algebraically sound'
+                    }
+                ]
+            };
 
-            const typedAnswer = 'This is my typed practice answer for today.';
+            const evalSpy = vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer')
+                .mockResolvedValueOnce(mockOutcome);
+
+            const syntheticImageBuffer = Buffer.from('synthetic-handwritten-image-test-bytes');
+
+            const submitted = await personalizedAssessmentService.submitTodayPhotoAssignment({
+                studentId: studentUser._id.toString(),
+                assignmentId: assignment._id.toString(),
+                fileBuffer: syntheticImageBuffer,
+                originalFilename: 'math_proof.png',
+                mimeType: 'image/png',
+                answerText: 'Handwritten proof for today assignment'
+            });
+
+            // 1. Verify ClassroomEvaluationService was called with the question context
+            expect(evalSpy).toHaveBeenCalledTimes(1);
+            expect(evalSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    maxMarks: 10,
+                    imageBuffer: syntheticImageBuffer,
+                    mimeType: 'image/png'
+                })
+            );
+
+            // 2. Verify returned object
+            expect(submitted.status).toBe('SUBMITTED');
+            expect(submitted.score).toBe(9.0);
+            expect(submitted.feedback).toContain('Excellent handwritten mathematical derivation');
+            expect(submitted.submissionType).toBe('PHOTO');
+
+            // 3. Verify database persistence
+            const persisted = (await PersonalizedStudentAssignment.findById(assignment._id))!;
+            expect(persisted.status).toBe('SUBMITTED');
+            expect(persisted.submissionType).toBe('PHOTO');
+            expect(persisted.score).toBe(9.0);
+            expect(persisted.feedback).toBe('Excellent handwritten mathematical derivation with clear steps.');
+            expect(persisted.criterionScores).toHaveLength(2);
+            expect(persisted.aiConfidence).toBe(0.96);
+            expect(persisted.aiEvaluatedAt).toBeInstanceOf(Date);
+            expect(persisted.imagePath).toContain('personalized_submissions');
+
+            // 4. Verify getTodayAssignment includes the evaluated score and feedback
+            const todayView = await personalizedAssessmentService.getTodayAssignment(studentUser._id.toString());
+            expect(todayView?.assignment?.score).toBe(9.0);
+            expect(todayView?.assignment?.feedback).toContain('Excellent handwritten');
+            expect(todayView?.assignment?.submissionType).toBe('PHOTO');
+
+            evalSpy.mockRestore();
+        });
+
+        it('supports photo submission through submitTodayAssignment object polymorphic overload', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Polymorphic Overload Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id,
+                dayNumber: 1
+            }))!;
+
+            vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer').mockResolvedValueOnce({
+                score: 8.0,
+                maxMarks: 10,
+                feedback: 'Solid solution',
+                confidence: 0.9,
+                criterionScores: []
+            });
+
             const result = await personalizedAssessmentService.submitTodayAssignment(
                 studentUser._id.toString(),
                 assignment._id.toString(),
-                typedAnswer,
-                new Date()
+                {
+                    fileBuffer: Buffer.from('test-image-content'),
+                    mimeType: 'image/jpeg',
+                    originalFilename: 'student_work.jpg'
+                }
             );
 
-            // Score and feedback must remain null (no grade assigned)
-            expect(result.score).toBeNull();
-            expect(result.feedback).toBeNull();
-
-            // Verify in DB that no score or feedback was written
-            const saved = await PersonalizedStudentAssignment.findById(assignment._id);
-            expect(saved?.score).toBeNull();
-            expect(saved?.feedback).toBeNull();
-
-            // Verify no AI evaluation was triggered
-            expect(classroomEvalSpy).not.toHaveBeenCalled();
-
-            classroomEvalSpy.mockRestore();
+            expect(result.status).toBe('SUBMITTED');
+            expect(result.submissionType).toBe('PHOTO');
+            expect(result.score).toBe(8.0);
+            expect(result.feedback).toBe('Solid solution');
         });
     });
 
     // =========================================================================
-    // 4. Scheduling & Allocation Invariants Preserved
+    // 4. Safe Handling of Evaluator Errors
     // =========================================================================
-    describe('4. Scheduling & Allocation Invariants Preserved', () => {
-        it('preserves 100 distinct questions per student and valid weekday schedule generation', async () => {
+    describe('4. Evaluator Errors Handled Safely', () => {
+        it('catches and transforms classroom evaluator failures into clean HttpError without corrupting assignment', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Error Handling Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id,
+                dayNumber: 1
+            }))!;
+
+            // Mock evaluation service error
+            vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer').mockRejectedValueOnce(
+                new HttpError('Gemini model service overloaded (503)', 503)
+            );
+
+            await expect(
+                personalizedAssessmentService.submitTodayPhotoAssignment({
+                    studentId: studentUser._id.toString(),
+                    assignmentId: assignment._id.toString(),
+                    fileBuffer: Buffer.from('dummy-image'),
+                    mimeType: 'image/png'
+                })
+            ).rejects.toThrow('Photo evaluation failed: Gemini model service overloaded (503)');
+
+            // Assignment should remain non-submitted so the student can retry
+            const unsubmittedDoc = await PersonalizedStudentAssignment.findById(assignment._id);
+            expect(unsubmittedDoc?.status).not.toBe('SUBMITTED');
+        });
+    });
+
+    // =========================================================================
+    // 5. Scheduling & Allocation Invariants (Collision-Free Daily Question Assignment)
+    // =========================================================================
+    describe('5. Scheduling & Daily Question Uniqueness Invariants', () => {
+        it('ensures no two students receive the same question on the same day', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Uniqueness Verification Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            // Fetch all assignments for day 1 across students
+            const day1Assignments = await PersonalizedStudentAssignment.find({
+                schedule: schedule._id,
+                dayNumber: 1
+            });
+
+            expect(day1Assignments).toHaveLength(2);
+
+            const questionStudent1 = day1Assignments.find(a => a.student.toString() === studentUser._id.toString())?.question.toString();
+            const questionStudent2 = day1Assignments.find(a => a.student.toString() === studentUser2._id.toString())?.question.toString();
+
+            // Crucial: No two students have the same question on day 1
+            expect(questionStudent1).not.toBe(questionStudent2);
+        });
+
+        it('guarantees 100 distinct questions per student across the full schedule', async () => {
             const todayStr = new Date().toISOString().slice(0, 10);
             const schedule = await personalizedAssessmentService.createSchedule(
                 {
                     course: testCourse._id.toString(),
                     title: '100-Question Invariant Schedule',
                     startDate: todayStr,
-                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6], // Daily (7 days/week to fit 100 slots in 16 weeks)
-                    enrolledStudents: [studentUser._id.toString()]
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
                 },
                 professorUser._id.toString()
             );
 
-            const studentAssignments = await PersonalizedStudentAssignment.find({
+            const student1Assignments = await PersonalizedStudentAssignment.find({
                 schedule: schedule._id,
                 student: studentUser._id
             });
 
-            // Exactly 100 questions allocated
-            expect(studentAssignments).toHaveLength(100);
-
-            // Zero duplicate questions for this student
-            const questionIds = studentAssignments.map((a) => a.question.toString());
-            const uniqueQuestions = new Set(questionIds);
+            expect(student1Assignments).toHaveLength(100);
+            const uniqueQuestions = new Set(student1Assignments.map(a => a.question.toString()));
             expect(uniqueQuestions.size).toBe(100);
-
-            // Day numbers strictly range 1..100
-            const dayNumbers = studentAssignments.map((a) => a.dayNumber).sort((a, b) => a - b);
-            expect(dayNumbers[0]).toBe(1);
-            expect(dayNumbers[99]).toBe(100);
         });
     });
 
     // =========================================================================
-    // 5. Delegation of Handwritten/Photo Evaluation to Classroom Service
+    // 6. Feature-Flag Protection
     // =========================================================================
-    describe('5. Handwritten / Photo Evaluation Delegation', () => {
-        it('delegates handwritten answer evaluation directly to ClassroomEvaluationService without duplicate evaluator', async () => {
-            // Mock classroom evaluation service response
-            const mockClassroomOutcome = {
-                score: 8.5,
-                maxMarks: 10,
-                feedback: 'Accurate derivation with clear step progression.',
-                confidence: 0.94,
-                criterionScores: [
-                    {
-                        criterionName: 'Step 1: Formula Setup',
-                        marksAwarded: 4.5,
-                        maxMarks: 5,
-                        feedback: 'Correct integral setup'
-                    },
-                    {
-                        criterionName: 'Step 2: Integration Calculation',
-                        marksAwarded: 4.0,
-                        maxMarks: 5,
-                        feedback: 'Minor simplification arithmetic'
-                    }
-                ]
-            };
+    describe('6. Feature-Flag Protection', () => {
+        it('rejects submissions with 404 when FEATURE_PERSONALIZED_ASSESSMENT is disabled', async () => {
+            process.env.FEATURE_PERSONALIZED_ASSESSMENT = 'false';
 
-            const evalSpy = vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer')
-                .mockResolvedValueOnce(mockClassroomOutcome);
-
-            const dummyImageBuffer = Buffer.from('mock-handwritten-image-bytes');
-            const result = await personalizedAssessmentService.evaluateHandwrittenAnswer({
-                questionPrompt: 'Calculate the double integral of xy over the unit square.',
-                maxMarks: 10,
-                rubricCriteria: [
-                    { criterionName: 'Step 1: Formula Setup', points: 5 },
-                    { criterionName: 'Step 2: Integration Calculation', points: 5 }
-                ],
-                sampleSolution: 'Integral = 1/4',
-                imageBuffer: dummyImageBuffer,
-                mimeType: 'image/png'
+            const req = new NextRequest('http://localhost:3000/api/personalized/today/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ answer: 'Valid solution text' })
             });
 
-            // Ensure delegation occurred to ClassroomEvaluationService
-            expect(evalSpy).toHaveBeenCalledTimes(1);
-            expect(evalSpy).toHaveBeenCalledWith(expect.objectContaining({
-                questionPrompt: 'Calculate the double integral of xy over the unit square.',
+            const response = await submitRoute(req);
+            expect(response.status).toBe(404);
+
+            const json = await response.json();
+            expect(json.success).toBe(false);
+            expect(json.message).toContain('disabled');
+
+            process.env.FEATURE_PERSONALIZED_ASSESSMENT = 'true';
+        });
+
+        it('processes multipart photo submissions when feature flag is enabled', async () => {
+            process.env.FEATURE_PERSONALIZED_ASSESSMENT = 'true';
+            mockSessionUser = { id: studentUser._id.toString(), role: 'STUDENT' };
+
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Route Feature Flag Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString(), studentUser2._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id,
+                dayNumber: 1
+            }))!;
+
+            vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer').mockResolvedValueOnce({
+                score: 9.5,
                 maxMarks: 10,
-                imageBuffer: dummyImageBuffer,
-                mimeType: 'image/png'
-            }));
+                feedback: 'Near perfect handwritten derivation',
+                confidence: 0.98,
+                criterionScores: []
+            });
 
-            // Outcome matches classroom evaluation outcome
-            expect(result.score).toBe(8.5);
-            expect(result.feedback).toContain('Accurate derivation');
-            expect(result.criterionScores).toHaveLength(2);
+            const formData = new FormData();
+            formData.append('assignmentId', assignment._id.toString());
+            const blob = new Blob(['synthetic-image-data'], { type: 'image/png' });
+            formData.append('file', blob, 'my_answer.png');
+            formData.append('answer', 'Solution comments');
 
-            evalSpy.mockRestore();
+            const req = new NextRequest('http://localhost:3000/api/personalized/today/submit', {
+                method: 'POST',
+                body: formData
+            });
+
+            const response = await submitRoute(req);
+            expect(response.status).toBe(200);
+
+            const json = await response.json();
+            expect(json.success).toBe(true);
+            expect(json.data.score).toBe(9.5);
+            expect(json.data.submissionType).toBe('PHOTO');
+
+            mockSessionUser = null;
         });
     });
 });

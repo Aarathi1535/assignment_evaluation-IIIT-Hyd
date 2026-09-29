@@ -19,6 +19,92 @@ export async function POST(req: NextRequest) {
     try {
         await connectDB();
 
+        const auditCtx = {
+            actingUserId: auth.user.id,
+            actingUserRole: auth.user.role,
+            ipAddress: req.headers.get('x-forwarded-for') || undefined
+        };
+
+        const contentType = req.headers.get('content-type') || '';
+
+        // 1. Multipart form-data: photo upload support (or text+photo)
+        if (contentType.includes('multipart/form-data')) {
+            const formData = await req.formData();
+            let assignmentId = (formData.get('assignmentId') as string | null) || undefined;
+            const file = formData.get('file') as File | null;
+            const answer = (formData.get('answer') as string | null) || undefined;
+
+            if (!assignmentId) {
+                const todayData = await personalizedAssessmentService.getTodayAssignment(auth.user.id);
+                if (!todayData?.assignment) {
+                    return NextResponse.json(
+                        {
+                            success: false,
+                            message: 'No active assessment found for today to submit',
+                            data: null
+                        },
+                        { status: 404 }
+                    );
+                }
+                assignmentId = todayData.assignment._id.toString();
+            }
+
+            if (!file && (!answer || answer.trim().length === 0)) {
+                return NextResponse.json(
+                    {
+                        success: false,
+                        message: 'Either answer text or photo file is required for submission',
+                        data: null
+                    },
+                    { status: 400 }
+                );
+            }
+
+            if (file) {
+                const arrayBuffer = await file.arrayBuffer();
+                const fileBuffer = Buffer.from(new Uint8Array(arrayBuffer));
+
+                const submitted = await personalizedAssessmentService.submitTodayPhotoAssignment({
+                    studentId: auth.user.id,
+                    assignmentId,
+                    fileBuffer,
+                    originalFilename: file.name || 'answer.png',
+                    mimeType: file.type || 'image/png',
+                    answerText: answer,
+                    referenceNow: new Date(),
+                    auditCtx
+                });
+
+                return NextResponse.json(
+                    {
+                        success: true,
+                        message: 'Personalized answer photo evaluated and submitted successfully',
+                        data: submitted
+                    },
+                    { status: 200 }
+                );
+            }
+
+            // Multipart text-only answer
+            const submitted = await personalizedAssessmentService.submitTodayAssignment(
+                auth.user.id,
+                assignmentId,
+                answer!.trim(),
+                new Date(),
+                auditCtx
+            );
+
+            return NextResponse.json(
+                {
+                    success: true,
+                    message: 'Assignment submitted successfully',
+                    data: submitted
+                },
+                { status: 200 }
+            );
+        }
+
+        // 2. Application/JSON: preserved text-only submission path
         let body;
         try {
             body = await req.json();
@@ -60,12 +146,6 @@ export async function POST(req: NextRequest) {
             }
             assignmentId = todayData.assignment._id.toString();
         }
-
-        const auditCtx = {
-            actingUserId: auth.user.id,
-            actingUserRole: auth.user.role,
-            ipAddress: req.headers.get('x-forwarded-for') || undefined
-        };
 
         const submitted = await personalizedAssessmentService.submitTodayAssignment(
             auth.user.id,

@@ -1,7 +1,18 @@
+export interface GeminiAIConfig {
+  model: string;
+  secretName: string;
+  isConfigured: boolean;
+  isPaidTier: boolean;
+  region: string;
+}
+
 export interface VertexAIConfig {
   model: string;
   region: string;
   projectId: string;
+  secretName?: string;
+  isConfigured?: boolean;
+  isPaidTier?: boolean;
 }
 
 export interface ServiceAccountCredentials {
@@ -16,6 +27,7 @@ export interface GenerateContentParams {
   model?: string;
   temperature?: number;
   responseMimeType?: string;
+  isRealStudentData?: boolean;
 }
 
 export interface GenerateMultimodalContentParams extends GenerateContentParams {
@@ -23,11 +35,13 @@ export interface GenerateMultimodalContentParams extends GenerateContentParams {
   mimeType: string;
 }
 
-export type VertexAICaller = (payload: {
+export type GeminiAICaller = (payload: {
   model: string;
-  region: string;
-  systemInstruction: string;
+  region?: string;
+  systemInstruction?: string;
   promptText: string;
   imageBase64?: string;
   mimeType?: string;
 }) => Promise<string>;
+
+export type VertexAICaller = GeminiAICaller;

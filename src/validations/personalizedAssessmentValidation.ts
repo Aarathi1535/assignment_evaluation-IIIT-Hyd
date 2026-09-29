@@ -98,6 +98,11 @@ export const submitStudentAssignmentSchema = z.object({
     answer: z.string().trim().min(1, 'Answer cannot be empty').max(50000, 'Answer exceeds maximum character limit')
 });
 
+export const submitStudentPhotoAssignmentSchema = z.object({
+    assignmentId: objectIdSchema.optional(),
+    answer: z.string().trim().max(50000, 'Answer exceeds maximum character limit').optional()
+});
+
 export const uploadSyllabusSchema = z.object({
     courseId: objectIdSchema,
     syllabusText: z.string().trim().min(10, 'Syllabus content must be at least 10 characters')

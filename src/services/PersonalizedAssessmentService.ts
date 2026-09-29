@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import mongoose from 'mongoose';
 import personalizedAssessmentRepository from '../repositories/PersonalizedAssessmentRepository';
 import { IPersonalizedQuestion, QuestionDifficulty } from '../models/PersonalizedQuestion';
@@ -10,6 +12,17 @@ import classroomEvaluationService, {
     EvaluateClassroomAnswerInput,
     ValidatedEvaluationOutcome
 } from './ClassroomEvaluationService';
+
+export interface SubmitTodayPhotoAssignmentInput {
+    studentId: string;
+    assignmentId: string;
+    fileBuffer: Buffer;
+    originalFilename?: string;
+    mimeType?: string;
+    answerText?: string;
+    referenceNow?: Date;
+    auditCtx?: AuditContext;
+}
 
 export interface CreatePersonalizedQuestionInput {
     course: string;
@@ -578,8 +591,12 @@ export class PersonalizedAssessmentService {
                 startedAt: assignment.startedAt,
                 submittedAt: assignment.submittedAt,
                 studentAnswer: assignment.studentAnswer,
+                submissionType: assignment.submissionType,
+                imagePath: assignment.imagePath,
                 score: assignment.score,
                 feedback: assignment.feedback,
+                criterionScores: assignment.criterionScores,
+                aiConfidence: assignment.aiConfidence,
                 question: redactedQuestion
             },
             serverTime: referenceNow
@@ -635,13 +652,164 @@ export class PersonalizedAssessmentService {
         };
     }
 
+    getStorageRoot(): string {
+        return process.env.PERSONALIZED_STORAGE_PATH || path.join(process.cwd(), 'data', 'personalized_submissions');
+    }
+
+    async submitTodayPhotoAssignment(input: SubmitTodayPhotoAssignmentInput) {
+        const {
+            studentId,
+            assignmentId,
+            fileBuffer,
+            originalFilename = 'answer.png',
+            mimeType = 'image/png',
+            answerText,
+            referenceNow = new Date(),
+            auditCtx
+        } = input;
+
+        // 1. Validate file buffer
+        if (!fileBuffer || fileBuffer.length === 0) {
+            throw new HttpError('Invalid upload: File buffer is empty', 400);
+        }
+
+        const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+        if (fileBuffer.length > maxSizeBytes) {
+            throw new HttpError('Invalid upload: File size exceeds the maximum allowed limit of 10MB', 400);
+        }
+
+        const validMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+        const normalizedMime = (mimeType || 'image/png').toLowerCase();
+        if (!validMimeTypes.includes(normalizedMime)) {
+            throw new HttpError(
+                `Invalid upload: Unsupported file format "${mimeType}". Please upload a JPEG, PNG, or WebP image.`,
+                400
+            );
+        }
+
+        // 2. Fetch and validate assignment
+        const assignment = await personalizedAssessmentRepository.getAssignmentById(assignmentId);
+        if (!assignment) {
+            throw new HttpError('Assignment not found', 404);
+        }
+
+        if (assignment.student.toString() !== studentId) {
+            throw new HttpError('Forbidden: This is not your assignment', 403);
+        }
+
+        if (assignment.status === 'SUBMITTED') {
+            throw new HttpError('This assignment has already been submitted and finalized', 400);
+        }
+
+        // Anti-postponement check: strictly enforce windowEnd
+        if (referenceNow.getTime() > assignment.windowEnd.getTime()) {
+            assignment.status = 'MISSED';
+            await assignment.save();
+            throw new HttpError(
+                'Submission rejected: The daily assessment window for this question has expired (Anti-postponement rule enforced).',
+                403
+            );
+        }
+
+        // Must be during or after windowStart
+        if (referenceNow.getTime() < assignment.windowStart.getTime()) {
+            throw new HttpError('Submission rejected: The window for this question has not opened yet.', 403);
+        }
+
+        // 3. Fetch question details
+        const question = await mongoose.model('PersonalizedQuestion').findById(assignment.question);
+        if (!question) {
+            throw new HttpError('Question for assignment not found', 404);
+        }
+
+        // 4. Save image to disk
+        const ext = normalizedMime.includes('png') ? 'png' : normalizedMime.includes('webp') ? 'webp' : 'jpg';
+        const storageRoot = this.getStorageRoot();
+        const assignmentDir = path.join(storageRoot, assignmentId);
+        await fs.promises.mkdir(assignmentDir, { recursive: true });
+
+        const filename = `${studentId}_${Date.now()}.${ext}`;
+        const filePath = path.join(assignmentDir, filename);
+        await fs.promises.writeFile(filePath, fileBuffer);
+
+        const relativeStoragePath = `personalized_submissions/${assignmentId}/${filename}`;
+
+        // 5. Evaluate handwritten answer via ClassroomEvaluationService
+        let evaluationOutcome: ValidatedEvaluationOutcome;
+        try {
+            evaluationOutcome = await this.evaluateHandwrittenAnswer({
+                questionPrompt: question.questionPrompt,
+                maxMarks: question.maxMarks || 10,
+                rubricCriteria: question.rubricCriteria || [],
+                sampleSolution: question.referenceAnswer || undefined,
+                imageBuffer: fileBuffer,
+                mimeType: normalizedMime
+            });
+        } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            const statusCode = err instanceof HttpError ? err.statusCode : 502;
+            throw new HttpError(`Photo evaluation failed: ${errMsg}`, statusCode);
+        }
+
+        // 6. Persist evaluated result on assignment
+        assignment.status = 'SUBMITTED';
+        assignment.submissionType = 'PHOTO';
+        assignment.submittedAt = referenceNow;
+        assignment.studentAnswer = answerText?.trim() || `[Photo Submission: ${originalFilename}]`;
+        assignment.imagePath = relativeStoragePath;
+        assignment.fileSize = fileBuffer.length;
+        assignment.mimeType = normalizedMime;
+        assignment.score = evaluationOutcome.score;
+        assignment.feedback = evaluationOutcome.feedback;
+        assignment.criterionScores = evaluationOutcome.criterionScores;
+        assignment.aiConfidence = evaluationOutcome.confidence;
+        assignment.aiEvaluatedAt = new Date();
+        await assignment.save();
+
+        await writeAuditLog({
+            user: studentId,
+            action: 'PERSONALIZED_ASSIGNMENT_SUBMITTED',
+            outcome: 'SUCCESS',
+            details: {
+                assignmentId,
+                dayNumber: assignment.dayNumber,
+                submissionType: 'PHOTO',
+                score: assignment.score,
+                feedback: assignment.feedback,
+                ipAddress: auditCtx?.ipAddress
+            }
+        });
+
+        const redactedQuestion = this.redactQuestionContent(assignment, 'SUBMITTED');
+
+        return {
+            ...assignment.toObject(),
+            status: 'SUBMITTED',
+            question: redactedQuestion
+        };
+    }
+
     async submitTodayAssignment(
         studentId: string,
         assignmentId: string,
-        answerText: string,
+        answer: string | { fileBuffer: Buffer; mimeType?: string; originalFilename?: string; answerText?: string },
         referenceNow: Date = new Date(),
         auditCtx?: AuditContext
     ) {
+        if (typeof answer === 'object' && answer !== null && 'fileBuffer' in answer) {
+            return this.submitTodayPhotoAssignment({
+                studentId,
+                assignmentId,
+                fileBuffer: answer.fileBuffer,
+                mimeType: answer.mimeType,
+                originalFilename: answer.originalFilename,
+                answerText: answer.answerText,
+                referenceNow,
+                auditCtx
+            });
+        }
+
+        const answerText = typeof answer === 'string' ? answer : '';
         if (typeof answerText !== 'string' || answerText.trim().length === 0) {
             throw new HttpError('Daily personalized assessment answer must be non-empty text', 400);
         }
@@ -674,9 +842,10 @@ export class PersonalizedAssessmentService {
             throw new HttpError('Submission rejected: The window for this question has not opened yet.', 403);
         }
 
-        // Daily personalized assessment answers are strictly TEXT-ONLY and UNGRADED:
-        // Responses are preserved as typed text learning records; do not grade or run AI evaluation.
+        // Daily personalized assessment answers are strictly TEXT-ONLY:
+        // Responses are preserved as typed text learning records.
         assignment.status = 'SUBMITTED';
+        assignment.submissionType = 'TEXT';
         assignment.studentAnswer = answerText.trim();
         assignment.score = null;
         assignment.feedback = null;
@@ -690,6 +859,7 @@ export class PersonalizedAssessmentService {
             details: {
                 assignmentId,
                 dayNumber: assignment.dayNumber,
+                submissionType: 'TEXT',
                 answerLength: assignment.studentAnswer.length,
                 ipAddress: auditCtx?.ipAddress
             }
@@ -765,6 +935,8 @@ export class PersonalizedAssessmentService {
                 status: dynamicStatus,
                 submittedAt: a.submittedAt,
                 score: a.score,
+                feedback: a.feedback,
+                submissionType: a.submissionType,
                 question: redactedQuestion
             };
         });
