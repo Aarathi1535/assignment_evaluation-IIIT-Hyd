@@ -36,6 +36,9 @@ describe('Mentor-Reviewed TA-Assisted Question-Region Tagging & Reconstruction',
     let testScript: IAnswerScript;
 
     beforeEach(async () => {
+        // Enable research feature flag so existing API route tests exercise auth/business logic
+        process.env.FEATURE_ANSWER_SEGMENTATION = 'true';
+
         // Clean collections
         await TaggedRegion.deleteMany({});
         await ReconstructedAnswer.deleteMany({});

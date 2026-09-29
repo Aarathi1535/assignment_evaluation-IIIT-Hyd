@@ -15,9 +15,11 @@ import {
   LucideIcon,
   FileText,
   Plus,
-  Flag
+  Flag,
+  Layers
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { isFeatureEnabled } from '@/config/features';
 
 interface NavLinksProps {
   menuItems: Array<{ label: string; href: string; icon: LucideIcon }>;
@@ -113,23 +115,38 @@ export default function DashboardLayout({
   const rawRole = user.role || 'STUDENT';
   const role = rawRole.toUpperCase();
 
+  const isAnswerSegmentationEnabled = isFeatureEnabled('ANSWER_SEGMENTATION');
+
+  // Build role navigation items, conditionally including research features when enabled
+  const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
+    { label: 'Courses', href: '/professor/courses', icon: BookOpen },
+    { label: 'Exams', href: '/professor/exams', icon: FileText },
+  ];
+  if (isAnswerSegmentationEnabled) {
+    professorNavItems.push({ label: 'Answer Segmentation', href: '/research/segmentation', icon: Layers });
+  }
+  professorNavItems.push(
+    { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
+    { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
+    { label: 'Create Exam', href: '/professor/exams/create', icon: Plus }
+  );
+
+  const taNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
+  ];
+  if (isAnswerSegmentationEnabled) {
+    taNavItems.push({ label: 'Answer Segmentation', href: '/research/segmentation', icon: Layers });
+  }
+
   // Define navigation items per role
   const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
     ADMIN: [
       { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
       { label: 'Users', href: '/admin/users', icon: Users },
     ],
-    PROFESSOR: [
-      { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
-      { label: 'Courses', href: '/professor/courses', icon: BookOpen },
-      { label: 'Exams', href: '/professor/exams', icon: FileText },
-      { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
-      { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
-      { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
-    ],
-    TA: [
-      { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
-    ],
+    PROFESSOR: professorNavItems,
+    TA: taNavItems,
     STUDENT: [
       { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
     ],

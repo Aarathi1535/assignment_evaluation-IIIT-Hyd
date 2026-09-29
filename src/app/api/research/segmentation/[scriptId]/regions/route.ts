@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Types as MongooseTypes } from 'mongoose';
 import { connectDB } from '@/lib/db';
-import { requireAuth } from '@/lib/apiAuth';
+import { requireAuth, requireFeature } from '@/lib/apiAuth';
 import answerSegmentationService from '@/services/AnswerSegmentationService';
 import { verifyScriptAccess } from '@/app/api/research/segmentation/auth';
 import { HttpError } from '@/lib/errors';
@@ -10,6 +10,11 @@ export async function GET(
     req: NextRequest,
     context: { params: Promise<{ scriptId: string }> }
 ) {
+    const featureCheck = requireFeature('ANSWER_SEGMENTATION');
+    if (!featureCheck.authorized) {
+        return featureCheck.response ?? NextResponse.json({ success: false, message: 'Answer segmentation feature is disabled', data: null }, { status: 404 });
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
@@ -56,6 +61,11 @@ export async function POST(
     req: NextRequest,
     context: { params: Promise<{ scriptId: string }> }
 ) {
+    const featureCheck = requireFeature('ANSWER_SEGMENTATION');
+    if (!featureCheck.authorized) {
+        return featureCheck.response ?? NextResponse.json({ success: false, message: 'Answer segmentation feature is disabled', data: null }, { status: 404 });
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;

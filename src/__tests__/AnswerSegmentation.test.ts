@@ -40,6 +40,9 @@ describe('Research Direction 3: Question-Answer Segmentation & Reconstruction Te
     const dummyExamId = new mongoose.Types.ObjectId();
 
     beforeEach(async () => {
+        // Enable research feature flag so existing API route tests exercise auth/business logic
+        process.env.FEATURE_ANSWER_SEGMENTATION = 'true';
+
         // 1. Create Professor
         professorUser = await User.create({
             name: 'Prof. Jawahar',
