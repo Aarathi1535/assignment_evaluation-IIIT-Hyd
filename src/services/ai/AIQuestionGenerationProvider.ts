@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { HttpError } from '../../lib/errors';
 import { QuestionDifficulty } from '../../models/PersonalizedQuestion';
 import { vertexAIService, VertexAIService } from './VertexAIService';
+import type { GeminiAICaller } from './types';
 
 export const generatedRubricCriterionSchema = z
     .object({
@@ -878,7 +879,7 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
         return this.sharedAiService.getRegion();
     }
 
-    setCustomCaller(caller: ((payload: { model: string; region: string; systemInstruction: string; promptText: string }) => Promise<string>) | null): void {
+    setCustomCaller(caller: GeminiAICaller | null): void {
         this.sharedAiService.setCustomCaller(caller);
     }
 

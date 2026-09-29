@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export type AssignmentStatus = 'LOCKED' | 'AVAILABLE' | 'IN_PROGRESS' | 'SUBMITTED' | 'MISSED';
+export type SubmissionType = 'TEXT' | 'PHOTO';
 
 export interface IPersonalizedStudentAssignment extends Document {
     schedule: mongoose.Types.ObjectId;
@@ -14,8 +15,21 @@ export interface IPersonalizedStudentAssignment extends Document {
     startedAt?: Date | null;
     submittedAt?: Date | null;
     studentAnswer?: string | null;
+    submissionType?: SubmissionType | null;
+    imagePath?: string | null;
+    mimeType?: string | null;
+    fileSize?: number | null;
     score?: number | null;
     feedback?: string | null;
+    criterionScores?: Array<{
+        criterionName: string;
+        marksAwarded: number;
+        maxMarks: number;
+        feedback?: string;
+        evidence?: string;
+    }> | null;
+    aiConfidence?: number | null;
+    aiEvaluatedAt?: Date | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -77,12 +91,41 @@ const PersonalizedStudentAssignmentSchema = new Schema<IPersonalizedStudentAssig
             type: String,
             default: null
         },
+        submissionType: {
+            type: String,
+            enum: ['TEXT', 'PHOTO'],
+            default: 'TEXT'
+        },
+        imagePath: {
+            type: String,
+            default: null
+        },
+        mimeType: {
+            type: String,
+            default: null
+        },
+        fileSize: {
+            type: Number,
+            default: null
+        },
         score: {
             type: Number,
             default: null
         },
         feedback: {
             type: String,
+            default: null
+        },
+        criterionScores: {
+            type: Schema.Types.Mixed,
+            default: null
+        },
+        aiConfidence: {
+            type: Number,
+            default: null
+        },
+        aiEvaluatedAt: {
+            type: Date,
             default: null
         }
     },

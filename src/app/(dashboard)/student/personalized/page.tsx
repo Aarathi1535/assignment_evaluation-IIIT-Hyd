@@ -13,7 +13,9 @@ import {
     Flame,
     AlertCircle,
     Info,
-    HelpCircle
+    HelpCircle,
+    ImagePlus,
+    Trash2
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -41,9 +43,23 @@ interface AssignmentData {
     startedAt?: string | null;
     submittedAt?: string | null;
     studentAnswer?: string | null;
+    submissionType?: 'TEXT' | 'PHOTO' | null;
     score?: number | null;
     feedback?: string | null;
+    aiConfidence?: number | null;
     question: QuestionDetails | null;
+}
+
+const PHOTO_MAX_BYTES = 10 * 1024 * 1024; // 10MB — mirrors Classroom photo convention
+const PHOTO_ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+const PHOTO_ACCEPT = 'image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp';
+
+function isAllowedPhotoFile(file: File): boolean {
+    const mime = (file.type || '').toLowerCase();
+    if (PHOTO_ALLOWED_MIME_TYPES.has(mime)) return true;
+    // Some browsers omit MIME; fall back to extension check
+    const name = file.name.toLowerCase();
+    return /\.(jpe?g|png|webp)$/.test(name);
 }
 
 interface ScheduleInfo {
@@ -90,6 +106,7 @@ export default function StudentPersonalizedAssessmentPage() {
     const [allSlots, setAllSlots] = useState<SlotSummary[]>([]);
     const [stats, setStats] = useState<StatsSummary | null>(null);
     const [answerText, setAnswerText] = useState('');
+    const [photoFile, setPhotoFile] = useState<File | null>(null);
     const [submitting, setSubmitting] = useState(false);
     const [starting, setStarting] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -167,23 +184,80 @@ export default function StudentPersonalizedAssessmentPage() {
         }
     };
 
+    const handlePhotoSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0] || null;
+        event.target.value = '';
+        setErrorMsg(null);
+
+        if (!file) {
+            setPhotoFile(null);
+            return;
+        }
+
+        if (!isAllowedPhotoFile(file)) {
+            setPhotoFile(null);
+            setErrorMsg('Unsupported file format. Please upload a JPEG, PNG, or WebP image.');
+            return;
+        }
+
+        if (file.size === 0) {
+            setPhotoFile(null);
+            setErrorMsg('Uploaded file is empty. Please choose a valid photo of your handwritten answer.');
+            return;
+        }
+
+        if (file.size > PHOTO_MAX_BYTES) {
+            setPhotoFile(null);
+            setErrorMsg('File size exceeds the maximum allowed limit of 10MB.');
+            return;
+        }
+
+        setPhotoFile(file);
+    };
+
     const handleSubmitAnswer = async () => {
-        if (!todayData || !answerText.trim()) return;
+        if (!todayData) return;
+        const trimmedAnswer = answerText.trim();
+        if (!trimmedAnswer && !photoFile) return;
+
         setSubmitting(true);
         setErrorMsg(null);
         setSuccessMsg(null);
         try {
-            const res = await fetch('/api/personalized/today/submit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    assignmentId: todayData._id,
-                    answer: answerText.trim()
-                })
-            });
+            let res: Response;
+
+            if (photoFile) {
+                // Handwritten/photo path — FormData multipart (mirrors Classroom submit)
+                const formData = new FormData();
+                formData.append('assignmentId', todayData._id);
+                formData.append('file', photoFile);
+                if (trimmedAnswer) {
+                    formData.append('answer', trimmedAnswer);
+                }
+                res = await fetch('/api/personalized/today/submit', {
+                    method: 'POST',
+                    body: formData
+                });
+            } else {
+                // Preserve existing JSON text-only submission
+                res = await fetch('/api/personalized/today/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        assignmentId: todayData._id,
+                        answer: trimmedAnswer
+                    })
+                });
+            }
+
             const json = await res.json();
             if (json.success) {
-                setSuccessMsg('Answer successfully submitted for today!');
+                setSuccessMsg(
+                    photoFile
+                        ? 'Handwritten answer evaluated and submitted successfully!'
+                        : 'Answer successfully submitted for today!'
+                );
+                setPhotoFile(null);
                 await loadAssessmentData();
             } else {
                 setErrorMsg(json.message || 'Submission failed');
@@ -382,13 +456,45 @@ export default function StudentPersonalizedAssessmentPage() {
 
                                     {/* Submitted Answer view */}
                                     <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
-                                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
-                                            Your Submitted Response
-                                        </p>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+                                                Your Submitted Response
+                                            </p>
+                                            {todayData.submissionType && (
+                                                <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200">
+                                                    {todayData.submissionType === 'PHOTO' ? 'Photo' : 'Text'}
+                                                </span>
+                                            )}
+                                        </div>
                                         <pre className="text-sm text-slate-800 whitespace-pre-wrap font-mono bg-slate-50 p-3 rounded-lg border border-slate-200">
                                             {todayData.studentAnswer}
                                         </pre>
                                     </div>
+
+                                    {/* Photo evaluation result (score + feedback) when graded */}
+                                    {(todayData.score != null || todayData.feedback) && (
+                                        <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-2">
+                                            <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">
+                                                Evaluation Result
+                                            </p>
+                                            {todayData.score != null && (
+                                                <p className="text-sm font-bold text-slate-900">
+                                                    Score:{' '}
+                                                    <span className="text-brand-primary">
+                                                        {todayData.score}
+                                                        {todayData.question?.maxMarks != null
+                                                            ? ` / ${todayData.question.maxMarks}`
+                                                            : ''}
+                                                    </span>
+                                                </p>
+                                            )}
+                                            {todayData.feedback && (
+                                                <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                                    {todayData.feedback}
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
@@ -442,27 +548,75 @@ export default function StudentPersonalizedAssessmentPage() {
                                         </div>
                                     ) : (
                                         /* In Progress Answer Box */
-                                        <div className="space-y-3">
-                                            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
-                                                Your Solution / Explanation
-                                            </label>
-                                            <textarea
-                                                value={answerText}
-                                                onChange={(e) => setAnswerText(e.target.value)}
-                                                rows={8}
-                                                placeholder="Write your answer, derivation, or code solution here..."
-                                                className="w-full rounded-xl border border-slate-300 p-3.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary font-mono transition-all resize-y"
-                                            />
-                                            <div className="flex items-center justify-between text-xs text-slate-500">
-                                                <span>{answerText.length} characters</span>
+                                        <div className="space-y-4">
+                                            <div className="space-y-3">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                                                    Typed Solution (optional if uploading a photo)
+                                                </label>
+                                                <textarea
+                                                    value={answerText}
+                                                    onChange={(e) => setAnswerText(e.target.value)}
+                                                    rows={8}
+                                                    placeholder="Write your answer, derivation, or code solution here..."
+                                                    className="w-full rounded-xl border border-slate-300 p-3.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary font-mono transition-all resize-y"
+                                                />
+                                                <p className="text-xs text-slate-500">{answerText.length} characters</p>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                                                    Handwritten / Photo Answer
+                                                </label>
+                                                <p className="text-xs text-slate-500">
+                                                    Upload a JPEG, PNG, or WebP image (max 10MB). Photo answers are graded automatically.
+                                                </p>
+                                                <div className="flex flex-wrap items-center gap-3">
+                                                    <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50">
+                                                        <ImagePlus className="h-4 w-4 text-brand-primary" />
+                                                        <span>{photoFile ? 'Replace Photo' : 'Choose Photo'}</span>
+                                                        <input
+                                                            type="file"
+                                                            accept={PHOTO_ACCEPT}
+                                                            className="hidden"
+                                                            onChange={handlePhotoSelected}
+                                                        />
+                                                    </label>
+                                                    {photoFile && (
+                                                        <div className="flex items-center gap-2 text-xs text-slate-600">
+                                                            <span className="font-medium truncate max-w-[220px]" title={photoFile.name}>
+                                                                {photoFile.name}
+                                                            </span>
+                                                            <span>({(photoFile.size / 1024).toFixed(1)} KB)</span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setPhotoFile(null)}
+                                                                className="inline-flex items-center gap-1 text-rose-600 hover:underline"
+                                                            >
+                                                                <Trash2 className="h-3.5 w-3.5" />
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex justify-end">
                                                 <Button
                                                     variant="primary"
                                                     size="md"
                                                     onClick={handleSubmitAnswer}
-                                                    disabled={submitting || !answerText.trim()}
+                                                    disabled={submitting || (!answerText.trim() && !photoFile)}
                                                 >
                                                     <Send className="h-4 w-4" />
-                                                    <span>{submitting ? 'Submitting...' : 'Submit Today’s Answer'}</span>
+                                                    <span>
+                                                        {submitting
+                                                            ? photoFile
+                                                                ? 'Evaluating Photo...'
+                                                                : 'Submitting...'
+                                                            : photoFile
+                                                              ? 'Submit Photo Answer'
+                                                              : 'Submit Today’s Answer'}
+                                                    </span>
                                                 </Button>
                                             </div>
                                         </div>

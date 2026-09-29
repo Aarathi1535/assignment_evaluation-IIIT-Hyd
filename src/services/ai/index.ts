@@ -1,3 +1,3 @@
 export * from './types';
-export * from './VertexAIService';
+export * from './GeminiAIService';
 export * from './AIQuestionGenerationProvider';
