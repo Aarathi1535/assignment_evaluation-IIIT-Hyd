@@ -103,14 +103,14 @@ export class GeminiAIService {
   }
 
   /**
-   * Returns the model name. Defaults to 'gemini-2.5-flash'.
+   * Returns the model name. Defaults to 'gemini-3.5-flash'.
    */
   public getModelName(): string {
     return (
       process.env.GEMINI_MODEL?.trim() ||
       process.env.AI_MODEL?.trim() ||
       process.env.VERTEX_AI_MODEL?.trim() ||
-      'gemini-2.5-flash'
+      'gemini-3.5-flash'
     );
   }
 
