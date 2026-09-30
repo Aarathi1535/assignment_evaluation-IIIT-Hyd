@@ -14,6 +14,7 @@ export interface LocalAnnotationDraft {
   hasConflict?: boolean; // True when a concurrent edit conflict is detected (AE-171)
   conflictServerData?: SerializedPageAnnotations | null; // Cached remote server data for reconciliation (AE-171)
   conflictServerUpdatedAt?: string | number | null;
+  isRecoveredDraft?: boolean; // True when detected on reload/mount before user explicitly restores or discards (AE-172)
 }
 
 export interface LocalGradingDraft {
@@ -119,6 +120,7 @@ export interface SaveAnnotationDraftOptions {
   hasConflict?: boolean;
   conflictServerData?: SerializedPageAnnotations | null;
   conflictServerUpdatedAt?: string | number | null;
+  isRecoveredDraft?: boolean;
 }
 
 /**
@@ -153,6 +155,7 @@ export function saveLocalAnnotationDraft(
     hasConflict: options?.hasConflict ?? existing?.hasConflict ?? false,
     conflictServerData: options?.conflictServerData ?? existing?.conflictServerData ?? null,
     conflictServerUpdatedAt: options?.conflictServerUpdatedAt ?? existing?.conflictServerUpdatedAt ?? null,
+    isRecoveredDraft: options?.isRecoveredDraft ?? existing?.isRecoveredDraft ?? false,
   };
 
   const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
@@ -239,6 +242,7 @@ export function markLocalAnnotationDraftSynced(
       hasConflict: false,
       conflictServerData: null,
       conflictServerUpdatedAt: null,
+      isRecoveredDraft: false,
     }, effectiveUserId);
   }
 }
@@ -271,6 +275,7 @@ export function markLocalAnnotationDraftSuperseded(
       hasConflict: false,
       conflictServerData: null,
       conflictServerUpdatedAt: null,
+      isRecoveredDraft: false,
     }, effectiveUserId);
   }
 }
@@ -305,6 +310,7 @@ export function markLocalAnnotationDraftConflict(
       hasConflict: true,
       conflictServerData: serverData ?? null,
       conflictServerUpdatedAt: serverUpdatedAt ? String(serverUpdatedAt) : null,
+      isRecoveredDraft: false,
     },
     effectiveUserId
   );
@@ -343,6 +349,7 @@ export function resolveLocalAnnotationDraftConflict(
         hasConflict: false,
         conflictServerData: null,
         conflictServerUpdatedAt: null,
+        isRecoveredDraft: false,
       },
       effectiveUserId
     );
@@ -363,6 +370,7 @@ export function resolveLocalAnnotationDraftConflict(
         hasConflict: false,
         conflictServerData: null,
         conflictServerUpdatedAt: null,
+        isRecoveredDraft: false,
       },
       effectiveUserId
     );
@@ -380,6 +388,10 @@ export function detectAnnotationConflict(
 ): boolean {
   if (!localDraft || localDraft.synced || localDraft.superseded) {
     return false;
+  }
+
+  if (localDraft.hasConflict) {
+    return true;
   }
 
   if (!serverUpdatedAt || !localDraft.baseServerUpdatedAt) {
@@ -476,6 +488,102 @@ export function getConflictDrafts(
 }
 
 /**
+ * Restores a recovered local draft after reload/crash (AE-172).
+ * Marks the draft active for synchronization and clears the recovery prompt flag.
+ * Only restores drafts belonging to the logged-in user (Mentor Fix 2).
+ */
+export function restoreLocalAnnotationDraft(
+  scriptId: string,
+  pageNumber: number,
+  userId?: string
+): LocalAnnotationDraft | null {
+  const effectiveUserId = userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+  if (!existing) return null;
+
+  return saveLocalAnnotationDraft(
+    scriptId,
+    pageNumber,
+    existing.pageKey,
+    existing.data,
+    {
+      userId: effectiveUserId,
+      serverUpdatedAt: existing.serverUpdatedAt,
+      baseServerUpdatedAt: existing.baseServerUpdatedAt,
+      savedAt: existing.savedAt,
+      synced: false,
+      hasConflict: existing.hasConflict ?? false,
+      conflictServerData: existing.conflictServerData,
+      conflictServerUpdatedAt: existing.conflictServerUpdatedAt,
+      isRecoveredDraft: false,
+    },
+    effectiveUserId
+  );
+}
+
+/**
+ * Discards a recovered local draft after reload/crash (AE-172).
+ * Replaces with server data or clears storage so recovery prompt will not reappear.
+ * Only affects drafts belonging to the logged-in user (Mentor Fix 2).
+ */
+export function discardLocalAnnotationDraft(
+  scriptId: string,
+  pageNumber: number,
+  serverData?: SerializedPageAnnotations | null,
+  serverUpdatedAt?: string | number | null,
+  userId?: string
+): void {
+  const effectiveUserId = userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+  if (!existing) {
+    clearLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+    return;
+  }
+
+  if (serverData) {
+    const newBase = serverUpdatedAt ?? existing.serverUpdatedAt ?? Date.now();
+    saveLocalAnnotationDraft(
+      scriptId,
+      pageNumber,
+      existing.pageKey,
+      serverData,
+      {
+        userId: effectiveUserId,
+        serverUpdatedAt: newBase,
+        baseServerUpdatedAt: newBase,
+        savedAt: Date.now(),
+        synced: true,
+        hasConflict: false,
+        conflictServerData: null,
+        conflictServerUpdatedAt: null,
+        isRecoveredDraft: false,
+      },
+      effectiveUserId
+    );
+  } else {
+    clearLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+  }
+}
+
+/**
+ * Checks whether an unsynced recoverable local draft exists for the given script/page (AE-172).
+ * Must only offer drafts belonging to the logged-in user (Mentor Fix 2).
+ */
+export function hasRecoverableDraft(
+  scriptId: string,
+  pageNumber?: number,
+  userId?: string
+): boolean {
+  const effectiveUserId = userId || currentDraftUserId;
+  if (typeof pageNumber === 'number') {
+    const draft = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+    return Boolean(draft && !draft.synced && !draft.superseded && !draft.hasConflict);
+  }
+  const pending = getPendingAnnotationDrafts(scriptId, effectiveUserId);
+  return pending.some((d) => !d.hasConflict);
+}
+
+/**
  * Clears the local annotation draft for a specific answer script page.
  */
 export function clearLocalAnnotationDraft(
@@ -495,7 +603,7 @@ export function clearLocalAnnotationDraft(
 
 /**
  * Clears all drafts for a script after successful final submit.
- * AE-170 requirement: Clear the relevant draft after successful submit.
+ * AE-170 / AE-172 requirement: Clear the relevant draft after successful submit.
  */
 export function clearDraftOnSubmit(
   scriptId: string,
@@ -552,7 +660,7 @@ export function clearAllScriptDrafts(scriptId: string, userId?: string): void {
 
 /**
  * Clears all drafts belonging to a specific user on logout.
- * AE-170 requirement: Clear the user's drafts on logout.
+ * AE-170 / AE-172 requirement: Clear the user's drafts on logout.
  */
 export function clearUserDrafts(userId?: string): void {
   const effectiveUserId = userId || currentDraftUserId;
@@ -584,7 +692,7 @@ export function clearUserDrafts(userId?: string): void {
 
 /**
  * Retrieves all pending (unsynced, not superseded, not in conflict) annotation drafts,
- * optionally filtered by script ID.
+ * optionally filtered by script ID and user ID.
  */
 export function getPendingAnnotationDrafts(
   scriptId?: string,
@@ -659,8 +767,9 @@ export function hasPendingSync(
 }
 
 /**
- * Determines whether server data is strictly newer than the local draft savedAt timestamp.
- * Used during hydration to detect if the server copy supersedes the local draft.
+ * Determines whether server data is strictly newer than the local draft's stored server updatedAt.
+ * Mentor Fix 1: Compare the draft's stored server updatedAt against the current server updatedAt.
+ * Never compare the client's clock (savedAt), unless no server timestamp was ever recorded.
  */
 export function isServerDataNewer(
   localDraft: LocalAnnotationDraft | null,
@@ -677,6 +786,17 @@ export function isServerDataNewer(
 
   if (Number.isNaN(serverTime)) {
     return false;
+  }
+
+  const storedServer = localDraft.baseServerUpdatedAt ?? localDraft.serverUpdatedAt;
+  if (storedServer != null) {
+    const storedServerTime =
+      typeof storedServer === 'number'
+        ? storedServer
+        : new Date(storedServer).getTime();
+    if (!Number.isNaN(storedServerTime)) {
+      return serverTime > storedServerTime;
+    }
   }
 
   return serverTime > localDraft.savedAt;
@@ -786,7 +906,7 @@ export function clearLocalGradingDraft(
 }
 
 /**
- * Pure test helper to clear the in-memory fallback storage between test runs.
+ * Clears all in-memory drafts (useful for test isolation).
  */
 export function clearAllMemoryDrafts(): void {
   memoryStorage.clear();

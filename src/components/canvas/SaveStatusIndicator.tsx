@@ -6,21 +6,28 @@ export interface SaveStatusIndicatorProps {
   onRetry?: () => void;
   onKeepMine?: () => void;
   onLoadServer?: () => void;
+  /** Callback to restore recovered local draft (AE-172) */
+  onRestoreDraft?: () => void;
+  /** Callback to discard recovered local draft (AE-172) */
+  onDiscardDraft?: () => void;
+  /** Optional custom error message tooltip or label */
   errorMessage?: string;
   isLocked?: boolean;
   className?: string;
 }
 
 /**
- * Visual indicator displaying autosave status (saving, saved, error, pending_sync, syncing, conflict, locked).
- * Supports AE-170 offline persistence & AE-171 concurrent edit conflict resolution (Keep Mine / Load Server)
- * and finalized locked status.
+ * Visual indicator displaying autosave status (saving, saved, error, pending_sync, syncing, conflict, locked, recovery_available).
+ * Supports AE-170 offline persistence & AE-171 concurrent edit conflict resolution (Keep Mine / Load Server),
+ * locked status, and AE-172 crash recovery (Restore / Discard).
  */
 export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
   status,
   onRetry,
   onKeepMine,
   onLoadServer,
+  onRestoreDraft,
+  onDiscardDraft,
   errorMessage = 'Failed to save annotations',
   isLocked = false,
   className = '',
@@ -45,6 +52,8 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
           ? 'bg-sky-50/90 text-sky-800 border border-sky-300'
           : status === 'conflict'
           ? 'bg-amber-100/90 text-amber-900 border border-amber-400'
+          : status === 'recovery_available'
+          ? 'bg-indigo-50/90 text-indigo-900 border border-indigo-300'
           : 'bg-rose-50/90 text-rose-700 border border-rose-200'
       } ${className}`}
       data-testid="save-status-indicator"
@@ -114,6 +123,47 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
             />
           </svg>
           <span>Pending sync (Saved locally)</span>
+        </>
+      )}
+
+      {status === 'recovery_available' && (
+        <>
+          <svg
+            className="w-3.5 h-3.5 text-indigo-600 shrink-0"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fillRule="evenodd"
+              d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span className="font-semibold">Unsaved work recovered</span>
+          <div className="flex items-center gap-1 ml-1">
+            {onRestoreDraft && (
+              <button
+                type="button"
+                onClick={onRestoreDraft}
+                className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-400 transition-colors"
+                aria-label="Restore recovered local draft"
+              >
+                Restore
+              </button>
+            )}
+            {onDiscardDraft && (
+              <button
+                type="button"
+                onClick={onDiscardDraft}
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-slate-400 transition-colors"
+                aria-label="Discard recovered local draft"
+              >
+                Discard
+              </button>
+            )}
+          </div>
         </>
       )}
 
