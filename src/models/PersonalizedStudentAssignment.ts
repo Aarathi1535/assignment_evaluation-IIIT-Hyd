@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export type AssignmentStatus = 'LOCKED' | 'AVAILABLE' | 'IN_PROGRESS' | 'SUBMITTED' | 'MISSED';
 export type SubmissionType = 'TEXT' | 'PHOTO';
+export type EvaluationStatus = 'PENDING' | 'EVALUATED' | 'FAILED';
 
 export interface IPersonalizedStudentAssignment extends Document {
     schedule: mongoose.Types.ObjectId;
@@ -19,6 +20,8 @@ export interface IPersonalizedStudentAssignment extends Document {
     imagePath?: string | null;
     mimeType?: string | null;
     fileSize?: number | null;
+    evaluationStatus?: EvaluationStatus;
+    isProvisional?: boolean;
     score?: number | null;
     feedback?: string | null;
     criterionScores?: Array<{
@@ -107,6 +110,15 @@ const PersonalizedStudentAssignmentSchema = new Schema<IPersonalizedStudentAssig
         fileSize: {
             type: Number,
             default: null
+        },
+        evaluationStatus: {
+            type: String,
+            enum: ['PENDING', 'EVALUATED', 'FAILED'],
+            default: null
+        },
+        isProvisional: {
+            type: Boolean,
+            default: false
         },
         score: {
             type: Number,

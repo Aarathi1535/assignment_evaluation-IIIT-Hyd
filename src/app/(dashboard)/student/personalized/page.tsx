@@ -45,6 +45,8 @@ interface AssignmentData {
     studentAnswer?: string | null;
     submissionType?: 'TEXT' | 'PHOTO' | null;
     score?: number | null;
+    isProvisional?: boolean;
+    evaluationStatus?: 'PENDING' | 'EVALUATED' | 'FAILED' | null;
     feedback?: string | null;
     aiConfidence?: number | null;
     question: QuestionDetails | null;
@@ -81,6 +83,8 @@ interface SlotSummary {
     scheduledDate: string;
     status: 'LOCKED' | 'AVAILABLE' | 'IN_PROGRESS' | 'SUBMITTED' | 'MISSED';
     score?: number | null;
+    isProvisional?: boolean;
+    evaluationStatus?: 'PENDING' | 'EVALUATED' | 'FAILED' | null;
     question?: {
         title: string;
         topic: string;
@@ -472,20 +476,50 @@ export default function StudentPersonalizedAssessmentPage() {
                                     </div>
 
                                     {/* Photo evaluation result (score + feedback) when graded */}
-                                    {(todayData.score != null || todayData.feedback) && (
+                                    {todayData.evaluationStatus === 'FAILED' && (
+                                        <div className="p-4 bg-orange-50/60 rounded-xl border border-orange-100 space-y-2">
+                                            <p className="text-xs font-bold text-orange-700 uppercase tracking-wide">
+                                                Evaluation Status
+                                            </p>
+                                            <p className="text-sm font-bold text-slate-900">
+                                                Submission received, but AI evaluation failed.
+                                            </p>
+                                            <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                                Your submission has been safely recorded. A professor or teaching assistant will review your assignment manually.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {todayData.evaluationStatus === 'PENDING' && (
+                                        <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
+                                            <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">
+                                                Evaluation Status
+                                            </p>
+                                            <p className="text-sm font-bold text-slate-900">
+                                                AI Evaluation is pending...
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    {(todayData.score != null || todayData.feedback) && todayData.evaluationStatus !== 'FAILED' && (
                                         <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-2">
                                             <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">
                                                 Evaluation Result
                                             </p>
                                             {todayData.score != null && (
-                                                <p className="text-sm font-bold text-slate-900">
-                                                    Score:{' '}
+                                                <p className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                                                    {todayData.isProvisional ? 'Provisional Score:' : 'Score:'}
                                                     <span className="text-brand-primary">
                                                         {todayData.score}
                                                         {todayData.question?.maxMarks != null
                                                             ? ` / ${todayData.question.maxMarks}`
                                                             : ''}
                                                     </span>
+                                                </p>
+                                            )}
+                                            {todayData.isProvisional && (
+                                                <p className="text-xs text-slate-500 italic">
+                                                    * This score is AI-generated and provisional. It is not an official or final grade.
                                                 </p>
                                             )}
                                             {todayData.feedback && (

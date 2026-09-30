@@ -396,6 +396,8 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
             expect(persisted.aiConfidence).toBe(0.96);
             expect(persisted.aiEvaluatedAt).toBeInstanceOf(Date);
             expect(persisted.imagePath).toContain('personalized_submissions');
+            expect(persisted.isProvisional).toBe(true);
+            expect(persisted.evaluationStatus).toBe('EVALUATED');
 
             // 4. Verify getTodayAssignment includes the evaluated score and feedback
             const todayView = await personalizedAssessmentService.getTodayAssignment(studentUser._id.toString());
@@ -449,6 +451,10 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
             expect(result.submissionType).toBe('PHOTO');
             expect(result.score).toBe(8.0);
             expect(result.feedback).toBe('Solid solution');
+            
+            const dbAssigned = await PersonalizedStudentAssignment.findById(assignment._id);
+            expect(dbAssigned?.isProvisional).toBe(true);
+            expect(dbAssigned?.evaluationStatus).toBe('EVALUATED');
         });
     });
 
@@ -456,7 +462,7 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
     // 4. Safe Handling of Evaluator Errors
     // =========================================================================
     describe('4. Evaluator Errors Handled Safely', () => {
-        it('catches and transforms classroom evaluator failures into clean HttpError without corrupting assignment', async () => {
+        it('persists submission safely but marks evaluation as failed when classroom evaluator fails', async () => {
             const todayStr = new Date().toISOString().slice(0, 10);
             const schedule = await personalizedAssessmentService.createSchedule(
                 {
@@ -482,18 +488,19 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
                 new HttpError('Gemini model service overloaded (503)', 503)
             );
 
-            await expect(
-                personalizedAssessmentService.submitTodayPhotoAssignment({
-                    studentId: studentUser._id.toString(),
-                    assignmentId: assignment._id.toString(),
-                    fileBuffer: Buffer.from('dummy-image'),
-                    mimeType: 'image/png'
-                })
-            ).rejects.toThrow('Photo evaluation failed: Gemini model service overloaded (503)');
+            await personalizedAssessmentService.submitTodayPhotoAssignment({
+                studentId: studentUser._id.toString(),
+                assignmentId: assignment._id.toString(),
+                fileBuffer: Buffer.from('dummy-image'),
+                mimeType: 'image/png'
+            });
 
-            // Assignment should remain non-submitted so the student can retry
-            const unsubmittedDoc = await PersonalizedStudentAssignment.findById(assignment._id);
-            expect(unsubmittedDoc?.status).not.toBe('SUBMITTED');
+            // Assignment should remain submitted but with FAILED evaluation status
+            const submittedDoc = await PersonalizedStudentAssignment.findById(assignment._id);
+            expect(submittedDoc?.status).toBe('SUBMITTED');
+            expect(submittedDoc?.evaluationStatus).toBe('FAILED');
+            expect(submittedDoc?.isProvisional).toBe(true);
+            expect(submittedDoc?.score).toBeNull();
         });
     });
 
