@@ -101,6 +101,12 @@ export async function PUT(
       question = (body as Record<string, unknown>).question as number;
     }
 
+    const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : null;
+    // AE-171: Read baseUpdatedAt from one defined location only (request body)
+    const baseUpdatedAt = bodyObj?.baseUpdatedAt as string | number | undefined;
+
+    const force = Boolean(bodyObj?.force);
+
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
     const result = await annotationPersistenceService.savePageAnnotations({
@@ -111,6 +117,9 @@ export async function PUT(
       userRole: user.role,
       question,
       ipAddress,
+      baseUpdatedAt,
+      force,
+      requireBaseUpdatedAt: true,
     });
 
     return NextResponse.json(
@@ -124,11 +133,47 @@ export async function PUT(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
+    const isConflict = status === 409;
+    const isLocked = isConflict && (
+      (error as { isLocked?: boolean })?.isLocked === true ||
+      message.toLowerCase().includes('locked') ||
+      message.toLowerCase().includes('completed') ||
+      message.toLowerCase().includes('submitted')
+    );
+
+    let serverData = isConflict && 'serverData' in (error as Record<string, unknown>)
+      ? (error as { serverData: unknown }).serverData
+      : null;
+    let serverUpdatedAt = isConflict && 'serverUpdatedAt' in (error as Record<string, unknown>)
+      ? (error as { serverUpdatedAt: string | null }).serverUpdatedAt
+      : null;
+
+    // AE-171: On 409, return the server's current annotations and updatedAt. Do not return data: null.
+    if (isConflict && !serverData && !isLocked) {
+      try {
+        const currentDoc = await annotationPersistenceService.getPageAnnotations({
+          scriptId: id,
+          pageIdentifier: p,
+          userId: user.id,
+          userRole: user.role,
+        });
+        serverData = {
+          annotations: currentDoc.annotations,
+          strokes: currentDoc.strokes,
+        };
+        serverUpdatedAt = currentDoc.updatedAt || null;
+      } catch {}
+    }
+
     return NextResponse.json(
       {
         success: false,
+        conflict: isConflict,
+        locked: isLocked,
+        isLocked,
         message,
-        data: null,
+        data: serverData ?? (isConflict && !isLocked ? { annotations: [], strokes: [] } : null),
+        serverUpdatedAt,
       },
       { status }
     );

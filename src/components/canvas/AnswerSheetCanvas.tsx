@@ -109,14 +109,16 @@ import {
   saveLocalAnnotationDraft,
   getLocalAnnotationDraft,
   markLocalAnnotationDraftSynced,
+  markLocalAnnotationDraftSuperseded,
   markLocalAnnotationDraftConflict,
   resolveLocalAnnotationDraftConflict,
-  restoreLocalAnnotationDraft,
-  discardLocalAnnotationDraft,
   detectAnnotationConflict,
+  hasConflict,
+  clearDraftOnSubmit,
   getPendingAnnotationDrafts,
   hasPendingSync,
   isServerDataNewer,
+  getCurrentDraftUser,
 } from '@/lib/offlineDrafts';
 import { PenStyleSelector } from './PenStyleSelector';
 
@@ -236,11 +238,9 @@ export function AnswerSheetCanvas({
   onSaveStatusChange,
   onSaveSuccess,
   onSaveError,
+  userId,
   onConflict,
   onResolveConflict,
-  onRecoverableDraftFound,
-  onDraftRestored,
-  onDraftDiscarded,
   onShortcutAction,
   onSaveDraft,
   onSubmitFinal,
@@ -251,6 +251,7 @@ export function AnswerSheetCanvas({
   isShortcutHelpOpen: propIsShortcutHelpOpen,
   onShortcutHelpOpenChange,
 }: AnswerSheetCanvasProps) {
+  const effectiveUserId = userId || getCurrentDraftUser();
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
     return pages ? sortScriptPages(pages) : null;
@@ -332,6 +333,7 @@ export function AnswerSheetCanvas({
 
   const [, setIsAnnotationsLoading] = useState<boolean>(false);
   const [, setAnnotationsLoadError] = useState<string | null>(null);
+  const [isLocked, setIsLocked] = useState<boolean>(false);
 
   const setTool = useCallback(
     (nextTool: CanvasTool) => {
@@ -577,12 +579,9 @@ export function AnswerSheetCanvas({
   const onSaveStatusChangeRef = useRef(onSaveStatusChange);
   const onSaveSuccessRef = useRef(onSaveSuccess);
   const onSaveErrorRef = useRef(onSaveError);
+  const serverDataCacheRef = useRef<Record<string, { data?: SerializedPageAnnotations | null; updatedAt?: string | number | null }>>({});
   const onConflictRef = useRef(onConflict);
   const onResolveConflictRef = useRef(onResolveConflict);
-  const onRecoverableDraftFoundRef = useRef(onRecoverableDraftFound);
-  const onDraftRestoredRef = useRef(onDraftRestored);
-  const onDraftDiscardedRef = useRef(onDraftDiscarded);
-  const serverDataCacheRef = useRef<Record<string, { data?: SerializedPageAnnotations | null; updatedAt?: string | number | null }>>({});
 
   useEffect(() => {
     onSaveStatusChangeRef.current = onSaveStatusChange;
@@ -590,18 +589,12 @@ export function AnswerSheetCanvas({
     onSaveErrorRef.current = onSaveError;
     onConflictRef.current = onConflict;
     onResolveConflictRef.current = onResolveConflict;
-    onRecoverableDraftFoundRef.current = onRecoverableDraftFound;
-    onDraftRestoredRef.current = onDraftRestored;
-    onDraftDiscardedRef.current = onDraftDiscarded;
   }, [
     onSaveStatusChange,
     onSaveSuccess,
     onSaveError,
     onConflict,
     onResolveConflict,
-    onRecoverableDraftFound,
-    onDraftRestored,
-    onDraftDiscarded,
   ]);
 
   useEffect(() => {
@@ -637,10 +630,10 @@ export function AnswerSheetCanvas({
         payloadToSave.strokes
       );
 
-      const existingDraft = getLocalAnnotationDraft(scriptId, payloadToSave.pageNumber);
-      const baseUpdatedAt = existingDraft?.baseServerUpdatedAt;
+      const existingDraft = getLocalAnnotationDraft(scriptId, payloadToSave.pageNumber, effectiveUserId);
+      const baseUpdatedAt = existingDraft?.baseServerUpdatedAt || serverDataCacheRef.current[payloadToSave.pageKey]?.updatedAt;
 
-      // AE-170: Always persist the latest draft locally first so it survives disconnects
+      // AE-170 / AE-171: Always persist the latest draft locally first so it survives disconnects
       saveLocalAnnotationDraft(
         scriptId,
         payloadToSave.pageNumber,
@@ -650,7 +643,8 @@ export function AnswerSheetCanvas({
           synced: false,
           baseServerUpdatedAt: baseUpdatedAt,
           serverUpdatedAt: existingDraft?.serverUpdatedAt,
-        }
+        },
+        effectiveUserId
       );
 
       // AE-170: If client is currently offline, reflect pending_sync without failing hard
@@ -669,6 +663,7 @@ export function AnswerSheetCanvas({
         let result: {
           success: boolean;
           conflict?: boolean;
+          isLocked?: boolean;
           serverData?: SerializedPageAnnotations | null;
           serverUpdatedAt?: string | number | null;
           error?: string;
@@ -702,9 +697,16 @@ export function AnswerSheetCanvas({
 
           if (res.status === 409) {
             const conflictJson = await res.json().catch(() => null);
+            const isLockConflict = Boolean(
+              conflictJson?.isLocked ||
+              conflictJson?.locked ||
+              conflictJson?.message?.toLowerCase().includes('locked') ||
+              conflictJson?.message?.toLowerCase().includes('completed')
+            );
             result = {
               success: false,
               conflict: true,
+              isLocked: isLockConflict,
               serverData: conflictJson?.data || null,
               serverUpdatedAt: conflictJson?.serverUpdatedAt || null,
               error: conflictJson?.message || 'Conflict: Modified on server',
@@ -727,12 +729,21 @@ export function AnswerSheetCanvas({
         }
 
         if (result.conflict) {
+          if (result.isLocked) {
+            setIsLocked(true);
+            setSaveStatus('locked');
+            setSaveErrorMessage(result.error || 'Script allocation has already been submitted and locked.');
+            onSaveStatusChangeRef.current?.('locked');
+            return;
+          }
+
           // AE-171: Detect and preserve conflict state without overwriting local changes
           markLocalAnnotationDraftConflict(
             scriptId,
             payloadToSave.pageNumber,
             result.serverData,
-            result.serverUpdatedAt ? String(result.serverUpdatedAt) : null
+            result.serverUpdatedAt ? String(result.serverUpdatedAt) : null,
+            effectiveUserId
           );
           setSaveStatus('conflict');
           setSaveErrorMessage(result.error || 'Conflict detected: Server has newer changes');
@@ -751,7 +762,8 @@ export function AnswerSheetCanvas({
           markLocalAnnotationDraftSynced(
             scriptId,
             payloadToSave.pageNumber,
-            result.serverUpdatedAt ? String(result.serverUpdatedAt) : null
+            result.serverUpdatedAt ? String(result.serverUpdatedAt) : null,
+            effectiveUserId
           );
           setSaveStatus('saved');
           onSaveStatusChangeRef.current?.('saved');
@@ -783,7 +795,7 @@ export function AnswerSheetCanvas({
         }
       }
     },
-    [scriptId, saveAnnotations, saveAnnotationsUrl]
+    [scriptId, effectiveUserId, saveAnnotations, saveAnnotationsUrl]
   );
 
   const scheduleAutosave = useCallback(
@@ -868,7 +880,7 @@ export function AnswerSheetCanvas({
     const handleOnline = async () => {
       if (!scriptId) return;
 
-      const pendingDrafts = getPendingAnnotationDrafts(scriptId);
+      const pendingDrafts = getPendingAnnotationDrafts(scriptId, effectiveUserId);
       if (pendingDrafts.length > 0 || pendingSaveRef.current) {
         setSaveStatus('syncing');
         onSaveStatusChangeRef.current?.('syncing');
@@ -891,7 +903,8 @@ export function AnswerSheetCanvas({
                   draft.scriptId,
                   draft.pageNumber,
                   res.serverData,
-                  res.serverUpdatedAt ? String(res.serverUpdatedAt) : null
+                  res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
+                  effectiveUserId
                 );
                 setSaveStatus('conflict');
                 onSaveStatusChangeRef.current?.('conflict');
@@ -902,13 +915,12 @@ export function AnswerSheetCanvas({
                   serverData: res.serverData,
                   serverUpdatedAt: res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
                 });
-                continue;
-              }
-              if (res.success) {
+              } else if (res.success) {
                 markLocalAnnotationDraftSynced(
                   draft.scriptId,
                   draft.pageNumber,
-                  res.serverUpdatedAt ? String(res.serverUpdatedAt) : null
+                  res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
+                  effectiveUserId
                 );
               }
             } else {
@@ -934,7 +946,8 @@ export function AnswerSheetCanvas({
                   draft.scriptId,
                   draft.pageNumber,
                   conflictJson?.data || null,
-                  conflictJson?.serverUpdatedAt || null
+                  conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
+                  effectiveUserId
                 );
                 setSaveStatus('conflict');
                 onSaveStatusChangeRef.current?.('conflict');
@@ -942,18 +955,16 @@ export function AnswerSheetCanvas({
                   scriptId: draft.scriptId,
                   pageNumber: draft.pageNumber,
                   localData: draft.data,
-                  serverData: conflictJson?.data,
-                  serverUpdatedAt: conflictJson?.serverUpdatedAt,
+                  serverData: conflictJson?.data || null,
+                  serverUpdatedAt: conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
                 });
-                continue;
-              }
-
-              if (res.ok) {
+              } else if (res.ok) {
                 const okJson = await res.json().catch(() => null);
                 markLocalAnnotationDraftSynced(
                   draft.scriptId,
                   draft.pageNumber,
-                  okJson?.data?.updatedAt || okJson?.updatedAt || null
+                  okJson?.data?.updatedAt || okJson?.updatedAt || null,
+                  effectiveUserId
                 );
               }
             }
@@ -962,9 +973,9 @@ export function AnswerSheetCanvas({
           }
         }
 
-        const remainingDrafts = getPendingAnnotationDrafts(scriptId);
-        const hasRemainingConflict = remainingDrafts.some((d) => d.hasConflict);
-        if (hasRemainingConflict) {
+        const remainingDrafts = getPendingAnnotationDrafts(scriptId, effectiveUserId);
+        const hasAnyConflict = hasConflict(scriptId, undefined, effectiveUserId);
+        if (hasAnyConflict) {
           setSaveStatus('conflict');
           onSaveStatusChangeRef.current?.('conflict');
         } else if (remainingDrafts.length === 0) {
@@ -978,7 +989,7 @@ export function AnswerSheetCanvas({
     };
 
     const handleOffline = () => {
-      if ((scriptId && hasPendingSync(scriptId)) || pendingSaveRef.current) {
+      if ((scriptId && hasPendingSync(scriptId, undefined, effectiveUserId)) || pendingSaveRef.current) {
         setSaveStatus('pending_sync');
         onSaveStatusChangeRef.current?.('pending_sync');
       }
@@ -991,7 +1002,7 @@ export function AnswerSheetCanvas({
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [scriptId, saveAnnotations, saveAnnotationsUrl, flushPendingSave]);
+  }, [scriptId, effectiveUserId, saveAnnotations, saveAnnotationsUrl, flushPendingSave]);
 
   const handleRetrySave = useCallback(() => {
     const targetPageNumber =
@@ -1035,7 +1046,7 @@ export function AnswerSheetCanvas({
       currentPageKey
     );
 
-    resolveLocalAnnotationDraftConflict(scriptId, targetPageNumber, 'keep_local');
+    resolveLocalAnnotationDraftConflict(scriptId, targetPageNumber, 'keep_local', null, null, effectiveUserId);
     onResolveConflictRef.current?.('keep_local', targetPageNumber);
 
     executeSave(
@@ -1050,6 +1061,7 @@ export function AnswerSheetCanvas({
     );
   }, [
     scriptId,
+    effectiveUserId,
     currentPage,
     activePageIndex,
     allStrokes,
@@ -1066,7 +1078,7 @@ export function AnswerSheetCanvas({
         ? currentPage.pageNumber
         : activePageIndex + 1;
 
-    const draft = getLocalAnnotationDraft(scriptId, targetPageNumber);
+    const draft = getLocalAnnotationDraft(scriptId, targetPageNumber, effectiveUserId);
     const serverData = draft?.conflictServerData;
 
     if (serverData) {
@@ -1094,6 +1106,13 @@ export function AnswerSheetCanvas({
           onAnnotationsChange?.(next);
           return next;
         });
+
+        // AE-171: Use returned server updatedAt as the new base timestamp and update server cache
+        serverDataCacheRef.current[currentPageKey] = {
+          data: { annotations: safeAnnotations, strokes: safeStrokes },
+          updatedAt: draft?.conflictServerUpdatedAt ? String(draft.conflictServerUpdatedAt) : null,
+        };
+        setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: createInitialHistory() }));
       }
 
       resolveLocalAnnotationDraftConflict(
@@ -1101,122 +1120,21 @@ export function AnswerSheetCanvas({
         targetPageNumber,
         'load_server',
         serverData,
-        draft?.conflictServerUpdatedAt
+        draft?.conflictServerUpdatedAt,
+        effectiveUserId
       );
       setSaveStatus('saved');
       onSaveStatusChangeRef.current?.('saved');
       onResolveConflictRef.current?.('load_server', targetPageNumber);
     } else {
       loadedPagesCacheRef.current.delete(currentPageKey);
-      resolveLocalAnnotationDraftConflict(scriptId, targetPageNumber, 'load_server');
+      resolveLocalAnnotationDraftConflict(scriptId, targetPageNumber, 'load_server', null, null, effectiveUserId);
       onResolveConflictRef.current?.('load_server', targetPageNumber);
       setInternalPageIndex((i) => i);
     }
   }, [
     scriptId,
-    currentPage,
-    activePageIndex,
-    currentPageKey,
-    onStrokesChange,
-    onAnnotationsChange,
-  ]);
-
-  const handleRestoreDraft = useCallback(() => {
-    if (!scriptId) return;
-    const targetPageNumber =
-      typeof currentPage?.pageNumber === 'number'
-        ? currentPage.pageNumber
-        : activePageIndex + 1;
-
-    restoreLocalAnnotationDraft(scriptId, targetPageNumber);
-    onDraftRestoredRef.current?.(targetPageNumber);
-    setSaveStatus('pending_sync');
-    onSaveStatusChangeRef.current?.('pending_sync');
-
-    const pageStrokes = filterStrokesByPage(allStrokes, currentPageKey);
-    const pageAnnotations = filterAnnotationsByPage(
-      allAnnotations,
-      currentPageKey
-    );
-
-    executeSave({
-      pageKey: currentPageKey,
-      pageNumber: targetPageNumber,
-      strokes: pageStrokes,
-      annotations: pageAnnotations,
-      imageBounds: baseBounds,
-    });
-  }, [
-    scriptId,
-    currentPage,
-    activePageIndex,
-    allStrokes,
-    allAnnotations,
-    currentPageKey,
-    baseBounds,
-    executeSave,
-  ]);
-
-  const handleDiscardDraft = useCallback(() => {
-    if (!scriptId) return;
-    const targetPageNumber =
-      typeof currentPage?.pageNumber === 'number'
-        ? currentPage.pageNumber
-        : activePageIndex + 1;
-
-    const cachedServer = serverDataCacheRef.current[currentPageKey];
-    discardLocalAnnotationDraft(
-      scriptId,
-      targetPageNumber,
-      cachedServer?.data,
-      cachedServer?.updatedAt
-    );
-
-    if (cachedServer?.data) {
-      const deserialized = deserializePageAnnotations(cachedServer.data, currentPageKey);
-      if (deserialized) {
-        const safeAnnotations = (deserialized.annotations || []).map((a) => ({
-          ...a,
-          pageKey: currentPageKey,
-        }));
-        const safeStrokes = (deserialized.strokes || []).map((s) => ({
-          ...s,
-          pageKey: currentPageKey,
-        }));
-
-        setInternalStrokes((prev) => {
-          const others = prev.filter((s) => String(s.pageKey) !== String(currentPageKey));
-          const next = [...others, ...safeStrokes];
-          onStrokesChange?.(next);
-          return next;
-        });
-
-        setInternalAnnotations((prev) => {
-          const others = prev.filter((a) => String(a.pageKey) !== String(currentPageKey));
-          const next = [...others, ...safeAnnotations];
-          onAnnotationsChange?.(next);
-          return next;
-        });
-      }
-    } else {
-      setInternalStrokes((prev) => {
-        const next = prev.filter((s) => String(s.pageKey) !== String(currentPageKey));
-        onStrokesChange?.(next);
-        return next;
-      });
-
-      setInternalAnnotations((prev) => {
-        const next = prev.filter((a) => String(a.pageKey) !== String(currentPageKey));
-        onAnnotationsChange?.(next);
-        return next;
-      });
-    }
-
-    setSaveStatus('saved');
-    onSaveStatusChangeRef.current?.('saved');
-    onDraftDiscardedRef.current?.(targetPageNumber);
-  }, [
-    scriptId,
+    effectiveUserId,
     currentPage,
     activePageIndex,
     currentPageKey,
@@ -1292,14 +1210,14 @@ export function AnswerSheetCanvas({
           return;
         }
 
-        // AE-170 / AE-171 / AE-172: Check if an unsynced local draft exists for this page and detect conflicts / recovery
+        // AE-170 / AE-171: Check if an unsynced local draft exists for this page and detect conflicts / superseded
         const targetPageNum =
           typeof currentPage?.pageNumber === 'number'
             ? currentPage.pageNumber
             : activePageIndex + 1;
-        const localDraft = getLocalAnnotationDraft(scriptId, targetPageNum);
+        const localDraft = getLocalAnnotationDraft(scriptId, targetPageNum, effectiveUserId);
 
-        // Cache server version for recovery / conflict discard
+        // Cache server version
         if (loadedData) {
           serverDataCacheRef.current[targetKey] = {
             data: loadedData,
@@ -1307,14 +1225,15 @@ export function AnswerSheetCanvas({
           };
         }
 
-        if (localDraft && !localDraft.synced) {
+        if (localDraft && !localDraft.synced && !localDraft.superseded) {
           const isConflict = detectAnnotationConflict(localDraft, serverUpdatedAt);
           if (isConflict) {
             markLocalAnnotationDraftConflict(
               scriptId,
               targetPageNum,
               loadedData,
-              serverUpdatedAt ? String(serverUpdatedAt) : null
+              serverUpdatedAt ? String(serverUpdatedAt) : null,
+              effectiveUserId
             );
             const localDeserialized = deserializePageAnnotations(localDraft.data, targetKey);
             if (localDeserialized) {
@@ -1329,34 +1248,37 @@ export function AnswerSheetCanvas({
               serverData: loadedData,
               serverUpdatedAt: serverUpdatedAt ? String(serverUpdatedAt) : null,
             });
-          } else if (!isServerDataNewer(localDraft, serverUpdatedAt)) {
-            // AE-172: Recover unsaved work after crash/reload
+          } else if (isServerDataNewer(localDraft, serverUpdatedAt)) {
+            // When the server copy is newer during hydration/page load, clear or mark the local draft superseded
+            markLocalAnnotationDraftSuperseded(
+              scriptId,
+              targetPageNum,
+              serverUpdatedAt ? String(serverUpdatedAt) : null,
+              effectiveUserId
+            );
+            // Server data is retained as loadedData
+          } else {
+            // Local draft is newer or offline edits exist: restore local draft
             const localDeserialized = deserializePageAnnotations(localDraft.data, targetKey);
             if (localDeserialized) {
-              const rawServerData = loadedData;
               loadedData = localDeserialized;
-              setSaveStatus('recovery_available');
-              onSaveStatusChangeRef.current?.('recovery_available');
-              onRecoverableDraftFoundRef.current?.({
-                scriptId,
-                pageNumber: targetPageNum,
-                draft: localDraft.data,
-                serverData: rawServerData,
-              });
+              setSaveStatus('pending_sync');
+              onSaveStatusChangeRef.current?.('pending_sync');
             }
           }
         } else if (loadedData && serverUpdatedAt) {
-          // Initialize local draft base timestamp to server version
+          // Initialize local draft base timestamp metadata without retaining heavy strokes
           saveLocalAnnotationDraft(
             scriptId,
             targetPageNum,
             targetKey,
-            loadedData,
+            { annotations: [], strokes: [] },
             {
               synced: true,
               serverUpdatedAt: String(serverUpdatedAt),
               baseServerUpdatedAt: String(serverUpdatedAt),
-            }
+            },
+            effectiveUserId
           );
         }
 
@@ -1409,7 +1331,7 @@ export function AnswerSheetCanvas({
           typeof currentPage?.pageNumber === 'number'
             ? currentPage.pageNumber
             : activePageIndex + 1;
-        const localDraft = getLocalAnnotationDraft(scriptId, targetPageNum);
+        const localDraft = getLocalAnnotationDraft(scriptId, targetPageNum, effectiveUserId);
         if (localDraft && localDraft.data) {
           const localDeserialized = deserializePageAnnotations(localDraft.data, targetKey);
           if (localDeserialized) {
@@ -1466,6 +1388,7 @@ export function AnswerSheetCanvas({
   }, [
     enableAnnotationLoading,
     scriptId,
+    effectiveUserId,
     currentPageKey,
     effectivePageIdentifier,
     currentPage,
@@ -2008,6 +1931,9 @@ export function AnswerSheetCanvas({
           break;
         case 'submitFinal':
           e.preventDefault();
+          if (scriptId) {
+            clearDraftOnSubmit(scriptId, undefined, effectiveUserId);
+          }
           onSubmitFinal?.();
           break;
         case 'undo':
@@ -2193,6 +2119,8 @@ export function AnswerSheetCanvas({
     enableShortcutHelp,
     handleCloseHelp,
     handleToggleHelp,
+    scriptId,
+    effectiveUserId,
   ]);
 
   const zoomPercent = Math.round(effectiveTransform.zoom * 100);
@@ -2297,7 +2225,7 @@ export function AnswerSheetCanvas({
         </nav>
       )}
 
-      {/* Autosave Status Indicator (AE-137 / AE-170 / AE-171 / AE-172) */}
+      {/* Autosave Status Indicator (AE-137 / AE-170 / AE-171) */}
       {enableAutosave && Boolean(scriptId) && (
         <div className="absolute top-3 right-3 z-20 pointer-events-auto" data-testid="autosave-status-wrapper">
           <SaveStatusIndicator
@@ -2305,9 +2233,8 @@ export function AnswerSheetCanvas({
             onRetry={handleRetrySave}
             onKeepMine={handleResolveKeepMine}
             onLoadServer={handleResolveLoadServer}
-            onRestoreDraft={handleRestoreDraft}
-            onDiscardDraft={handleDiscardDraft}
             errorMessage={saveErrorMessage}
+            isLocked={isLocked || saveStatus === 'locked'}
           />
         </div>
       )}

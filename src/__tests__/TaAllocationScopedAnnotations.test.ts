@@ -229,13 +229,18 @@ describe('AE-135/AE-136 P2: TA Annotation Access is Allocation-Scoped', () => {
       role: UserRole.TA,
     };
 
+    const pageDoc = await Page.findById(pageWhole1._id);
     const check = createCheckAnnotation(pageWhole1._id.toString(), { x: 100, y: 150 });
     const req = new NextRequest(
       `http://localhost:3000/api/scripts/${scriptWhole._id}/pages/1/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [check], strokes: [] }),
+        body: JSON.stringify({
+          annotations: [check],
+          strokes: [],
+          baseUpdatedAt: pageDoc?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     const res = await saveAnnotationsPUT(req, {
@@ -320,13 +325,19 @@ describe('AE-135/AE-136 P2: TA Annotation Access is Allocation-Scoped', () => {
     expect(getRes.status).toBe(200);
 
     // PUT with question in query / body
+    const pageDoc = await Page.findById(pageQuestion1._id);
     const stroke = createStroke(pageQuestion1._id.toString(), { x: 10, y: 10 });
     const putReq = new NextRequest(
       `http://localhost:3000/api/scripts/${scriptQuestion._id}/pages/1/annotations?question=1`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [], strokes: [stroke], question: 1 }),
+        body: JSON.stringify({
+          annotations: [],
+          strokes: [stroke],
+          question: 1,
+          baseUpdatedAt: pageDoc?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     const putRes = await saveAnnotationsPUT(putReq, {
@@ -387,13 +398,19 @@ describe('AE-135/AE-136 P2: TA Annotation Access is Allocation-Scoped', () => {
     expect(getRes.status).toBe(200);
 
     // PUT with ?question=2
+    const pageDoc7 = await Page.findById(pageQuestion1._id);
     const text = createTextNoteAnnotation(pageQuestion1._id.toString(), { x: 50, y: 50 }, 'Question 2 correct');
     const putReq = new NextRequest(
       `http://localhost:3000/api/scripts/${scriptQuestion._id}/pages/1/annotations?question=2`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [text], strokes: [], question: 2 }),
+        body: JSON.stringify({
+          annotations: [text],
+          strokes: [],
+          question: 2,
+          baseUpdatedAt: pageDoc7?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     const putRes = await saveAnnotationsPUT(putReq, {
@@ -458,13 +475,18 @@ describe('AE-135/AE-136 P2: TA Annotation Access is Allocation-Scoped', () => {
     expect(getRes.status).toBe(200);
 
     // PUT
+    const pageDoc9 = await Page.findById(pageWhole1._id);
     const check = createCheckAnnotation(pageWhole1._id.toString(), { x: 50, y: 50 });
     const putReq = new NextRequest(
       `http://localhost:3000/api/scripts/${scriptWhole._id}/pages/1/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [check], strokes: [] }),
+        body: JSON.stringify({
+          annotations: [check],
+          strokes: [],
+          baseUpdatedAt: pageDoc9?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     const putRes = await saveAnnotationsPUT(putReq, {
@@ -492,13 +514,18 @@ describe('AE-135/AE-136 P2: TA Annotation Access is Allocation-Scoped', () => {
     expect(getRes.status).toBe(200);
 
     // PUT
+    const pageDoc10 = await Page.findById(pageWhole1._id);
     const check = createCheckAnnotation(pageWhole1._id.toString(), { x: 80, y: 80 });
     const putReq = new NextRequest(
       `http://localhost:3000/api/scripts/${scriptWhole._id}/pages/1/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [check], strokes: [] }),
+        body: JSON.stringify({
+          annotations: [check],
+          strokes: [],
+          baseUpdatedAt: pageDoc10?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     const putRes = await saveAnnotationsPUT(putReq, {

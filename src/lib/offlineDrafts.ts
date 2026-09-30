@@ -1,6 +1,7 @@
 import type { SerializedPageAnnotations } from './annotationSerialization';
 
 export interface LocalAnnotationDraft {
+  userId?: string;
   scriptId: string;
   pageNumber: number;
   pageKey: string;
@@ -9,13 +10,14 @@ export interface LocalAnnotationDraft {
   synced: boolean;
   serverUpdatedAt?: string | number | null;
   baseServerUpdatedAt?: string | number | null; // The server timestamp this draft was based on when loaded
-  hasConflict?: boolean; // True when a concurrent edit conflict is detected
-  conflictServerData?: SerializedPageAnnotations | null; // Cached remote server data for reconciliation
+  superseded?: boolean; // When server copy is newer during hydration, draft is marked superseded so it cannot be pushed on reconnect
+  hasConflict?: boolean; // True when a concurrent edit conflict is detected (AE-171)
+  conflictServerData?: SerializedPageAnnotations | null; // Cached remote server data for reconciliation (AE-171)
   conflictServerUpdatedAt?: string | number | null;
-  isRecoveredDraft?: boolean; // True when detected on reload/mount before user explicitly restores or discards
 }
 
 export interface LocalGradingDraft {
+  userId?: string;
   scriptId: string;
   questionNumber: number;
   marksAwarded: Array<{ criterionName: string; score: number }>;
@@ -25,7 +27,7 @@ export interface LocalGradingDraft {
   synced: boolean;
   serverUpdatedAt?: string | number | null;
   baseServerUpdatedAt?: string | number | null;
-  hasConflict?: boolean;
+  superseded?: boolean;
 }
 
 export const ANNOTATION_DRAFT_PREFIX = 'ae_draft_annotations:';
@@ -33,6 +35,22 @@ export const GRADING_DRAFT_PREFIX = 'ae_draft_grading:';
 
 // In-memory fallback map if localStorage is unavailable (e.g., SSR, private browsing restrictions, quota exceeded)
 const memoryStorage = new Map<string, string>();
+
+let currentDraftUserId = 'default';
+
+/**
+ * Sets the active user ID for user-isolated offline drafts.
+ */
+export function setCurrentDraftUser(userId: string | null | undefined): void {
+  currentDraftUserId = userId?.trim() || 'default';
+}
+
+/**
+ * Gets the current active user ID for offline drafts.
+ */
+export function getCurrentDraftUser(): string {
+  return currentDraftUserId;
+}
 
 /**
  * Checks whether localStorage is available and writable in the current runtime environment.
@@ -52,17 +70,55 @@ export function isLocalStorageAvailable(): boolean {
 }
 
 /**
- * Helper to get the canonical storage key for a script page's annotation draft.
+ * Helper to get the canonical storage key for a script page's annotation draft,
+ * strictly user-isolated to prevent cross-user draft pollution on shared lab machines.
  */
-export function getAnnotationDraftKey(scriptId: string, pageNumber: number): string {
-  return `${ANNOTATION_DRAFT_PREFIX}${scriptId}:${pageNumber}`;
+export function getAnnotationDraftKey(
+  userIdOrScriptId: string,
+  scriptIdOrPageNum: string | number,
+  maybePageNum?: number
+): string {
+  if (typeof maybePageNum === 'number') {
+    const userId = userIdOrScriptId || currentDraftUserId;
+    const scriptId = String(scriptIdOrPageNum);
+    return `${ANNOTATION_DRAFT_PREFIX}${userId}:${scriptId}:${maybePageNum}`;
+  }
+  const userId = currentDraftUserId;
+  const scriptId = userIdOrScriptId;
+  const pageNum = scriptIdOrPageNum as number;
+  return `${ANNOTATION_DRAFT_PREFIX}${userId}:${scriptId}:${pageNum}`;
 }
 
 /**
- * Helper to get the canonical storage key for a script question's grading draft.
+ * Helper to get the canonical storage key for a script question's grading draft,
+ * strictly user-isolated.
  */
-export function getGradingDraftKey(scriptId: string, questionNumber: number): string {
-  return `${GRADING_DRAFT_PREFIX}${scriptId}:${questionNumber}`;
+export function getGradingDraftKey(
+  userIdOrScriptId: string,
+  scriptIdOrQuestionNum: string | number,
+  maybeQuestionNum?: number
+): string {
+  if (typeof maybeQuestionNum === 'number') {
+    const userId = userIdOrScriptId || currentDraftUserId;
+    const scriptId = String(scriptIdOrQuestionNum);
+    return `${GRADING_DRAFT_PREFIX}${userId}:${scriptId}:${maybeQuestionNum}`;
+  }
+  const userId = currentDraftUserId;
+  const scriptId = userIdOrScriptId;
+  const questionNum = scriptIdOrQuestionNum as number;
+  return `${GRADING_DRAFT_PREFIX}${userId}:${scriptId}:${questionNum}`;
+}
+
+export interface SaveAnnotationDraftOptions {
+  userId?: string;
+  serverUpdatedAt?: string | number | null;
+  baseServerUpdatedAt?: string | number | null;
+  synced?: boolean;
+  savedAt?: number;
+  superseded?: boolean;
+  hasConflict?: boolean;
+  conflictServerData?: SerializedPageAnnotations | null;
+  conflictServerUpdatedAt?: string | number | null;
 }
 
 /**
@@ -73,24 +129,18 @@ export function saveLocalAnnotationDraft(
   pageNumber: number,
   pageKey: string,
   data: SerializedPageAnnotations,
-  options?: {
-    serverUpdatedAt?: string | number | null;
-    baseServerUpdatedAt?: string | number | null;
-    synced?: boolean;
-    savedAt?: number;
-    hasConflict?: boolean;
-    conflictServerData?: SerializedPageAnnotations | null;
-    conflictServerUpdatedAt?: string | number | null;
-    isRecoveredDraft?: boolean;
-  }
+  options?: SaveAnnotationDraftOptions,
+  userId?: string
 ): LocalAnnotationDraft | null {
   if (!scriptId || typeof pageNumber !== 'number') {
     return null;
   }
 
-  const existing = getLocalAnnotationDraft(scriptId, pageNumber);
+  const effectiveUserId = userId || options?.userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
 
   const draft: LocalAnnotationDraft = {
+    userId: effectiveUserId,
     scriptId,
     pageNumber,
     pageKey,
@@ -99,13 +149,13 @@ export function saveLocalAnnotationDraft(
     synced: options?.synced ?? false,
     serverUpdatedAt: options?.serverUpdatedAt ?? existing?.serverUpdatedAt ?? null,
     baseServerUpdatedAt: options?.baseServerUpdatedAt ?? existing?.baseServerUpdatedAt ?? null,
+    superseded: options?.superseded ?? existing?.superseded ?? false,
     hasConflict: options?.hasConflict ?? existing?.hasConflict ?? false,
     conflictServerData: options?.conflictServerData ?? existing?.conflictServerData ?? null,
     conflictServerUpdatedAt: options?.conflictServerUpdatedAt ?? existing?.conflictServerUpdatedAt ?? null,
-    isRecoveredDraft: options?.isRecoveredDraft ?? existing?.isRecoveredDraft ?? false,
   };
 
-  const key = getAnnotationDraftKey(scriptId, pageNumber);
+  const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
   const serialized = JSON.stringify(draft);
 
   if (isLocalStorageAvailable()) {
@@ -126,13 +176,15 @@ export function saveLocalAnnotationDraft(
  */
 export function getLocalAnnotationDraft(
   scriptId: string,
-  pageNumber: number
+  pageNumber: number,
+  userId?: string
 ): LocalAnnotationDraft | null {
   if (!scriptId || typeof pageNumber !== 'number') {
     return null;
   }
 
-  const key = getAnnotationDraftKey(scriptId, pageNumber);
+  const effectiveUserId = userId || currentDraftUserId;
+  const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
   let raw: string | null = null;
 
   if (isLocalStorageAvailable()) {
@@ -160,38 +212,85 @@ export function getLocalAnnotationDraft(
 
 /**
  * Marks an existing local annotation draft as synced with the server.
+ * AE-170 requirement: Once synced, strips the full strokes/notes payload to avoid bloat,
+ * retaining only the essential status/sync metadata.
  */
 export function markLocalAnnotationDraftSynced(
   scriptId: string,
   pageNumber: number,
-  serverUpdatedAt?: string | number | null
+  serverUpdatedAt?: string | number | null,
+  userId?: string
 ): void {
-  const existing = getLocalAnnotationDraft(scriptId, pageNumber);
+  const effectiveUserId = userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
   if (existing) {
-    const updatedTimestamp = serverUpdatedAt ?? existing.serverUpdatedAt;
-    saveLocalAnnotationDraft(scriptId, pageNumber, existing.pageKey, existing.data, {
+    const updatedTimestamp = serverUpdatedAt ?? existing.serverUpdatedAt ?? Date.now();
+    const strippedData: SerializedPageAnnotations = {
+      annotations: [],
+      strokes: [],
+    };
+    saveLocalAnnotationDraft(scriptId, pageNumber, existing.pageKey, strippedData, {
+      userId: effectiveUserId,
       serverUpdatedAt: updatedTimestamp,
       baseServerUpdatedAt: updatedTimestamp,
       synced: true,
       savedAt: existing.savedAt,
+      superseded: false,
       hasConflict: false,
       conflictServerData: null,
       conflictServerUpdatedAt: null,
-    });
+    }, effectiveUserId);
   }
 }
 
 /**
- * Flags an existing local draft as conflicted due to concurrent modifications on the server.
+ * Marks an existing local draft as superseded by a newer server copy during hydration.
+ * AE-170 requirement: When the server copy is newer during hydration/page load, clear or
+ * mark the local draft superseded so it cannot be pushed again on reconnect.
+ */
+export function markLocalAnnotationDraftSuperseded(
+  scriptId: string,
+  pageNumber: number,
+  serverUpdatedAt?: string | number | null,
+  userId?: string
+): void {
+  const effectiveUserId = userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+  if (existing) {
+    const strippedData: SerializedPageAnnotations = {
+      annotations: [],
+      strokes: [],
+    };
+    saveLocalAnnotationDraft(scriptId, pageNumber, existing.pageKey, strippedData, {
+      userId: effectiveUserId,
+      serverUpdatedAt: serverUpdatedAt ?? existing.serverUpdatedAt,
+      baseServerUpdatedAt: serverUpdatedAt ?? existing.baseServerUpdatedAt,
+      synced: false,
+      savedAt: existing.savedAt,
+      superseded: true,
+      hasConflict: false,
+      conflictServerData: null,
+      conflictServerUpdatedAt: null,
+    }, effectiveUserId);
+  }
+}
+
+/**
+ * Marks a local draft as having a concurrent edit conflict (AE-171).
+ * Preserves local unsaved edits in place while attaching the conflicting server data.
  */
 export function markLocalAnnotationDraftConflict(
   scriptId: string,
   pageNumber: number,
-  conflictServerData?: SerializedPageAnnotations | null,
-  conflictServerUpdatedAt?: string | number | null
+  serverData?: SerializedPageAnnotations | null,
+  serverUpdatedAt?: string | number | null,
+  userId?: string
 ): LocalAnnotationDraft | null {
-  const existing = getLocalAnnotationDraft(scriptId, pageNumber);
-  if (!existing) return null;
+  const effectiveUserId = userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+  if (!existing) {
+    return null;
+  }
 
   return saveLocalAnnotationDraft(
     scriptId,
@@ -199,149 +298,181 @@ export function markLocalAnnotationDraftConflict(
     existing.pageKey,
     existing.data,
     {
-      serverUpdatedAt: existing.serverUpdatedAt,
-      baseServerUpdatedAt: existing.baseServerUpdatedAt,
+      userId: effectiveUserId,
       savedAt: existing.savedAt,
       synced: false,
+      baseServerUpdatedAt: existing.baseServerUpdatedAt,
       hasConflict: true,
-      conflictServerData: conflictServerData ?? existing.conflictServerData ?? null,
-      conflictServerUpdatedAt: conflictServerUpdatedAt ?? existing.conflictServerUpdatedAt ?? null,
-    }
+      conflictServerData: serverData ?? null,
+      conflictServerUpdatedAt: serverUpdatedAt ? String(serverUpdatedAt) : null,
+    },
+    effectiveUserId
   );
 }
 
 /**
- * Resolves a conflict on a local annotation draft.
- * - 'keep_local': Keeps user's local edits and updates baseServerUpdatedAt so the next save can proceed.
- * - 'load_server': Discards local uncommitted edits and replaces with server data.
+ * Reconciles a conflicted local draft according to user choice (AE-171).
+ * - 'keep_local': clears conflict flag, preserves local edits, advances baseServerUpdatedAt to conflict timestamp.
+ * - 'load_server': replaces local edits with remote server data, marks synced: true.
  */
 export function resolveLocalAnnotationDraftConflict(
   scriptId: string,
   pageNumber: number,
   resolution: 'keep_local' | 'load_server',
   serverData?: SerializedPageAnnotations | null,
-  serverUpdatedAt?: string | number | null
+  serverUpdatedAt?: string | number | null,
+  userId?: string
 ): LocalAnnotationDraft | null {
-  const existing = getLocalAnnotationDraft(scriptId, pageNumber);
-  if (!existing) return null;
+  const effectiveUserId = userId || currentDraftUserId;
+  const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+  if (!existing) {
+    return null;
+  }
 
   if (resolution === 'keep_local') {
-    const newBase = serverUpdatedAt ?? existing.conflictServerUpdatedAt ?? Date.now();
     return saveLocalAnnotationDraft(
       scriptId,
       pageNumber,
       existing.pageKey,
       existing.data,
       {
-        serverUpdatedAt: newBase,
-        baseServerUpdatedAt: newBase,
-        savedAt: existing.savedAt,
+        userId: effectiveUserId,
+        savedAt: Date.now(),
         synced: false,
+        baseServerUpdatedAt: existing.conflictServerUpdatedAt || serverUpdatedAt || existing.baseServerUpdatedAt,
         hasConflict: false,
         conflictServerData: null,
         conflictServerUpdatedAt: null,
-      }
+      },
+      effectiveUserId
     );
   } else {
-    const finalData = serverData ?? existing.conflictServerData ?? { annotations: [], strokes: [] };
-    const newBase = serverUpdatedAt ?? existing.conflictServerUpdatedAt ?? Date.now();
+    const dataToUse = serverData || existing.conflictServerData || { annotations: [], strokes: [] };
+    const updatedTimestamp = serverUpdatedAt || existing.conflictServerUpdatedAt || existing.serverUpdatedAt || Date.now();
     return saveLocalAnnotationDraft(
       scriptId,
       pageNumber,
       existing.pageKey,
-      finalData,
+      dataToUse,
       {
-        serverUpdatedAt: newBase,
-        baseServerUpdatedAt: newBase,
+        userId: effectiveUserId,
         savedAt: Date.now(),
         synced: true,
+        serverUpdatedAt: updatedTimestamp,
+        baseServerUpdatedAt: updatedTimestamp,
         hasConflict: false,
         conflictServerData: null,
         conflictServerUpdatedAt: null,
-        isRecoveredDraft: false,
-      }
+      },
+      effectiveUserId
     );
   }
 }
 
 /**
- * Restores a recovered local draft after reload/crash (AE-172).
- * Marks the draft active for synchronization and clears the recovery prompt flag.
+ * Detects whether incoming server data conflicts with an uncommitted local draft (AE-171).
+ * Returns true if the draft has unsynced local edits AND the server updatedAt is newer than
+ * the baseServerUpdatedAt that this draft was branched from.
  */
-export function restoreLocalAnnotationDraft(
-  scriptId: string,
-  pageNumber: number
-): LocalAnnotationDraft | null {
-  const existing = getLocalAnnotationDraft(scriptId, pageNumber);
-  if (!existing) return null;
+export function detectAnnotationConflict(
+  localDraft: LocalAnnotationDraft | null,
+  serverUpdatedAt?: string | number | Date | null
+): boolean {
+  if (!localDraft || localDraft.synced || localDraft.superseded) {
+    return false;
+  }
 
-  return saveLocalAnnotationDraft(
-    scriptId,
-    pageNumber,
-    existing.pageKey,
-    existing.data,
-    {
-      serverUpdatedAt: existing.serverUpdatedAt,
-      baseServerUpdatedAt: existing.baseServerUpdatedAt,
-      savedAt: existing.savedAt,
-      synced: false,
-      hasConflict: existing.hasConflict ?? false,
-      conflictServerData: existing.conflictServerData,
-      conflictServerUpdatedAt: existing.conflictServerUpdatedAt,
-      isRecoveredDraft: false,
-    }
-  );
+  if (!serverUpdatedAt || !localDraft.baseServerUpdatedAt) {
+    return false;
+  }
+
+  const serverTime =
+    typeof serverUpdatedAt === 'number'
+      ? serverUpdatedAt
+      : new Date(serverUpdatedAt).getTime();
+
+  const baseTime =
+    typeof localDraft.baseServerUpdatedAt === 'number'
+      ? localDraft.baseServerUpdatedAt
+      : new Date(localDraft.baseServerUpdatedAt).getTime();
+
+  if (Number.isNaN(serverTime) || Number.isNaN(baseTime)) {
+    return false;
+  }
+
+  return serverTime > baseTime;
 }
 
 /**
- * Discards a recovered local draft after reload/crash (AE-172).
- * Replaces with server data or clears storage so recovery prompt will not reappear.
+ * Checks whether a specific script or page has an active concurrent conflict (AE-171).
  */
-export function discardLocalAnnotationDraft(
-  scriptId: string,
-  pageNumber: number,
-  serverData?: SerializedPageAnnotations | null,
-  serverUpdatedAt?: string | number | null
-): void {
-  const existing = getLocalAnnotationDraft(scriptId, pageNumber);
-  if (!existing) {
-    clearLocalAnnotationDraft(scriptId, pageNumber);
-    return;
+export function hasConflict(
+  scriptId?: string,
+  pageNumber?: number,
+  userId?: string
+): boolean {
+  const effectiveUserId = userId || currentDraftUserId;
+  if (!scriptId) {
+    return getConflictDrafts(undefined, effectiveUserId).length > 0;
   }
-
-  if (serverData) {
-    const newBase = serverUpdatedAt ?? existing.serverUpdatedAt ?? Date.now();
-    saveLocalAnnotationDraft(
-      scriptId,
-      pageNumber,
-      existing.pageKey,
-      serverData,
-      {
-        serverUpdatedAt: newBase,
-        baseServerUpdatedAt: newBase,
-        savedAt: Date.now(),
-        synced: true,
-        hasConflict: false,
-        conflictServerData: null,
-        conflictServerUpdatedAt: null,
-        isRecoveredDraft: false,
-      }
-    );
-  } else {
-    clearLocalAnnotationDraft(scriptId, pageNumber);
-  }
-}
-
-/**
- * Checks whether an unsynced recoverable local draft exists for the given script/page (AE-172).
- */
-export function hasRecoverableDraft(scriptId: string, pageNumber?: number): boolean {
   if (typeof pageNumber === 'number') {
-    const draft = getLocalAnnotationDraft(scriptId, pageNumber);
-    return Boolean(draft && !draft.synced && !draft.hasConflict);
+    const draft = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+    return Boolean(draft && draft.hasConflict);
   }
-  const pending = getPendingAnnotationDrafts(scriptId);
-  return pending.some((d) => !d.hasConflict);
+  return getConflictDrafts(scriptId, effectiveUserId).length > 0;
+}
+
+/**
+ * Retrieves all drafts with active conflicts (AE-171).
+ */
+export function getConflictDrafts(
+  scriptId?: string,
+  userId?: string
+): LocalAnnotationDraft[] {
+  const effectiveUserId = userId || currentDraftUserId;
+  const draftsMap = new Map<string, LocalAnnotationDraft>();
+  const expectedPrefix =
+    effectiveUserId !== undefined && effectiveUserId !== null
+      ? `${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:`
+      : ANNOTATION_DRAFT_PREFIX;
+
+  const processRaw = (key: string, raw: string | null) => {
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as LocalAnnotationDraft;
+      if (
+        parsed &&
+        typeof parsed.scriptId === 'string' &&
+        typeof parsed.pageNumber === 'number' &&
+        parsed.hasConflict
+      ) {
+        if (!scriptId || parsed.scriptId === scriptId) {
+          if (!effectiveUserId || parsed.userId === effectiveUserId) {
+            draftsMap.set(key, parsed);
+          }
+        }
+      }
+    } catch {}
+  };
+
+  if (isLocalStorageAvailable()) {
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && k.startsWith(expectedPrefix)) {
+          processRaw(k, window.localStorage.getItem(k));
+        }
+      }
+    } catch {}
+  }
+
+  memoryStorage.forEach((v, k) => {
+    if (k.startsWith(expectedPrefix)) {
+      processRaw(k, v);
+    }
+  });
+
+  return Array.from(draftsMap.values());
 }
 
 /**
@@ -349,9 +480,11 @@ export function hasRecoverableDraft(scriptId: string, pageNumber?: number): bool
  */
 export function clearLocalAnnotationDraft(
   scriptId: string,
-  pageNumber: number
+  pageNumber: number,
+  userId?: string
 ): void {
-  const key = getAnnotationDraftKey(scriptId, pageNumber);
+  const effectiveUserId = userId || currentDraftUserId;
+  const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
   if (isLocalStorageAvailable()) {
     try {
       window.localStorage.removeItem(key);
@@ -361,21 +494,125 @@ export function clearLocalAnnotationDraft(
 }
 
 /**
- * Retrieves all pending (unsynced) annotation drafts, optionally filtered by script ID.
+ * Clears all drafts for a script after successful final submit.
+ * AE-170 requirement: Clear the relevant draft after successful submit.
+ */
+export function clearDraftOnSubmit(
+  scriptId: string,
+  pageNumber?: number,
+  userId?: string
+): void {
+  const effectiveUserId = userId || currentDraftUserId;
+  if (typeof pageNumber === 'number') {
+    clearLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+    return;
+  }
+  clearAllScriptDrafts(scriptId, effectiveUserId);
+}
+
+/**
+ * Clears all page annotation and grading drafts for a specific script.
+ */
+export function clearAllScriptDrafts(scriptId: string, userId?: string): void {
+  const effectiveUserId = userId || currentDraftUserId;
+  const matches = (k: string) => {
+    if (effectiveUserId) {
+      return (
+        k.startsWith(`${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:${scriptId}:`) ||
+        k.startsWith(`${GRADING_DRAFT_PREFIX}${effectiveUserId}:${scriptId}:`)
+      );
+    }
+    return (
+      (k.startsWith(ANNOTATION_DRAFT_PREFIX) || k.startsWith(GRADING_DRAFT_PREFIX)) &&
+      (k.includes(`:${scriptId}:`) || k.endsWith(`:${scriptId}`))
+    );
+  };
+
+  if (isLocalStorageAvailable()) {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && matches(k)) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+    } catch {}
+  }
+
+  const memKeysToRemove: string[] = [];
+  memoryStorage.forEach((_, k) => {
+    if (matches(k)) {
+      memKeysToRemove.push(k);
+    }
+  });
+  memKeysToRemove.forEach((k) => memoryStorage.delete(k));
+}
+
+/**
+ * Clears all drafts belonging to a specific user on logout.
+ * AE-170 requirement: Clear the user's drafts on logout.
+ */
+export function clearUserDrafts(userId?: string): void {
+  const effectiveUserId = userId || currentDraftUserId;
+  if (!effectiveUserId) return;
+  const annotUserPrefix = `${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:`;
+  const gradingUserPrefix = `${GRADING_DRAFT_PREFIX}${effectiveUserId}:`;
+
+  if (isLocalStorageAvailable()) {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && (k.startsWith(annotUserPrefix) || k.startsWith(gradingUserPrefix))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+    } catch {}
+  }
+
+  const memKeysToRemove: string[] = [];
+  memoryStorage.forEach((_, k) => {
+    if (k.startsWith(annotUserPrefix) || k.startsWith(gradingUserPrefix)) {
+      memKeysToRemove.push(k);
+    }
+  });
+  memKeysToRemove.forEach((k) => memoryStorage.delete(k));
+}
+
+/**
+ * Retrieves all pending (unsynced, not superseded, not in conflict) annotation drafts,
+ * optionally filtered by script ID.
  */
 export function getPendingAnnotationDrafts(
-  scriptId?: string
+  scriptId?: string,
+  userId?: string
 ): LocalAnnotationDraft[] {
+  const effectiveUserId = userId || currentDraftUserId;
   const draftsMap = new Map<string, LocalAnnotationDraft>();
+  const expectedPrefix =
+    effectiveUserId !== undefined && effectiveUserId !== null
+      ? `${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:`
+      : ANNOTATION_DRAFT_PREFIX;
 
-  const processRaw = (raw: string | null) => {
+  const processRaw = (key: string, raw: string | null) => {
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw) as LocalAnnotationDraft;
-      if (parsed && typeof parsed.scriptId === 'string' && typeof parsed.pageNumber === 'number' && !parsed.synced) {
+      if (
+        parsed &&
+        typeof parsed.scriptId === 'string' &&
+        typeof parsed.pageNumber === 'number' &&
+        !parsed.synced &&
+        !parsed.superseded &&
+        !parsed.hasConflict
+      ) {
         if (!scriptId || parsed.scriptId === scriptId) {
-          const key = getAnnotationDraftKey(parsed.scriptId, parsed.pageNumber);
-          draftsMap.set(key, parsed);
+          if (!effectiveUserId || parsed.userId === effectiveUserId) {
+            draftsMap.set(key, parsed);
+          }
         }
       }
     } catch {}
@@ -385,16 +622,16 @@ export function getPendingAnnotationDrafts(
     try {
       for (let i = 0; i < window.localStorage.length; i++) {
         const k = window.localStorage.key(i);
-        if (k && k.startsWith(ANNOTATION_DRAFT_PREFIX)) {
-          processRaw(window.localStorage.getItem(k));
+        if (k && k.startsWith(expectedPrefix)) {
+          processRaw(k, window.localStorage.getItem(k));
         }
       }
     } catch {}
   }
 
   memoryStorage.forEach((v, k) => {
-    if (k.startsWith(ANNOTATION_DRAFT_PREFIX)) {
-      processRaw(v);
+    if (k.startsWith(expectedPrefix)) {
+      processRaw(k, v);
     }
   });
 
@@ -402,98 +639,28 @@ export function getPendingAnnotationDrafts(
 }
 
 /**
- * Retrieves all conflicted drafts, optionally filtered by script ID.
- */
-export function getConflictDrafts(scriptId?: string): LocalAnnotationDraft[] {
-  const allDrafts: LocalAnnotationDraft[] = [];
-
-  const processRaw = (raw: string | null) => {
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as LocalAnnotationDraft;
-      if (parsed && typeof parsed.scriptId === 'string' && typeof parsed.pageNumber === 'number' && parsed.hasConflict) {
-        if (!scriptId || parsed.scriptId === scriptId) {
-          allDrafts.push(parsed);
-        }
-      }
-    } catch {}
-  };
-
-  if (isLocalStorageAvailable()) {
-    try {
-      for (let i = 0; i < window.localStorage.length; i++) {
-        const k = window.localStorage.key(i);
-        if (k && k.startsWith(ANNOTATION_DRAFT_PREFIX)) {
-          processRaw(window.localStorage.getItem(k));
-        }
-      }
-    } catch {}
-  }
-
-  memoryStorage.forEach((v, k) => {
-    if (k.startsWith(ANNOTATION_DRAFT_PREFIX)) {
-      processRaw(v);
-    }
-  });
-
-  return allDrafts;
-}
-
-/**
  * Checks whether any unsynced local drafts exist for the specified script (or page).
  */
-export function hasPendingSync(scriptId?: string, pageNumber?: number): boolean {
+export function hasPendingSync(
+  scriptId?: string,
+  pageNumber?: number,
+  userId?: string
+): boolean {
+  const effectiveUserId = userId || currentDraftUserId;
   if (!scriptId) {
-    return getPendingAnnotationDrafts().length > 0;
+    return getPendingAnnotationDrafts(undefined, effectiveUserId).length > 0;
   }
   if (typeof pageNumber === 'number') {
-    const draft = getLocalAnnotationDraft(scriptId, pageNumber);
-    return Boolean(draft && !draft.synced);
+    const draft = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
+    return Boolean(draft && !draft.synced && !draft.superseded && !draft.hasConflict);
   }
-  const pending = getPendingAnnotationDrafts(scriptId);
+  const pending = getPendingAnnotationDrafts(scriptId, effectiveUserId);
   return pending.length > 0;
 }
 
 /**
- * Checks whether a conflict exists for the specified script (or page).
- */
-export function hasConflict(scriptId: string, pageNumber?: number): boolean {
-  if (typeof pageNumber === 'number') {
-    const draft = getLocalAnnotationDraft(scriptId, pageNumber);
-    return Boolean(draft && draft.hasConflict);
-  }
-  const conflicts = getConflictDrafts(scriptId);
-  return conflicts.length > 0;
-}
-
-/**
- * Detects whether a conflict exists between the local draft and current server data.
- * A conflict occurs if the local draft has unsynced changes and the server was updated after
- * the draft's baseServerUpdatedAt (or if the draft is explicitly flagged as conflicted).
- */
-export function detectAnnotationConflict(
-  localDraft: LocalAnnotationDraft | null,
-  serverUpdatedAt?: string | number | Date | null
-): boolean {
-  if (!localDraft || localDraft.synced) {
-    return false;
-  }
-  if (localDraft.hasConflict) {
-    return true;
-  }
-  if (localDraft.baseServerUpdatedAt && serverUpdatedAt) {
-    const serverTime = new Date(serverUpdatedAt).getTime();
-    const baseTime = new Date(localDraft.baseServerUpdatedAt).getTime();
-    if (!isNaN(serverTime) && !isNaN(baseTime) && serverTime > baseTime) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
  * Determines whether server data is strictly newer than the local draft savedAt timestamp.
- * Used to avoid silently overwriting newer server modifications.
+ * Used during hydration to detect if the server copy supersedes the local draft.
  */
 export function isServerDataNewer(
   localDraft: LocalAnnotationDraft | null,
@@ -502,8 +669,13 @@ export function isServerDataNewer(
   if (!localDraft || !serverUpdatedAt) {
     return false;
   }
-  const serverTime = new Date(serverUpdatedAt).getTime();
-  if (isNaN(serverTime)) {
+
+  const serverTime =
+    typeof serverUpdatedAt === 'number'
+      ? serverUpdatedAt
+      : new Date(serverUpdatedAt).getTime();
+
+  if (Number.isNaN(serverTime)) {
     return false;
   }
 
@@ -511,7 +683,110 @@ export function isServerDataNewer(
 }
 
 /**
- * Clears all in-memory drafts (useful for test isolation).
+ * Saves a local grading draft for a script question (AE-145 / AE-170).
+ */
+export function saveLocalGradingDraft(
+  scriptId: string,
+  questionNumber: number,
+  draft: Omit<LocalGradingDraft, 'userId' | 'scriptId' | 'questionNumber' | 'savedAt' | 'synced'>,
+  options?: { synced?: boolean; savedAt?: number; userId?: string }
+): LocalGradingDraft | null {
+  if (!scriptId || typeof questionNumber !== 'number') {
+    return null;
+  }
+
+  const effectiveUserId = options?.userId || currentDraftUserId;
+  const existing = getLocalGradingDraft(scriptId, questionNumber, effectiveUserId);
+
+  const fullDraft: LocalGradingDraft = {
+    userId: effectiveUserId,
+    scriptId,
+    questionNumber,
+    marksAwarded: draft.marksAwarded,
+    feedback: draft.feedback,
+    tagIds: draft.tagIds,
+    savedAt: options?.savedAt ?? Date.now(),
+    synced: options?.synced ?? false,
+    serverUpdatedAt: draft.serverUpdatedAt ?? existing?.serverUpdatedAt ?? null,
+    baseServerUpdatedAt: draft.baseServerUpdatedAt ?? existing?.baseServerUpdatedAt ?? null,
+    superseded: existing?.superseded ?? false,
+  };
+
+  const key = getGradingDraftKey(effectiveUserId, scriptId, questionNumber);
+  const serialized = JSON.stringify(fullDraft);
+
+  if (isLocalStorageAvailable()) {
+    try {
+      window.localStorage.setItem(key, serialized);
+    } catch {
+      memoryStorage.set(key, serialized);
+    }
+  } else {
+    memoryStorage.set(key, serialized);
+  }
+
+  return fullDraft;
+}
+
+/**
+ * Retrieves the local grading draft for a specific question, if one exists.
+ */
+export function getLocalGradingDraft(
+  scriptId: string,
+  questionNumber: number,
+  userId?: string
+): LocalGradingDraft | null {
+  if (!scriptId || typeof questionNumber !== 'number') {
+    return null;
+  }
+
+  const effectiveUserId = userId || currentDraftUserId;
+  const key = getGradingDraftKey(effectiveUserId, scriptId, questionNumber);
+  let raw: string | null = null;
+
+  if (isLocalStorageAvailable()) {
+    try {
+      raw = window.localStorage.getItem(key);
+    } catch {
+      raw = null;
+    }
+  }
+
+  if (!raw) {
+    raw = memoryStorage.get(key) || null;
+  }
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as LocalGradingDraft;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Clears the local grading draft for a specific question.
+ */
+export function clearLocalGradingDraft(
+  scriptId: string,
+  questionNumber: number,
+  userId?: string
+): void {
+  const effectiveUserId = userId || currentDraftUserId;
+  const key = getGradingDraftKey(effectiveUserId, scriptId, questionNumber);
+  if (isLocalStorageAvailable()) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {}
+  }
+  memoryStorage.delete(key);
+}
+
+/**
+ * Pure test helper to clear the in-memory fallback storage between test runs.
  */
 export function clearAllMemoryDrafts(): void {
   memoryStorage.clear();

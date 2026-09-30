@@ -2,66 +2,60 @@ import React from 'react';
 import type { SaveStatus } from './types';
 
 export interface SaveStatusIndicatorProps {
-  /** Current save status */
   status: SaveStatus;
-  /** Callback to trigger a manual retry when in error state */
   onRetry?: () => void;
-  /** Callback to resolve conflict by keeping local draft (AE-171) */
   onKeepMine?: () => void;
-  /** Callback to resolve conflict by loading server changes */
   onLoadServer?: () => void;
-  /** Callback to restore recovered local draft (AE-172) */
-  onRestoreDraft?: () => void;
-  /** Callback to discard recovered local draft (AE-172) */
-  onDiscardDraft?: () => void;
-  /** Optional custom error message tooltip or label */
   errorMessage?: string;
-  /** Additional CSS class names */
+  isLocked?: boolean;
   className?: string;
 }
 
+/**
+ * Visual indicator displaying autosave status (saving, saved, error, pending_sync, syncing, conflict, locked).
+ * Supports AE-170 offline persistence & AE-171 concurrent edit conflict resolution (Keep Mine / Load Server)
+ * and finalized locked status.
+ */
 export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
   status,
   onRetry,
   onKeepMine,
   onLoadServer,
-  onRestoreDraft,
-  onDiscardDraft,
   errorMessage = 'Failed to save annotations',
+  isLocked = false,
   className = '',
 }) => {
   if (status === 'idle') {
     return null;
   }
 
-  const isAlertRole = status === 'error' || status === 'conflict';
+  const lockedActive = status === 'locked' || isLocked;
+  const isAlertRole = status === 'error' || status === 'conflict' || lockedActive;
 
   return (
     <div
       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium backdrop-blur transition-all duration-200 shadow-sm ${
-        status === 'saving' || status === 'syncing'
+        lockedActive
+          ? 'bg-slate-100/95 text-slate-800 border border-slate-300'
+          : status === 'saving' || status === 'syncing'
           ? 'bg-amber-50/90 text-amber-700 border border-amber-200'
           : status === 'saved'
           ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200'
-          : status === 'submitted'
-          ? 'bg-emerald-100/90 text-emerald-900 border border-emerald-300'
           : status === 'pending_sync'
           ? 'bg-sky-50/90 text-sky-800 border border-sky-300'
           : status === 'conflict'
           ? 'bg-amber-100/90 text-amber-900 border border-amber-400'
-          : status === 'recovery_available'
-          ? 'bg-indigo-50/90 text-indigo-900 border border-indigo-300'
           : 'bg-rose-50/90 text-rose-700 border border-rose-200'
       } ${className}`}
       data-testid="save-status-indicator"
-      data-status={status}
+      data-status={lockedActive ? 'locked' : status}
       role={isAlertRole ? 'alert' : 'status'}
       aria-live={isAlertRole ? 'assertive' : 'polite'}
     >
       {(status === 'saving' || status === 'syncing') && (
         <>
           <svg
-            className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0"
+            className="animate-spin w-3.5 h-3.5 text-amber-600 shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -104,25 +98,6 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
         </>
       )}
 
-      {status === 'submitted' && (
-        <>
-          <svg
-            className="w-3.5 h-3.5 text-emerald-700 shrink-0"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fillRule="evenodd"
-              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-              clipRule="evenodd"
-            />
-          </svg>
-          <span className="font-semibold">Submitted</span>
-        </>
-      )}
-
       {status === 'pending_sync' && (
         <>
           <svg
@@ -142,7 +117,38 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
         </>
       )}
 
-      {status === 'conflict' && (
+      {lockedActive && (
+        <>
+          <svg
+            className="w-3.5 h-3.5 text-slate-700 shrink-0"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fillRule="evenodd"
+              d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span className="font-semibold text-slate-800">Locked</span>
+          {onLoadServer && (
+            <div className="flex items-center gap-1 ml-1">
+              <button
+                type="button"
+                onClick={onLoadServer}
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-slate-500 transition-colors"
+                aria-label="Load server version"
+              >
+                Load Server
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {status === 'conflict' && !lockedActive && (
         <>
           <svg
             className="w-3.5 h-3.5 text-amber-700 shrink-0"
@@ -177,47 +183,6 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
                 aria-label="Discard local changes and load server version"
               >
                 Load Server
-              </button>
-            )}
-          </div>
-        </>
-      )}
-
-      {status === 'recovery_available' && (
-        <>
-          <svg
-            className="w-3.5 h-3.5 text-indigo-600 shrink-0"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              fillRule="evenodd"
-              d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"
-              clipRule="evenodd"
-            />
-          </svg>
-          <span className="font-semibold">Unsaved work recovered</span>
-          <div className="flex items-center gap-1 ml-1">
-            {onRestoreDraft && (
-              <button
-                type="button"
-                onClick={onRestoreDraft}
-                className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-400 transition-colors"
-                aria-label="Restore recovered local draft"
-              >
-                Restore
-              </button>
-            )}
-            {onDiscardDraft && (
-              <button
-                type="button"
-                onClick={onDiscardDraft}
-                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-slate-400 transition-colors"
-                aria-label="Discard recovered local draft"
-              >
-                Discard
               </button>
             )}
           </div>

@@ -184,9 +184,11 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
     const stroke = createStroke(page1._id.toString(), { x: 10, y: 10 }, { color: '#e11d48', strokeWidth: 3 });
     stroke.points = [10, 10, 20, 20, 30, 30];
 
+    const page1Doc = await Page.findById(page1._id);
     const payload = {
       annotations: [check, hl, text],
       strokes: [stroke],
+      baseUpdatedAt: page1Doc?.updatedAt?.toISOString() || new Date().toISOString(),
     };
 
     const req = new NextRequest(
@@ -224,9 +226,11 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
 
   it('2. successfully saves annotations using Page ObjectId as identifier', async () => {
     const cross = createCrossAnnotation(page2._id.toString(), { x: 80, y: 90 });
+    const page2Doc = await Page.findById(page2._id);
     const payload = {
       annotations: [cross],
       strokes: [],
+      baseUpdatedAt: page2Doc?.updatedAt?.toISOString() || new Date().toISOString(),
     };
 
     const req = new NextRequest(
@@ -255,7 +259,12 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
 
   it('3. repeated PUT replaces the existing annotation state on the same Page document rather than duplicating it (idempotency)', async () => {
     const check1 = createCheckAnnotation(page1._id.toString(), { x: 50, y: 50 });
-    const payload1 = { annotations: [check1], strokes: [] };
+    const page1Doc = await Page.findById(page1._id);
+    const payload1 = {
+      annotations: [check1],
+      strokes: [],
+      baseUpdatedAt: page1Doc?.updatedAt?.toISOString() || new Date().toISOString(),
+    };
 
     const req1 = new NextRequest(
       `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
@@ -276,7 +285,11 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
 
     // Second PUT with different annotation: replaces state on the same page document
     const cross2 = createCrossAnnotation(page1._id.toString(), { x: 99, y: 99 });
-    const payload2 = { annotations: [cross2], strokes: [] };
+    const payload2 = {
+      annotations: [cross2],
+      strokes: [],
+      baseUpdatedAt: pageAfterFirst?.updatedAt?.toISOString() || new Date().toISOString(),
+    };
 
     const req2 = new NextRequest(
       `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
@@ -435,13 +448,17 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
   it('9. confirms source page image storage path remains completely untouched and immutable', async () => {
     const originalImagePath = page1.imagePath;
 
+    const page1Doc = await Page.findById(page1._id);
     const check = createCheckAnnotation(page1._id.toString(), { x: 10, y: 10 });
     const req = new NextRequest(
       `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [check] }),
+        body: JSON.stringify({
+          annotations: [check],
+          baseUpdatedAt: page1Doc?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
 
@@ -466,9 +483,11 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
     const stroke = createStroke(page1._id.toString(), { x: 10, y: 10 }, { color: '#2563eb', strokeWidth: 5 });
     stroke.points = [10, 10, 20, 20, 30, 30];
 
+    const page1Doc = await Page.findById(page1._id);
     const payload = {
       annotations: [check, cross, hl, text],
       strokes: [stroke],
+      baseUpdatedAt: page1Doc?.updatedAt?.toISOString() || new Date().toISOString(),
     };
 
     const req = new NextRequest(
@@ -527,26 +546,36 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
 
   it('11. verifies that the Annotation collection is not modified and Page.annotations is the sole single source of truth', async () => {
     // Perform multiple saves across page1 and page2
+    const page1Doc = await Page.findById(page1._id);
     const check = createCheckAnnotation(page1._id.toString(), { x: 50, y: 50 });
     const req1 = new NextRequest(
       `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [check], strokes: [] }),
+        body: JSON.stringify({
+          annotations: [check],
+          strokes: [],
+          baseUpdatedAt: page1Doc?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     await saveAnnotationsPUT(req1, {
       params: Promise.resolve({ id: answerScript._id.toString(), p: '1' }),
     });
 
+    const page2Doc = await Page.findById(page2._id);
     const cross = createCrossAnnotation(page2._id.toString(), { x: 75, y: 75 });
     const req2 = new NextRequest(
       `http://localhost:3000/api/scripts/${answerScript._id}/pages/2/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [cross], strokes: [] }),
+        body: JSON.stringify({
+          annotations: [cross],
+          strokes: [],
+          baseUpdatedAt: page2Doc?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     await saveAnnotationsPUT(req2, {
