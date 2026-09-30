@@ -131,3 +131,24 @@ All unit, service, invariant, and integration tests in [`src/__tests__/Personali
 - Daily window lifecycle (LOCKED $\rightarrow$ AVAILABLE $\rightarrow$ IN_PROGRESS $\rightarrow$ SUBMITTED / MISSED)
 - Anti-postponement permanent locking of expired slots
 - Cross-student privacy isolation and authorization guards
+
+---
+
+## 6. Rotated Question Sets and Anti-Copying Mechanisms
+
+To mitigate answer-sharing and plagiarism among students, the system employs a cyclic question rotation mechanism.
+
+**How different students receive different variations:**
+During schedule creation, `PersonalizationService.generatePersonalizedAllocation` sorts the AI-generated question pool ($M$ questions) by difficulty and topic. It then assigns a question sequence to each enrolled student ($N$ students) using a mathematical cyclic offset:
+`qIdx = (studentIndex * shiftStep + dayIndex) % M`
+
+**Why rotation reduces direct answer-sharing/copying:**
+Because the pool size is strictly validated to be $M \ge \max(N, 100)$, the cyclic offset mathematically guarantees a **collision-free daily assignment matrix**. On any given assessment day, no two students receive the same question prompt. Therefore, a student cannot simply copy-paste a peer's solution—they must solve their uniquely assigned problem variant.
+
+**How generated question sets associate with the student's assignment:**
+The generated allocation is explicitly recorded in `PersonalizedAssessmentSchedule.ts`, mapping each `studentId` to their distinct sequence of `questionId`s. Every day, the system looks up this sequence to generate the student's unique `PersonalizedStudentAssignment` record.
+
+**Limitations and Assumptions:**
+- **Conceptual collaboration is not prevented:** Students can still discuss topics and concepts. The mechanism only stops verbatim 1-to-1 copying of final answers.
+- **Proxy submission:** It does not prevent one student from logging into another student's account to solve their distinct question.
+- **Finite Pool Size constraint:** For the cyclic offset to provide 100% collision-free days, the AI question bank size ($M$) must be equal to or greater than the number of enrolled students ($N$). For very large cohorts, this requires a proportionally large generated question bank.
