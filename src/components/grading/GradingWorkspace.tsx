@@ -28,6 +28,7 @@ import type { AnswerSheetPage } from '@/lib/pageNavigation';
 export interface ScriptData {
   _id: string;
   exam?: string;
+  allocationId?: string;
   anonymousId?: string;
   scriptReference?: string;
   pageCount?: number;
@@ -58,6 +59,8 @@ export interface FlagDetail {
 
 export interface GradingWorkspaceProps {
   scriptId: string;
+  allocationId?: string;
+  userRole?: string;
   allocatedQuestionNumber?: number;
   flagId?: string;
   isReviewMode?: boolean;
@@ -65,6 +68,8 @@ export interface GradingWorkspaceProps {
 
 export function GradingWorkspace({
   scriptId,
+  allocationId,
+  userRole,
   allocatedQuestionNumber,
   flagId,
   isReviewMode = false,
@@ -347,6 +352,8 @@ export function GradingWorkspace({
           <div className="flex items-center gap-2 sm:ml-auto">
             <GradingSubmissionControls
               scriptId={scriptId}
+              allocationId={allocationId || scriptData?.allocationId}
+              userRole={userRole}
               allocatedQuestionNumber={allocatedQuestionNumber}
               isSubmitted={isSubmitted}
               canSubmit={!isReviewMode}

@@ -16,6 +16,7 @@ import type { SaveStatus } from '@/components/canvas/types';
 export interface GradingSubmissionControlsProps {
   scriptId: string;
   allocationId?: string;
+  userRole?: string;
   allocatedQuestionNumber?: number;
   isSubmitted?: boolean;
   canSubmit?: boolean;
@@ -29,6 +30,7 @@ export interface GradingSubmissionControlsProps {
 export function GradingSubmissionControls({
   scriptId,
   allocationId,
+  userRole,
   allocatedQuestionNumber,
   isSubmitted = false,
   canSubmit = true,
@@ -128,13 +130,16 @@ export function GradingSubmissionControls({
       return;
     }
 
+    if (!allocationId) {
+      setReopenError('Allocation ID is required to reopen grading.');
+      return;
+    }
+
     setIsReopening(true);
     setReopenError(null);
 
-    const targetId = allocationId || scriptId;
-
     try {
-      const res = await fetch(`/api/allocations/${encodeURIComponent(targetId)}/reopen`, {
+      const res = await fetch(`/api/allocations/${encodeURIComponent(allocationId)}/reopen`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -159,6 +164,12 @@ export function GradingSubmissionControls({
       setIsReopening(false);
     }
   };
+
+  // Check role authorization for reopening (Professor or Admin only)
+  const normalizedRole = userRole?.trim().toUpperCase();
+  const isProfessorOrAdmin =
+    normalizedRole === 'PROFESSOR' || normalizedRole === 'ADMIN';
+  const showReopenButton = isSubmitted && canReopen && isProfessorOrAdmin;
 
   // Determine state label
   const gradingState = isSubmitted
@@ -226,7 +237,7 @@ export function GradingSubmissionControls({
             <span>Grading Locked</span>
           </span>
 
-          {canReopen && (
+          {showReopenButton && (
             <Button
               type="button"
               variant="outline"

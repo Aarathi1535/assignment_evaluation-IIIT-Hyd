@@ -38,6 +38,20 @@ interface Pagination {
   hasPreviousPage: boolean;
 }
 
+export function resolveTargetExamId(
+  allocations: Array<{ exam: string }>,
+  selectedExamId?: string | null
+): string | null {
+  if (selectedExamId && selectedExamId !== 'ALL') {
+    return selectedExamId;
+  }
+  const uniqueExams = Array.from(new Set(allocations.map((a) => a.exam).filter(Boolean)));
+  if (uniqueExams.length === 1) {
+    return uniqueExams[0];
+  }
+  return null;
+}
+
 export default function TaDashboardPage() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
@@ -48,6 +62,8 @@ export default function TaDashboardPage() {
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
+  const [selectedExamFilter, setSelectedExamFilter] = useState<string>('ALL');
+  const [isExamPickerOpen, setIsExamPickerOpen] = useState(false);
 
   const fetchAllocations = async (pageToFetch: number) => {
     setIsLoading(true);
@@ -82,9 +98,26 @@ export default function TaDashboardPage() {
   }, []);
 
   // Compute stats
-  const uniqueExams = Array.from(new Set(allocations.map(a => a.exam))).length;
+  const uniqueExamIds = Array.from(new Set(allocations.map((a) => a.exam).filter(Boolean)));
+  const uniqueExams = uniqueExamIds.length;
   const pendingCount = allocations.filter(a => a.status !== 'COMPLETED').length;
   const completedCount = allocations.filter(a => a.status === 'COMPLETED').length;
+
+  const handleBulkSubmitClick = (targetExamId?: string) => {
+    if (targetExamId) {
+      setSelectedExamId(targetExamId);
+      setIsBulkModalOpen(true);
+      return;
+    }
+
+    const resolved = resolveTargetExamId(allocations, selectedExamFilter);
+    if (resolved) {
+      setSelectedExamId(resolved);
+      setIsBulkModalOpen(true);
+    } else {
+      setIsExamPickerOpen(true);
+    }
+  };
 
   const stats = [
     {
@@ -154,11 +187,8 @@ export default function TaDashboardPage() {
           variant="primary"
           size="md"
           data-testid="bulk-submit-exam-button"
-          onClick={() => {
-            setSelectedExamId(allocations[0]?.exam || null);
-            setIsBulkModalOpen(true);
-          }}
-          className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+          onClick={() => handleBulkSubmitClick()}
+          className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs cursor-pointer"
         >
           <Send className="h-4 w-4" />
           <span>Bulk Submit Exam</span>
@@ -230,14 +260,37 @@ export default function TaDashboardPage() {
 
         {/* Allocations Queue Card */}
         <Card className="p-0 overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <ClipboardList className="h-5 w-5 text-slate-500" />
-              <span>Assigned Grading Queue</span>
-            </h2>
-            <span className="text-xs font-semibold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
-              {pagination ? pagination.total : allocations.length} Items
-            </span>
+          <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex flex-wrap justify-between items-center gap-3">
+            <div className="flex items-center gap-3">
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <ClipboardList className="h-5 w-5 text-slate-500" />
+                <span>Assigned Grading Queue</span>
+              </h2>
+              <span className="text-xs font-semibold text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
+                {pagination ? pagination.total : allocations.length} Items
+              </span>
+            </div>
+            {uniqueExamIds.length > 1 && (
+              <div className="flex items-center gap-2">
+                <label htmlFor="exam-filter-select" className="text-xs font-semibold text-slate-600">
+                  Filter Exam:
+                </label>
+                <select
+                  id="exam-filter-select"
+                  data-testid="exam-filter-select"
+                  value={selectedExamFilter}
+                  onChange={(e) => setSelectedExamFilter(e.target.value)}
+                  className="text-xs border border-slate-300 rounded px-2.5 py-1 bg-white text-slate-700 font-medium focus:ring-1 focus:ring-brand-primary"
+                >
+                  <option value="ALL">All Exams ({uniqueExamIds.length})</option>
+                  {uniqueExamIds.map((id) => (
+                    <option key={id} value={id}>
+                      Exam: {id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {isLoading ? (
@@ -272,14 +325,17 @@ export default function TaDashboardPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-sm">
-                    {allocations.map((alloc) => {
+                    {(selectedExamFilter === 'ALL'
+                      ? allocations
+                      : allocations.filter((a) => a.exam === selectedExamFilter)
+                    ).map((alloc) => {
                       const script = alloc.answerScript;
                       const scriptRef = script?.scriptReference || script?.anonymousId || 'Unassigned Script';
                       const isQuestionWise = alloc.question !== undefined && alloc.question !== null;
                       const targetUrl = script
                         ? isQuestionWise
-                          ? `/grading/${script._id}/question/${alloc.question}`
-                          : `/grading/${script._id}`
+                          ? `/grading/${script._id}/question/${alloc.question}?allocationId=${alloc._id}`
+                          : `/grading/${script._id}?allocationId=${alloc._id}`
                         : '#';
 
                       return (
@@ -296,7 +352,20 @@ export default function TaDashboardPage() {
 
                           {/* Exam ID */}
                           <td className="px-6 py-4.5 text-slate-650 font-medium whitespace-nowrap">
-                            Exam ID: {alloc.exam}
+                            <div className="flex items-center gap-2">
+                              <span>Exam ID: {alloc.exam}</span>
+                              {uniqueExamIds.length > 1 && (
+                                <button
+                                  type="button"
+                                  data-testid={`bulk-submit-exam-row-${alloc.exam}`}
+                                  onClick={() => handleBulkSubmitClick(alloc.exam)}
+                                  className="text-3xs text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded px-1.5 py-0.5 font-bold cursor-pointer transition-colors"
+                                  title={`Bulk submit scripts for Exam ${alloc.exam}`}
+                                >
+                                  Submit Exam
+                                </button>
+                              )}
+                            </div>
                           </td>
 
                           {/* Context Mode */}
@@ -380,6 +449,62 @@ export default function TaDashboardPage() {
         onClose={() => setIsNotificationPanelOpen(false)}
         onNotificationsUpdated={(count) => setUnreadNotificationCount(count)}
       />
+
+      {/* Exam Picker Modal for Multiple Exams (AE-173) */}
+      {isExamPickerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="select-exam-modal-title"
+          data-testid="exam-picker-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+        >
+          <div className="bg-white rounded-brand-lg shadow-xl border border-slate-200 max-w-md w-full p-6 space-y-4">
+            <div>
+              <h3 id="select-exam-modal-title" className="text-base font-bold text-slate-900">
+                Select Exam for Bulk Submission
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Your queue contains allocations across multiple exams. Please select the specific exam you wish to bulk submit:
+              </p>
+            </div>
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {uniqueExamIds.map((examId) => {
+                const count = allocations.filter((a) => a.exam === examId).length;
+                return (
+                  <button
+                    key={examId}
+                    type="button"
+                    data-testid={`select-exam-option-${examId}`}
+                    onClick={() => {
+                      setSelectedExamId(examId);
+                      setIsExamPickerOpen(false);
+                      setIsBulkModalOpen(true);
+                    }}
+                    className="w-full text-left p-3 rounded-brand border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/50 transition-colors flex justify-between items-center cursor-pointer"
+                  >
+                    <div>
+                      <span className="font-mono text-xs font-bold text-slate-900 block">Exam: {examId}</span>
+                      <span className="text-2xs text-slate-500 font-medium">{count} script{count === 1 ? '' : 's'} assigned</span>
+                    </div>
+                    <Send className="h-4 w-4 text-emerald-600 shrink-0" />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsExamPickerOpen(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bulk Submit Modal (AE-169 / AE-173) */}
       {selectedExamId && (

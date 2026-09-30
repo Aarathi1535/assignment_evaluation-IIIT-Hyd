@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { SaveStatusIndicator } from '../components/canvas/SaveStatusIndicator';
 import { GradingSubmissionControls } from '../components/grading/GradingSubmissionControls';
 import { BulkSubmitModal } from '../components/grading/BulkSubmitModal';
+import { resolveTargetExamId } from '../app/(dashboard)/ta/page';
 
 describe('AE-173: Grading State & Submission Controls', () => {
   beforeEach(() => {
@@ -172,11 +173,12 @@ describe('AE-173: Grading State & Submission Controls', () => {
   });
 
   describe('3. Reopen Allocation Workflow', () => {
-    it('renders Reopen button when isSubmitted is true and canReopen is enabled', () => {
+    it('renders Reopen button when isSubmitted is true and userRole is PROFESSOR', () => {
       const html = renderToStaticMarkup(
         React.createElement(GradingSubmissionControls, {
           scriptId: 'script-303',
           allocationId: 'alloc-303',
+          userRole: 'PROFESSOR',
           isSubmitted: true,
           canReopen: true,
         })
@@ -186,11 +188,55 @@ describe('AE-173: Grading State & Submission Controls', () => {
       expect(html).toContain('data-testid="reopen-allocation-button"');
     });
 
-    it('does not render Reopen button when canReopen is false', () => {
+    it('renders Reopen button when isSubmitted is true and userRole is ADMIN', () => {
       const html = renderToStaticMarkup(
         React.createElement(GradingSubmissionControls, {
           scriptId: 'script-303',
           allocationId: 'alloc-303',
+          userRole: 'ADMIN',
+          isSubmitted: true,
+          canReopen: true,
+        })
+      );
+
+      expect(html).toContain('Reopen');
+      expect(html).toContain('data-testid="reopen-allocation-button"');
+    });
+
+    it('does NOT render Reopen button when userRole is TA, even if isSubmitted and canReopen are true', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(GradingSubmissionControls, {
+          scriptId: 'script-303',
+          allocationId: 'alloc-303',
+          userRole: 'TA',
+          isSubmitted: true,
+          canReopen: true,
+        })
+      );
+
+      expect(html).not.toContain('data-testid="reopen-allocation-button"');
+      expect(html).not.toContain('Reopen');
+    });
+
+    it('does NOT render Reopen button when userRole is missing or unauthorized', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(GradingSubmissionControls, {
+          scriptId: 'script-303',
+          allocationId: 'alloc-303',
+          isSubmitted: true,
+          canReopen: true,
+        })
+      );
+
+      expect(html).not.toContain('data-testid="reopen-allocation-button"');
+    });
+
+    it('does not render Reopen button when canReopen is false even if userRole is PROFESSOR', () => {
+      const html = renderToStaticMarkup(
+        React.createElement(GradingSubmissionControls, {
+          scriptId: 'script-303',
+          allocationId: 'alloc-303',
+          userRole: 'PROFESSOR',
           isSubmitted: true,
           canReopen: false,
         })
@@ -199,7 +245,7 @@ describe('AE-173: Grading State & Submission Controls', () => {
       expect(html).not.toContain('data-testid="reopen-allocation-button"');
     });
 
-    it('executes reopen API with provided reason and transitions state', async () => {
+    it('executes reopen API targeting the allocationId, never scriptId', async () => {
       const mockReopenResult = {
         allocationId: 'alloc-303',
         status: 'IN_PROGRESS',
@@ -220,7 +266,11 @@ describe('AE-173: Grading State & Submission Controls', () => {
 
       const onReopened = vi.fn();
 
-      const res = await fetch('/api/allocations/alloc-303/reopen', {
+      const scriptId = 'script-999';
+      const allocationId = 'alloc-303';
+
+      // Send reopen with allocationId
+      const res = await fetch(`/api/allocations/${encodeURIComponent(allocationId)}/reopen`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'Student requested regrade on Question 2' }),
@@ -230,12 +280,17 @@ describe('AE-173: Grading State & Submission Controls', () => {
         onReopened(json.data);
       }
 
+      // Verify fetch was called with allocationId, NOT scriptId
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/allocations/alloc-303/reopen',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ reason: 'Student requested regrade on Question 2' }),
         })
+      );
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        expect.stringContaining(scriptId),
+        expect.anything()
       );
       expect(onReopened).toHaveBeenCalledWith(mockReopenResult);
     });
@@ -266,6 +321,47 @@ describe('AE-173: Grading State & Submission Controls', () => {
   });
 
   describe('4. Bulk Submit Workflow & Preview Breakdown (AE-169 / AE-173)', () => {
+    describe('resolveTargetExamId behavior', () => {
+      it('resolves target exam to explicitly selected exam, never defaulting to allocations[0].exam', () => {
+        const allocations = [
+          { exam: 'exam-alpha' },
+          { exam: 'exam-beta' },
+          { exam: 'exam-gamma' },
+        ];
+
+        // TA explicitly selects exam-beta: must resolve to exam-beta, NEVER allocations[0] (exam-alpha)
+        const resolved = resolveTargetExamId(allocations, 'exam-beta');
+        expect(resolved).toBe('exam-beta');
+      });
+
+      it('resolves target exam when all allocations belong to a single unique exam', () => {
+        const singleExamAllocations = [
+          { exam: 'exam-single' },
+          { exam: 'exam-single' },
+          { exam: 'exam-single' },
+        ];
+
+        const resolved = resolveTargetExamId(singleExamAllocations, 'ALL');
+        expect(resolved).toBe('exam-single');
+      });
+
+      it('returns null when allocations span multiple exams and no exam filter is active', () => {
+        const multiExamAllocations = [
+          { exam: 'exam-first' },
+          { exam: 'exam-second' },
+        ];
+
+        // Must NOT blindly pick allocations[0].exam ('exam-first')
+        const resolved = resolveTargetExamId(multiExamAllocations, 'ALL');
+        expect(resolved).toBeNull();
+      });
+
+      it('returns null when allocations array is empty', () => {
+        const resolved = resolveTargetExamId([], 'ALL');
+        expect(resolved).toBeNull();
+      });
+    });
+
     it('renders null when BulkSubmitModal is closed', () => {
       const html = renderToStaticMarkup(
         React.createElement(BulkSubmitModal, {
