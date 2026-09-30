@@ -1,18 +1,23 @@
 'use client';
 
 import React from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { GradingWorkspace } from '@/components/grading/GradingWorkspace';
 
 export default function QuestionGradingPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const scriptId = (params?.scriptId as string) || '';
   const questionNumberParam = params?.questionNumber as string;
   const questionNumber = questionNumberParam ? parseInt(questionNumberParam, 10) : undefined;
+  const allocationId = searchParams?.get('allocationId') || undefined;
+  const roleParam = searchParams?.get('role') || undefined;
 
   return (
     <GradingWorkspace
       scriptId={scriptId}
+      allocationId={allocationId}
+      userRole={roleParam}
       allocatedQuestionNumber={Number.isNaN(questionNumber) ? undefined : questionNumber}
     />
   );

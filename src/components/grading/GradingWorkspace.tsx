@@ -20,12 +20,15 @@ import {
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { AnswerSheetCanvas } from '@/components/canvas/AnswerSheetCanvas';
+import type { SaveStatus } from '@/components/canvas/types';
 import { RubricSidebar, RubricData, RubricSidebarHandle } from './RubricSidebar';
+import { GradingSubmissionControls } from './GradingSubmissionControls';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
 
 export interface ScriptData {
   _id: string;
   exam?: string;
+  allocationId?: string;
   anonymousId?: string;
   scriptReference?: string;
   pageCount?: number;
@@ -56,6 +59,8 @@ export interface FlagDetail {
 
 export interface GradingWorkspaceProps {
   scriptId: string;
+  allocationId?: string;
+  userRole?: string;
   allocatedQuestionNumber?: number;
   flagId?: string;
   isReviewMode?: boolean;
@@ -63,6 +68,8 @@ export interface GradingWorkspaceProps {
 
 export function GradingWorkspace({
   scriptId,
+  allocationId,
+  userRole,
   allocatedQuestionNumber,
   flagId,
   isReviewMode = false,
@@ -76,6 +83,8 @@ export function GradingWorkspace({
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
   const [activeFlag, setActiveFlag] = useState<FlagDetail | null>(null);
+  const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
 
   // Resolution controls state (AE-164)
   const [resolutionAction, setResolutionAction] = useState<'CLEAR' | 'OVERRIDE' | 'ESCALATE'>('CLEAR');
@@ -337,6 +346,27 @@ export function GradingWorkspace({
                 </span>
               )}
             </div>
+          </div>
+
+          {/* AE-173: Grading State & Submission / Reopen Controls */}
+          <div className="flex items-center gap-2 sm:ml-auto">
+            <GradingSubmissionControls
+              scriptId={scriptId}
+              allocationId={allocationId || scriptData?.allocationId}
+              userRole={userRole}
+              allocatedQuestionNumber={allocatedQuestionNumber}
+              isSubmitted={isSubmitted}
+              canSubmit={!isReviewMode}
+              canReopen={true}
+              saveStatus={saveStatus}
+              onSubmitted={() => {
+                setIsSubmitted(true);
+              }}
+              onReopened={() => {
+                setIsSubmitted(false);
+                fetchScriptData();
+              }}
+            />
           </div>
         </div>
 
@@ -643,16 +673,17 @@ export function GradingWorkspace({
                 showPageNavigation={true}
                 enablePanZoom={true}
                 showZoomControls={true}
-                enableSelect={!isReviewMode}
-                enablePenTool={!isReviewMode}
-                enableEraserTool={!isReviewMode}
-                enableStamps={!isReviewMode}
-                enableHighlight={!isReviewMode}
-                enableTextNote={!isReviewMode}
-                enableUndoRedo={!isReviewMode}
+                enableSelect={!isReviewMode && !isSubmitted}
+                enablePenTool={!isReviewMode && !isSubmitted}
+                enableEraserTool={!isReviewMode && !isSubmitted}
+                enableStamps={!isReviewMode && !isSubmitted}
+                enableHighlight={!isReviewMode && !isSubmitted}
+                enableTextNote={!isReviewMode && !isSubmitted}
+                enableUndoRedo={!isReviewMode && !isSubmitted}
                 enableOverlayToggle={true}
                 enableAnnotationLoading={true}
-                enableAutosave={!isReviewMode}
+                enableAutosave={!isReviewMode && !isSubmitted}
+                onSaveStatusChange={setSaveStatus}
                 onSaveDraft={handleSaveDraft}
                 onSubmitFinal={handleSubmitFinal}
                 onNextQuestion={handleNextQuestion}
@@ -668,9 +699,10 @@ export function GradingWorkspace({
                 scriptId={scriptId}
                 examId={scriptData?.exam}
                 allocatedQuestionNumber={allocatedQuestionNumber}
-                readOnly={isReviewMode}
+                readOnly={isReviewMode || isSubmitted}
                 onRubricLoaded={setRubricData}
                 onGradeSaved={handleGradeSaved}
+                onFinalizedStateChange={setIsSubmitted}
               />
             </div>
           </div>

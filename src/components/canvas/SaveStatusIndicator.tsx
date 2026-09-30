@@ -17,9 +17,9 @@ export interface SaveStatusIndicatorProps {
 }
 
 /**
- * Visual indicator displaying autosave status (saving, saved, error, pending_sync, syncing, conflict, locked, recovery_available).
+ * Visual indicator displaying autosave status (saving, saved, error, pending_sync, syncing, conflict, locked, recovery_available, submitted).
  * Supports AE-170 offline persistence & AE-171 concurrent edit conflict resolution (Keep Mine / Load Server),
- * locked status, and AE-172 crash recovery (Restore / Discard).
+ * locked status, AE-172 crash recovery (Restore / Discard), and AE-173 grading submission controls.
  */
 export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
   status,
@@ -54,6 +54,8 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
           ? 'bg-amber-100/90 text-amber-900 border border-amber-400'
           : status === 'recovery_available'
           ? 'bg-indigo-50/90 text-indigo-900 border border-indigo-300'
+          : status === 'submitted'
+          ? 'bg-emerald-100/90 text-emerald-900 border border-emerald-300'
           : 'bg-rose-50/90 text-rose-700 border border-rose-200'
       } ${className}`}
       data-testid="save-status-indicator"
@@ -236,6 +238,25 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
               </button>
             )}
           </div>
+        </>
+      )}
+
+      {status === 'submitted' && (
+        <>
+          <svg
+            className="w-3.5 h-3.5 text-emerald-700 shrink-0"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fillRule="evenodd"
+              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span className="font-semibold">Submitted</span>
         </>
       )}
 

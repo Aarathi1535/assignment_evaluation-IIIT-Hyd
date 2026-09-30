@@ -4,6 +4,7 @@ import { connectDB } from '../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../lib/apiAuth';
 import { UserRole } from '../../../../constants/permissions';
 import AnswerScript from '../../../../models/AnswerScript';
+import Allocation from '../../../../models/Allocation';
 import IngestionPage from '../../../../models/IngestionPage';
 import Page from '../../../../models/Page';
 import ExamRepository from '../../../../repositories/ExamRepository';
@@ -64,6 +65,8 @@ export async function GET(
     const isProfessorOrAdmin =
       userRole === UserRole.PROFESSOR || userRole === UserRole.ADMIN;
 
+    let scriptAllocationId: string | undefined;
+
     if (isProfessorOrAdmin) {
       const exam = await ExamRepository.getExamById(
         script.exam.toString(),
@@ -80,6 +83,10 @@ export async function GET(
           { status: 403 }
         );
       }
+      const existingAlloc = await Allocation.findOne({ answerScript: script._id }).select('_id');
+      if (existingAlloc) {
+        scriptAllocationId = existingAlloc._id.toString();
+      }
     } else {
       const allocation = await AllocationService.verifyTaAllocation(
         script._id,
@@ -95,6 +102,7 @@ export async function GET(
           { status: 403 }
         );
       }
+      scriptAllocationId = allocation._id.toString();
     }
 
     // 4. Retrieve pages for this answer script
@@ -165,6 +173,7 @@ export async function GET(
         message: 'AnswerScript retrieved successfully',
         data: {
           ...serializedScript,
+          allocationId: scriptAllocationId,
           pageCount: formattedPages.length,
           pages: formattedPages,
         },
