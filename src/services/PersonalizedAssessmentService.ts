@@ -594,6 +594,8 @@ export class PersonalizedAssessmentService {
                 submissionType: assignment.submissionType,
                 imagePath: assignment.imagePath,
                 score: assignment.score,
+                isProvisional: assignment.isProvisional,
+                evaluationStatus: assignment.evaluationStatus,
                 feedback: assignment.feedback,
                 criterionScores: assignment.criterionScores,
                 aiConfidence: assignment.aiConfidence,
@@ -732,24 +734,7 @@ export class PersonalizedAssessmentService {
 
         const relativeStoragePath = gcsUri;
 
-        // 5. Evaluate handwritten answer via ClassroomEvaluationService
-        let evaluationOutcome: ValidatedEvaluationOutcome;
-        try {
-            evaluationOutcome = await this.evaluateHandwrittenAnswer({
-                questionPrompt: question.questionPrompt,
-                maxMarks: question.maxMarks || 10,
-                rubricCriteria: question.rubricCriteria || [],
-                sampleSolution: question.referenceAnswer || undefined,
-                imageBuffer: fileBuffer,
-                mimeType: normalizedMime
-            });
-        } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            const statusCode = err instanceof HttpError ? err.statusCode : 502;
-            throw new HttpError(`Photo evaluation failed: ${errMsg}`, statusCode);
-        }
-
-        // 6. Persist evaluated result on assignment
+        // Persist submission independently of AI Evaluation
         assignment.status = 'SUBMITTED';
         assignment.submissionType = 'PHOTO';
         assignment.submittedAt = referenceNow;
@@ -757,12 +742,33 @@ export class PersonalizedAssessmentService {
         assignment.imagePath = relativeStoragePath;
         assignment.fileSize = fileBuffer.length;
         assignment.mimeType = normalizedMime;
-        assignment.score = evaluationOutcome.score;
-        assignment.feedback = evaluationOutcome.feedback;
-        assignment.criterionScores = evaluationOutcome.criterionScores;
-        assignment.aiConfidence = evaluationOutcome.confidence;
-        assignment.aiEvaluatedAt = new Date();
+        assignment.evaluationStatus = 'PENDING';
+        assignment.isProvisional = true;
         await assignment.save();
+
+        // 5. Evaluate handwritten answer via ClassroomEvaluationService
+        try {
+            const evaluationOutcome = await this.evaluateHandwrittenAnswer({
+                questionPrompt: question.questionPrompt,
+                maxMarks: question.maxMarks || 10,
+                rubricCriteria: question.rubricCriteria || [],
+                sampleSolution: question.referenceAnswer || undefined,
+                imageBuffer: fileBuffer,
+                mimeType: normalizedMime
+            });
+
+            assignment.evaluationStatus = 'EVALUATED';
+            assignment.score = evaluationOutcome.score;
+            assignment.feedback = evaluationOutcome.feedback;
+            assignment.criterionScores = evaluationOutcome.criterionScores;
+            assignment.aiConfidence = evaluationOutcome.confidence;
+            assignment.aiEvaluatedAt = new Date();
+            await assignment.save();
+        } catch (err: unknown) {
+            console.error('AI Evaluation failed for personalized photo submission:', err);
+            assignment.evaluationStatus = 'FAILED';
+            await assignment.save();
+        }
 
         await writeAuditLog({
             user: studentId,
