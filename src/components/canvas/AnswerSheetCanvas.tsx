@@ -114,6 +114,9 @@ import {
   resolveLocalAnnotationDraftConflict,
   detectAnnotationConflict,
   hasConflict,
+  hasRecoverableDraft,
+  restoreLocalAnnotationDraft,
+  discardLocalAnnotationDraft,
   clearDraftOnSubmit,
   getPendingAnnotationDrafts,
   hasPendingSync,
@@ -241,6 +244,10 @@ export function AnswerSheetCanvas({
   userId,
   onConflict,
   onResolveConflict,
+  enableCrashRecovery = true,
+  onRecoverableDraftFound,
+  onDraftRestored,
+  onDraftDiscarded,
   onShortcutAction,
   onSaveDraft,
   onSubmitFinal,
@@ -582,6 +589,9 @@ export function AnswerSheetCanvas({
   const serverDataCacheRef = useRef<Record<string, { data?: SerializedPageAnnotations | null; updatedAt?: string | number | null }>>({});
   const onConflictRef = useRef(onConflict);
   const onResolveConflictRef = useRef(onResolveConflict);
+  const onRecoverableDraftFoundRef = useRef(onRecoverableDraftFound);
+  const onDraftRestoredRef = useRef(onDraftRestored);
+  const onDraftDiscardedRef = useRef(onDraftDiscarded);
 
   useEffect(() => {
     onSaveStatusChangeRef.current = onSaveStatusChange;
@@ -589,12 +599,18 @@ export function AnswerSheetCanvas({
     onSaveErrorRef.current = onSaveError;
     onConflictRef.current = onConflict;
     onResolveConflictRef.current = onResolveConflict;
+    onRecoverableDraftFoundRef.current = onRecoverableDraftFound;
+    onDraftRestoredRef.current = onDraftRestored;
+    onDraftDiscardedRef.current = onDraftDiscarded;
   }, [
     onSaveStatusChange,
     onSaveSuccess,
     onSaveError,
     onConflict,
     onResolveConflict,
+    onRecoverableDraftFound,
+    onDraftRestored,
+    onDraftDiscarded,
   ]);
 
   useEffect(() => {
@@ -822,7 +838,7 @@ export function AnswerSheetCanvas({
 
       pendingSaveRef.current = pendingData;
 
-      // AE-170: Persist local draft immediately during edit
+      // AE-170 / AE-172: Persist local draft immediately during edit so it survives reload/crash/disconnect before debounce fires
       const serialized = serializePageAnnotations(
         pendingData.pageKey,
         pendingData.annotations,
@@ -833,7 +849,8 @@ export function AnswerSheetCanvas({
         targetPageNumber,
         currentPageKey,
         serialized,
-        { synced: false }
+        { synced: false },
+        effectiveUserId
       );
 
       if (debounceTimerRef.current) {
@@ -1142,6 +1159,112 @@ export function AnswerSheetCanvas({
     onAnnotationsChange,
   ]);
 
+  const handleRestoreDraft = useCallback(() => {
+    if (!scriptId) return;
+    const targetPageNumber =
+      typeof currentPage?.pageNumber === 'number'
+        ? currentPage.pageNumber
+        : activePageIndex + 1;
+
+    restoreLocalAnnotationDraft(scriptId, targetPageNumber, effectiveUserId);
+    onDraftRestoredRef.current?.(targetPageNumber);
+
+    const pageStrokes = filterStrokesByPage(allStrokes, currentPageKey);
+    const pageAnnotations = filterAnnotationsByPage(
+      allAnnotations,
+      currentPageKey
+    );
+
+    executeSave({
+      pageKey: currentPageKey,
+      pageNumber: targetPageNumber,
+      strokes: pageStrokes,
+      annotations: pageAnnotations,
+      imageBounds: baseBounds,
+    });
+  }, [
+    scriptId,
+    effectiveUserId,
+    currentPage,
+    activePageIndex,
+    allStrokes,
+    allAnnotations,
+    currentPageKey,
+    baseBounds,
+    executeSave,
+  ]);
+
+  const handleDiscardDraft = useCallback(() => {
+    if (!scriptId) return;
+    const targetPageNumber =
+      typeof currentPage?.pageNumber === 'number'
+        ? currentPage.pageNumber
+        : activePageIndex + 1;
+
+    const cachedServer = serverDataCacheRef.current[currentPageKey];
+    discardLocalAnnotationDraft(
+      scriptId,
+      targetPageNumber,
+      cachedServer?.data,
+      cachedServer?.updatedAt,
+      effectiveUserId
+    );
+
+    if (cachedServer?.data) {
+      const deserialized = deserializePageAnnotations(cachedServer.data, currentPageKey);
+      if (deserialized) {
+        const safeAnnotations = (deserialized.annotations || []).map((a) => ({
+          ...a,
+          pageKey: currentPageKey,
+        }));
+        const safeStrokes = (deserialized.strokes || []).map((s) => ({
+          ...s,
+          pageKey: currentPageKey,
+        }));
+
+        setInternalStrokes((prev) => {
+          const others = prev.filter((s) => String(s.pageKey) !== String(currentPageKey));
+          const next = [...others, ...safeStrokes];
+          onStrokesChange?.(next);
+          return next;
+        });
+
+        setInternalAnnotations((prev) => {
+          const others = prev.filter((a) => String(a.pageKey) !== String(currentPageKey));
+          const next = [...others, ...safeAnnotations];
+          onAnnotationsChange?.(next);
+          return next;
+        });
+        setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: createInitialHistory() }));
+      }
+    } else {
+      setInternalStrokes((prev) => {
+        const next = prev.filter((s) => String(s.pageKey) !== String(currentPageKey));
+        onStrokesChange?.(next);
+        return next;
+      });
+
+      setInternalAnnotations((prev) => {
+        const next = prev.filter((a) => String(a.pageKey) !== String(currentPageKey));
+        onAnnotationsChange?.(next);
+        return next;
+      });
+      setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: createInitialHistory() }));
+    }
+
+    setSaveStatus('saved');
+    onSaveStatusChangeRef.current?.('saved');
+    onDraftDiscardedRef.current?.(targetPageNumber);
+  }, [
+    scriptId,
+    effectiveUserId,
+    currentPage,
+    activePageIndex,
+    currentPageKey,
+    onStrokesChange,
+    onAnnotationsChange,
+  ]);
+
   // Annotation Hydration Lifecycle (AE-136)
   useEffect(() => {
     // If annotation loading is disabled, no scriptId, or already loaded during this session, return
@@ -1172,6 +1295,7 @@ export function AnswerSheetCanvas({
       try {
         let loadedData: { annotations: MarkAnnotation[]; strokes: FreehandStroke[] } | null = null;
         let serverUpdatedAt: string | number | Date | null = null;
+        let serializedServerPayload: SerializedPageAnnotations | null = null;
 
         if (fetchAnnotations) {
           loadedData = await fetchAnnotations(
@@ -1198,7 +1322,12 @@ export function AnswerSheetCanvas({
 
           const json = await res.json();
           const rawPayload = json?.data || json;
-          serverUpdatedAt = (rawPayload as { updatedAt?: string })?.updatedAt || (json as { updatedAt?: string })?.updatedAt || null;
+          serverUpdatedAt =
+            json?.updatedAt ||
+            json?.data?.updatedAt ||
+            (rawPayload as { updatedAt?: string })?.updatedAt ||
+            null;
+          serializedServerPayload = rawPayload as SerializedPageAnnotations;
           loadedData = deserializePageAnnotations(rawPayload, targetKey);
         }
 
@@ -1210,17 +1339,25 @@ export function AnswerSheetCanvas({
           return;
         }
 
-        // AE-170 / AE-171: Check if an unsynced local draft exists for this page and detect conflicts / superseded
+        // AE-170 / AE-171 / AE-172: Check if an unsynced local draft exists for this page and detect conflicts / superseded / recoverable
         const targetPageNum =
           typeof currentPage?.pageNumber === 'number'
             ? currentPage.pageNumber
             : activePageIndex + 1;
         const localDraft = getLocalAnnotationDraft(scriptId, targetPageNum, effectiveUserId);
 
-        // Cache server version
-        if (loadedData) {
+        if (!serializedServerPayload && loadedData) {
+          serializedServerPayload = serializePageAnnotations(
+            targetKey,
+            loadedData.annotations,
+            loadedData.strokes
+          );
+        }
+
+        // Cache server version for recovery discard & conflicts
+        if (serializedServerPayload) {
           serverDataCacheRef.current[targetKey] = {
-            data: loadedData,
+            data: serializedServerPayload,
             updatedAt: serverUpdatedAt ? String(serverUpdatedAt) : null,
           };
         }
@@ -1231,7 +1368,7 @@ export function AnswerSheetCanvas({
             markLocalAnnotationDraftConflict(
               scriptId,
               targetPageNum,
-              loadedData,
+              serializedServerPayload,
               serverUpdatedAt ? String(serverUpdatedAt) : null,
               effectiveUserId
             );
@@ -1245,7 +1382,7 @@ export function AnswerSheetCanvas({
               scriptId,
               pageNumber: targetPageNum,
               localData: localDraft.data,
-              serverData: loadedData,
+              serverData: serializedServerPayload,
               serverUpdatedAt: serverUpdatedAt ? String(serverUpdatedAt) : null,
             });
           } else if (isServerDataNewer(localDraft, serverUpdatedAt)) {
@@ -1257,6 +1394,21 @@ export function AnswerSheetCanvas({
               effectiveUserId
             );
             // Server data is retained as loadedData
+          } else if (enableCrashRecovery !== false && hasRecoverableDraft(scriptId, targetPageNum, effectiveUserId)) {
+            // AE-172: Recover unsaved work after crash/reload
+            const localDeserialized = deserializePageAnnotations(localDraft.data, targetKey);
+            if (localDeserialized) {
+              const rawServerData = serializedServerPayload;
+              loadedData = localDeserialized;
+              setSaveStatus('recovery_available');
+              onSaveStatusChangeRef.current?.('recovery_available');
+              onRecoverableDraftFoundRef.current?.({
+                scriptId,
+                pageNumber: targetPageNum,
+                draft: localDraft.data,
+                serverData: rawServerData,
+              });
+            }
           } else {
             // Local draft is newer or offline edits exist: restore local draft
             const localDeserialized = deserializePageAnnotations(localDraft.data, targetKey);
@@ -1266,8 +1418,8 @@ export function AnswerSheetCanvas({
               onSaveStatusChangeRef.current?.('pending_sync');
             }
           }
-        } else if (loadedData && serverUpdatedAt) {
-          // Initialize local draft base timestamp metadata without retaining heavy strokes
+        } else if (serializedServerPayload && serverUpdatedAt) {
+          // Initialize local draft base timestamp metadata without retaining heavy strokes (AE-170)
           saveLocalAnnotationDraft(
             scriptId,
             targetPageNum,
@@ -2225,7 +2377,7 @@ export function AnswerSheetCanvas({
         </nav>
       )}
 
-      {/* Autosave Status Indicator (AE-137 / AE-170 / AE-171) */}
+      {/* Autosave Status Indicator (AE-137 / AE-170 / AE-171 / AE-172) */}
       {enableAutosave && Boolean(scriptId) && (
         <div className="absolute top-3 right-3 z-20 pointer-events-auto" data-testid="autosave-status-wrapper">
           <SaveStatusIndicator
@@ -2233,6 +2385,8 @@ export function AnswerSheetCanvas({
             onRetry={handleRetrySave}
             onKeepMine={handleResolveKeepMine}
             onLoadServer={handleResolveLoadServer}
+            onRestoreDraft={handleRestoreDraft}
+            onDiscardDraft={handleDiscardDraft}
             errorMessage={saveErrorMessage}
             isLocked={isLocked || saveStatus === 'locked'}
           />

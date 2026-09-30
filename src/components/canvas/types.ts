@@ -36,7 +36,16 @@ import type {
 
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing' | 'conflict' | 'locked';
+export type SaveStatus =
+  | 'idle'
+  | 'saving'
+  | 'saved'
+  | 'error'
+  | 'pending_sync'
+  | 'syncing'
+  | 'conflict'
+  | 'locked'
+  | 'recovery_available';
 
 export type {
   CanvasViewState,
@@ -346,6 +355,19 @@ export interface AnswerSheetCanvasProps {
     action: 'keep_local' | 'load_server',
     pageNumber: number
   ) => void;
+  /** Whether crash recovery detection is enabled (default true, AE-172) */
+  enableCrashRecovery?: boolean;
+  /** Callback fired when an unsynced recoverable local draft is detected on load (AE-172) */
+  onRecoverableDraftFound?: (info: {
+    scriptId: string;
+    pageNumber: number;
+    draft: SerializedPageAnnotations;
+    serverData?: SerializedPageAnnotations | null;
+  }) => void;
+  /** Callback fired when a recovered local draft is restored (AE-172) */
+  onDraftRestored?: (pageNumber: number) => void;
+  /** Callback fired when a recovered local draft is discarded (AE-172) */
+  onDraftDiscarded?: (pageNumber: number) => void;
   /** Authoritative shortcut action listener (AE-154) */
   onShortcutAction?: (action: ShortcutAction, event: KeyboardEvent) => void;
   /** Save draft trigger handler (AE-154) */
