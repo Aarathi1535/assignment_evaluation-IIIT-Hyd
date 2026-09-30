@@ -36,7 +36,7 @@ import type {
 
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing';
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing' | 'conflict' | 'locked';
 
 export type {
   CanvasViewState,
@@ -310,7 +310,7 @@ export interface AnswerSheetCanvasProps {
   debounceDelayMs?: number;
   /** Custom URL builder for saving page annotations (AE-137) */
   saveAnnotationsUrl?: (scriptId: string, pageNumber: number) => string;
-  /** Custom saver function for sending serialized page annotations (AE-137 / AE-170) */
+  /** Custom saver function for sending serialized page annotations (AE-137 / AE-170 / AE-171) */
   saveAnnotations?: (params: {
     scriptId: string;
     pageNumber: number;
@@ -320,11 +320,12 @@ export interface AnswerSheetCanvasProps {
   }) => Promise<{
     success: boolean;
     conflict?: boolean;
+    isLocked?: boolean;
     serverData?: SerializedPageAnnotations | null;
     serverUpdatedAt?: string | number | null;
     error?: string;
   }>;
-  /** Callback fired when save status changes ('idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing', AE-137 / AE-170) */
+  /** Callback fired when save status changes ('idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing' | 'conflict', AE-137 / AE-170 / AE-171) */
   onSaveStatusChange?: (status: SaveStatus) => void;
   /** Callback fired when autosave succeeds (AE-137) */
   onSaveSuccess?: (pageNumber: number) => void;
@@ -332,6 +333,19 @@ export interface AnswerSheetCanvasProps {
   onSaveError?: (pageNumber: number, error: Error) => void;
   /** Authenticated user ID for user-isolated offline drafts (AE-170) */
   userId?: string;
+  /** Callback fired when a concurrent edit conflict is detected (AE-171) */
+  onConflict?: (conflictInfo: {
+    scriptId: string;
+    pageNumber: number;
+    localData: SerializedPageAnnotations;
+    serverData?: SerializedPageAnnotations | null;
+    serverUpdatedAt?: string | number | null;
+  }) => void;
+  /** Callback fired when a conflict is resolved (AE-171) */
+  onResolveConflict?: (
+    action: 'keep_local' | 'load_server',
+    pageNumber: number
+  ) => void;
   /** Authoritative shortcut action listener (AE-154) */
   onShortcutAction?: (action: ShortcutAction, event: KeyboardEvent) => void;
   /** Save draft trigger handler (AE-154) */

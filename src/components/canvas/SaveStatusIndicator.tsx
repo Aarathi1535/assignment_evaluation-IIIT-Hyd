@@ -2,48 +2,60 @@ import React from 'react';
 import type { SaveStatus } from './types';
 
 export interface SaveStatusIndicatorProps {
-  /** Current save status */
   status: SaveStatus;
-  /** Callback to trigger a manual retry when in error state */
   onRetry?: () => void;
-  /** Optional custom error message tooltip or label */
+  onKeepMine?: () => void;
+  onLoadServer?: () => void;
   errorMessage?: string;
-  /** Additional CSS class names */
+  isLocked?: boolean;
   className?: string;
 }
 
+/**
+ * Visual indicator displaying autosave status (saving, saved, error, pending_sync, syncing, conflict, locked).
+ * Supports AE-170 offline persistence & AE-171 concurrent edit conflict resolution (Keep Mine / Load Server)
+ * and finalized locked status.
+ */
 export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
   status,
   onRetry,
+  onKeepMine,
+  onLoadServer,
   errorMessage = 'Failed to save annotations',
+  isLocked = false,
   className = '',
 }) => {
   if (status === 'idle') {
     return null;
   }
 
-  const isAlertRole = status === 'error';
+  const lockedActive = status === 'locked' || isLocked;
+  const isAlertRole = status === 'error' || status === 'conflict' || lockedActive;
 
   return (
     <div
       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium backdrop-blur transition-all duration-200 shadow-sm ${
-        status === 'saving' || status === 'syncing'
+        lockedActive
+          ? 'bg-slate-100/95 text-slate-800 border border-slate-300'
+          : status === 'saving' || status === 'syncing'
           ? 'bg-amber-50/90 text-amber-700 border border-amber-200'
           : status === 'saved'
           ? 'bg-emerald-50/90 text-emerald-700 border border-emerald-200'
           : status === 'pending_sync'
           ? 'bg-sky-50/90 text-sky-800 border border-sky-300'
+          : status === 'conflict'
+          ? 'bg-amber-100/90 text-amber-900 border border-amber-400'
           : 'bg-rose-50/90 text-rose-700 border border-rose-200'
       } ${className}`}
       data-testid="save-status-indicator"
-      data-status={status}
+      data-status={lockedActive ? 'locked' : status}
       role={isAlertRole ? 'alert' : 'status'}
       aria-live={isAlertRole ? 'assertive' : 'polite'}
     >
       {(status === 'saving' || status === 'syncing') && (
         <>
           <svg
-            className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0"
+            className="animate-spin w-3.5 h-3.5 text-amber-600 shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -102,6 +114,78 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
             />
           </svg>
           <span>Pending sync (Saved locally)</span>
+        </>
+      )}
+
+      {lockedActive && (
+        <>
+          <svg
+            className="w-3.5 h-3.5 text-slate-700 shrink-0"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fillRule="evenodd"
+              d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span className="font-semibold text-slate-800">Locked</span>
+          {onLoadServer && (
+            <div className="flex items-center gap-1 ml-1">
+              <button
+                type="button"
+                onClick={onLoadServer}
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 font-semibold focus:outline-none focus:ring-1 focus:ring-slate-500 transition-colors"
+                aria-label="Load server version"
+              >
+                Load Server
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {status === 'conflict' && !lockedActive && (
+        <>
+          <svg
+            className="w-3.5 h-3.5 text-amber-700 shrink-0"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fillRule="evenodd"
+              d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span className="font-semibold">Conflict detected</span>
+          <div className="flex items-center gap-1 ml-1">
+            {onKeepMine && (
+              <button
+                type="button"
+                onClick={onKeepMine}
+                className="px-1.5 py-0.5 rounded bg-amber-200/90 hover:bg-amber-300 text-amber-900 font-semibold focus:outline-none focus:ring-1 focus:ring-amber-500 transition-colors"
+                aria-label="Keep local changes and overwrite server"
+              >
+                Keep Mine
+              </button>
+            )}
+            {onLoadServer && (
+              <button
+                type="button"
+                onClick={onLoadServer}
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 font-semibold focus:outline-none focus:ring-1 focus:ring-amber-500 transition-colors"
+                aria-label="Discard local changes and load server version"
+              >
+                Load Server
+              </button>
+            )}
+          </div>
         </>
       )}
 

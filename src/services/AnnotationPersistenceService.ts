@@ -26,6 +26,26 @@ import type { FreehandStroke } from '../lib/penTool';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
 
+export class ConflictHttpError extends HttpError {
+  serverData: unknown;
+  serverUpdatedAt?: string | null;
+  isLocked?: boolean;
+
+  constructor(
+    message: string,
+    serverData?: unknown,
+    serverUpdatedAt?: string | null,
+    isLocked = false
+  ) {
+    super(message, 409);
+    this.name = 'ConflictHttpError';
+    this.serverData = serverData;
+    this.serverUpdatedAt = serverUpdatedAt;
+    this.isLocked = isLocked;
+    Object.setPrototypeOf(this, ConflictHttpError.prototype);
+  }
+}
+
 export interface SavePageAnnotationsOptions {
   scriptId: string;
   pageIdentifier: string;
@@ -34,6 +54,10 @@ export interface SavePageAnnotationsOptions {
   userRole: string;
   question?: number | null;
   ipAddress?: string;
+  expectedUpdatedAt?: string | number | Date | null;
+  baseUpdatedAt?: string | number | Date | null;
+  force?: boolean;
+  requireBaseUpdatedAt?: boolean;
 }
 
 export interface SavePageAnnotationsResult {
@@ -45,6 +69,7 @@ export interface SavePageAnnotationsResult {
   totalAnnotations: number;
   totalStrokes: number;
   savedAt: string;
+  updatedAt?: string;
 }
 
 export interface GetPageAnnotationsOptions {
@@ -293,9 +318,11 @@ export class AnnotationPersistenceService {
       }
 
       if (allocation.status === AllocationStatus.COMPLETED) {
-        throw new HttpError(
+        throw new ConflictHttpError(
           'Cannot save annotations: This script allocation has already been submitted and locked.',
-          409
+          null,
+          null,
+          true
         );
       }
     }
@@ -367,18 +394,88 @@ export class AnnotationPersistenceService {
       targetPageId.toString()
     );
 
-    // 7. Persist vector data directly onto Page (single source of truth) without altering image storage
+    // AE-171: Atomic conditional update with baseUpdatedAt to ensure safe concurrency
+    let baseDate: Date;
+    if (options.baseUpdatedAt) {
+      baseDate = new Date(options.baseUpdatedAt);
+      if (isNaN(baseDate.getTime())) {
+        throw new HttpError('Invalid baseUpdatedAt timestamp format', 400);
+      }
+    } else if (!options.requireBaseUpdatedAt && (pageDoc?.updatedAt || ingestionDoc?.updatedAt)) {
+      baseDate = pageDoc?.updatedAt || ingestionDoc?.updatedAt || new Date();
+    } else {
+      throw new HttpError(
+        'baseUpdatedAt is required on every save to ensure conflict detection',
+        400
+      );
+    }
+
+    // 7. Atomic update: updateOne({ _id, updatedAt: baseDate }, ...)
+    let matchedCount = 0;
+    let updatedDocTimestamp = new Date();
+
     if (pageDoc) {
-      pageDoc.annotations = normalizedPageData;
-      pageDoc.annotatedBy = new mongoose.Types.ObjectId(userId);
-      await pageDoc.save();
+      const updateResult = await Page.updateOne(
+        { _id: targetPageId, updatedAt: baseDate },
+        {
+          $set: {
+            annotations: normalizedPageData,
+            annotatedBy: new mongoose.Types.ObjectId(userId),
+          },
+        }
+      );
+      matchedCount = updateResult.matchedCount;
+
+      if (matchedCount > 0) {
+        const refreshed = await Page.findById(targetPageId).select('updatedAt');
+        if (refreshed?.updatedAt) {
+          updatedDocTimestamp = refreshed.updatedAt;
+        }
+      }
     } else if (ingestionDoc) {
-      ingestionDoc.metadata = {
-        ...(ingestionDoc.metadata || {}),
-        annotations: normalizedPageData,
-        annotatedBy: userId,
-      };
-      await ingestionDoc.save();
+      const updateResult = await IngestionPage.updateOne(
+        { _id: targetPageId, updatedAt: baseDate },
+        {
+          $set: {
+            'metadata.annotations': normalizedPageData,
+            'metadata.annotatedBy': userId,
+          },
+        }
+      );
+      matchedCount = updateResult.matchedCount;
+
+      if (matchedCount > 0) {
+        const refreshed = await IngestionPage.findById(targetPageId).select('updatedAt');
+        if (refreshed?.updatedAt) {
+          updatedDocTimestamp = refreshed.updatedAt;
+        }
+      }
+    }
+
+    // Treat matchedCount === 0 as a 409
+    if (matchedCount === 0) {
+      let currentServerAnnotations: SerializedPageAnnotations | null = null;
+      let currentServerUpdatedAt: string | null = null;
+
+      if (pageDoc) {
+        const latestDoc = await Page.findById(targetPageId);
+        if (latestDoc) {
+          currentServerAnnotations = latestDoc.annotations || null;
+          currentServerUpdatedAt = latestDoc.updatedAt ? latestDoc.updatedAt.toISOString() : null;
+        }
+      } else if (ingestionDoc) {
+        const latestDoc = await IngestionPage.findById(targetPageId);
+        if (latestDoc) {
+          currentServerAnnotations = (latestDoc.metadata?.annotations as SerializedPageAnnotations) || null;
+          currentServerUpdatedAt = latestDoc.updatedAt ? latestDoc.updatedAt.toISOString() : null;
+        }
+      }
+
+      throw new ConflictHttpError(
+        'Conflict: Annotations have been modified on the server since your draft was loaded.',
+        currentServerAnnotations || { annotations: [], strokes: [] },
+        currentServerUpdatedAt
+      );
     }
 
     // 8. Record audit log
@@ -406,6 +503,7 @@ export class AnnotationPersistenceService {
       totalAnnotations: normalizedPageData.annotations.length,
       totalStrokes: normalizedPageData.strokes.length,
       savedAt: new Date().toISOString(),
+      updatedAt: updatedDocTimestamp.toISOString(),
     };
   }
 
