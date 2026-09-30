@@ -184,12 +184,17 @@ describe('AE-136: GET /scripts/[id]/pages/[p]/annotations (Load Annotations API)
     const stroke = createStroke(page1._id.toString(), { x: 20, y: 30 }, { color: '#e11d48', strokeWidth: 4 });
     stroke.points = [20, 30, 40, 50];
 
+    const page1Doc = await Page.findById(page1._id);
     const putReq = new NextRequest(
       `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: [check], strokes: [stroke] }),
+        body: JSON.stringify({
+          annotations: [check],
+          strokes: [stroke],
+          baseUpdatedAt: page1Doc?.updatedAt?.toISOString() || new Date().toISOString(),
+        }),
       }
     );
     await saveAnnotationsPUT(putReq, {
