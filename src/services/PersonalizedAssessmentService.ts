@@ -1,5 +1,4 @@
-import fs from 'fs';
-import path from 'path';
+
 import mongoose from 'mongoose';
 import personalizedAssessmentRepository from '../repositories/PersonalizedAssessmentRepository';
 import { IPersonalizedQuestion, QuestionDifficulty } from '../models/PersonalizedQuestion';
@@ -12,6 +11,7 @@ import classroomEvaluationService, {
     EvaluateClassroomAnswerInput,
     ValidatedEvaluationOutcome
 } from './ClassroomEvaluationService';
+import { cloudStorageService } from './CloudStorageService';
 
 export interface SubmitTodayPhotoAssignmentInput {
     studentId: string;
@@ -652,10 +652,6 @@ export class PersonalizedAssessmentService {
         };
     }
 
-    getStorageRoot(): string {
-        return process.env.PERSONALIZED_STORAGE_PATH || path.join(process.cwd(), 'data', 'personalized_submissions');
-    }
-
     async submitTodayPhotoAssignment(input: SubmitTodayPhotoAssignmentInput) {
         const {
             studentId,
@@ -722,17 +718,19 @@ export class PersonalizedAssessmentService {
             throw new HttpError('Question for assignment not found', 404);
         }
 
-        // 4. Save image to disk
+        // 4. Save image to Cloud Storage
         const ext = normalizedMime.includes('png') ? 'png' : normalizedMime.includes('webp') ? 'webp' : 'jpg';
-        const storageRoot = this.getStorageRoot();
-        const assignmentDir = path.join(storageRoot, assignmentId);
-        await fs.promises.mkdir(assignmentDir, { recursive: true });
-
         const filename = `${studentId}_${Date.now()}.${ext}`;
-        const filePath = path.join(assignmentDir, filename);
-        await fs.promises.writeFile(filePath, fileBuffer);
+        const destination = `personalized_submissions/${assignmentId}/${filename}`;
 
-        const relativeStoragePath = `personalized_submissions/${assignmentId}/${filename}`;
+        const gcsUri = await cloudStorageService.uploadFile({
+            bucketName: 'assignment-eval-data',
+            destination,
+            buffer: fileBuffer,
+            contentType: normalizedMime
+        });
+
+        const relativeStoragePath = gcsUri;
 
         // 5. Evaluate handwritten answer via ClassroomEvaluationService
         let evaluationOutcome: ValidatedEvaluationOutcome;

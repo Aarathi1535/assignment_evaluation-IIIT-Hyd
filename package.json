@@ -9,6 +9,7 @@
     "seed": "tsx src/scripts/seed.ts"
   },
   "dependencies": {
+    "@google-cloud/storage": "^8.2.0",
     "@google/genai": "^2.24.0",
     "@hookform/resolvers": "^5.5.7",
     "@napi-rs/canvas": "^0.1.100",
