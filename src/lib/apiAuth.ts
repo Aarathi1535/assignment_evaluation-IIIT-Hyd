@@ -2,6 +2,7 @@ import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 import { authOptions } from './auth';
 import { hasPermission, Permission, UserRole } from '../constants/permissions';
+import { isFeatureEnabled, FeatureFlag } from '../config/features';
 
 export type AuthResult =
   | {
@@ -58,6 +59,53 @@ export async function requireAuth(): Promise<AuthResult> {
       name: user.name || '',
       role: user.role as UserRole,
     },
+  };
+}
+
+export type FeatureCheckResult =
+  | {
+      authorized: true;
+      response: null;
+    }
+  | {
+      authorized: false;
+      response: NextResponse;
+    };
+
+/**
+ * Helper to enforce that a research feature flag is enabled before processing an API route.
+ * Returns { authorized: false, response } with status 404 if disabled,
+ * or { authorized: true, response: null } if enabled.
+ */
+export function requireFeature(flag: FeatureFlag): FeatureCheckResult {
+  if (!isFeatureEnabled(flag)) {
+    let message = 'Feature is disabled';
+    if (flag === 'CLASSROOM_ASSESSMENT') {
+      message = 'Classroom assessment feature is disabled';
+    } else if (flag === 'PERSONALIZED_ASSESSMENT') {
+      message = 'Personalized assessment feature is disabled';
+    } else if (flag === 'ANSWER_SEGMENTATION') {
+      message = 'Answer segmentation feature is disabled';
+    } else if (flag === 'HANDWRITING_CONSISTENCY') {
+      message = 'Handwriting consistency feature is disabled';
+    }
+
+    return {
+      authorized: false,
+      response: NextResponse.json(
+        {
+          success: false,
+          message,
+          data: null,
+        },
+        { status: 404 }
+      ),
+    };
+  }
+
+  return {
+    authorized: true,
+    response: null,
   };
 }
 
