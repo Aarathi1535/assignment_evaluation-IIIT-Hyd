@@ -24,6 +24,17 @@ vi.mock('next-auth', async (importOriginal) => {
     };
 });
 
+vi.mock('../services/CloudStorageService', () => {
+    return {
+        cloudStorageService: {
+            uploadFile: vi.fn().mockImplementation(async ({ bucketName, destination }) => {
+                return `gs://${bucketName}/${destination}`;
+            }),
+            downloadFile: vi.fn().mockResolvedValue(Buffer.from('mock-image-data'))
+        }
+    };
+});
+
 describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluated Answers', () => {
     let professorUser: IUser;
     let studentUser: IUser;
