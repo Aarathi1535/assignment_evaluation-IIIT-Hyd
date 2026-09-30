@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { HttpError } from '../../lib/errors';
 import { QuestionDifficulty } from '../../models/PersonalizedQuestion';
 import { vertexAIService, VertexAIService } from './VertexAIService';
+import { geminiAIService, GeminiAIService } from './GeminiAIService';
 import type { GeminiAICaller } from './types';
 
 export const generatedRubricCriterionSchema = z
@@ -387,6 +388,11 @@ export function parseGeneratedQuestions(
 export class GeminiAIQuestionGenerationProvider implements IAIQuestionGenerationProvider {
     readonly providerName: string = 'GeminiAI';
     private customGeminiCaller: GeminiQuestionCaller | null = null;
+    private sharedGeminiService: GeminiAIService;
+
+    constructor(aiService: GeminiAIService = geminiAIService) {
+        this.sharedGeminiService = aiService;
+    }
 
     /**
      * Dependency injection hook for deterministic unit testing without live network calls.
@@ -397,6 +403,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
 
     getApiKey(): string {
         return (
+            this.sharedGeminiService.getApiKey() ||
             process.env.GEMINI_API_KEY ||
             process.env.GOOGLE_API_KEY ||
             process.env.GOOGLE_GENAI_API_KEY ||
@@ -419,8 +426,10 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         if (vertexAIService.isConfigured()) {
             return true;
         }
-        const key = this.getApiKey();
-        return typeof key === 'string' && key.length > 0;
+        if (this.customGeminiCaller !== null) {
+            return true;
+        }
+        return this.sharedGeminiService.isConfigured();
     }
 
     async extractSyllabus(rawText: string, courseCode = 'Course'): Promise<ExtractedSyllabusData> {
@@ -516,14 +525,14 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
     }
 
     async callGeminiApi(payload: {
-        model: string;
-        apiKey: string;
+        model?: string;
+        apiKey?: string;
         systemInstruction: string;
         promptText: string;
     }): Promise<string> {
         const { model, apiKey, systemInstruction, promptText } = payload;
 
-        if (!apiKey) {
+        if (!apiKey && !this.isConfigured()) {
             throw new HttpError(
                 'AI question generation is not configured. Please configure an AI provider with GEMINI_API_KEY in the environment.',
                 503
@@ -548,100 +557,24 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         let lastError: Error | null = null;
 
         for (const currentModel of modelsToTry) {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-                currentModel
-            )}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-            const requestBody = {
-                systemInstruction: {
-                    parts: [{ text: systemInstruction }]
-                },
-                contents: [
-                    {
-                        role: 'user',
-                        parts: [{ text: promptText }]
-                    }
-                ],
-                generationConfig: {
+            try {
+                const rawText = await this.sharedGeminiService.generateContent({
+                    systemInstruction,
+                    promptText,
+                    model: currentModel,
                     responseMimeType: 'application/json',
-                    responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA,
                     temperature: 0.2
-                }
-            };
-
-            const maxRetries = 2;
-            for (let attempt = 0; attempt <= maxRetries; attempt++) {
-                if (attempt > 0) {
-                    const backoffMs = attempt * 1500;
-                    await new Promise((resolve) => setTimeout(resolve, backoffMs));
-                }
-
-                let response: Response;
-                try {
-                    response = await fetch(url, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(requestBody)
-                    });
-                } catch (netErr: unknown) {
-                    lastError = netErr instanceof Error ? netErr : new Error('Network error calling Gemini API');
-                    continue;
-                }
-
-                // If 429 quota exhausted on free tier for this model, immediately try next model
-                if (response.status === 429) {
-                    const errBody = await response.text().catch(() => '');
-                    lastError = new Error(`HTTP 429 Quota/Rate Limit from model ${currentModel}: ${errBody}`);
-                    break;
-                }
-
-                // If high demand (503), retry with backoff on this model
-                if (response.status === 503) {
-                    const errBody = await response.text().catch(() => '');
-                    lastError = new Error(`HTTP 503 from model ${currentModel}: ${errBody}`);
-                    if (attempt < maxRetries) {
-                        continue;
-                    }
-                    break;
-                }
-
-                if (!response.ok) {
-                    const errorText = await response.text().catch(() => '');
-                    lastError = new Error(`Gemini API error (${response.status}): ${errorText}`);
-                    if (response.status === 404) {
-                        // Model not found, break out to next model immediately
-                        break;
-                    }
-                    if (attempt < maxRetries) {
-                        continue;
-                    }
-                    break;
-                }
-
-                // Success
-                const data = (await response.json()) as {
-                    candidates?: Array<{
-                        content?: {
-                            parts?: Array<{ text?: string; thoughtSignature?: string }>;
-                        };
-                    }>;
-                };
-
-                const candidate = data?.candidates?.[0];
-                const parts = candidate?.content?.parts || [];
-                const rawText = parts
-                    .map((p) => p.text)
-                    .filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
-                    .join('\n');
+                });
 
                 if (!rawText || rawText.trim().length === 0) {
                     lastError = new Error(`Empty content returned by model ${currentModel}`);
-                    break;
+                    continue;
                 }
 
                 return rawText;
+            } catch (err: unknown) {
+                lastError = err instanceof Error ? err : new Error(String(err));
+                continue;
             }
         }
 
@@ -860,27 +793,27 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
  */
 export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerationProvider {
     override readonly providerName = 'VertexAI';
-    private sharedAiService: VertexAIService;
+    private sharedVertexService: VertexAIService;
 
     constructor(aiService: VertexAIService = vertexAIService) {
         super();
-        this.sharedAiService = aiService;
+        this.sharedVertexService = aiService;
     }
 
     override isConfigured(): boolean {
-        return this.sharedAiService.isConfigured();
+        return this.sharedVertexService.isConfigured();
     }
 
     override getModelName(): string {
-        return this.sharedAiService.getModelName();
+        return this.sharedVertexService.getModelName();
     }
 
     getRegion(): string {
-        return this.sharedAiService.getRegion();
+        return this.sharedVertexService.getRegion();
     }
 
     setCustomCaller(caller: GeminiAICaller | null): void {
-        this.sharedAiService.setCustomCaller(caller);
+        this.sharedVertexService.setCustomCaller(caller);
     }
 
     override async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
@@ -899,7 +832,7 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
         const systemInstruction = this.buildSystemInstruction();
         const promptText = this.buildUserPrompt(params);
 
-        const rawText = await this.sharedAiService.generateContent({
+        const rawText = await this.sharedVertexService.generateContent({
             systemInstruction,
             promptText,
             responseMimeType: 'application/json',

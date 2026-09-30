@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import User, { IUser } from '../models/User';
 import Course, { ICourse } from '../models/Course';
@@ -14,6 +14,7 @@ import {
     GeminiAIQuestionGenerationProvider,
     parseGeneratedQuestions
 } from '../services/ai/AIQuestionGenerationProvider';
+import { GeminiAIService } from '../services/ai/GeminiAIService';
 import { UserRole } from '../constants/permissions';
 import {
     createPersonalizedQuestionSchema,
@@ -1204,6 +1205,72 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
                 expect(result.topicBreakdown['Gradient Descent and Convexity']).toBeGreaterThanOrEqual(1);
                 expect(result.topicBreakdown['Loss Functions & Activations']).toBeGreaterThanOrEqual(1);
             } finally {
+                if (originalApiKey !== undefined) process.env.GEMINI_API_KEY = originalApiKey;
+                else delete process.env.GEMINI_API_KEY;
+            }
+        });
+
+        it('uses shared GeminiAIService abstraction and does not construct a URL containing an API key', async () => {
+            const originalApiKey = process.env.GEMINI_API_KEY;
+            process.env.GEMINI_API_KEY = 'test-secret-key-123';
+
+            const originalFetch = global.fetch;
+            const fetchCalls: string[] = [];
+            global.fetch = (async (input: RequestInfo | URL) => {
+                const url = typeof input === 'string' ? input : input.toString();
+                fetchCalls.push(url);
+                throw new Error('Unexpected fetch call');
+            }) as typeof fetch;
+
+            try {
+                const mockGenerateContent = vi.fn().mockResolvedValue(
+                    JSON.stringify({
+                        questions: [
+                            {
+                                title: 'Convex Optimization Basics',
+                                topic: 'Gradient Descent and Convexity',
+                                unit: 'Unit 1: Linear Models & Optimization',
+                                difficulty: 'EASY',
+                                questionPrompt: 'Define a convex set and give an example.',
+                                expectedConcepts: ['Convex Set'],
+                                maxMarks: 10,
+                                hints: ['Check line segment property.'],
+                                referenceAnswer: 'A set is convex if the line segment connecting any two points lies entirely within the set.'
+                            }
+                        ]
+                    })
+                );
+
+                const mockService = {
+                    getApiKey: () => 'test-secret-key-123',
+                    isConfigured: () => true,
+                    generateContent: mockGenerateContent
+                } as unknown as GeminiAIService;
+
+                const provider = new GeminiAIQuestionGenerationProvider(mockService);
+
+                const result = await provider.callGeminiApi({
+                    systemInstruction: 'Test system instruction',
+                    promptText: 'Test prompt text'
+                });
+
+                expect(result).toContain('Convex Optimization Basics');
+                expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+                expect(mockGenerateContent).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        systemInstruction: 'Test system instruction',
+                        promptText: 'Test prompt text',
+                        responseMimeType: 'application/json'
+                    })
+                );
+
+                for (const callUrl of fetchCalls) {
+                    expect(callUrl).not.toContain('key=');
+                    expect(callUrl).not.toContain('test-secret-key-123');
+                }
+                expect(fetchCalls).toHaveLength(0);
+            } finally {
+                global.fetch = originalFetch;
                 if (originalApiKey !== undefined) process.env.GEMINI_API_KEY = originalApiKey;
                 else delete process.env.GEMINI_API_KEY;
             }
