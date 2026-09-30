@@ -15,9 +15,11 @@ import {
   LucideIcon,
   FileText,
   Plus,
-  Flag
+  Flag,
+  PenTool
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { isFeatureEnabled } from '@/config/features';
 
 interface NavLinksProps {
   menuItems: Array<{ label: string; href: string; icon: LucideIcon }>;
@@ -113,12 +115,23 @@ export default function DashboardLayout({
   const rawRole = user.role || 'STUDENT';
   const role = rawRole.toUpperCase();
 
+  const isHandwritingConsistencyEnabled = isFeatureEnabled('HANDWRITING_CONSISTENCY');
+
+  const adminNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+    { label: 'Users', href: '/admin/users', icon: Users },
+  ];
+  if (isHandwritingConsistencyEnabled) {
+    adminNavItems.push({
+      label: 'Handwriting Consistency',
+      href: '/admin/research/handwriting',
+      icon: PenTool,
+    });
+  }
+
   // Define navigation items per role
   const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
-    ADMIN: [
-      { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-      { label: 'Users', href: '/admin/users', icon: Users },
-    ],
+    ADMIN: adminNavItems,
     PROFESSOR: [
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
       { label: 'Courses', href: '/professor/courses', icon: BookOpen },

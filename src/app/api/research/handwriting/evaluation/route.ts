@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../../../lib/db';
-import { requireAuth } from '../../../../../lib/apiAuth';
+import { requireAuth, requireFeature } from '../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../lib/errors';
 import { handwritingEvaluationService } from '../../../../../services/handwriting/HandwritingEvaluationService';
 import { UserRole } from '../../../../../constants/permissions';
@@ -12,6 +12,11 @@ import { UserRole } from '../../../../../constants/permissions';
  * Accessible to Admin, Professor, and TA roles.
  */
 export async function GET(req: NextRequest) {
+    const feature = requireFeature('HANDWRITING_CONSISTENCY');
+    if (!feature.authorized) {
+        return feature.response;
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
@@ -59,6 +64,11 @@ export async function GET(req: NextRequest) {
  * Evaluates custom student groups or custom labeled sample datasets.
  */
 export async function POST(req: NextRequest) {
+    const feature = requireFeature('HANDWRITING_CONSISTENCY');
+    if (!feature.authorized) {
+        return feature.response;
+    }
+
     const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;

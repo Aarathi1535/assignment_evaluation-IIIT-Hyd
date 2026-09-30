@@ -1,6 +1,7 @@
 import { withAuth } from 'next-auth/middleware';
 import { NextResponse } from 'next/server';
 import { hasPermission, Permission, UserRole } from './constants/permissions';
+import { isFeatureEnabled } from './config/features';
 
 export default withAuth(
   function middleware(req) {
@@ -9,6 +10,13 @@ export default withAuth(
 
     // API route protection (JSON 401 instead of redirecting)
     if (path.startsWith('/api')) {
+      if (path.startsWith('/api/research/handwriting') && !isFeatureEnabled('HANDWRITING_CONSISTENCY')) {
+        return NextResponse.json(
+          { success: false, message: 'Handwriting consistency feature is disabled', data: null },
+          { status: 404 }
+        );
+      }
+
       // Allow public access ONLY to /api/auth/** and /api/health
       if (path.startsWith('/api/auth') || path === '/api/health') {
         return;
@@ -50,6 +58,10 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
       if (path.startsWith('/student') && userRole !== UserRole.STUDENT) {
+        return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+      }
+
+      if (path.startsWith('/admin/research/handwriting') && !isFeatureEnabled('HANDWRITING_CONSISTENCY')) {
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
