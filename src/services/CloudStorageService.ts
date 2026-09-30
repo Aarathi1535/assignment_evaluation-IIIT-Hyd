@@ -14,13 +14,13 @@ export class CloudStorageService {
 
     private constructor() {
         const env = validateEnv();
-        
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const options: any = {};
         if (env.GOOGLE_CLOUD_PROJECT) {
             options.projectId = env.GOOGLE_CLOUD_PROJECT;
         }
-        
+
         if (env.GOOGLE_APPLICATION_CREDENTIALS) {
             options.keyFilename = env.GOOGLE_APPLICATION_CREDENTIALS;
         }
@@ -57,7 +57,7 @@ export class CloudStorageService {
     public async downloadFile(bucketName: string, destination: string): Promise<Buffer> {
         const bucket = this.storage.bucket(bucketName);
         const file = bucket.file(destination);
-        
+
         const [buffer] = await file.download();
         return buffer;
     }
