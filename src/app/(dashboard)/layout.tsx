@@ -15,9 +15,10 @@ import {
   LucideIcon,
   FileText,
   Plus,
-  Flag
+  Flag,
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { clearUserDrafts } from '@/lib/offlineDrafts';
 
 interface NavLinksProps {
   menuItems: Array<{ label: string; href: string; icon: LucideIcon }>;
@@ -148,6 +149,7 @@ export default function DashboardLayout({
   const roleLabel = role.charAt(0) + role.slice(1).toLowerCase();
 
   const handleSignOut = () => {
+    clearUserDrafts(session?.user?.id);
     signOut({ callbackUrl: '/login' });
   };
 

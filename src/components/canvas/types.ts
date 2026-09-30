@@ -36,7 +36,7 @@ import type {
 
 export type CanvasTool = 'none' | 'select' | 'pen' | 'check' | 'cross' | 'highlight' | 'text' | 'eraser' | 'loupe';
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing' | 'conflict' | 'recovery_available' | 'submitted';
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'pending_sync' | 'syncing';
 
 export type {
   CanvasViewState,
@@ -330,30 +330,8 @@ export interface AnswerSheetCanvasProps {
   onSaveSuccess?: (pageNumber: number) => void;
   /** Callback fired when autosave fails (AE-137) */
   onSaveError?: (pageNumber: number, error: Error) => void;
-  /** Callback fired when a concurrent edit conflict is detected (AE-171) */
-  onConflict?: (conflictInfo: {
-    scriptId: string;
-    pageNumber: number;
-    localData: SerializedPageAnnotations;
-    serverData?: SerializedPageAnnotations | null;
-    serverUpdatedAt?: string | number | null;
-  }) => void;
-  /** Callback fired when a conflict is resolved (AE-171) */
-  onResolveConflict?: (
-    action: 'keep_local' | 'load_server',
-    pageNumber: number
-  ) => void;
-  /** Callback fired when an unsynced recoverable local draft is detected on load (AE-172) */
-  onRecoverableDraftFound?: (info: {
-    scriptId: string;
-    pageNumber: number;
-    draft: SerializedPageAnnotations;
-    serverData?: SerializedPageAnnotations | null;
-  }) => void;
-  /** Callback fired when a recovered local draft is restored (AE-172) */
-  onDraftRestored?: (pageNumber: number) => void;
-  /** Callback fired when a recovered local draft is discarded (AE-172) */
-  onDraftDiscarded?: (pageNumber: number) => void;
+  /** Authenticated user ID for user-isolated offline drafts (AE-170) */
+  userId?: string;
   /** Authoritative shortcut action listener (AE-154) */
   onShortcutAction?: (action: ShortcutAction, event: KeyboardEvent) => void;
   /** Save draft trigger handler (AE-154) */
