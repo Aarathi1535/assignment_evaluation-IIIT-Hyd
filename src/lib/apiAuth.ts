@@ -62,12 +62,22 @@ export async function requireAuth(): Promise<AuthResult> {
   };
 }
 
+export type FeatureCheckResult =
+  | {
+      authorized: true;
+      response: null;
+    }
+  | {
+      authorized: false;
+      response: NextResponse;
+    };
+
 /**
  * Helper to enforce that a research feature flag is enabled before processing an API route.
  * Returns { authorized: false, response } with status 404 if disabled,
  * or { authorized: true, response: null } if enabled.
  */
-export function requireFeature(flag: FeatureFlag): { authorized: boolean; response: NextResponse | null } {
+export function requireFeature(flag: FeatureFlag): FeatureCheckResult {
   if (!isFeatureEnabled(flag)) {
     let message = 'Feature is disabled';
     if (flag === 'CLASSROOM_ASSESSMENT') {

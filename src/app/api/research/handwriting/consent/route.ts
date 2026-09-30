@@ -12,10 +12,10 @@ import { UserRole } from '../../../../../constants/permissions';
  * - Students can only query their own consent.
  * - Professors, Admins, and TAs may query by ?studentId=...
  */
-export async function GET(req: NextRequest) {
-    const feature = requireFeature('HANDWRITING_CONSISTENCY');
-    if (!feature.authorized) {
-        return feature.response;
+export async function GET(req: NextRequest): Promise<NextResponse> {
+    const featureCheck = requireFeature('HANDWRITING_CONSISTENCY');
+    if (!featureCheck.authorized) {
+        return featureCheck.response;
     }
 
     const auth = await requireAuth();
@@ -78,10 +78,10 @@ export async function GET(req: NextRequest) {
  * Grants or revokes consent for handwriting consistency evaluation.
  * Body: { studentId?: string, hasConsented: boolean, retentionDays?: number, notes?: string }
  */
-export async function POST(req: NextRequest) {
-    const feature = requireFeature('HANDWRITING_CONSISTENCY');
-    if (!feature.authorized) {
-        return feature.response;
+export async function POST(req: NextRequest): Promise<NextResponse> {
+    const featureCheck = requireFeature('HANDWRITING_CONSISTENCY');
+    if (!featureCheck.authorized) {
+        return featureCheck.response;
     }
 
     const auth = await requireAuth();

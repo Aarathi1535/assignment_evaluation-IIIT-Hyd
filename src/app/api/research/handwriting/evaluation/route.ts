@@ -11,10 +11,10 @@ import { UserRole } from '../../../../../constants/permissions';
  * Runs or retrieves the empirical False-Positive Rate benchmark evaluation.
  * Accessible to Admin, Professor, and TA roles.
  */
-export async function GET(req: NextRequest) {
-    const feature = requireFeature('HANDWRITING_CONSISTENCY');
-    if (!feature.authorized) {
-        return feature.response;
+export async function GET(req: NextRequest): Promise<NextResponse> {
+    const featureCheck = requireFeature('HANDWRITING_CONSISTENCY');
+    if (!featureCheck.authorized) {
+        return featureCheck.response;
     }
 
     const auth = await requireAuth();
@@ -63,10 +63,10 @@ export async function GET(req: NextRequest) {
  *
  * Evaluates custom student groups or custom labeled sample datasets.
  */
-export async function POST(req: NextRequest) {
-    const feature = requireFeature('HANDWRITING_CONSISTENCY');
-    if (!feature.authorized) {
-        return feature.response;
+export async function POST(req: NextRequest): Promise<NextResponse> {
+    const featureCheck = requireFeature('HANDWRITING_CONSISTENCY');
+    if (!featureCheck.authorized) {
+        return featureCheck.response;
     }
 
     const auth = await requireAuth();
