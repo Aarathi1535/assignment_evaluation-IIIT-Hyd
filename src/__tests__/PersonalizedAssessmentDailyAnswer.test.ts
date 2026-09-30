@@ -451,7 +451,7 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
             expect(result.submissionType).toBe('PHOTO');
             expect(result.score).toBe(8.0);
             expect(result.feedback).toBe('Solid solution');
-            
+
             const dbAssigned = await PersonalizedStudentAssignment.findById(assignment._id);
             expect(dbAssigned?.isProvisional).toBe(true);
             expect(dbAssigned?.evaluationStatus).toBe('EVALUATED');

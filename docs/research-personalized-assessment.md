@@ -1,8 +1,8 @@
 # Research Direction 2: Student Login + Personalized Assessment
 
-**Author / Lead Researcher:** Antigravity AI Engineering (Pair Programming with IIIT Hyderabad Team)  
-**Research Advisor:** Prof. C. V. Jawahar  
-**Branch:** `research/jawahar-2-personalized-assessment`  
+**Author / Lead Researcher:** Antigravity AI Engineering (Pair Programming with IIIT Hyderabad Team)
+**Research Advisor:** Prof. C. V. Jawahar
+**Branch:** `research/jawahar-2-personalized-assessment`
 **Status:** Complete Working Architecture with Syllabus-Driven Question Generation, Student Personalization, Mathematical Allocation Invariants, and Anti-Postponement Guards
 
 ---

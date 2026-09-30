@@ -754,7 +754,7 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
         for (let i = 0; i < targetCount; i++) {
             const unit = syllabusUnits[i % syllabusUnits.length];
             const topic = unit.topics[i % unit.topics.length];
-            
+
             let difficulty: QuestionDifficulty = 'MEDIUM';
             if (i < easyTarget) {
                 difficulty = 'EASY';
