@@ -75,6 +75,8 @@ export function PenLayer({
 
   const layerRef = useRef<Konva.Layer | null>(null);
   const groupRef = useRef<Konva.Group | null>(null);
+  const activeLayerRef = useRef<Konva.Layer | null>(null);
+  const activeGroupRef = useRef<Konva.Group | null>(null);
   const linesMapRef = useRef<Map<string, Konva.Line>>(new Map());
 
   // Active stroke tracking refs (for real-time hardware drawing without React lag)
@@ -138,21 +140,30 @@ export function PenLayer({
     const bounds = baseBoundsRef.current;
     const rotation = currentTransform.rotation || 0;
 
+    const groups = [groupRef.current];
+    if (activeGroupRef.current) {
+      groups.push(activeGroupRef.current);
+    }
+
     if (bounds && bounds.width > 0 && bounds.height > 0) {
       const cx = bounds.width / 2;
       const cy = bounds.height / 2;
-      groupRef.current.position({
-        x: currentTransform.x + cx * currentTransform.zoom,
-        y: currentTransform.y + cy * currentTransform.zoom,
+      groups.forEach(g => {
+        g.position({
+          x: currentTransform.x + cx * currentTransform.zoom,
+          y: currentTransform.y + cy * currentTransform.zoom,
+        });
+        g.offset({ x: cx, y: cy });
+        g.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+        g.rotation(rotation);
       });
-      groupRef.current.offset({ x: cx, y: cy });
-      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
-      groupRef.current.rotation(rotation);
     } else {
-      groupRef.current.position({ x: currentTransform.x, y: currentTransform.y });
-      groupRef.current.offset({ x: 0, y: 0 });
-      groupRef.current.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
-      groupRef.current.rotation(rotation);
+      groups.forEach(g => {
+        g.position({ x: currentTransform.x, y: currentTransform.y });
+        g.offset({ x: 0, y: 0 });
+        g.scale({ x: currentTransform.zoom, y: currentTransform.zoom });
+        g.rotation(rotation);
+      });
     }
   }, []);
 
@@ -172,11 +183,27 @@ export function PenLayer({
       visible,
     });
 
+    const activeLayer = new Konva.Layer({
+      name: 'active-pen-stroke-layer',
+      listening: false,
+      visible,
+    });
+
+    const activeGroup = new Konva.Group({
+      name: 'active-pen-stroke-group',
+      listening: false,
+      visible,
+    });
+
     layer.add(group);
+    activeLayer.add(activeGroup);
     stage.add(layer);
+    stage.add(activeLayer);
 
     layerRef.current = layer;
     groupRef.current = group;
+    activeLayerRef.current = activeLayer;
+    activeGroupRef.current = activeGroup;
     syncGroupTransform();
 
     const linesMap = linesMapRef.current;
@@ -185,8 +212,12 @@ export function PenLayer({
       linesMap.clear();
       group.destroy();
       layer.destroy();
+      activeGroup.destroy();
+      activeLayer.destroy();
       layerRef.current = null;
       groupRef.current = null;
+      activeLayerRef.current = null;
+      activeGroupRef.current = null;
     };
   }, [stage, visible, syncGroupTransform]);
 
@@ -196,6 +227,11 @@ export function PenLayer({
     layerRef.current.visible(visible);
     groupRef.current.visible(visible);
     layerRef.current.batchDraw();
+    if (activeLayerRef.current && activeGroupRef.current) {
+      activeLayerRef.current.visible(visible);
+      activeGroupRef.current.visible(visible);
+      activeLayerRef.current.batchDraw();
+    }
   }, [visible]);
 
   // Synchronize group transform with pan/zoom/rotation
@@ -203,6 +239,9 @@ export function PenLayer({
     if (!groupRef.current || !layerRef.current) return;
     syncGroupTransform();
     layerRef.current.batchDraw();
+    if (activeLayerRef.current) {
+      activeLayerRef.current.batchDraw();
+    }
   }, [transform.x, transform.y, transform.zoom, transform.rotation, baseBounds, syncGroupTransform]);
 
   // Re-render committed strokes when strokes list or page changes
@@ -257,11 +296,20 @@ export function PenLayer({
     const completed = activeStrokeRef.current;
     if (completed && completed.points.length >= 2) {
       const smoothed = finalizeSmoothedStroke(completed, smoothingOptionsRef.current);
-      if (activeLineNodeRef.current && layerRef.current) {
-        activeLineNodeRef.current.points(smoothed.points);
+      if (activeLineNodeRef.current && activeLayerRef.current && groupRef.current && layerRef.current) {
+        // Move live line to the committed group to prevent 1-frame flicker
+        const node = activeLineNodeRef.current;
+        node.moveTo(groupRef.current);
+        node.points(smoothed.points);
+        linesMapRef.current.set(completed.id, node);
+
+        activeLayerRef.current.batchDraw();
         layerRef.current.batchDraw();
       }
       onStrokeCompleteRef.current?.(smoothed);
+    } else if (activeLineNodeRef.current && activeLayerRef.current) {
+      activeLineNodeRef.current.destroy();
+      activeLayerRef.current.batchDraw();
     }
 
     activeStrokeRef.current = null;
@@ -340,7 +388,7 @@ export function PenLayer({
       activeStrokeRef.current = newStroke;
 
       // Add a live Konva.Line for instant rendering during drawing
-      if (groupRef.current && layerRef.current) {
+      if (activeGroupRef.current && activeLayerRef.current) {
         const liveLine = new Konva.Line({
           id: newStroke.id,
           points: newStroke.points,
@@ -351,10 +399,9 @@ export function PenLayer({
           lineJoin: 'round',
           listening: false,
         });
-        groupRef.current.add(liveLine);
+        activeGroupRef.current.add(liveLine);
         activeLineNodeRef.current = liveLine;
-        linesMapRef.current.set(newStroke.id, liveLine);
-        layerRef.current.batchDraw();
+        activeLayerRef.current.batchDraw();
       }
     };
 
@@ -407,9 +454,9 @@ export function PenLayer({
         activeStrokeRef.current = updated;
 
         // Update live Konva Line node
-        if (activeLineNodeRef.current && layerRef.current) {
+        if (activeLineNodeRef.current && activeLayerRef.current) {
           activeLineNodeRef.current.points(updated.points);
-          layerRef.current.batchDraw();
+          activeLayerRef.current.batchDraw();
         }
       }
     };
