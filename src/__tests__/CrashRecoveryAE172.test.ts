@@ -307,10 +307,42 @@ describe('AE-172: Recover Unsaved Work After Crash / Reload', () => {
       expect(hasRecoverableDraft('script-conf-rec-1', 1)).toBe(false);
     });
 
-    it('does not silently overwrite newer server data', () => {
-      const now = Date.now();
+    it('does not silently overwrite newer server data (server timestamp newer than recorded base)', () => {
+      const baseTime = '2026-09-24T10:00:00.000Z';
       const localDraft = {
         scriptId: 'script-conf-rec-2',
+        pageNumber: 1,
+        pageKey: 'page-1',
+        data: localAnnotations,
+        savedAt: Date.now(),
+        synced: false,
+        baseServerUpdatedAt: baseTime,
+      };
+
+      const serverTimestamp = '2026-09-24T10:05:00.000Z'; // Newer
+      expect(isServerDataNewer(localDraft, serverTimestamp)).toBe(true);
+    });
+
+    it('allows restoration when server timestamp is not newer than recorded base', () => {
+      const baseTime = '2026-09-24T10:05:00.000Z';
+      const localDraft = {
+        scriptId: 'script-conf-rec-2b',
+        pageNumber: 1,
+        pageKey: 'page-1',
+        data: localAnnotations,
+        savedAt: Date.now(),
+        synced: false,
+        baseServerUpdatedAt: baseTime,
+      };
+
+      const serverTimestamp = '2026-09-24T10:05:00.000Z'; // Same timestamp
+      expect(isServerDataNewer(localDraft, serverTimestamp)).toBe(false);
+    });
+
+    it('AE-172: returns false (does NOT fall back to client savedAt) when no recorded base timestamp exists', () => {
+      const now = Date.now();
+      const localDraft = {
+        scriptId: 'script-conf-rec-3',
         pageNumber: 1,
         pageKey: 'page-1',
         data: localAnnotations,
@@ -318,8 +350,34 @@ describe('AE-172: Recover Unsaved Work After Crash / Reload', () => {
         synced: false,
       };
 
-      const serverTimestamp = new Date(now - 60000).toISOString(); // 1 min ago (newer)
-      expect(isServerDataNewer(localDraft, serverTimestamp)).toBe(true);
+      // Server timestamp is newer than savedAt, but since we don't have baseServerUpdatedAt,
+      // we must NOT fall back to the client clock. The draft should be kept for conflict resolution.
+      const serverTimestamp = new Date(now - 60000).toISOString();
+      expect(isServerDataNewer(localDraft, serverTimestamp)).toBe(false);
+    });
+
+    it('AE-172: prevents different users from restoring each others drafts', () => {
+      // Save draft as TA A
+      saveLocalAnnotationDraft(
+        'script-conf-rec-4',
+        1,
+        'page-1',
+        localAnnotations,
+        {
+          userId: 'user-ta-A',
+          synced: false,
+          baseServerUpdatedAt: '2026-09-24T10:00:00.000Z',
+        }
+      );
+
+      // TA B tries to retrieve/restore
+      const draftForB = getLocalAnnotationDraft('script-conf-rec-4', 1, 'user-ta-B');
+      expect(draftForB).toBeNull();
+
+      // TA A can retrieve/restore
+      const draftForA = getLocalAnnotationDraft('script-conf-rec-4', 1, 'user-ta-A');
+      expect(draftForA).not.toBeNull();
+      expect(draftForA?.userId).toBe('user-ta-A');
     });
   });
 

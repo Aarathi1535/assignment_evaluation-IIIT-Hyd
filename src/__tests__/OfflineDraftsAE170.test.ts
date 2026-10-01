@@ -287,22 +287,24 @@ describe('AE-170: Offline-Safe Local Draft of Annotations', () => {
   });
 
   describe('4. Stale / Server-Newer Draft Handling & Superseded Status (Requirements 8 & 9)', () => {
+    const baseServerUpdatedAt = new Date(1700000000000).toISOString();
     const localDraft = {
       scriptId: 'script-1',
       pageNumber: 1,
       pageKey: 'page-1',
       data: { annotations: [], strokes: [] },
-      savedAt: 1700000000000,
+      savedAt: 1700000005000,
+      baseServerUpdatedAt,
       synced: false,
     };
 
     it('identifies when server data is strictly newer than local draft', () => {
-      const newerServerDate = new Date(localDraft.savedAt + 5000).toISOString();
+      const newerServerDate = new Date(1700000005000).toISOString();
       expect(isServerDataNewer(localDraft, newerServerDate)).toBe(true);
     });
 
     it('identifies when local draft is newer than server data', () => {
-      const olderServerDate = new Date(localDraft.savedAt - 5000).toISOString();
+      const olderServerDate = new Date(1699999999000).toISOString();
       expect(isServerDataNewer(localDraft, olderServerDate)).toBe(false);
     });
 
@@ -492,6 +494,7 @@ describe('AE-170: Offline-Safe Local Draft of Annotations', () => {
       // Local draft was saved 10 minutes ago
       saveLocalAnnotationDraft('script-777', 1, 'page-1', localSerialized, {
         savedAt: now - 600000,
+        baseServerUpdatedAt: new Date(now - 700000).toISOString(),
         synced: false,
       });
 
