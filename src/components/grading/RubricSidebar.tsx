@@ -19,7 +19,6 @@ import {
   CommentTagData,
   insertTagIntoFeedback,
 } from './PresetCommentChips';
-import { clearDraftOnSubmit } from '@/lib/offlineDrafts';
 
 export interface RubricCriterion {
   criterionName: string;
@@ -437,7 +436,6 @@ export const RubricSidebar = forwardRef<RubricSidebarHandle, RubricSidebarProps>
         const savedData = json.data || json;
         if (isFinal) {
           setFinalizedQuestions((prev) => ({ ...prev, [qNum]: true }));
-          clearDraftOnSubmit(scriptId);
         }
         setSavingStatus((prev) => ({
           ...prev,

@@ -117,11 +117,11 @@ import {
   hasRecoverableDraft,
   restoreLocalAnnotationDraft,
   discardLocalAnnotationDraft,
-  clearDraftOnSubmit,
   getPendingAnnotationDrafts,
   hasPendingSync,
   isServerDataNewer,
   getCurrentDraftUser,
+  setCurrentDraftUser,
 } from '@/lib/offlineDrafts';
 import { PenStyleSelector } from './PenStyleSelector';
 
@@ -259,6 +259,13 @@ export function AnswerSheetCanvas({
   onShortcutHelpOpenChange,
 }: AnswerSheetCanvasProps) {
   const effectiveUserId = userId || getCurrentDraftUser();
+
+  useEffect(() => {
+    if (userId && userId !== getCurrentDraftUser()) {
+      setCurrentDraftUser(userId);
+    }
+  }, [userId]);
+
   // Deterministically sort pages if a multi-page list is supplied
   const sortedPages = useMemo(() => {
     return pages ? sortScriptPages(pages) : null;
@@ -875,6 +882,7 @@ export function AnswerSheetCanvas({
       baseBounds,
       debounceDelayMs,
       executeSave,
+      effectiveUserId,
     ]
   );
 
@@ -1551,6 +1559,7 @@ export function AnswerSheetCanvas({
     onAnnotationsLoadError,
     onStrokesChange,
     onAnnotationsChange,
+    enableCrashRecovery,
   ]);
 
   const canUndoActive = useMemo(() => {
@@ -2083,9 +2092,6 @@ export function AnswerSheetCanvas({
           break;
         case 'submitFinal':
           e.preventDefault();
-          if (scriptId) {
-            clearDraftOnSubmit(scriptId, undefined, effectiveUserId);
-          }
           onSubmitFinal?.();
           break;
         case 'undo':
