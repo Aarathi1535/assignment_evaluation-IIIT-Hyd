@@ -101,6 +101,8 @@ export interface CanvasStageProps {
 export interface PageImageLayerProps {
   /** URL or base64 data URI of the page image */
   src?: string | null;
+  /** Optional low-resolution thumbnail URL to display while full image loads (AE-176) */
+  thumbnailUrl?: string;
   /** Alt or debug label for the page image */
   alt?: string;
   /** Aspect ratio fit mode ('contain' | 'cover' | 'fill' | 'natural') */

@@ -152,6 +152,19 @@ export async function GET(
       );
     }
 
+    const etag = `"${page.storageKey}"`;
+    const ifNoneMatch = req.headers.get('if-none-match');
+
+    if (ifNoneMatch && ifNoneMatch.includes(etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          'ETag': etag,
+          'Cache-Control': 'private, max-age=3600',
+        },
+      });
+    }
+
     // 5. Read the full-resolution page image file from derived storage
     try {
       const buffer = await DerivedStorageService.readDerivedPage(page.storageKey);
@@ -171,6 +184,8 @@ export async function GET(
         headers: {
           'Content-Type': contentType,
           'Content-Length': buffer.length.toString(),
+          'ETag': etag,
+          'Cache-Control': 'private, max-age=3600',
         },
       });
     } catch (readError) {
