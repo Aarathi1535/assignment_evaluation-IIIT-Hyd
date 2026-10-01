@@ -17,22 +17,7 @@ export interface LocalAnnotationDraft {
   isRecoveredDraft?: boolean; // True when detected on reload/mount before user explicitly restores or discards (AE-172)
 }
 
-export interface LocalGradingDraft {
-  userId?: string;
-  scriptId: string;
-  questionNumber: number;
-  marksAwarded: Array<{ criterionName: string; score: number }>;
-  feedback?: string;
-  tagIds?: string[];
-  savedAt: number;
-  synced: boolean;
-  serverUpdatedAt?: string | number | null;
-  baseServerUpdatedAt?: string | number | null;
-  superseded?: boolean;
-}
-
 export const ANNOTATION_DRAFT_PREFIX = 'ae_draft_annotations:';
-export const GRADING_DRAFT_PREFIX = 'ae_draft_grading:';
 
 // In-memory fallback map if localStorage is unavailable (e.g., SSR, private browsing restrictions, quota exceeded)
 const memoryStorage = new Map<string, string>();
@@ -88,26 +73,6 @@ export function getAnnotationDraftKey(
   const scriptId = userIdOrScriptId;
   const pageNum = scriptIdOrPageNum as number;
   return `${ANNOTATION_DRAFT_PREFIX}${userId}:${scriptId}:${pageNum}`;
-}
-
-/**
- * Helper to get the canonical storage key for a script question's grading draft,
- * strictly user-isolated.
- */
-export function getGradingDraftKey(
-  userIdOrScriptId: string,
-  scriptIdOrQuestionNum: string | number,
-  maybeQuestionNum?: number
-): string {
-  if (typeof maybeQuestionNum === 'number') {
-    const userId = userIdOrScriptId || currentDraftUserId;
-    const scriptId = String(scriptIdOrQuestionNum);
-    return `${GRADING_DRAFT_PREFIX}${userId}:${scriptId}:${maybeQuestionNum}`;
-  }
-  const userId = currentDraftUserId;
-  const scriptId = userIdOrScriptId;
-  const questionNum = scriptIdOrQuestionNum as number;
-  return `${GRADING_DRAFT_PREFIX}${userId}:${scriptId}:${questionNum}`;
 }
 
 export interface SaveAnnotationDraftOptions {
@@ -619,19 +584,18 @@ export function clearDraftOnSubmit(
 }
 
 /**
- * Clears all page annotation and grading drafts for a specific script.
+ * Clears all page annotation drafts for a specific script.
  */
 export function clearAllScriptDrafts(scriptId: string, userId?: string): void {
   const effectiveUserId = userId || currentDraftUserId;
   const matches = (k: string) => {
     if (effectiveUserId) {
       return (
-        k.startsWith(`${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:${scriptId}:`) ||
-        k.startsWith(`${GRADING_DRAFT_PREFIX}${effectiveUserId}:${scriptId}:`)
+        k.startsWith(`${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:${scriptId}:`)
       );
     }
     return (
-      (k.startsWith(ANNOTATION_DRAFT_PREFIX) || k.startsWith(GRADING_DRAFT_PREFIX)) &&
+      k.startsWith(ANNOTATION_DRAFT_PREFIX) &&
       (k.includes(`:${scriptId}:`) || k.endsWith(`:${scriptId}`))
     );
   };
@@ -666,14 +630,13 @@ export function clearUserDrafts(userId?: string): void {
   const effectiveUserId = userId || currentDraftUserId;
   if (!effectiveUserId) return;
   const annotUserPrefix = `${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:`;
-  const gradingUserPrefix = `${GRADING_DRAFT_PREFIX}${effectiveUserId}:`;
 
   if (isLocalStorageAvailable()) {
     try {
       const keysToRemove: string[] = [];
       for (let i = 0; i < window.localStorage.length; i++) {
         const k = window.localStorage.key(i);
-        if (k && (k.startsWith(annotUserPrefix) || k.startsWith(gradingUserPrefix))) {
+        if (k && k.startsWith(annotUserPrefix)) {
           keysToRemove.push(k);
         }
       }
@@ -683,7 +646,7 @@ export function clearUserDrafts(userId?: string): void {
 
   const memKeysToRemove: string[] = [];
   memoryStorage.forEach((_, k) => {
-    if (k.startsWith(annotUserPrefix) || k.startsWith(gradingUserPrefix)) {
+    if (k.startsWith(annotUserPrefix)) {
       memKeysToRemove.push(k);
     }
   });
@@ -800,109 +763,6 @@ export function isServerDataNewer(
   }
 
   return serverTime > localDraft.savedAt;
-}
-
-/**
- * Saves a local grading draft for a script question (AE-145 / AE-170).
- */
-export function saveLocalGradingDraft(
-  scriptId: string,
-  questionNumber: number,
-  draft: Omit<LocalGradingDraft, 'userId' | 'scriptId' | 'questionNumber' | 'savedAt' | 'synced'>,
-  options?: { synced?: boolean; savedAt?: number; userId?: string }
-): LocalGradingDraft | null {
-  if (!scriptId || typeof questionNumber !== 'number') {
-    return null;
-  }
-
-  const effectiveUserId = options?.userId || currentDraftUserId;
-  const existing = getLocalGradingDraft(scriptId, questionNumber, effectiveUserId);
-
-  const fullDraft: LocalGradingDraft = {
-    userId: effectiveUserId,
-    scriptId,
-    questionNumber,
-    marksAwarded: draft.marksAwarded,
-    feedback: draft.feedback,
-    tagIds: draft.tagIds,
-    savedAt: options?.savedAt ?? Date.now(),
-    synced: options?.synced ?? false,
-    serverUpdatedAt: draft.serverUpdatedAt ?? existing?.serverUpdatedAt ?? null,
-    baseServerUpdatedAt: draft.baseServerUpdatedAt ?? existing?.baseServerUpdatedAt ?? null,
-    superseded: existing?.superseded ?? false,
-  };
-
-  const key = getGradingDraftKey(effectiveUserId, scriptId, questionNumber);
-  const serialized = JSON.stringify(fullDraft);
-
-  if (isLocalStorageAvailable()) {
-    try {
-      window.localStorage.setItem(key, serialized);
-    } catch {
-      memoryStorage.set(key, serialized);
-    }
-  } else {
-    memoryStorage.set(key, serialized);
-  }
-
-  return fullDraft;
-}
-
-/**
- * Retrieves the local grading draft for a specific question, if one exists.
- */
-export function getLocalGradingDraft(
-  scriptId: string,
-  questionNumber: number,
-  userId?: string
-): LocalGradingDraft | null {
-  if (!scriptId || typeof questionNumber !== 'number') {
-    return null;
-  }
-
-  const effectiveUserId = userId || currentDraftUserId;
-  const key = getGradingDraftKey(effectiveUserId, scriptId, questionNumber);
-  let raw: string | null = null;
-
-  if (isLocalStorageAvailable()) {
-    try {
-      raw = window.localStorage.getItem(key);
-    } catch {
-      raw = null;
-    }
-  }
-
-  if (!raw) {
-    raw = memoryStorage.get(key) || null;
-  }
-
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw) as LocalGradingDraft;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Clears the local grading draft for a specific question.
- */
-export function clearLocalGradingDraft(
-  scriptId: string,
-  questionNumber: number,
-  userId?: string
-): void {
-  const effectiveUserId = userId || currentDraftUserId;
-  const key = getGradingDraftKey(effectiveUserId, scriptId, questionNumber);
-  if (isLocalStorageAvailable()) {
-    try {
-      window.localStorage.removeItem(key);
-    } catch {}
-  }
-  memoryStorage.delete(key);
 }
 
 /**

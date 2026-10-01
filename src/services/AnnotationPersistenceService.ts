@@ -54,9 +54,7 @@ export interface SavePageAnnotationsOptions {
   userRole: string;
   question?: number | null;
   ipAddress?: string;
-  expectedUpdatedAt?: string | number | Date | null;
   baseUpdatedAt?: string | number | Date | null;
-  force?: boolean;
   requireBaseUpdatedAt?: boolean;
 }
 
@@ -415,39 +413,39 @@ export class AnnotationPersistenceService {
     let updatedDocTimestamp = new Date();
 
     if (pageDoc) {
-      const updateResult = await Page.updateOne(
+      const updatedDoc = await Page.findOneAndUpdate(
         { _id: targetPageId, updatedAt: baseDate },
         {
           $set: {
             annotations: normalizedPageData,
             annotatedBy: new mongoose.Types.ObjectId(userId),
           },
-        }
+        },
+        { returnDocument: 'after', select: 'updatedAt' }
       );
-      matchedCount = updateResult.matchedCount;
 
-      if (matchedCount > 0) {
-        const refreshed = await Page.findById(targetPageId).select('updatedAt');
-        if (refreshed?.updatedAt) {
-          updatedDocTimestamp = refreshed.updatedAt;
+      if (updatedDoc) {
+        matchedCount = 1;
+        if (updatedDoc.updatedAt) {
+          updatedDocTimestamp = updatedDoc.updatedAt;
         }
       }
     } else if (ingestionDoc) {
-      const updateResult = await IngestionPage.updateOne(
+      const updatedDoc = await IngestionPage.findOneAndUpdate(
         { _id: targetPageId, updatedAt: baseDate },
         {
           $set: {
             'metadata.annotations': normalizedPageData,
             'metadata.annotatedBy': userId,
           },
-        }
+        },
+        { returnDocument: 'after', select: 'updatedAt' }
       );
-      matchedCount = updateResult.matchedCount;
 
-      if (matchedCount > 0) {
-        const refreshed = await IngestionPage.findById(targetPageId).select('updatedAt');
-        if (refreshed?.updatedAt) {
-          updatedDocTimestamp = refreshed.updatedAt;
+      if (updatedDoc) {
+        matchedCount = 1;
+        if (updatedDoc.updatedAt) {
+          updatedDocTimestamp = updatedDoc.updatedAt;
         }
       }
     }

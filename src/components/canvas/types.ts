@@ -326,7 +326,6 @@ export interface AnswerSheetCanvasProps {
     pageNumber: number;
     data: SerializedPageAnnotations;
     baseUpdatedAt?: string | number | null;
-    force?: boolean;
   }) => Promise<{
     success: boolean;
     conflict?: boolean;
@@ -350,6 +349,7 @@ export interface AnswerSheetCanvasProps {
     localData: SerializedPageAnnotations;
     serverData?: SerializedPageAnnotations | null;
     serverUpdatedAt?: string | number | null;
+    isLocked?: boolean;
   }) => void;
   /** Callback fired when a conflict is resolved (AE-171) */
   onResolveConflict?: (
