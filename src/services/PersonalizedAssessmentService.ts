@@ -22,6 +22,7 @@ export interface SubmitTodayPhotoAssignmentInput {
     answerText?: string;
     referenceNow?: Date;
     auditCtx?: AuditContext;
+    isRealStudentData?: boolean;
 }
 
 export interface CreatePersonalizedQuestionInput {
@@ -663,7 +664,8 @@ export class PersonalizedAssessmentService {
             mimeType = 'image/png',
             answerText,
             referenceNow = new Date(),
-            auditCtx
+            auditCtx,
+            isRealStudentData
         } = input;
 
         // 1. Validate file buffer
@@ -754,7 +756,8 @@ export class PersonalizedAssessmentService {
                 rubricCriteria: question.rubricCriteria || [],
                 sampleSolution: question.referenceAnswer || undefined,
                 imageBuffer: fileBuffer,
-                mimeType: normalizedMime
+                mimeType: normalizedMime,
+                isRealStudentData
             });
 
             assignment.evaluationStatus = 'EVALUATED';
@@ -798,7 +801,8 @@ export class PersonalizedAssessmentService {
         assignmentId: string,
         answer: string | { fileBuffer: Buffer; mimeType?: string; originalFilename?: string; answerText?: string },
         referenceNow: Date = new Date(),
-        auditCtx?: AuditContext
+        auditCtx?: AuditContext,
+        isRealStudentData?: boolean
     ) {
         if (typeof answer === 'object' && answer !== null && 'fileBuffer' in answer) {
             return this.submitTodayPhotoAssignment({
@@ -809,7 +813,8 @@ export class PersonalizedAssessmentService {
                 originalFilename: answer.originalFilename,
                 answerText: answer.answerText,
                 referenceNow,
-                auditCtx
+                auditCtx,
+                isRealStudentData
             });
         }
 

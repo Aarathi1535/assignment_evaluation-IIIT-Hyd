@@ -14,8 +14,7 @@ const envSchema = z.object({
     NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT: z.string().optional().default('false'),
     VERTEX_AI_REGION: z.string().optional().default('asia-south1'),
     GOOGLE_CLOUD_PROJECT: z.string().optional().default('assignment-evaluator-iiith'),
-    GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
-    GOOGLE_SERVICE_ACCOUNT_KEY: z.string().optional()
+    GOOGLE_APPLICATION_CREDENTIALS: z.string().optional()
 });
 
 export function validateEnv() {

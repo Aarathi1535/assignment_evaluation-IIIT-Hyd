@@ -72,7 +72,8 @@ export async function POST(req: NextRequest) {
                     mimeType: file.type || 'image/png',
                     answerText: answer,
                     referenceNow: new Date(),
-                    auditCtx
+                    auditCtx,
+                    isRealStudentData: auth.user.role === 'STUDENT'
                 });
 
                 return NextResponse.json(
@@ -91,7 +92,8 @@ export async function POST(req: NextRequest) {
                 assignmentId,
                 answer!.trim(),
                 new Date(),
-                auditCtx
+                auditCtx,
+                auth.user.role === 'STUDENT'
             );
 
             return NextResponse.json(
@@ -152,7 +154,8 @@ export async function POST(req: NextRequest) {
             assignmentId,
             validation.data.answer,
             new Date(),
-            auditCtx
+            auditCtx,
+            auth.user.role === 'STUDENT'
         );
 
         return NextResponse.json(
