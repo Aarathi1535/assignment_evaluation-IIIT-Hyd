@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -21,6 +22,7 @@ import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { AnswerSheetCanvas } from '@/components/canvas/AnswerSheetCanvas';
 import type { SaveStatus } from '@/components/canvas/types';
+import { clearDraftOnSubmit } from '@/lib/offlineDrafts';
 import { RubricSidebar, RubricData, RubricSidebarHandle } from './RubricSidebar';
 import { GradingSubmissionControls } from './GradingSubmissionControls';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
@@ -85,6 +87,11 @@ export function GradingWorkspace({
   const [activeFlag, setActiveFlag] = useState<FlagDetail | null>(null);
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+
+  const { data: session } = useSession();
+  const userId = session?.user?.id;
+
+
 
   // Resolution controls state (AE-164)
   const [resolutionAction, setResolutionAction] = useState<'CLEAR' | 'OVERRIDE' | 'ESCALATE'>('CLEAR');
@@ -361,6 +368,7 @@ export function GradingWorkspace({
               saveStatus={saveStatus}
               onSubmitted={() => {
                 setIsSubmitted(true);
+                clearDraftOnSubmit(scriptId, undefined, userId);
               }}
               onReopened={() => {
                 setIsSubmitted(false);
@@ -683,6 +691,7 @@ export function GradingWorkspace({
                 enableOverlayToggle={true}
                 enableAnnotationLoading={true}
                 enableAutosave={!isReviewMode && !isSubmitted}
+                userId={userId}
                 onSaveStatusChange={setSaveStatus}
                 onSaveDraft={handleSaveDraft}
                 onSubmitFinal={handleSubmitFinal}

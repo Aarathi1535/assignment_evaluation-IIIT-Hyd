@@ -28,6 +28,13 @@ vi.mock('next-auth', async (importOriginal) => {
   };
 });
 
+vi.mock('next-auth/react', () => ({
+  useSession: () => {
+    if (!mockSessionUser) return { data: null, status: 'unauthenticated' };
+    return { data: { user: mockSessionUser }, status: 'authenticated' };
+  },
+}));
+
 vi.mock('next/navigation', () => ({
   useParams: () => mockParams,
   useSearchParams: () => mockSearchParams,
