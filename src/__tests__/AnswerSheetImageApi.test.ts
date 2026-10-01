@@ -844,4 +844,85 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
   });
+
+  it('18. returns 304 Not Modified when If-None-Match matches the storageKey ETag (AE-176)', async () => {
+    mockSessionUser = {
+      id: profUser._id.toString(),
+      email: profUser.email,
+      name: profUser.name,
+      role: UserRole.PROFESSOR,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': `"${pagePng.storageKey}"` }
+      }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(304);
+    expect(res.headers.get('ETag')).toBe(`"${pagePng.storageKey}"`);
+    expect(res.headers.get('Cache-Control')).toBe('private, max-age=3600');
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('19. does not return 304 if authorization fails, even with matching ETag (AE-176)', async () => {
+    // Student is unauthorized for this route
+    mockSessionUser = {
+      id: studentUser._id.toString(),
+      email: studentUser.email,
+      name: studentUser.name,
+      role: UserRole.STUDENT,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': `"${pagePng.storageKey}"` }
+      }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    // Should return 403 Forbidden instead of 304 Not Modified
+    expect(res.status).toBe(403);
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('20. thumbnail route returns 304 Not Modified when If-None-Match matches the thumbnailKey ETag (AE-176)', async () => {
+    mockSessionUser = {
+      id: profUser._id.toString(),
+      email: profUser.email,
+      name: profUser.name,
+      role: UserRole.PROFESSOR,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+
+    const { GET: thumbnailGET } = await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route');
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/thumbnail`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': `"${pagePng.thumbnailKey}"` }
+      }
+    );
+    const res = await thumbnailGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(304);
+    expect(res.headers.get('ETag')).toBe(`"${pagePng.thumbnailKey}"`);
+    expect(spyRead).not.toHaveBeenCalled();
+  });
 });
