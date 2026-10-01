@@ -86,6 +86,31 @@ export function isAuthorizedForStudent(
  * NOTE: This is a research-only workflow service strictly isolated from production grading.
  */
 export class HandwritingConsistencyWorkflowService {
+    // Background purge throttling variables
+    private lastPurgeTime: number = 0;
+    private isPurging: boolean = false;
+    private readonly PURGE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
+    /**
+     * Executes a background purge of expired handwriting data, throttled to run at most
+     * once every PURGE_INTERVAL_MS to prevent performance degradation on every request.
+     */
+    private async maybePurgeExpiredData(): Promise<void> {
+        const now = Date.now();
+        if (now - this.lastPurgeTime < this.PURGE_INTERVAL_MS || this.isPurging) {
+            return;
+        }
+        this.isPurging = true;
+        try {
+            await this.purgeExpiredData();
+            this.lastPurgeTime = Date.now();
+        } catch (error) {
+            console.error('Handwriting consistency background purge failed:', error);
+        } finally {
+            this.isPurging = false;
+        }
+    }
+
     constructor(
         private readonly sampleRepo: HandwritingSampleRepository = handwritingSampleRepository,
         private readonly profileRepo: HandwritingProfileRepository = handwritingProfileRepository,
@@ -116,6 +141,11 @@ export class HandwritingConsistencyWorkflowService {
      */
     public async verifyConsent(studentId: string): Promise<IHandwritingConsentDocument> {
         if (!this.requireConsent) {
+            // Trigger background cleanup of expired data globally
+            this.maybePurgeExpiredData().catch(err => {
+                console.error('Failed to trigger background purge:', err);
+            });
+
             const existing = await this.consentRepo.findByStudent(studentId);
             if (existing) return existing;
             return {
@@ -142,6 +172,11 @@ export class HandwritingConsistencyWorkflowService {
                 403
             );
         }
+
+        // Trigger background cleanup of expired data globally
+        this.maybePurgeExpiredData().catch(err => {
+            console.error('Failed to trigger background purge:', err);
+        });
 
         return consent;
     }

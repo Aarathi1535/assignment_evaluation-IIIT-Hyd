@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import HandwritingSampleModel from '../models/HandwritingSample';
 import HandwritingProfileModel from '../models/HandwritingProfile';
@@ -229,6 +229,49 @@ describe('HandwritingConsistency: Consent, Retention, Status, and FPR (Mentor Re
                     studentAContext
                 )
             ).rejects.toMatchObject({ statusCode: 403 });
+        });
+
+        it('production paths invoke background purge for expired data', async () => {
+            const workflow = new HandwritingConsistencyWorkflowService();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const purgeSpy = vi.spyOn(workflow as any, 'purgeExpiredData');
+            
+            // Create some expired samples
+            const base = {
+                student: new mongoose.Types.ObjectId(studentAId),
+                sampleType: 'EXAM_SCRIPT' as const,
+                status: SampleExtractionStatus.VALID,
+                isUsable: true,
+                extractionVersion: '1.0.0',
+                rawVector: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+            };
+            await HandwritingSampleModel.create([
+                { ...base, sourceReference: 'auto-exp-1', retentionExpiresAt: new Date(Date.now() - 2000) },
+                { ...base, sourceReference: 'auto-exp-2', retentionExpiresAt: new Date(Date.now() - 1000) },
+                { ...base, sourceReference: 'auto-active-3', retentionExpiresAt: new Date(Date.now() + 100000) }
+            ]);
+
+            // Set valid consent so it doesn't fail early
+            await handwritingConsentRepository.setConsent(studentAId, true);
+            await HandwritingConsentModel.updateOne(
+                { student: new mongoose.Types.ObjectId(studentAId) },
+                { $set: { retentionExpiresAt: new Date(Date.now() + 100000) } }
+            );
+
+            // Trigger a production path like verifyConsent (used by registerSample, etc.)
+            await workflow.verifyConsent(studentAId);
+
+            // Wait a tick for the floating promise to execute
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            expect(purgeSpy).toHaveBeenCalled();
+            
+            // Verify expired data was actually purged
+            const remaining = await HandwritingSampleModel.find({ student: new mongoose.Types.ObjectId(studentAId) });
+            expect(remaining).toHaveLength(1);
+            expect(remaining[0].sourceReference).toBe('auto-active-3');
+            
+            purgeSpy.mockRestore();
         });
     });
 
