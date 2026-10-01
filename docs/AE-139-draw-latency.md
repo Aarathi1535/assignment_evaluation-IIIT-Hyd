@@ -107,6 +107,7 @@ The Week-7 canvas drawing subsystem achieves sub-millisecond execution times bec
 
 1. **Measurement Boundary**:
    - The benchmark strictly measures application-side draw processing from pointer-event ingress through coordinate transformation, smoothing, point accumulation, Konva node update, and `batchDraw` dispatch.
+   - **CRITICAL NOTE (AE-174):** The numbers in this document represent **in-memory JS execution times only**. They explicitly exclude React reconciliation overhead, synchronous draft writes to localStorage, and actual browser/Konva rasterisation time on the main thread. See `AE-174-canvas-profile.md` for real browser rendering bottlenecks.
 2. **External Latency Factors**:
    - Measured application-side draw-processing latency is well below the 200 ms target. Browser compositor, GPU, physical digitizer, and display pixel presentation latencies are outside the benchmark measurement boundary and were not independently measured.
 
