@@ -11,13 +11,11 @@ export default function QuestionGradingPage() {
   const questionNumberParam = params?.questionNumber as string;
   const questionNumber = questionNumberParam ? parseInt(questionNumberParam, 10) : undefined;
   const allocationId = searchParams?.get('allocationId') || undefined;
-  const roleParam = searchParams?.get('role') || undefined;
 
   return (
     <GradingWorkspace
       scriptId={scriptId}
       allocationId={allocationId}
-      userRole={roleParam}
       allocatedQuestionNumber={Number.isNaN(questionNumber) ? undefined : questionNumber}
     />
   );

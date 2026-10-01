@@ -14,13 +14,10 @@ export default function GradingPage() {
   const questionParam = searchParams?.get('question');
   const questionNumber = questionParam ? parseInt(questionParam, 10) : undefined;
   const allocationId = searchParams?.get('allocationId') || undefined;
-  const roleParam = searchParams?.get('role') || undefined;
-
   return (
     <GradingWorkspace
       scriptId={scriptId}
       allocationId={allocationId}
-      userRole={roleParam}
       flagId={flagId}
       isReviewMode={isReviewMode}
       allocatedQuestionNumber={questionNumber}

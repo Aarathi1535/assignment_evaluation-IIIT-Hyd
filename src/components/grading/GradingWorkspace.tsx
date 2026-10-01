@@ -31,6 +31,7 @@ export interface ScriptData {
   _id: string;
   exam?: string;
   allocationId?: string;
+  allocationStatus?: string;
   anonymousId?: string;
   scriptReference?: string;
   pageCount?: number;
@@ -62,7 +63,7 @@ export interface FlagDetail {
 export interface GradingWorkspaceProps {
   scriptId: string;
   allocationId?: string;
-  userRole?: string;
+
   allocatedQuestionNumber?: number;
   flagId?: string;
   isReviewMode?: boolean;
@@ -71,7 +72,7 @@ export interface GradingWorkspaceProps {
 export function GradingWorkspace({
   scriptId,
   allocationId,
-  userRole,
+
   allocatedQuestionNumber,
   flagId,
   isReviewMode = false,
@@ -90,6 +91,8 @@ export function GradingWorkspace({
 
   const { data: session } = useSession();
   const userId = session?.user?.id;
+  const userRole = session?.user?.role;
+  const isProfessorOrAdmin = userRole === 'PROFESSOR' || userRole === 'ADMIN';
 
 
 
@@ -199,7 +202,9 @@ export function GradingWorkspace({
     setError(null);
 
     try {
-      const res = await fetch(`/api/scripts/${encodeURIComponent(scriptId)}`, {
+      const baseUrl = `/api/scripts/${encodeURIComponent(scriptId)}`;
+      const url = allocatedQuestionNumber ? `${baseUrl}?question=${allocatedQuestionNumber}` : baseUrl;
+      const res = await fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
       });
@@ -223,6 +228,9 @@ export function GradingWorkspace({
 
       setScriptData(data);
       setPages(Array.isArray(data?.pages) ? data.pages : []);
+      if (data.allocationStatus === 'COMPLETED') {
+        setIsSubmitted(true);
+      }
 
       // If review mode or flagId is active, fetch flag details
       if (isReviewMode || flagId) {
@@ -249,7 +257,7 @@ export function GradingWorkspace({
       setError(message);
       setLoading(false);
     }
-  }, [scriptId, isReviewMode, flagId]);
+  }, [scriptId, isReviewMode, flagId, allocatedQuestionNumber]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -364,7 +372,7 @@ export function GradingWorkspace({
               allocatedQuestionNumber={allocatedQuestionNumber}
               isSubmitted={isSubmitted}
               canSubmit={!isReviewMode}
-              canReopen={true}
+              canReopen={isProfessorOrAdmin}
               saveStatus={saveStatus}
               onSubmitted={() => {
                 setIsSubmitted(true);
@@ -711,7 +719,6 @@ export function GradingWorkspace({
                 readOnly={isReviewMode || isSubmitted}
                 onRubricLoaded={setRubricData}
                 onGradeSaved={handleGradeSaved}
-                onFinalizedStateChange={setIsSubmitted}
               />
             </div>
           </div>
