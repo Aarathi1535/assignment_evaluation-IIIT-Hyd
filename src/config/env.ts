@@ -14,8 +14,7 @@ const envSchema = z.object({
     VERTEX_AI_MODEL: z.string().optional().default('gemini-3.5-flash'),
     VERTEX_AI_REGION: z.string().optional().default('asia-south1'),
     GOOGLE_CLOUD_PROJECT: z.string().optional().default('assignment-evaluator-iiith'),
-    GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
-    GOOGLE_SERVICE_ACCOUNT_KEY: z.string().optional()
+    GOOGLE_APPLICATION_CREDENTIALS: z.string().optional()
 });
 
 export function validateEnv() {

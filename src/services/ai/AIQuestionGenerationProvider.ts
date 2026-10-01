@@ -547,9 +547,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         if (!modelsToTry.includes('gemini-3.8-flash')) {
             modelsToTry.push('gemini-3.8-flash');
         }
-        if (!modelsToTry.includes('gemini-2.5-flash')) {
-            modelsToTry.push('gemini-2.5-flash');
-        }
+
         if (!modelsToTry.includes('gemini-flash-latest')) {
             modelsToTry.push('gemini-flash-latest');
         }
@@ -819,7 +817,7 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
     override async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
         if (!this.isConfigured()) {
             throw new HttpError(
-                'Vertex AI question generation is not configured. Please configure Google Cloud service account credentials via GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SERVICE_ACCOUNT_KEY.',
+                'Vertex AI question generation is not configured. Please configure Google Cloud service account credentials via GOOGLE_APPLICATION_CREDENTIALS.',
                 503
             );
         }

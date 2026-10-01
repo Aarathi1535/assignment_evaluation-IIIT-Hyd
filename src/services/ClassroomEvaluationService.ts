@@ -11,6 +11,7 @@ export interface EvaluateClassroomAnswerInput {
     sampleSolution?: string;
     imageBuffer: Buffer;
     mimeType: string;
+    isRealStudentData?: boolean;
 }
 
 export interface RawGeminiCriterionEvaluation {
@@ -440,7 +441,8 @@ export class ClassroomEvaluationService {
                     systemInstruction,
                     promptText,
                     imageBase64,
-                    mimeType
+                    mimeType,
+                    isRealStudentData: input.isRealStudentData
                 });
             }
         } catch (apiErr) {

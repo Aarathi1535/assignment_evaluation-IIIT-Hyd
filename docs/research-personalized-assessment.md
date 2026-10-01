@@ -149,6 +149,7 @@ Because the pool size is strictly validated to be $M \ge \max(N, 100)$, the cycl
 The generated allocation is explicitly recorded in `PersonalizedAssessmentSchedule.ts`, mapping each `studentId` to their distinct sequence of `questionId`s. Every day, the system looks up this sequence to generate the student's unique `PersonalizedStudentAssignment` record.
 
 **Limitations and Assumptions:**
+- **Answer passing via time shift:** A rotation shift of 1 allows an answer to pass one day ahead (e.g., if shiftStep is 1, a question assigned to student A today will be assigned to student B tomorrow).
 - **Conceptual collaboration is not prevented:** Students can still discuss topics and concepts. The mechanism only stops verbatim 1-to-1 copying of final answers.
 - **Proxy submission:** It does not prevent one student from logging into another student's account to solve their distinct question.
 - **Finite Pool Size constraint:** For the cyclic offset to provide 100% collision-free days, the AI question bank size ($M$) must be equal to or greater than the number of enrolled students ($N$). For very large cohorts, this requires a proportionally large generated question bank.
