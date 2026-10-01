@@ -1,10 +1,14 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { render, fireEvent, screen, waitFor } from '@testing-library/react';
 import { SaveStatusIndicator } from '../components/canvas/SaveStatusIndicator';
 import { GradingSubmissionControls } from '../components/grading/GradingSubmissionControls';
 import { BulkSubmitModal } from '../components/grading/BulkSubmitModal';
-import { resolveTargetExamId } from '../app/(dashboard)/ta/page';
+import { resolveTargetExamId } from '../lib/allocationUtils';
 
 describe('AE-173: Grading State & Submission Controls', () => {
   beforeEach(() => {
@@ -267,27 +271,40 @@ describe('AE-173: Grading State & Submission Controls', () => {
       const onReopened = vi.fn();
 
       const scriptId = 'script-999';
-      const allocationId = 'alloc-303';
 
-      // Send reopen with allocationId
-      const res = await fetch(`/api/allocations/${encodeURIComponent(allocationId)}/reopen`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: 'Student requested regrade on Question 2' }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        onReopened(json.data);
-      }
-
-      // Verify fetch was called with allocationId, NOT scriptId
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/allocations/alloc-303/reopen',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({ reason: 'Student requested regrade on Question 2' }),
+      render(
+        React.createElement(GradingSubmissionControls, {
+          scriptId: scriptId,
+          allocationId: "alloc-303",
+          userRole: "PROFESSOR",
+          isSubmitted: true,
+          canReopen: true,
+          onReopened: onReopened,
         })
       );
+
+      // Click the Reopen button to open modal
+      const reopenButton = screen.getByTestId('reopen-allocation-button');
+      fireEvent.click(reopenButton);
+
+      // Enter reason
+      const reasonInput = screen.getByPlaceholderText(/state the reason for reopening/i);
+      fireEvent.change(reasonInput, { target: { value: 'Student requested regrade on Question 2' } });
+
+      // Click confirm
+      const confirmButton = screen.getByText('Confirm Reopen');
+      fireEvent.click(confirmButton);
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/allocations/alloc-303/reopen',
+          expect.objectContaining({
+            method: 'POST',
+            body: expect.stringContaining('Student requested regrade on Question 2'),
+          })
+        );
+      });
+
       expect(fetchMock).not.toHaveBeenCalledWith(
         expect.stringContaining(scriptId),
         expect.anything()

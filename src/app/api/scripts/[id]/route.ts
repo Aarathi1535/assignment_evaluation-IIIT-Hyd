@@ -31,6 +31,10 @@ export async function GET(
   }
   const user = auth.user;
 
+  const { searchParams } = new URL(req.url);
+  const questionParam = searchParams.get('question');
+  const targetQuestion = questionParam ? parseInt(questionParam, 10) : undefined;
+
   const { id } = await context.params;
 
   if (!id || !mongoose.Types.ObjectId.isValid(id)) {
@@ -66,6 +70,7 @@ export async function GET(
       userRole === UserRole.PROFESSOR || userRole === UserRole.ADMIN;
 
     let scriptAllocationId: string | undefined;
+    let allocationStatus: string | undefined;
 
     if (isProfessorOrAdmin) {
       const exam = await ExamRepository.getExamById(
@@ -83,9 +88,14 @@ export async function GET(
           { status: 403 }
         );
       }
-      const existingAlloc = await Allocation.findOne({ answerScript: script._id }).select('_id');
+      const query: { answerScript: mongoose.Types.ObjectId; question?: number } = { answerScript: script._id };
+      if (targetQuestion !== undefined && !isNaN(targetQuestion)) {
+        query.question = targetQuestion;
+      }
+      const existingAlloc = await Allocation.findOne(query).select('_id status');
       if (existingAlloc) {
         scriptAllocationId = existingAlloc._id.toString();
+        allocationStatus = existingAlloc.status || null;
       }
     } else {
       const allocation = await AllocationService.verifyTaAllocation(
@@ -103,6 +113,7 @@ export async function GET(
         );
       }
       scriptAllocationId = allocation._id.toString();
+      allocationStatus = allocation.status || null;
     }
 
     // 4. Retrieve pages for this answer script
@@ -174,6 +185,7 @@ export async function GET(
         data: {
           ...serializedScript,
           allocationId: scriptAllocationId,
+          allocationStatus: allocationStatus,
           pageCount: formattedPages.length,
           pages: formattedPages,
         },

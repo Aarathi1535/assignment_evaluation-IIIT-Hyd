@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/Card';
 import NotificationPanel from '@/components/NotificationPanel';
 import { BulkSubmitModal } from '@/components/grading/BulkSubmitModal';
 import Link from 'next/link';
+import { resolveTargetExamId } from '@/lib/allocationUtils';
 
 interface AnswerScript {
   _id: string;
@@ -38,19 +39,6 @@ interface Pagination {
   hasPreviousPage: boolean;
 }
 
-export function resolveTargetExamId(
-  allocations: Array<{ exam: string }>,
-  selectedExamId?: string | null
-): string | null {
-  if (selectedExamId && selectedExamId !== 'ALL') {
-    return selectedExamId;
-  }
-  const uniqueExams = Array.from(new Set(allocations.map((a) => a.exam).filter(Boolean)));
-  if (uniqueExams.length === 1) {
-    return uniqueExams[0];
-  }
-  return null;
-}
 
 export default function TaDashboardPage() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
