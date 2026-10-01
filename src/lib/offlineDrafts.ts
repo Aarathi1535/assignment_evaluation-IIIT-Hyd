@@ -761,8 +761,11 @@ export function isServerDataNewer(
       return serverTime > storedServerTime;
     }
   }
-
-  return serverTime > localDraft.savedAt;
+  // AE-172: If no server base timestamp exists in the draft, we cannot
+  // safely determine if the server is newer. We do not fall back to the
+  // client clock. Return false to keep the local draft and rely on the
+  // backend's 409 Conflict detection during sync.
+  return false;
 }
 
 /**
