@@ -359,6 +359,11 @@ export function PenLayer({
     };
 
     const handlePointerMove = (e: PointerEvent) => {
+      const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
+      if (isDevProfiling) {
+        performance.mark('pointermove-start');
+      }
+
       const rect = container.getBoundingClientRect();
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
@@ -410,6 +415,12 @@ export function PenLayer({
         if (activeLineNodeRef.current && layerRef.current) {
           activeLineNodeRef.current.points(updated.points);
           layerRef.current.batchDraw();
+
+          if (isDevProfiling) {
+            requestAnimationFrame(() => {
+              performance.measure('pointermove->raf', 'pointermove-start');
+            });
+          }
         }
       }
     };

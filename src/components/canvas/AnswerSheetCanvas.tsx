@@ -1596,16 +1596,47 @@ export function AnswerSheetCanvas({
 
   const handleStrokeComplete = useCallback(
     (newStroke: FreehandStroke) => {
+      const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
+      if (isDevProfiling && typeof performance !== 'undefined') {
+        performance.mark('stroke-end-start');
+        performance.mark('react-commit-start');
+      }
+
       const updated = [...allStrokes, newStroke];
       const newHistory = recordAddStroke(currentPageHistory, newStroke);
 
       setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
       setInternalStrokes(updated);
       onStrokesChange?.(updated);
+
+      if (isDevProfiling && typeof performance !== 'undefined') performance.mark('schedule-autosave-called');
       scheduleAutosave(updated, allAnnotations);
+      if (isDevProfiling && typeof performance !== 'undefined') {
+        performance.measure('stroke-end->scheduleAutosave', 'stroke-end-start', 'schedule-autosave-called');
+      }
     },
     [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
   );
+
+  const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
+
+  React.useLayoutEffect(() => {
+    if (isDevProfiling && typeof performance !== 'undefined') {
+      try {
+        const marks = performance.getEntriesByName('react-commit-start');
+        if (marks.length > 0) {
+          performance.measure('react-commit-per-stroke', 'react-commit-start');
+          performance.clearMarks('react-commit-start');
+        }
+      } catch (e) {}
+    }
+  });
+
+  React.useEffect(() => {
+    if (isDevProfiling && typeof performance !== 'undefined') {
+      performance.mark('page-switch');
+    }
+  }, [activePageIndex, isDevProfiling]);
 
   const handleAnnotationComplete = useCallback(
     (newAnnotation: MarkAnnotation) => {

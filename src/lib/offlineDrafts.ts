@@ -99,6 +99,11 @@ export function saveLocalAnnotationDraft(
   options?: SaveAnnotationDraftOptions,
   userId?: string
 ): LocalAnnotationDraft | null {
+  const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
+  if (isDevProfiling && typeof performance !== 'undefined') {
+    performance.mark('save-draft-start');
+  }
+
   if (!scriptId || typeof pageNumber !== 'number') {
     return null;
   }
@@ -134,6 +139,11 @@ export function saveLocalAnnotationDraft(
     }
   } else {
     memoryStorage.set(key, serialized);
+  }
+
+  if (isDevProfiling && typeof performance !== 'undefined') {
+    performance.mark('save-draft-end');
+    performance.measure('saveLocalAnnotationDraft', 'save-draft-start', 'save-draft-end');
   }
 
   return draft;

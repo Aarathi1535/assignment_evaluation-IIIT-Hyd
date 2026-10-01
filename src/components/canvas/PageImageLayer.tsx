@@ -245,6 +245,15 @@ export function PageImageLayer({
 
     img.onload = () => {
       if (isCancelled) return;
+
+      const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
+      if (isDevProfiling && typeof performance !== 'undefined') {
+        performance.mark('image-loaded');
+        try {
+          performance.measure('page-switch->image-loaded', 'page-switch', 'image-loaded');
+        } catch (e) {}
+      }
+
       loadedImageRef.current = img;
 
       const stageW = stage?.width() || dimensionsRef.current.width;
