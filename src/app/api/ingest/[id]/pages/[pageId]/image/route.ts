@@ -185,6 +185,19 @@ export async function GET(
       );
     }
 
+    let etag = `"${page.storageKey}"`;
+    const ifNoneMatch = req.headers.get('if-none-match');
+
+    if (ifNoneMatch && ifNoneMatch.includes(etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          'ETag': etag,
+          'Cache-Control': 'private, no-store',
+        },
+      });
+    }
+
     // 5. Open the stored page image after checking metadata so missing assets can
     // still be returned as a controlled API error before the response starts.
     try {
@@ -199,6 +212,7 @@ export async function GET(
           const refreshedPage = await IngestionPage.findById(pageId);
           if (!refreshedPage?.storageKey) throw new Error('Regenerated page has no storage key.');
           page.storageKey = refreshedPage.storageKey;
+          etag = `"${page.storageKey}"`;
         } catch (repairError) {
           if (repairError && typeof repairError === 'object') {
             const storageError = repairError as { code?: number | string; statusCode?: number };
@@ -234,6 +248,7 @@ export async function GET(
         headers: {
           'Content-Type': contentType,
           'Content-Length': size.toString(),
+          'ETag': etag,
           'Cache-Control': 'private, no-store',
           'X-Content-Type-Options': 'nosniff',
         },

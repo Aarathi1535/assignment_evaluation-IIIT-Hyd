@@ -25,6 +25,7 @@ import {
 
 export function PageImageLayer({
   src,
+  thumbnailUrl,
   alt = 'Answer sheet page',
   fitMode = 'contain',
   transform: propTransform,
@@ -235,6 +236,33 @@ export function PageImageLayer({
     let isCancelled = false;
     const requestStartedAt = performance.now();
     logGraderTiming('page-image-request-start', requestStartedAt, { page: alt });
+    let hasLoadedHighRes = false;
+
+    // AE-176: Load thumbnail placeholder first
+    if (thumbnailUrl) {
+      const thumbImg = new window.Image();
+      try {
+        const url = new URL(thumbnailUrl, window.location.href);
+        if (url.origin !== window.location.origin) {
+          thumbImg.crossOrigin = 'anonymous';
+        }
+      } catch {
+        thumbImg.crossOrigin = 'anonymous';
+      }
+
+      thumbImg.onload = () => {
+        if (isCancelled || hasLoadedHighRes) return;
+
+        const stageW = stage?.width() || dimensionsRef.current.width;
+        const stageH = stage?.height() || dimensionsRef.current.height;
+
+        // Render thumbnail without triggering the final onLoad (keeps loading spinner)
+        updateImageLayout(thumbImg, stageW, stageH, activeTransformRef.current);
+      };
+
+      thumbImg.src = thumbnailUrl;
+    }
+
     const img = new window.Image();
     if (src.startsWith('http://') || src.startsWith('https://')) {
       try {
@@ -256,6 +284,7 @@ export function PageImageLayer({
         measureCanvasProfile('page-switch->image-loaded', 'page-switch', 'image-loaded');
       }
 
+      hasLoadedHighRes = true;
       loadedImageRef.current = img;
 
       const stageW = stage?.width() || dimensionsRef.current.width;
@@ -305,7 +334,7 @@ export function PageImageLayer({
     return () => {
       isCancelled = true;
     };
-  }, [src, alt, stage, fitMode, updateImageLayout, onImageLoad, onImageError, onTransformChange]);
+  }, [src, thumbnailUrl, alt, stage, fitMode, updateImageLayout, onImageLoad, onImageError, onTransformChange]);
 
   // Update layout when stage dimensions change
   useEffect(() => {

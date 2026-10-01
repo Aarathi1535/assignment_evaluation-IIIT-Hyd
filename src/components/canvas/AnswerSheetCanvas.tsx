@@ -352,6 +352,7 @@ export function AnswerSheetCanvas({
   const loadedPagesCacheRef = useRef<Set<string>>(new Set());
   const activeRequestSeqRef = useRef<number>(0);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const prefetchedUrlsRef = useRef<Set<string>>(new Set());
 
   const [, setIsAnnotationsLoading] = useState<boolean>(false);
   const [, setAnnotationsLoadError] = useState<string | null>(null);
@@ -1594,6 +1595,28 @@ export function AnswerSheetCanvas({
     enableCrashRecovery,
   ]);
 
+  // Adjacent page prefetch (AE-176)
+  useEffect(() => {
+    if (isLoading || !isMultiPageMode || totalPages <= 0 || !sortedPages) return;
+
+    const prefetch = (index: number) => {
+      const page = sortedPages[index];
+      const url = getPageImageUrl(page);
+      if (url && !prefetchedUrlsRef.current.has(url)) {
+        prefetchedUrlsRef.current.add(url);
+        const img = new window.Image();
+        img.src = url;
+      }
+    };
+
+    if (canGoNext(activePageIndex, totalPages)) {
+      prefetch(getNextPageIndex(activePageIndex, totalPages));
+    }
+    if (canGoPrev(activePageIndex, totalPages)) {
+      prefetch(getPrevPageIndex(activePageIndex, totalPages));
+    }
+  }, [isLoading, isMultiPageMode, activePageIndex, totalPages, sortedPages]);
+
   const canUndoActive = useMemo(() => {
     return enableUndoRedo && canUndo(currentPageHistory);
   }, [enableUndoRedo, currentPageHistory]);
@@ -2468,6 +2491,7 @@ export function AnswerSheetCanvas({
         <PageImageLayer
           key={imageRetryCount}
           src={effectiveSrc}
+          thumbnailUrl={currentPage?.thumbnailUrl || undefined}
           alt={effectivePageLabel}
           fitMode={fitMode}
           transform={effectiveTransform}
