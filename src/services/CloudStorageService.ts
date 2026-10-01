@@ -9,23 +9,11 @@ export interface UploadFileOptions {
 }
 
 export class CloudStorageService {
-    private storage: Storage;
+    private storage: Storage | null = null;
     private static instance: CloudStorageService;
 
     private constructor() {
-        const env = validateEnv();
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const options: any = {};
-        if (env.GOOGLE_CLOUD_PROJECT) {
-            options.projectId = env.GOOGLE_CLOUD_PROJECT;
-        }
-
-        if (env.GOOGLE_APPLICATION_CREDENTIALS) {
-            options.keyFilename = env.GOOGLE_APPLICATION_CREDENTIALS;
-        }
-
-        this.storage = new Storage(options);
+        // Lazy initialization: avoid eagerly validating env variables on module import
     }
 
     public static getInstance(): CloudStorageService {
@@ -35,11 +23,31 @@ export class CloudStorageService {
         return CloudStorageService.instance;
     }
 
+    private getStorageClient(): Storage {
+        if (!this.storage) {
+            const env = validateEnv();
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const options: any = {};
+            if (env.GOOGLE_CLOUD_PROJECT) {
+                options.projectId = env.GOOGLE_CLOUD_PROJECT;
+            }
+
+            if (env.GOOGLE_APPLICATION_CREDENTIALS) {
+                options.keyFilename = env.GOOGLE_APPLICATION_CREDENTIALS;
+            }
+
+            this.storage = new Storage(options);
+        }
+        return this.storage;
+    }
+
     /**
      * Uploads a buffer to a specific Google Cloud Storage bucket.
      */
     public async uploadFile({ bucketName, destination, buffer, contentType }: UploadFileOptions): Promise<string> {
-        const bucket = this.storage.bucket(bucketName);
+        const client = this.getStorageClient();
+        const bucket = client.bucket(bucketName);
         const file = bucket.file(destination);
 
         await file.save(buffer, {
@@ -55,7 +63,8 @@ export class CloudStorageService {
      * Downloads a file from a Google Cloud Storage bucket as a Buffer.
      */
     public async downloadFile(bucketName: string, destination: string): Promise<Buffer> {
-        const bucket = this.storage.bucket(bucketName);
+        const client = this.getStorageClient();
+        const bucket = client.bucket(bucketName);
         const file = bucket.file(destination);
 
         const [buffer] = await file.download();
