@@ -592,4 +592,90 @@ describe('AE-135: PUT /scripts/[id]/pages/[p]/annotations (Save Annotations API)
     const annotationCount = await Annotation.countDocuments({});
     expect(annotationCount).toBe(0);
   });
+
+  describe('AE-171: Route-Level Concurrency', () => {
+    it('handles concurrent PUTs on the same base, one wins (200), one conflicts (409)', async () => {
+      // 1. Get current page state and baseUpdatedAt
+      const pageDoc = await Page.findById(page1._id);
+      const baseUpdatedAt = pageDoc?.updatedAt?.toISOString() || new Date().toISOString();
+
+      const check = createCheckAnnotation(page1._id.toString(), { x: 50, y: 50 });
+      const cross = createCrossAnnotation(page1._id.toString(), { x: 70, y: 70 });
+
+      const req1 = new NextRequest(
+        `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            annotations: [check],
+            strokes: [],
+            baseUpdatedAt,
+          }),
+        }
+      );
+
+      const req2 = new NextRequest(
+        `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            annotations: [cross],
+            strokes: [],
+            baseUpdatedAt,
+          }),
+        }
+      );
+
+      // 2. Fire requests concurrently
+      const [res1, res2] = await Promise.all([
+        saveAnnotationsPUT(req1, { params: Promise.resolve({ id: answerScript._id.toString(), p: '1' }) }),
+        saveAnnotationsPUT(req2, { params: Promise.resolve({ id: answerScript._id.toString(), p: '1' }) }),
+      ]);
+
+      const status1 = res1.status;
+      const status2 = res2.status;
+
+      // Exactly one 200 and one 409
+      expect([status1, status2]).toContain(200);
+      expect([status1, status2]).toContain(409);
+
+      const conflictRes = status1 === 409 ? res1 : res2;
+      const conflictJson = await conflictRes.json();
+
+      // 409 must include server data and serverUpdatedAt
+      expect(conflictJson.success).toBe(false);
+      expect(conflictJson.conflict).toBe(true);
+      expect(conflictJson.data).toBeDefined();
+      expect(conflictJson.data.annotations).toBeDefined();
+      expect(conflictJson.serverUpdatedAt).toBeDefined();
+      expect(conflictJson.serverUpdatedAt).not.toBeNull();
+    });
+
+    it('returns 400 if baseUpdatedAt is missing in payload', async () => {
+      const check = createCheckAnnotation(page1._id.toString(), { x: 50, y: 50 });
+      const req = new NextRequest(
+        `http://localhost:3000/api/scripts/${answerScript._id}/pages/1/annotations`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            annotations: [check],
+            strokes: [],
+            // Missing baseUpdatedAt
+          }),
+        }
+      );
+
+      const res = await saveAnnotationsPUT(req, {
+        params: Promise.resolve({ id: answerScript._id.toString(), p: '1' }),
+      });
+
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.success).toBe(false);
+      expect(json.message).toContain('baseUpdatedAt');
+    });
+  });
 });

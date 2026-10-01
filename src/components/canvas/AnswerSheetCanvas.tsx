@@ -639,8 +639,7 @@ export function AnswerSheetCanvas({
         strokes: FreehandStroke[];
         annotations: MarkAnnotation[];
         imageBounds?: RenderedImageBounds | null;
-      },
-      options?: { force?: boolean }
+      }
     ) => {
       if (!scriptId) return;
 
@@ -698,7 +697,6 @@ export function AnswerSheetCanvas({
             pageNumber: payloadToSave.pageNumber,
             data: serialized,
             baseUpdatedAt,
-            force: options?.force,
           });
         } else {
           const url = saveAnnotationsUrl
@@ -714,7 +712,6 @@ export function AnswerSheetCanvas({
             body: JSON.stringify({
               ...serialized,
               baseUpdatedAt,
-              force: options?.force,
             }),
           });
 
@@ -924,22 +921,32 @@ export function AnswerSheetCanvas({
                 baseUpdatedAt: draft.baseServerUpdatedAt,
               });
               if (res.conflict) {
-                markLocalAnnotationDraftConflict(
-                  draft.scriptId,
-                  draft.pageNumber,
-                  res.serverData,
-                  res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
-                  effectiveUserId
-                );
-                setSaveStatus('conflict');
-                onSaveStatusChangeRef.current?.('conflict');
-                onConflictRef.current?.({
-                  scriptId: draft.scriptId,
-                  pageNumber: draft.pageNumber,
-                  localData: draft.data,
-                  serverData: res.serverData,
-                  serverUpdatedAt: res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
-                });
+                if (res.isLocked) {
+                  setIsLocked(true);
+                  setSaveStatus('locked');
+                  setSaveErrorMessage(res.error || 'Script allocation has already been submitted and locked.');
+                  onSaveStatusChangeRef.current?.('locked');
+                  setTool('none');
+                } else {
+                  markLocalAnnotationDraftConflict(
+                    draft.scriptId,
+                    draft.pageNumber,
+                    res.serverData,
+                    res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
+                    effectiveUserId
+                  );
+                  setSaveStatus('conflict');
+                  setSaveErrorMessage(res.error || 'Conflict detected: Server has newer changes');
+                  onSaveStatusChangeRef.current?.('conflict');
+                  onConflictRef.current?.({
+                    scriptId: draft.scriptId,
+                    pageNumber: draft.pageNumber,
+                    localData: draft.data,
+                    serverData: res.serverData,
+                    serverUpdatedAt: res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
+                    isLocked: false,
+                  });
+                }
               } else if (res.success) {
                 markLocalAnnotationDraftSynced(
                   draft.scriptId,
@@ -967,22 +974,39 @@ export function AnswerSheetCanvas({
 
               if (res.status === 409) {
                 const conflictJson = await res.json().catch(() => null);
-                markLocalAnnotationDraftConflict(
-                  draft.scriptId,
-                  draft.pageNumber,
-                  conflictJson?.data || null,
-                  conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
-                  effectiveUserId
+                const isLockConflict = Boolean(
+                  conflictJson?.isLocked ||
+                  conflictJson?.locked ||
+                  conflictJson?.message?.toLowerCase().includes('locked') ||
+                  conflictJson?.message?.toLowerCase().includes('completed')
                 );
-                setSaveStatus('conflict');
-                onSaveStatusChangeRef.current?.('conflict');
-                onConflictRef.current?.({
-                  scriptId: draft.scriptId,
-                  pageNumber: draft.pageNumber,
-                  localData: draft.data,
-                  serverData: conflictJson?.data || null,
-                  serverUpdatedAt: conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
-                });
+
+                if (isLockConflict) {
+                  setIsLocked(true);
+                  setSaveStatus('locked');
+                  setSaveErrorMessage(conflictJson?.message || 'Script allocation has already been submitted and locked.');
+                  onSaveStatusChangeRef.current?.('locked');
+                  setTool('none');
+                } else {
+                  markLocalAnnotationDraftConflict(
+                    draft.scriptId,
+                    draft.pageNumber,
+                    conflictJson?.data || null,
+                    conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
+                    effectiveUserId
+                  );
+                  setSaveStatus('conflict');
+                  setSaveErrorMessage(conflictJson?.message || 'Conflict detected: Server has newer changes');
+                  onSaveStatusChangeRef.current?.('conflict');
+                  onConflictRef.current?.({
+                    scriptId: draft.scriptId,
+                    pageNumber: draft.pageNumber,
+                    localData: draft.data,
+                    serverData: conflictJson?.data || null,
+                    serverUpdatedAt: conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
+                    isLocked: false,
+                  });
+                }
               } else if (res.ok) {
                 const okJson = await res.json().catch(() => null);
                 markLocalAnnotationDraftSynced(
@@ -1027,7 +1051,7 @@ export function AnswerSheetCanvas({
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [scriptId, effectiveUserId, saveAnnotations, saveAnnotationsUrl, flushPendingSave]);
+  }, [scriptId, effectiveUserId, saveAnnotations, saveAnnotationsUrl, flushPendingSave, setTool]);
 
   const handleRetrySave = useCallback(() => {
     const targetPageNumber =
@@ -1081,8 +1105,7 @@ export function AnswerSheetCanvas({
         strokes: pageStrokes,
         annotations: pageAnnotations,
         imageBounds: baseBounds,
-      },
-      { force: true }
+      }
     );
   }, [
     scriptId,

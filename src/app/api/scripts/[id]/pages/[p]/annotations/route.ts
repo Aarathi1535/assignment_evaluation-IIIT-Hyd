@@ -105,8 +105,6 @@ export async function PUT(
     // AE-171: Read baseUpdatedAt from one defined location only (request body)
     const baseUpdatedAt = bodyObj?.baseUpdatedAt as string | number | undefined;
 
-    const force = Boolean(bodyObj?.force);
-
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
     const result = await annotationPersistenceService.savePageAnnotations({
@@ -118,7 +116,6 @@ export async function PUT(
       question,
       ipAddress,
       baseUpdatedAt,
-      force,
       requireBaseUpdatedAt: true,
     });
 
