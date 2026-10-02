@@ -15,6 +15,7 @@ import AllocationService from '../../../../services/AllocationService';
  * - currentAllocationId (optional): Current allocation to skip.
  */
 export async function GET(req: NextRequest) {
+  const __reqStart = Date.now();
   const auth = await requirePermission(Permission.VIEW_ASSIGNED_SCRIPTS);
   if (!auth.authorized) {
     return auth.response;
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
         message: 'Valid Exam ID is required',
         data: null,
       },
-      { status: 400 }
+      {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest) {
         message: 'Invalid currentAllocationId format',
         data: null,
       },
-      { status: 400 }
+      {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
         message: nextAllocation ? 'Next allocation found' : 'No remaining allocations',
         data: nextAllocation,
       },
-      { status: 200 }
+      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';

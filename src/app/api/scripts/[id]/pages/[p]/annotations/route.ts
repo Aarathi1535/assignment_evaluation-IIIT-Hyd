@@ -13,6 +13,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; p: string }> }
 ) {
+  const __reqStart = Date.now();
   // 1. Authenticate and enforce grading / exam permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -43,7 +44,7 @@ export async function GET(
         message: 'Annotations loaded successfully',
         data: result,
       },
-      { status: 200 }
+      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -68,6 +69,7 @@ export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ id: string; p: string }> }
 ) {
+  const __reqStart = Date.now();
   // 1. Authenticate and enforce grading / exam permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -90,7 +92,7 @@ export async function PUT(
           message: 'Invalid JSON request body',
           data: null,
         },
-        { status: 400 }
+        {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -125,7 +127,7 @@ export async function PUT(
         message: 'Annotations saved successfully',
         data: result,
       },
-      { status: 200 }
+      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
