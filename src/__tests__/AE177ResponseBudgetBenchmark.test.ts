@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { NextRequest } from 'next/server';
-import User, { UserRole } from '../models/User';
+import User, { UserRole, IUser } from '../models/User';
 import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
 import AnswerScript from '../models/AnswerScript';
@@ -13,27 +12,28 @@ import Rubric from '../models/Rubric';
 import { AnnotationPersistenceService } from '../services/AnnotationPersistenceService';
 import gradingService from '../services/GradingService';
 import AllocationService from '../services/AllocationService';
-import { vi } from 'vitest';
 
 vi.mock('../lib/apiAuth', () => ({
-  requireGradingOrAnnotationAccess: vi.fn().mockImplementation(() => {
-    return Promise.resolve({
-      authorized: true,
-      user: { id: 'TA_USER_ID', role: 'ta' }
-    });
-    return Promise.resolve({
-      authorized: true,
-      user: { id: 'TA_USER_ID', role: 'ta' }
-    });
-  })
+  requireGradingOrAnnotationAccess: vi.fn(),
 }));
 
 describe('AE-177 Backend Response-Time Budget Benchmark', () => {
-  let taUser: mongoose.Document & { _id: mongoose.Types.ObjectId };
-  let profUser: mongoose.Document & { _id: mongoose.Types.ObjectId };
+  let taUser: IUser;
+  let profUser: IUser;
   let course: mongoose.Document & { _id: mongoose.Types.ObjectId };
   let exam: mongoose.Document & { _id: mongoose.Types.ObjectId };
-  let rubric: mongoose.Document & { _id: mongoose.Types.ObjectId, questions: any[] };
+  let rubric: mongoose.Document & {
+    _id: mongoose.Types.ObjectId;
+    questions: {
+      questionNumber: number;
+      maxMarks: number;
+      criteria: {
+        criterionName: string;
+        description?: string;
+        points: number;
+      }[];
+    }[];
+  };
   let scripts: Array<mongoose.Document & { _id: mongoose.Types.ObjectId }> = [];
   let allocations: Array<mongoose.Document & { _id: mongoose.Types.ObjectId }> = [];
   let firstScriptId: string;
@@ -101,7 +101,7 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
     const rubricQuestions = Array.from({ length: 10 }, (_, i) => ({
       questionNumber: i + 1,
       maxMarks: 10,
-      criteria: [{ criterionName: 'dummy', points: 10 }]
+      criteria: [{ criterionName: 'dummy', points: 10 }],
     }));
 
     rubric = await Rubric.create({
@@ -115,12 +115,11 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
     const scriptDocs = [];
     const pageDocs = [];
     const allocDocs = [];
-    const gradeDocs = [];
-
-    const dummyBatchId = new mongoose.Types.ObjectId();
+    const gradeDocs: Record<string, unknown>[] = [];
 
     for (let i = 0; i < 200; i++) {
       const scriptId = new mongoose.Types.ObjectId();
+
       scriptDocs.push({
         _id: scriptId,
         exam: exam._id,
@@ -140,11 +139,14 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
 
       for (let p = 1; p <= 20; p++) {
         const pageId = new mongoose.Types.ObjectId();
-        if (i === 0 && p === 1) firstPageId = pageId.toString();
+
+        if (i === 0 && p === 1) {
+          firstPageId = pageId.toString();
+        }
 
         pageDocs.push({
           _id: pageId,
-          batchId: new mongoose.Types.ObjectId(), // unique batchId to avoid unique index clash
+          batchId: new mongoose.Types.ObjectId(),
           answerScript: scriptId,
           pageNumber: p,
           fileIndex: p,
@@ -154,8 +156,12 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
           fileId: new mongoose.Types.ObjectId(),
           job: new mongoose.Types.ObjectId(),
           metadata: {
-            annotations: { annotations: [], strokes: [], version: 1 }
-          }
+            annotations: {
+              annotations: [],
+              strokes: [],
+              version: 1,
+            },
+          },
         });
       }
 
@@ -182,26 +188,39 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
     firstScriptId = scripts[0]._id.toString();
 
     const { requireGradingOrAnnotationAccess } = await import('../lib/apiAuth');
-    (requireGradingOrAnnotationAccess as any).mockImplementation(() => Promise.resolve({
+
+    vi.mocked(requireGradingOrAnnotationAccess).mockResolvedValue({
       authorized: true,
-      user: { id: taUser._id.toString(), role: 'ta' }
-    }));
+      response: null,
+      user: {
+        id: taUser._id.toString(),
+        email: taUser.email,
+        name: taUser.name,
+        role: UserRole.TA,
+      },
+    });
 
     annotationService = new AnnotationPersistenceService();
-  }, 30000); // 30s timeout for seeding
+  }, 30000);
 
-  const runBenchmark = async (name: string, fn: () => Promise<void>, iterations: number) => {
+  const runBenchmark = async (
+    name: string,
+    fn: () => Promise<void>,
+    iterations: number
+  ) => {
     // Warm up
     await fn();
     await fn();
 
     // Reset query count
     let dbOps = 0;
-    mongoose.set('debug', (coll: string, method: string, query: any, doc: any) => {
+
+    mongoose.set('debug', () => {
       dbOps++;
     });
 
     const latencies: number[] = [];
+
     try {
       for (let i = 0; i < iterations; i++) {
         const start = performance.now();
@@ -213,6 +232,7 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
     }
 
     latencies.sort((a, b) => a - b);
+
     const p50 = latencies[Math.floor(latencies.length * 0.5)];
     const p95 = latencies[Math.floor(latencies.length * 0.95)];
     const max = latencies[latencies.length - 1];
@@ -225,78 +245,138 @@ describe('AE-177 Backend Response-Time Budget Benchmark', () => {
   };
 
   it('Runs all benchmarks', async () => {
-    await runBenchmark('GET Script (20 pages)', async () => {
-      // Direct DB operations that mimic GET /scripts/[id]
-      const script = await AnswerScript.findOne({ _id: firstScriptId, isActive: true });
-      const alloc = await Allocation.findOne({ answerScript: firstScriptId });
-      const ingestionPages = await IngestionPage.find({ answerScript: firstScriptId }).sort({ fileIndex: 1, pageNumber: 1 });
-      if (ingestionPages.length === 0) {
-        await Page.find({ answerScript: firstScriptId, isActive: true }).sort({ pageNumber: 1 });
-      }
-    }, 100);
-    // Bench 2
-    const count = await AnswerScript.countDocuments();
-    console.log('AnswerScript count:', count);
-    const script = await AnswerScript.findOne({ _id: firstScriptId });
-    console.log('Script by ID:', script?._id, 'isActive:', script?.isActive);
+    await runBenchmark(
+      'GET Script (20 pages)',
+      async () => {
+        // Direct DB operations that mimic GET /scripts/[id]
+        await AnswerScript.findOne({
+          _id: firstScriptId,
+          isActive: true,
+        });
 
-    await runBenchmark('saveGrade', async () => {
-      await gradingService.saveGrade({
-        scriptId: firstScriptId,
-        question: 1,
-        marksAwarded: [{ criterionName: 'dummy', score: 5 }],
-        userId: taUser._id.toString(),
-        userRole: UserRole.TA,
-        clientTotalScore: 5,
-        isFinal: false
-      });
-    }, 100);
-    // Bench 4
+        await Allocation.findOne({
+          answerScript: firstScriptId,
+        });
+
+        const ingestionPages = await IngestionPage.find({
+          answerScript: firstScriptId,
+        }).sort({
+          fileIndex: 1,
+          pageNumber: 1,
+        });
+
+        if (ingestionPages.length === 0) {
+          await Page.find({
+            answerScript: firstScriptId,
+            isActive: true,
+          }).sort({
+            pageNumber: 1,
+          });
+        }
+      },
+      100
+    );
+
+    await runBenchmark(
+      'saveGrade',
+      async () => {
+        await gradingService.saveGrade({
+          scriptId: firstScriptId,
+          question: 1,
+          marksAwarded: [{ criterionName: 'dummy', score: 5 }],
+          userId: taUser._id.toString(),
+          userRole: UserRole.TA,
+          clientTotalScore: 5,
+          isFinal: false,
+        });
+      },
+      100
+    );
+
     let lastUpdatedAt: string | undefined;
-    await runBenchmark('Annotation Autosave', async () => {
-      const currentUpdateAt = lastUpdatedAt || (await IngestionPage.findById(firstPageId))?.updatedAt?.toISOString() || new Date().toISOString();
-      const res = await annotationService.savePageAnnotations({
-        scriptId: firstScriptId,
-        pageIdentifier: firstPageId,
-        payload: { annotations: [], strokes: [], version: 1 },
-        userId: taUser._id.toString(),
-        userRole: UserRole.TA,
-        baseUpdatedAt: currentUpdateAt
-      });
-      lastUpdatedAt = res.updatedAt;
-    }, 100);
-    // Bench 5
-    let scriptIdx = 10;
-    await runBenchmark('Script Submit', async () => {
-      const sId = scripts[scriptIdx]._id.toString();
-      await gradingService.submitScript({
-        scriptId: sId,
-        userId: taUser._id.toString(),
-        userRole: UserRole.TA
-      });
-      scriptIdx++;
-    }, 50);
-    // Bench 6
-    // Ensure exam createdBy matches
-    await Exam.updateOne({ _id: exam._id }, { $set: { createdBy: profUser._id } });
 
-    await runBenchmark('Bulk Submit (50 items)', async () => {
-      await gradingService.bulkSubmit({
-        examId: exam._id.toString(),
-        userId: taUser._id.toString(),
-        userRole: UserRole.TA,
-        confirmed: true,
-        limit: 50
-      });
-    }, 2);
-    // Bench 7
-    await runBenchmark('Image GET', async () => {
-      await IngestionPage.findById(firstPageId);
-    }, 100);
-    // Bench 8
-    // We just call AllocationService.getNextAllocation
-    await runBenchmark('getNextAllocation', async () => {
-      await AllocationService.getNextAllocation(taUser._id.toString(), exam._id, allocations[0]._id);
-    }, 100);
+    await runBenchmark(
+      'Annotation Autosave',
+      async () => {
+        const currentUpdateAt =
+          lastUpdatedAt ||
+          (await IngestionPage.findById(firstPageId))?.updatedAt?.toISOString() ||
+          new Date().toISOString();
+
+        const res = await annotationService.savePageAnnotations({
+          scriptId: firstScriptId,
+          pageIdentifier: firstPageId,
+          payload: {
+            annotations: [],
+            strokes: [],
+            version: 1,
+          },
+          userId: taUser._id.toString(),
+          userRole: UserRole.TA,
+          baseUpdatedAt: currentUpdateAt,
+        });
+
+        lastUpdatedAt = res.updatedAt;
+      },
+      100
+    );
+
+    let scriptIdx = 10;
+
+    await runBenchmark(
+      'Script Submit',
+      async () => {
+        const sId = scripts[scriptIdx]._id.toString();
+
+        await gradingService.submitScript({
+          scriptId: sId,
+          userId: taUser._id.toString(),
+          userRole: UserRole.TA,
+        });
+
+        scriptIdx++;
+      },
+      50
+    );
+
+    // Ensure exam createdBy matches
+    await Exam.updateOne(
+      { _id: exam._id },
+      { $set: { createdBy: profUser._id } }
+    );
+
+    await runBenchmark(
+      'Bulk Submit (50 items)',
+      async () => {
+        await gradingService.bulkSubmit({
+          examId: exam._id.toString(),
+          userId: taUser._id.toString(),
+          userRole: UserRole.TA,
+          confirmed: true,
+          limit: 50,
+        });
+      },
+      2
+    );
+
+    await runBenchmark(
+      'Image GET',
+      async () => {
+        await IngestionPage.findById(firstPageId);
+      },
+      100
+    );
+
+    await runBenchmark(
+      'getNextAllocation',
+      async () => {
+        await AllocationService.getNextAllocation(
+          taUser._id.toString(),
+          exam._id,
+          allocations[0]._id
+        );
+      },
+      100
+    );
   });
 });
