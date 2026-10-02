@@ -19,6 +19,7 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  const __reqStart = Date.now();
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -65,7 +66,7 @@ export async function POST(
         message: 'Grade saved successfully',
         data: responseData,
       },
-      { status: 200 }
+      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -76,7 +77,7 @@ export async function POST(
         message,
         data: null,
       },
-      { status }
+      { status, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 }
@@ -99,6 +100,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  const __reqStart = Date.now();
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -118,7 +120,7 @@ export async function GET(
         message: 'Grades retrieved successfully',
         data: grades,
       },
-      { status: 200 }
+      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -129,7 +131,7 @@ export async function GET(
         message,
         data: null,
       },
-      { status }
+      { status, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 }

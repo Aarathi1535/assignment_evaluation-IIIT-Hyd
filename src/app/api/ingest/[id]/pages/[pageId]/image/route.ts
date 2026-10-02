@@ -18,6 +18,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
 ) {
+  const __reqStart = Date.now();
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -60,7 +61,7 @@ export async function GET(
           message: 'Page not found',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -72,7 +73,7 @@ export async function GET(
           message: 'Page does not belong to the requested batch',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -106,7 +107,7 @@ export async function GET(
           message: 'Batch not found or access denied',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -148,7 +149,7 @@ export async function GET(
           message: 'Page image key is missing or not processed yet',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -171,6 +172,7 @@ export async function GET(
         headers: {
           'Content-Type': contentType,
           'Content-Length': buffer.length.toString(),
+          'Server-Timing': `total;dur=${Date.now() - __reqStart}`
         },
       });
     } catch (readError) {
@@ -181,7 +183,7 @@ export async function GET(
           message: 'Page image file not found on disk',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
   } catch (error: unknown) {
@@ -192,7 +194,7 @@ export async function GET(
         message,
         data: null,
       },
-      { status: 500 }
+      { status: 500, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 }
