@@ -80,6 +80,5 @@ export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ id: string; questionNumber: string }> }
 ) {
-  const __reqStart = Date.now();
   return POST(req, context);
 }
