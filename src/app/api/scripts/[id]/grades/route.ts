@@ -77,7 +77,7 @@ export async function POST(
         message,
         data: null,
       },
-      { status }
+      { status, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 }
@@ -86,7 +86,6 @@ export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const __reqStart = Date.now();
   return POST(req, context);
 }
 
@@ -132,7 +131,7 @@ export async function GET(
         message,
         data: null,
       },
-      { status }
+      { status, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 }

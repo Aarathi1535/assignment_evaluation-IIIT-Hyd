@@ -1178,32 +1178,36 @@ export class GradingService {
             );
         }
 
-        if (gradesToFinalizeIds.length > 0) {
-            await Grade.updateMany(
-                { _id: { $in: gradesToFinalizeIds } },
-                { $set: { isFinal: true } }
-            );
-        }
+        await AllocationService.runInTransaction(async (session) => {
+            if (gradesToFinalizeIds.length > 0) {
+                await Grade.updateMany(
+                    { _id: { $in: gradesToFinalizeIds } },
+                    { $set: { isFinal: true } },
+                    { session }
+                );
+            }
 
-        if (allocationIdsToComplete.length > 0) {
-            await Allocation.updateMany(
-                { _id: { $in: allocationIdsToComplete } },
-                {
-                    $set: {
-                        status: AllocationStatus.COMPLETED,
-                        completedAt: now,
-                    },
-                    $push: {
-                        history: {
+            if (allocationIdsToComplete.length > 0) {
+                await Allocation.updateMany(
+                    { _id: { $in: allocationIdsToComplete } },
+                    {
+                        $set: {
                             status: AllocationStatus.COMPLETED,
-                            actor: userObjectId,
-                            actorRole: userRole,
-                            timestamp: now,
+                            completedAt: now,
+                        },
+                        $push: {
+                            history: {
+                                status: AllocationStatus.COMPLETED,
+                                actor: userObjectId,
+                                actorRole: userRole,
+                                timestamp: now,
+                            }
                         }
-                    }
-                }
-            );
-        }
+                    },
+                    { session }
+                );
+            }
+        });
 
         await Promise.all(auditLogPromises);
 
