@@ -11,7 +11,6 @@ import ExamRepository from '../../../../repositories/ExamRepository';
 import AllocationService from '../../../../services/AllocationService';
 import { Anonymizer } from '../../../../lib/anonymizer';
 import { HttpError } from '../../../../lib/errors';
-import { logGraderTiming } from '../../../../lib/graderPerformance';
 
 /**
  * GET /api/scripts/[id]
@@ -25,7 +24,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const requestStartedAt = performance.now();
+  const __reqStart = Date.now();
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -46,7 +45,7 @@ export async function GET(
         message: 'Invalid AnswerScript ID format',
         data: null,
       },
-      { status: 400 }
+      {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 
@@ -62,7 +61,7 @@ export async function GET(
           message: 'AnswerScript not found',
           data: null,
         },
-        { status: 404 }
+        {  status: 404 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -87,7 +86,7 @@ export async function GET(
             message: 'Forbidden: Access denied to the exam for this answer script',
             data: null,
           },
-          { status: 403 }
+          {  status: 403 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
         );
       }
       const query: { answerScript: mongoose.Types.ObjectId; question?: number } = { answerScript: script._id };
@@ -111,7 +110,7 @@ export async function GET(
             message: 'Forbidden: You are not allocated to grade this answer script',
             data: null,
           },
-          { status: 403 }
+          {  status: 403 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
         );
       }
       scriptAllocationId = allocation._id.toString();
@@ -180,10 +179,6 @@ export async function GET(
       isActive: script.isActive,
     };
 
-    logGraderTiming('script-api-ready', requestStartedAt, {
-      status: 200,
-      pageCount: formattedPages.length,
-    });
     return NextResponse.json(
       {
         success: true,

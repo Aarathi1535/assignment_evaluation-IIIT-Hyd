@@ -1122,33 +1122,90 @@ export class GradingService {
         const submitted: BulkSubmitItemDetail[] = [];
         const failed: BulkSubmitItemDetail[] = [];
 
-        for (const item of batchToSubmit) {
-            try {
-                const subResult = await this.submitScript({
-                    scriptId: item.answerScriptId,
-                    userId: userId.toString(),
-                    userRole,
-                    question: item.question ?? undefined,
-                    ipAddress,
-                });
+        // --- OPTIMIZED BULK EXECUTION ---
+        const allocationIdsToComplete: mongoose.Types.ObjectId[] = [];
+        const gradesToFinalizeIds: mongoose.Types.ObjectId[] = [];
+        const auditLogPromises: Promise<void>[] = [];
 
-                submitted.push({
-                    allocationId: item.allocation._id.toString(),
-                    answerScriptId: item.answerScriptId,
-                    question: item.question,
-                    totalScore: subResult.totalScore,
-                    finalizedQuestions: subResult.finalizedQuestions,
-                });
-            } catch (err: unknown) {
-                const errorMessage = err instanceof Error ? err.message : String(err);
-                failed.push({
-                    allocationId: item.allocation._id.toString(),
-                    answerScriptId: item.answerScriptId,
-                    question: item.question,
-                    error: errorMessage,
-                });
+        const now = new Date();
+
+        for (const item of batchToSubmit) {
+            const itemGrades = existingGrades.filter((g) => g.answerScript.toString() === item.answerScriptId && (item.question === null || item.question === undefined || g.question === item.question));
+
+            const finalizedQuestions: number[] = [];
+            let totalScore = 0;
+            for (const grade of itemGrades) {
+                if (!grade.isFinal) {
+                    gradesToFinalizeIds.push(grade._id as mongoose.Types.ObjectId);
+                }
+                if (typeof grade.question === 'number') {
+                    finalizedQuestions.push(grade.question);
+                }
+                totalScore += (grade.totalScore || 0);
             }
+
+            const roundedTotalScore = Math.round(totalScore * 100) / 100;
+            allocationIdsToComplete.push(item.allocation._id as mongoose.Types.ObjectId);
+
+            submitted.push({
+                allocationId: item.allocation._id.toString(),
+                answerScriptId: item.answerScriptId,
+                question: item.question,
+                totalScore: roundedTotalScore,
+                finalizedQuestions,
+            });
+
+            // Replicate individual audit logs emitted by submitScript
+            auditLogPromises.push(
+                writeAuditLog({
+                    user: userId.toString(),
+                    action: 'SCRIPT_SUBMITTED',
+                    outcome: 'SUCCESS',
+                    entityId: new mongoose.Types.ObjectId(item.answerScriptId),
+                    entityType: 'AnswerScript',
+                    details: {
+                        examId: examObjectId.toString(),
+                        scriptId: item.answerScriptId,
+                        submittedBy: userId.toString(),
+                        role: userRole,
+                        totalScore: roundedTotalScore,
+                        finalizedQuestions,
+                        allocationCount: 1,
+                        bulk: true
+                    },
+                    ipAddress,
+                })
+            );
         }
+
+        if (gradesToFinalizeIds.length > 0) {
+            await Grade.updateMany(
+                { _id: { $in: gradesToFinalizeIds } },
+                { $set: { isFinal: true } }
+            );
+        }
+
+        if (allocationIdsToComplete.length > 0) {
+            await Allocation.updateMany(
+                { _id: { $in: allocationIdsToComplete } },
+                {
+                    $set: {
+                        status: AllocationStatus.COMPLETED,
+                        completedAt: now,
+                    },
+                    $push: {
+                        history: {
+                            status: AllocationStatus.COMPLETED,
+                            actor: userObjectId,
+                            actorRole: userRole,
+                            timestamp: now,
+                        }
+                    }
+                }
+            );
+        }
+
+        await Promise.all(auditLogPromises);
 
         // Audit Logging
         await writeAuditLog({

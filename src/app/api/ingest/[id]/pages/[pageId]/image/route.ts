@@ -6,39 +6,7 @@ import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
 import AllocationService from '../../../../../../../services/AllocationService';
-import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
-import DerivedPageRepairService from '../../../../../../../services/DerivedPageRepairService';
-import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
-
-function isMissingDerivedPageError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const storageError = error as { code?: number | string; statusCode?: number };
-  return storageError.code === 404 || storageError.code === '404' ||
-    storageError.statusCode === 404 || storageError.code === 'ENOENT';
-}
-
-function toWebReadableStream(
-  stream: NodeJS.ReadableStream & AsyncIterable<Uint8Array | string>
-): ReadableStream<Uint8Array> {
-  const iterator = stream[Symbol.asyncIterator]();
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const chunk = await iterator.next();
-      if (chunk.done) {
-        controller.close();
-      } else {
-        const bytes =
-          typeof chunk.value === 'string'
-            ? new TextEncoder().encode(chunk.value)
-            : new Uint8Array(chunk.value);
-        controller.enqueue(bytes);
-      }
-    },
-    async cancel() {
-      await iterator.return?.();
-    },
-  });
-}
+import DerivedStorageService from '../../../../../../../services/DerivedStorageService';
 
 /**
  * GET /api/ingest/[id]/pages/[pageId]/image
@@ -50,7 +18,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
 ) {
-  const requestStartedAt = performance.now();
+  const __reqStart = Date.now();
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -93,7 +61,7 @@ export async function GET(
           message: 'Page not found',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -105,7 +73,7 @@ export async function GET(
           message: 'Page does not belong to the requested batch',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -139,7 +107,7 @@ export async function GET(
           message: 'Batch not found or access denied',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
@@ -181,43 +149,13 @@ export async function GET(
           message: 'Page image key is missing or not processed yet',
           data: null,
         },
-        { status: 404 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
 
-    // 5. Open the stored page image after checking metadata so missing assets can
-    // still be returned as a controlled API error before the response starts.
+    // 5. Read the full-resolution page image file from derived storage
     try {
-      const storageOpenStartedAt = performance.now();
-      let opened: Awaited<ReturnType<typeof DerivedStorageService.openDerivedPage>>;
-      try {
-        opened = await DerivedStorageService.openDerivedPage(page.storageKey);
-      } catch (error) {
-        if (!isMissingDerivedPageError(error)) throw error;
-        try {
-          await DerivedPageRepairService.repairPage(pageId);
-          const refreshedPage = await IngestionPage.findById(pageId);
-          if (!refreshedPage?.storageKey) throw new Error('Regenerated page has no storage key.');
-          page.storageKey = refreshedPage.storageKey;
-        } catch (repairError) {
-          if (repairError && typeof repairError === 'object') {
-            const storageError = repairError as { code?: number | string; statusCode?: number };
-            if ((storageError.code !== undefined || storageError.statusCode !== undefined) &&
-              !isMissingDerivedPageError(repairError)) {
-              throw repairError;
-            }
-          }
-          console.error(`Failed to regenerate missing page image for page ${pageId}:`, repairError);
-          return NextResponse.json(
-            { success: false, message: 'Page image file not found in derived storage', data: null },
-            { status: 404 }
-          );
-        }
-        opened = await DerivedStorageService.openDerivedPage(page.storageKey);
-      }
-      const { stream, size } = opened;
-      logGraderTiming('page-object-opened', storageOpenStartedAt, { sizeBytes: size });
-      logGraderTiming('page-image-api-ready', requestStartedAt, { status: 200 });
+      const buffer = await DerivedStorageService.readDerivedPage(page.storageKey);
 
       // Determine proper Content-Type
       let contentType = 'image/png';
@@ -230,33 +168,22 @@ export async function GET(
         contentType = 'image/gif';
       }
 
-      return new NextResponse(toWebReadableStream(stream), {
+      return new NextResponse(new Uint8Array(buffer), {
         headers: {
           'Content-Type': contentType,
-          'Content-Length': size.toString(),
-          'Cache-Control': 'private, no-store',
-          'X-Content-Type-Options': 'nosniff',
+          'Content-Length': buffer.length.toString(),
+          'Server-Timing': `total;dur=${Date.now() - __reqStart}`
         },
       });
     } catch (readError) {
-      if (readError instanceof DerivedStorageConfigurationError) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: readError.message,
-            data: null,
-          },
-          { status: 500 }
-        );
-      }
       console.error(`Failed to read page image file for page ${pageId}:`, readError);
       return NextResponse.json(
         {
           success: false,
-          message: 'Failed to read page image from derived storage',
+          message: 'Page image file not found on disk',
           data: null,
         },
-        { status: 500 }
+        { status: 404, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
       );
     }
   } catch (error: unknown) {
@@ -267,7 +194,7 @@ export async function GET(
         message,
         data: null,
       },
-      { status: 500 }
+      { status: 500, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
     );
   }
 }
