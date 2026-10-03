@@ -3,6 +3,8 @@ import AnswerScript from '../models/AnswerScript';
 import IngestionPage from '../models/IngestionPage';
 import Page from '../models/Page';
 import Rubric from '../models/Rubric';
+import Course from '../models/Course';
+import Exam, { ExamStatus, IngestionApprovalStatus } from '../models/Exam';
 import ReconstructedAnswer, {
     IReconstructedAnswer,
     ITaggedRegion,
@@ -36,6 +38,174 @@ export interface TagRegionInput {
 }
 
 export class AnswerSegmentationService {
+    async loadDemoScript(userId: string, userRole: string): Promise<{
+        scriptId: string;
+        pages: Array<{ id: string; pageNumber: number; imageUrl: string; width: number; height: number }>;
+    }> {
+        const role = userRole.toUpperCase();
+        let courseQuery: mongoose.QueryFilter<import('../models/Course').ICourse>;
+        if (role === 'PROFESSOR') {
+            courseQuery = { professor: new mongoose.Types.ObjectId(userId), isActive: true };
+        } else if (role === 'TA') {
+            courseQuery = { teachingAssistants: new mongoose.Types.ObjectId(userId), isActive: true };
+        } else if (role === 'ADMIN') {
+            courseQuery = { isActive: true };
+        } else {
+            throw new HttpError('Forbidden: Unauthorized role', 403);
+        }
+
+        const course = await Course.findOne(courseQuery).sort({ createdAt: 1 });
+        if (!course) {
+            throw new HttpError('An active course is required to load the segmentation demo', 404);
+        }
+
+        const examTitle = 'Research Direction 3 — Question-Answer Segmentation Demo';
+        let exam = await Exam.findOne({
+            course: course._id,
+            createdBy: course.professor,
+            title: examTitle
+        });
+        if (!exam) {
+            exam = await Exam.create({
+                title: examTitle,
+                course: course._id,
+                createdBy: course.professor,
+                examDate: new Date(),
+                totalMarks: 50,
+                status: ExamStatus.EVALUATING,
+                numberOfQuestions: 5,
+                isActive: true,
+                ingestionApprovalStatus: IngestionApprovalStatus.APPROVED
+            });
+        }
+
+        const batchId = `research-direction-3-segmentation-demo-${course._id.toString()}`;
+        let script = await AnswerScript.findOne({
+            batchId,
+            fileIndex: 0,
+            startPageNumber: 1
+        });
+        if (!script) {
+            script = await AnswerScript.create({
+                exam: exam._id,
+                filename: 'research-direction-3-segmentation-demo.pdf',
+                batchId,
+                fileIndex: 0,
+                startPageNumber: 1,
+                endPageNumber: 2,
+                pageCount: 2,
+                isActive: true,
+                identificationHistory: [],
+                metadata: { researchDemo: 'answer-segmentation-v1' }
+            });
+        } else if (script.exam.toString() !== exam._id.toString()) {
+            throw new HttpError('The existing segmentation demo script is linked to another exam', 409);
+        }
+
+        const pageContent = [
+            [
+                { question: 1, label: 'Artificial Intelligence', y: 190 },
+                { question: 2, label: 'Machine Learning', y: 440 },
+                { question: 3, label: 'Deep Learning — answer begins', y: 690 }
+            ],
+            [
+                { question: 3, label: 'Deep Learning — continuation', y: 190 },
+                { question: 4, label: 'Natural Language Processing', y: 440 },
+                { question: 5, label: 'Generative AI', y: 690 }
+            ]
+        ];
+
+        const escapeXml = (value: string) => value
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+        const pageImage = (pageNumber: number) => {
+            const entries = pageContent[pageNumber - 1];
+            const textElements = entries.map((entry) => `
+                <text x="90" y="${entry.y}" font-family="Arial, sans-serif" font-size="25" font-weight="700" fill="#172554">Q${entry.question} — ${escapeXml(entry.label)}</text>
+                <rect x="90" y="${entry.y + 18}" width="620" height="95" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+                <text x="110" y="${entry.y + 52}" font-family="Arial, sans-serif" font-size="17" fill="#334155">Digital sample answer region for demonstration.</text>
+                <text x="110" y="${entry.y + 82}" font-family="Arial, sans-serif" font-size="14" fill="#64748b">TA-tagged bounding box • not handwritten OCR</text>
+            `).join('');
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100" viewBox="0 0 800 1100"><rect width="800" height="1100" fill="#f8fafc"/><rect x="45" y="40" width="710" height="1020" rx="16" fill="#ffffff" stroke="#94a3b8" stroke-width="2"/><text x="90" y="100" font-family="Arial, sans-serif" font-size="18" fill="#64748b">RESEARCH DIRECTION 3 • DIGITAL DEMO SCRIPT • PAGE ${pageNumber} OF 2</text><line x1="90" y1="125" x2="710" y2="125" stroke="#cbd5e1"/>${textElements}<text x="90" y="1005" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Question–answer segmentation sample • no OCR is performed</text></svg>`;
+            return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+        };
+
+        for (let pageNumber = 1; pageNumber <= 2; pageNumber++) {
+            await Page.findOneAndUpdate(
+                { answerScript: script._id, pageNumber },
+                { $set: { imagePath: pageImage(pageNumber), isActive: true } },
+                { upsert: true, returnDocument: 'after' }
+            );
+        }
+        const pages = await Page.find({ answerScript: script._id, isActive: true }).sort({ pageNumber: 1 });
+
+        const demoRegions: TagRegionInput[] = [
+            {
+                questionNumber: 1,
+                pageNumber: 1,
+                box: { x: 0.1, y: 0.15, width: 0.78, height: 0.17 },
+                segmentType: 'START',
+                notes: 'Artificial Intelligence studies intelligent agents that perceive an environment and take actions to achieve defined goals. Rational agents choose actions that maximize expected performance from available information.'
+            },
+            {
+                questionNumber: 2,
+                pageNumber: 1,
+                box: { x: 0.1, y: 0.38, width: 0.78, height: 0.17 },
+                segmentType: 'START',
+                notes: 'Machine learning algorithms improve performance by learning patterns from data. Supervised learning fits labeled examples; validation measures generalization and helps detect overfitting.'
+            },
+            {
+                questionNumber: 3,
+                pageNumber: 1,
+                box: { x: 0.1, y: 0.61, width: 0.78, height: 0.17 },
+                segmentType: 'START',
+                notes: 'Deep learning uses multi-layer neural networks to learn increasingly abstract representations. A convolutional network applies shared filters to local input regions and builds hierarchical feature maps.'
+            },
+            {
+                questionNumber: 3,
+                pageNumber: 2,
+                box: { x: 0.1, y: 0.15, width: 0.78, height: 0.17 },
+                sequenceIndex: 2,
+                segmentType: 'CONTINUATION',
+                notes: 'Back-propagation computes gradients from the output layer toward earlier layers using the chain rule. Gradient-based optimization updates weights to reduce training loss; regularization and validation help control overfitting.'
+            },
+            {
+                questionNumber: 4,
+                pageNumber: 2,
+                box: { x: 0.1, y: 0.38, width: 0.78, height: 0.17 },
+                segmentType: 'START',
+                notes: 'Natural language processing enables computers to analyze and generate human language. Tokenization, contextual representations, and sequence models support tasks such as translation, summarization, and question answering.'
+            },
+            {
+                questionNumber: 5,
+                pageNumber: 2,
+                box: { x: 0.1, y: 0.61, width: 0.78, height: 0.17 },
+                segmentType: 'START',
+                notes: 'Generative AI models learn patterns in training data and sample new content from a learned distribution. Evaluation considers usefulness, factuality, safety, and the limitations of generated responses.'
+            }
+        ];
+
+        await TaggedRegion.deleteMany({ answerScript: script._id });
+        await ReconstructedAnswer.deleteMany({ answerScript: script._id });
+        for (const region of demoRegions) {
+            await this.tagRegion(script._id, region, userId);
+        }
+
+        return {
+            scriptId: script._id.toString(),
+            pages: pages.map((page) => ({
+                id: page._id.toString(),
+                pageNumber: page.pageNumber,
+                imageUrl: page.imagePath,
+                width: 800,
+                height: 1100
+            }))
+        };
+    }
+
     /**
      * Executes answer reconstruction for an answer script, prioritizing TA-tagged ground truth regions.
      * When TA-tagged regions exist, they become the ground truth for question-answer association.

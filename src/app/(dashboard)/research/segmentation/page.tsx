@@ -84,6 +84,14 @@ interface PageData {
   height?: number;
 }
 
+const DEMO_QUESTION_LABELS: Record<number, string> = {
+  1: 'Artificial Intelligence',
+  2: 'Machine Learning',
+  3: 'Deep Learning',
+  4: 'Natural Language Processing',
+  5: 'Generative AI'
+};
+
 const QUESTION_COLORS = [
   { border: 'border-blue-500', bg: 'bg-blue-500/20', text: 'text-blue-400', hex: '#3b82f6' },
   { border: 'border-emerald-500', bg: 'bg-emerald-500/20', text: 'text-emerald-400', hex: '#10b981' },
@@ -102,7 +110,9 @@ export default function AnswerSegmentationWorkspace() {
   const [scriptId, setScriptId] = useState('');
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingDemo, setIsLoadingDemo] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDemoScript, setIsDemoScript] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -126,7 +136,7 @@ export default function AnswerSegmentationWorkspace() {
   const currentPage = pages[currentPageIndex] || null;
 
   // Load Script Details & Workspace
-  const loadScriptWorkspace = async (id: string) => {
+  const loadScriptWorkspace = async (id: string, demoMode = false, demoPages?: PageData[]) => {
     const trimmedId = id.trim();
     if (!trimmedId) return;
 
@@ -136,14 +146,16 @@ export default function AnswerSegmentationWorkspace() {
     setCurrentBox(null);
 
     try {
-      // 1. Fetch pages for this script
-      const pagesRes = await fetch(`/api/scripts/${encodeURIComponent(trimmedId)}/pages`);
-      const pagesData = await pagesRes.json();
-      if (!pagesRes.ok) {
-        throw new Error(pagesData.message || 'Failed to load script pages');
+      // The demo returns its pages directly because the generic pages API requires a TA grading allocation.
+      let scriptPages = demoMode && demoPages ? demoPages : [];
+      if (!demoMode || !demoPages) {
+        const pagesRes = await fetch(`/api/scripts/${encodeURIComponent(trimmedId)}/pages`);
+        const pagesData = await pagesRes.json();
+        if (!pagesRes.ok) {
+          throw new Error(pagesData.message || 'Failed to load script pages');
+        }
+        scriptPages = pagesData.data || [];
       }
-
-      const scriptPages: PageData[] = pagesData.data || [];
       if (scriptPages.length === 0) {
         // Fallback placeholder pages for research demonstration if none ingested
         setPages([
@@ -176,11 +188,31 @@ export default function AnswerSegmentationWorkspace() {
       }
 
       setActiveScriptId(trimmedId);
+      setIsDemoScript(demoMode);
       setSuccessMessage('Answer script loaded successfully.');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to initialize segmentation workspace');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleLoadDemoScript = async () => {
+    setIsLoadingDemo(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      const response = await fetch('/api/research/segmentation/demo', { method: 'POST' });
+      const result = await response.json();
+      if (!response.ok || !result.success || !result.data?.scriptId) {
+        throw new Error(result.message || 'Failed to load the demo script');
+      }
+      setScriptId(result.data.scriptId);
+      await loadScriptWorkspace(result.data.scriptId, true, result.data.pages);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load the demo script');
+    } finally {
+      setIsLoadingDemo(false);
     }
   };
 
@@ -349,12 +381,19 @@ export default function AnswerSegmentationWorkspace() {
         </div>
 
         {/* Script Selection Input */}
-        <div className="flex items-center gap-2 w-full md:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <button
+            onClick={handleLoadDemoScript}
+            disabled={isLoadingDemo || isLoading}
+            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-xl text-sm font-semibold flex items-center gap-2 transition"
+          >
+            {isLoadingDemo ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Load Demo Script'}
+          </button>
           <div className="relative flex-1 md:w-80">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Enter AnswerScript ID..."
+              placeholder="Script ID..."
               value={scriptId}
               onChange={(e) => setScriptId(e.target.value)}
               className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -365,9 +404,15 @@ export default function AnswerSegmentationWorkspace() {
             disabled={isLoading || !scriptId.trim()}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-sm font-semibold flex items-center gap-2 transition"
           >
-            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Open Sheet'}
+            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Open Existing Script'}
           </button>
         </div>
+      </div>
+
+      <div className="p-4 rounded-xl bg-blue-950/30 border border-blue-900/60 text-sm text-slate-300">
+        Research prototype for question–answer segmentation and reconstruction. TAs can tag question regions across pages,
+        link continuations, and reconstruct complete question-wise answers for downstream evaluation. The demo uses digital
+        sample content and deterministic ground-truth tags; it does not perform automatic handwritten OCR.
       </div>
 
       {/* Notifications */}
@@ -614,7 +659,7 @@ export default function AnswerSegmentationWorkspace() {
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                  <h2 className="font-bold text-white text-base">Reconstructed Question Answers</h2>
+                  <h2 className="font-bold text-white text-base">RECONSTRUCTED ANSWERS</h2>
                 </div>
                 <button
                   onClick={reloadData}
@@ -665,7 +710,9 @@ export default function AnswerSegmentationWorkspace() {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <span className={`px-2 py-0.5 rounded text-xs font-extrabold ${color.bg} ${color.text} border ${color.border}`}>
-                              Question {ans.questionNumber}
+                              Q{ans.questionNumber}{isDemoScript && DEMO_QUESTION_LABELS[ans.questionNumber]
+                                ? ` — ${DEMO_QUESTION_LABELS[ans.questionNumber]}`
+                                : ''}
                             </span>
                             {ans.isNonConsecutive && (
                               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30">
@@ -698,6 +745,28 @@ export default function AnswerSegmentationWorkspace() {
                             {ans.totalSegments} {ans.totalSegments === 1 ? 'region' : 'regions'}
                           </span>
                         </div>
+
+                        {isDemoScript && ans.questionNumber === 3 && (
+                          <div className="text-xs font-semibold text-blue-300">
+                            Pages: 1 → 2 · 2 segments · Reconstructed
+                          </div>
+                        )}
+
+                        {ans.segments.some((segment) => segment.extractedText?.trim()) && (
+                          <div className="rounded-lg bg-slate-900/80 border border-slate-800 p-3">
+                            <div className="text-[10px] font-bold tracking-wider text-slate-400 uppercase mb-1">
+                              Complete reconstructed answer
+                            </div>
+                            <p className="text-xs leading-relaxed text-slate-200">
+                              {ans.segments
+                                .slice()
+                                .sort((a, b) => a.sequenceIndex - b.sequenceIndex)
+                                .map((segment) => segment.extractedText?.trim())
+                                .filter((text): text is string => Boolean(text))
+                                .join(' ')}
+                            </p>
+                          </div>
+                        )}
 
                         {/* Ambiguity Reason if any */}
                         {ans.isAmbiguous && ans.ambiguityReason && (

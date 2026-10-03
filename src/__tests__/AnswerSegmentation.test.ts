@@ -6,13 +6,17 @@ import Course, { ICourse } from '../models/Course';
 import Exam, { IExam, ExamStatus, IngestionApprovalStatus } from '../models/Exam';
 import Rubric from '../models/Rubric';
 import AnswerScript, { IAnswerScript } from '../models/AnswerScript';
-import ReconstructedAnswer from '../models/AnswerSegmentation';
+import ReconstructedAnswer, { TaggedRegion } from '../models/AnswerSegmentation';
+import Page from '../models/Page';
 import { ContinuationReconstructionEngine } from '../services/segmentation/ContinuationReconstructionEngine';
 import { SegmentHeadingDetector } from '../services/segmentation/SegmentHeadingDetector';
 import answerSegmentationService from '../services/AnswerSegmentationService';
 import { AnswerScriptFixtureGenerator } from './fixtures/AnswerScriptFixtureGenerator';
 import { UserRole } from '../constants/permissions';
 import { GET as getSegmentationRoute } from '../app/api/research/segmentation/[scriptId]/route';
+import { GET as getRegionsRoute } from '../app/api/research/segmentation/[scriptId]/regions/route';
+import { POST as postSegmentationDemoRoute } from '../app/api/research/segmentation/demo/route';
+import { GET as getScriptPagesRoute } from '../app/api/scripts/[id]/pages/route';
 import { GET as getQuestionRoute, PATCH as patchQuestionRoute } from '../app/api/research/segmentation/[scriptId]/question/[questionNumber]/route';
 
 // Mock NextAuth session
@@ -515,6 +519,120 @@ describe('Research Direction 3: Question-Answer Segmentation & Reconstruction Te
             await expect(
                 answerSegmentationService.reconstructScript(fakeId)
             ).rejects.toThrow(/AnswerScript not found/i);
+        });
+    });
+
+    describe('15A. Deterministic segmentation demo workflow', () => {
+        beforeEach(() => {
+            mockSessionUser = {
+                id: professorUser._id.toString(),
+                email: professorUser.email,
+                name: professorUser.name,
+                role: UserRole.PROFESSOR
+            };
+        });
+
+        it('loads a two-page demo script with five reconstructed questions and a Q3 continuation', async () => {
+            const response = await postSegmentationDemoRoute();
+            expect(response.status).toBe(200);
+            const result = await response.json();
+            expect(result.success).toBe(true);
+
+            const scriptId = result.data.scriptId as string;
+            expect(result.data.pages).toHaveLength(2);
+            const pages = await Page.find({ answerScript: scriptId, isActive: true }).sort({ pageNumber: 1 });
+            expect(pages).toHaveLength(2);
+            expect(pages.map((page) => page.pageNumber)).toEqual([1, 2]);
+            expect(pages[0].imagePath).toContain('data:image/svg+xml');
+
+            const pagesResponse = await getScriptPagesRoute(
+                new NextRequest(`http://localhost:3000/api/scripts/${scriptId}/pages`),
+                { params: Promise.resolve({ id: scriptId }) }
+            );
+            expect(pagesResponse.status).toBe(200);
+            const pagesJson = await pagesResponse.json();
+            expect(pagesJson.data).toHaveLength(2);
+            expect(pagesJson.data[1].imageUrl).toContain('data:image/svg+xml');
+
+            const regions = await TaggedRegion.find({ answerScript: scriptId });
+            expect(regions).toHaveLength(6);
+            expect(regions.map((region) => region.questionNumber).sort()).toEqual([1, 2, 3, 3, 4, 5]);
+
+            const regionsResponse = await getRegionsRoute(
+                new NextRequest(`http://localhost:3000/api/research/segmentation/${scriptId}/regions`),
+                { params: Promise.resolve({ scriptId }) }
+            );
+            expect(regionsResponse.status).toBe(200);
+            expect((await regionsResponse.json()).data).toHaveLength(6);
+
+            const answersResponse = await getSegmentationRoute(
+                new NextRequest(`http://localhost:3000/api/research/segmentation/${scriptId}`),
+                { params: Promise.resolve({ scriptId }) }
+            );
+            expect(answersResponse.status).toBe(200);
+            expect((await answersResponse.json()).data).toHaveLength(5);
+
+            const answers = await answerSegmentationService.getReconstructedAnswers(scriptId);
+            expect(answers.map((answer) => answer.questionNumber)).toEqual([1, 2, 3, 4, 5]);
+            const q3 = answers.find((answer) => answer.questionNumber === 3);
+            expect(q3?.pagesInvolved).toEqual([1, 2]);
+            expect(q3?.segments).toHaveLength(2);
+            expect(q3?.segments[1].segmentType).toBe('CONTINUATION');
+            expect(q3?.segments[0].extractedText).toContain('Deep learning uses multi-layer neural networks');
+            expect(q3?.segments[1].extractedText).toContain('Back-propagation computes gradients');
+        });
+
+        it('reuses the same demo script and does not duplicate regions when loaded repeatedly', async () => {
+            const firstResponse = await postSegmentationDemoRoute();
+            const firstResult = await firstResponse.json();
+            const secondResponse = await postSegmentationDemoRoute();
+            const secondResult = await secondResponse.json();
+
+            expect(firstResponse.status).toBe(200);
+            expect(secondResponse.status).toBe(200);
+            expect(secondResult.data.scriptId).toBe(firstResult.data.scriptId);
+            expect(await TaggedRegion.countDocuments({ answerScript: firstResult.data.scriptId })).toBe(6);
+            expect(await ReconstructedAnswer.countDocuments({ answerScript: firstResult.data.scriptId })).toBe(5);
+        });
+
+        it('denies students access to the demo loader', async () => {
+            const student = await User.create({
+                name: 'Demo Student',
+                email: `demo_student_${Date.now()}@iiit.ac.in`,
+                password: 'hashedPassword123',
+                role: UserRole.STUDENT,
+                isActive: true
+            });
+            mockSessionUser = {
+                id: student._id.toString(),
+                email: student.email,
+                name: student.name,
+                role: UserRole.STUDENT
+            };
+
+            const response = await postSegmentationDemoRoute();
+            expect(response.status).toBe(403);
+        });
+
+        it('allows an assigned TA to load and retrieve their course demo regions', async () => {
+            mockSessionUser = {
+                id: taUser._id.toString(),
+                email: taUser.email,
+                name: taUser.name,
+                role: UserRole.TA
+            };
+
+            const response = await postSegmentationDemoRoute();
+            expect(response.status).toBe(200);
+            const result = await response.json();
+            expect(result.data.pages).toHaveLength(2);
+
+            const regionsResponse = await getRegionsRoute(
+                new NextRequest(`http://localhost:3000/api/research/segmentation/${result.data.scriptId}/regions`),
+                { params: Promise.resolve({ scriptId: result.data.scriptId }) }
+            );
+            expect(regionsResponse.status).toBe(200);
+            expect((await regionsResponse.json()).data).toHaveLength(6);
         });
     });
 

@@ -274,6 +274,13 @@ $$\text{Confidence} = \min\left(1.0, \sum w_i \cdot \text{signal}_i\right)$$
 
 All Direction 3 APIs are isolated under `/api/research/segmentation`:
 
+### 0. Load the deterministic two-page demo
+`POST /api/research/segmentation/demo`
+- **Access:** Authenticated Professor or Admin with an active course, or a TA assigned to an active course.
+- **Returns:** The reusable demo `AnswerScript` ID. The route creates/reuses regular `Exam`, `AnswerScript`, and `Page` records; it does not add a demo-specific model.
+- **Demo contents:** Five questions across two digital sample pages. Q3 has a `START` region on page 1 and a `CONTINUATION` region on page 2. Reloading the demo re-seeds only this dedicated demo script, so its six tagged regions and five reconstructed answers remain deterministic.
+- **Scope:** Uses existing TA ground-truth tagging and reconstruction; the digital sample is not an automatic handwritten OCR result.
+
 ### 1. Retrieve or Execute Reconstruction
 `GET /api/research/segmentation/[scriptId]`
 - **Access:** Professor, Admin, or Allocated TA.
@@ -292,6 +299,8 @@ All Direction 3 APIs are isolated under `/api/research/segmentation`:
 `PATCH /api/research/segmentation/[scriptId]/question/[questionNumber]`
 - **Body:** `{ notes: string }`
 - **Action:** Updates status to `VERIFIED`, logs `verifiedBy` and timestamp.
+
+The segmentation workspace offers **Load Demo Script** as well as **Open Existing Script**. Its reconstructed-answer cards show available reconstructed text, page/segment information, and (for the demo) question labels.
 
 ---
 
