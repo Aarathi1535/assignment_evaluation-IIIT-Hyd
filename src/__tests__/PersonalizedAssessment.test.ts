@@ -1019,6 +1019,61 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
             expect(parsed[0].sourceSyllabusTopic).toBe('Gradient Descent and Convexity');
         });
 
+        it('normalizes a root-level JSON array response into the question bank structure', () => {
+            const validPayload = JSON.stringify([
+                {
+                    title: 'Gradient Descent Formulation',
+                    topic: 'Gradient Descent and Convexity',
+                    unit: 'Unit 1: Linear Models & Optimization',
+                    difficulty: 'MEDIUM',
+                    questionPrompt: 'Explain how step size affects gradient descent convergence on convex functions.',
+                    expectedConcepts: ['Gradient Descent', 'Convexity', 'Step Size'],
+                    maxMarks: 10
+                }
+            ]);
+            const units = [
+                {
+                    unitNumber: 1,
+                    unitTitle: 'Unit 1: Linear Models & Optimization',
+                    topics: ['Gradient Descent and Convexity']
+                }
+            ];
+
+            const parsed = parseGeneratedQuestions(validPayload, units);
+
+            expect(parsed).toHaveLength(1);
+            expect(parsed[0].title).toBe('Gradient Descent Formulation');
+            expect(parsed[0].sourceSyllabusTopic).toBe('Gradient Descent and Convexity');
+        });
+
+        it('accepts questions without titles and derives each title from its topic', () => {
+            const validPayload = JSON.stringify({
+                questions: [
+                    {
+                        topic: 'Gradient Descent and Convexity',
+                        unit: 'Unit 1: Linear Models & Optimization',
+                        difficulty: 'MEDIUM',
+                        questionPrompt: 'Explain how step size affects gradient descent convergence.',
+                        maxMarks: 10
+                    }
+                ]
+            });
+            const units = [
+                {
+                    unitNumber: 1,
+                    unitTitle: 'Unit 1: Linear Models & Optimization',
+                    topics: ['Gradient Descent and Convexity']
+                }
+            ];
+
+            const parsed = parseGeneratedQuestions(validPayload, units);
+
+            expect(parsed).toHaveLength(1);
+            expect(parsed[0].title).toBe('Gradient Descent and Convexity');
+            expect(parsed[0].topic).toBe('Gradient Descent and Convexity');
+            expect(parsed[0].questionPrompt).toBe('Explain how step size affects gradient descent convergence.');
+        });
+
         it('malformed JSON response: rejects unparseable text with controlled 502 error', () => {
             const malformedPayload = 'pseudocode... this is not valid JSON at all';
             const units = [
@@ -1442,4 +1497,3 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
         });
     });
 });
-
