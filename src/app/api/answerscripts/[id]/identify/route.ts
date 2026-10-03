@@ -3,8 +3,8 @@ import mongoose from 'mongoose';
 import { connectDB } from '../../../../../lib/db';
 import AnswerScript from '../../../../../models/AnswerScript';
 import User, { UserRole } from '../../../../../models/User';
-import StudentMapping from '../../../../../models/StudentMapping';
 import ExamRepository from '../../../../../repositories/ExamRepository';
+import StudentRosterMappingService from '../../../../../services/StudentRosterMappingService';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { HttpError, isDuplicateKeyError } from '../../../../../lib/errors';
@@ -98,9 +98,10 @@ export async function POST(
       }, { status: 400 });
     }
 
-    // 4. Verify student belongs to the exam roster
-    const isMapped = await StudentMapping.exists({ exam: script.exam, student: studentId });
-    if (!isMapped) {
+    // 4. Verify student belongs to the shared exam/course roster used by ingestion.
+    const eligibleRoster = await StudentRosterMappingService.resolveEligibleExamRoster(exam);
+    const isEligible = eligibleRoster.students.some(student => student._id.equals(studentId));
+    if (!isEligible) {
       return NextResponse.json({
         success: false,
         message: 'Student is not enrolled in this exam roster',

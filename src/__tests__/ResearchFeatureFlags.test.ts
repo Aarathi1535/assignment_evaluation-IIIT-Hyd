@@ -247,6 +247,39 @@ describe('Research Feature Flags (Handwriting Consistency + Shared Research Flag
       expect(adminRes!.headers.get('location')).toBe('http://localhost:3000/admin');
     });
 
+    it('allows Professors on /research/handwriting when enabled and denies students', () => {
+      process.env.FEATURE_HANDWRITING_CONSISTENCY = 'true';
+      const professorReq: any = {
+        nextUrl: { pathname: '/research/handwriting' },
+        nextauth: { token: { role: 'PROFESSOR' } },
+        url: 'http://localhost:3000/research/handwriting',
+      };
+      expect((proxy as any)(professorReq)).toBeUndefined();
+
+      const studentReq: any = {
+        nextUrl: { pathname: '/research/handwriting' },
+        nextauth: { token: { role: 'STUDENT' } },
+        url: 'http://localhost:3000/research/handwriting',
+      };
+      const studentRes: any = (proxy as any)(studentReq);
+      expect(studentRes).toBeDefined();
+      expect(studentRes!.status).toBe(307);
+      expect(studentRes!.headers.get('location')).toBe('http://localhost:3000/student');
+    });
+
+    it('redirects Professors away from /research/handwriting when disabled', () => {
+      delete process.env.FEATURE_HANDWRITING_CONSISTENCY;
+      const professorReq: any = {
+        nextUrl: { pathname: '/research/handwriting' },
+        nextauth: { token: { role: 'PROFESSOR' } },
+        url: 'http://localhost:3000/research/handwriting',
+      };
+      const professorRes: any = (proxy as any)(professorReq);
+      expect(professorRes).toBeDefined();
+      expect(professorRes!.status).toBe(307);
+      expect(professorRes!.headers.get('location')).toBe('http://localhost:3000/professor');
+    });
+
     it('allows /api/research/handwriting through feature gate when enabled (auth still checked by middleware)', () => {
       process.env.FEATURE_HANDWRITING_CONSISTENCY = 'true';
 
@@ -285,6 +318,9 @@ describe('Research Feature Flags (Handwriting Consistency + Shared Research Flag
         { label: 'Courses', href: '/professor/courses' },
         { label: 'Exams', href: '/professor/exams' },
         { label: 'Flag Review Queue', href: '/professor/flags' },
+        ...(isHandwritingConsistencyEnabled
+          ? [{ label: 'Handwriting Consistency', href: '/research/handwriting' }]
+          : []),
         { label: 'Create Course', href: '/professor/courses/create' },
         { label: 'Create Exam', href: '/professor/exams/create' },
       ];
@@ -308,7 +344,7 @@ describe('Research Feature Flags (Handwriting Consistency + Shared Research Flag
       }
     });
 
-    it('shows Handwriting Consistency for Admin only when enabled', () => {
+    it('shows Handwriting Consistency for Professors and Admins when enabled', () => {
       process.env.FEATURE_HANDWRITING_CONSISTENCY = 'true';
 
       const adminItems = buildNavForRole('ADMIN');
@@ -319,7 +355,9 @@ describe('Research Feature Flags (Handwriting Consistency + Shared Research Flag
       );
 
       const profLabels = buildNavForRole('PROFESSOR').map((i) => i.label);
-      expect(profLabels).not.toContain('Handwriting Consistency');
+      expect(profLabels).toContain('Handwriting Consistency');
+      expect(buildNavForRole('PROFESSOR').find((i) => i.label === 'Handwriting Consistency')?.href)
+        .toBe('/research/handwriting');
 
       const taLabels = buildNavForRole('TA').map((i) => i.label);
       expect(taLabels).not.toContain('Handwriting Consistency');

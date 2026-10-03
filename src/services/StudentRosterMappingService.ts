@@ -14,7 +14,8 @@ import BatchRepository from '../repositories/BatchRepository';
 import ExamRepository from '../repositories/ExamRepository';
 import { HttpError } from '../lib/errors';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
-import { SplittingStrategyType, IngestionApprovalStatus } from '../models/Exam';
+import { UserRole } from '../constants/permissions';
+import { IExam, SplittingStrategyType, IngestionApprovalStatus } from '../models/Exam';
 import { PageSplittingStrategy } from './splitting/PageSplittingStrategy';
 import { CoverBoundarySplittingStrategy } from './splitting/CoverBoundarySplittingStrategy';
 import { FixedPageSplittingStrategy } from './splitting/FixedPageSplittingStrategy';
@@ -39,6 +40,41 @@ export interface AnswerScriptGroup {
 }
 
 export class StudentRosterMappingService {
+    /**
+     * Resolve the same eligible exam roster used by ingestion: direct exam enrollment,
+     * explicit StudentMapping records, and enrollment in the exam's active course.
+     * Callers must first authorize access to the exam.
+     */
+    public async resolveEligibleExamRoster(exam: IExam): Promise<{
+        studentIds: Set<string>;
+        students: IUser[];
+        mappings: Awaited<ReturnType<typeof StudentMapping.find>>;
+    }> {
+        const ids = new Map<string, mongoose.Types.ObjectId>();
+        for (const id of exam.enrolledStudents || []) {
+            if (id) ids.set(id.toString(), id as mongoose.Types.ObjectId);
+        }
+
+        const mappings = await StudentMapping.find({ exam: exam._id });
+        for (const mapping of mappings) {
+            if (mapping.student) ids.set(mapping.student.toString(), mapping.student);
+        }
+
+        if (exam.course) {
+            const course = await Course.findOne({ _id: exam.course, isActive: true }).select('enrolledStudents');
+            for (const id of course?.enrolledStudents || []) {
+                if (id) ids.set(id.toString(), id as mongoose.Types.ObjectId);
+            }
+        }
+
+        const students = ids.size === 0 ? [] : await User.find({
+            _id: { $in: Array.from(ids.values()) },
+            role: UserRole.STUDENT,
+            isActive: true
+        }).sort({ name: 1 });
+        return { studentIds: new Set(ids.keys()), students, mappings };
+    }
+
     /**
      * Assembles AnswerScripts from IngestionPages and performs automated student identification
      * mapping according to AE-051 and AE-053 specifications.
@@ -142,36 +178,9 @@ export class StudentRosterMappingService {
             return [];
         }
 
-        // Step 4: Load Exam Roster (Exam.enrolledStudents, StudentMapping, Course.enrolledStudents)
-        const enrolledUserIds = new Set<string>();
-
-        if (exam.enrolledStudents && Array.isArray(exam.enrolledStudents)) {
-            for (const sid of exam.enrolledStudents) {
-                if (sid) enrolledUserIds.add(sid.toString());
-            }
-        }
-
-        const studentMappings = await StudentMapping.find({ exam: exam._id });
-        for (const mapping of studentMappings) {
-            if (mapping.student) {
-                enrolledUserIds.add(mapping.student.toString());
-            }
-        }
-
-        if (exam.course) {
-            const course = await Course.findOne({ _id: exam.course, isActive: true });
-            if (course?.enrolledStudents && Array.isArray(course.enrolledStudents)) {
-                for (const sid of course.enrolledStudents) {
-                    if (sid) enrolledUserIds.add(sid.toString());
-                }
-            }
-        }
-
-        // Load full user records for all enrolled students
-        const enrolledUsers = await User.find({
-            _id: { $in: Array.from(enrolledUserIds).map(id => new mongoose.Types.ObjectId(id)) },
-            isActive: true
-        });
+        // Step 4: Resolve the shared Assignment Evaluation exam/course roster.
+        const { studentIds: enrolledUserIds, students: enrolledUsers, mappings: studentMappings } =
+            await this.resolveEligibleExamRoster(exam);
 
         const userByIdMap = new Map<string, IUser>();
         const userByEmailMap = new Map<string, IUser>();

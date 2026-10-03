@@ -10,6 +10,7 @@ import ExamRepository from '../../../../repositories/ExamRepository';
 import AllocationService from '../../../../services/AllocationService';
 import { Anonymizer } from '../../../../lib/anonymizer';
 import { HttpError } from '../../../../lib/errors';
+import { isFeatureEnabled } from '../../../../config/features';
 
 /**
  * GET /api/scripts/[id]
@@ -166,6 +167,9 @@ export async function GET(
         data: {
           ...serializedScript,
           pageCount: formattedPages.length,
+          canAnalyzeHandwriting:
+            isFeatureEnabled('HANDWRITING_CONSISTENCY') &&
+            (userRole === UserRole.PROFESSOR || userRole === UserRole.ADMIN),
           pages: formattedPages,
         },
       },

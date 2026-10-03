@@ -7,6 +7,7 @@ import { HttpError } from '../../lib/errors';
 
 export interface IResolvedAnswerSheetPage {
     answerScriptId: string;
+    examId?: string;
     studentId: string;
     pageNumber: number;
     pageId?: string;
@@ -126,6 +127,7 @@ export class AnswerSheetSourceAdapter {
                     const buffer = await this.resolvePageBuffer(p.imagePath);
                     resolvedPages.push({
                         answerScriptId,
+                        examId: answerScript.exam.toString(),
                         studentId,
                         pageNumber: p.pageNumber,
                         pageId: p._id ? p._id.toString() : undefined,
@@ -152,6 +154,7 @@ export class AnswerSheetSourceAdapter {
                     const buffer = await this.resolvePageBuffer(ip.storageKey);
                     resolvedPages.push({
                         answerScriptId,
+                        examId: answerScript.exam.toString(),
                         studentId,
                         pageNumber: ip.pageNumber,
                         pageId: ip._id ? ip._id.toString() : undefined,

@@ -504,5 +504,24 @@ describe('HandwritingConsistency: Consent, Retention, Status, and FPR (Mentor Re
             const expectedExpiry = Date.now() + 7 * 24 * 60 * 60 * 1000;
             expect(Math.abs(sample.retentionExpiresAt!.getTime() - expectedExpiry)).toBeLessThan(5000);
         });
+
+        it('comparison evidence inherits consent expiry and is purged when that retention expires', async () => {
+            await handwritingConsentRepository.setConsent(studentAId, true, { retentionDays: 7 });
+            const workflow = new HandwritingConsistencyWorkflowService();
+            const comparison = await workflow.compareSample(
+                studentAId,
+                { imageBuffer: HandwritingFixtureGenerator.createConsistentSample(43) },
+                studentAContext
+            );
+            expect(comparison.retentionExpiresAt).toBeDefined();
+            expect(comparison.retentionPolicy).toBe(HANDWRITING_RETENTION_POLICY.POLICY_NAME);
+
+            await HandwritingComparisonModel.updateOne(
+                { _id: comparison._id },
+                { $set: { retentionExpiresAt: new Date(Date.now() - 1000) } }
+            );
+            await workflow.purgeExpiredData(studentAId, studentAContext);
+            expect(await HandwritingComparisonModel.countDocuments({ _id: comparison._id })).toBe(0);
+        });
     });
 });

@@ -247,11 +247,13 @@ describe('AE-165: Flag Analytics / Counts Tests', () => {
       expect(result.byReason).toEqual({
         CHEATING_SUSPECTED: 0,
         ILLEGIBLE: 0,
+        HANDWRITING_DISCREPANCY: 0,
         OTHER: 0,
       });
       expect(result.byReasonAndStatus).toEqual({
         CHEATING_SUSPECTED: { OPEN: 0, RESOLVED: 0, ESCALATED: 0 },
         ILLEGIBLE: { OPEN: 0, RESOLVED: 0, ESCALATED: 0 },
+        HANDWRITING_DISCREPANCY: { OPEN: 0, RESOLVED: 0, ESCALATED: 0 },
         OTHER: { OPEN: 0, RESOLVED: 0, ESCALATED: 0 },
       });
     });

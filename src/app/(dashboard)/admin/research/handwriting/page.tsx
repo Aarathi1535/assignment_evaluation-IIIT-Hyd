@@ -1,6 +1,7 @@
 import React from 'react';
 import HandwritingEvaluationDashboard from '@/components/handwriting/HandwritingEvaluationDashboard';
 import HandwritingConsentCard from '@/components/handwriting/HandwritingConsentCard';
+import HandwritingResearchDemo from '@/components/handwriting/HandwritingResearchDemo';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { isFeatureEnabled } from '@/config/features';
 
@@ -44,6 +45,7 @@ export default function HandwritingResearchPage() {
             </div>
 
             <div className="grid grid-cols-1 gap-8">
+                <HandwritingResearchDemo />
                 <HandwritingEvaluationDashboard />
                 <HandwritingConsentCard />
             </div>

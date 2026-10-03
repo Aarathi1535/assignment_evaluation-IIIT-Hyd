@@ -9,6 +9,7 @@ export enum FlagStatus {
 export enum FlagReason {
     CHEATING_SUSPECTED = 'CHEATING_SUSPECTED',
     ILLEGIBLE = 'ILLEGIBLE',
+    HANDWRITING_DISCREPANCY = 'HANDWRITING_DISCREPANCY',
     OTHER = 'OTHER'
 }
 
@@ -183,6 +184,16 @@ ScriptFlagSchema.index(
 // Query indexes for efficient professor queue and TA filtering
 ScriptFlagSchema.index({ exam: 1, status: 1 });
 ScriptFlagSchema.index({ raisedBy: 1, status: 1 });
+ScriptFlagSchema.index(
+    { answerScript: 1, reason: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            reason: FlagReason.HANDWRITING_DISCREPANCY,
+            status: FlagStatus.OPEN
+        }
+    }
+);
 
 const ScriptFlag: Model<IScriptFlag> =
     mongoose.models.ScriptFlag || mongoose.model<IScriptFlag>('ScriptFlag', ScriptFlagSchema);

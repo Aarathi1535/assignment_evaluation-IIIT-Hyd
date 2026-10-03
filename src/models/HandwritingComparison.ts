@@ -9,6 +9,12 @@ export type HandwritingReviewStatus = 'PENDING_REVIEW' | 'REVIEWED_CONSISTENT' |
 
 export interface IHandwritingComparisonDocument extends Document {
     student: mongoose.Types.ObjectId;
+    answerScriptId?: mongoose.Types.ObjectId;
+    examId?: mongoose.Types.ObjectId;
+    pageNumber?: number;
+    questionNumber?: number;
+    boundingBox?: { x: number; y: number; width: number; height: number };
+    analysisVersion: string;
     profile?: mongoose.Types.ObjectId;
     profileVersion?: number;
     sample: mongoose.Types.ObjectId;
@@ -24,6 +30,8 @@ export interface IHandwritingComparisonDocument extends Document {
     reviewedBy?: mongoose.Types.ObjectId;
     reviewedAt?: Date;
     reviewNotes?: string;
+    retentionExpiresAt?: Date;
+    retentionPolicy?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -129,9 +137,16 @@ const HandwritingComparisonSchema = new Schema<IHandwritingComparisonDocument>(
         },
         reviewNotes: {
             type: String
-        }
-    },
-    {
+        },
+        answerScriptId: { type: Schema.Types.ObjectId, ref: 'AnswerScript', index: true },
+        examId: { type: Schema.Types.ObjectId, ref: 'Exam', index: true },
+        pageNumber: { type: Number, min: 1 },
+        questionNumber: { type: Number, min: 1 },
+        boundingBox: { type: Schema.Types.Mixed },
+        analysisVersion: { type: String, required: true, default: '1.0.0' },
+        retentionExpiresAt: { type: Date, index: true },
+        retentionPolicy: { type: String }
+    }, {
         timestamps: true
     }
 );

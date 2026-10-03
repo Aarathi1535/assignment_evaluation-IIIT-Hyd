@@ -921,5 +921,31 @@ describe('AE-163: Professor Flag Review Queue Tests', () => {
       });
       expect(isolatedResult.flags).toHaveLength(0);
     });
+
+    it('adds an idempotent handwriting discrepancy to the existing Professor review queue', async () => {
+      const note = 'Page 4 requires manual review based on handwriting consistency signals.';
+      const first = await ScriptFlagService.createHandwritingDiscrepancyFlag({
+        scriptId: scriptA1Id,
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        note,
+      });
+      const repeated = await ScriptFlagService.createHandwritingDiscrepancyFlag({
+        scriptId: scriptA1Id,
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        note,
+      });
+
+      expect(repeated._id.toString()).toBe(first._id.toString());
+      const queue = await ScriptFlagService.getProfessorFlagQueue({
+        userId: profAId,
+        userRole: UserRole.PROFESSOR,
+        status: FlagStatus.OPEN,
+      });
+      const queuedFlag = queue.flags.find(flag => flag._id === first._id.toString());
+      expect(queuedFlag?.reason).toBe(FlagReason.HANDWRITING_DISCREPANCY);
+      expect(queuedFlag?.note).toBe(note);
+    });
   });
 });

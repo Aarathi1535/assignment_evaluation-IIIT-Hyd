@@ -100,6 +100,18 @@ export class HandwritingComparisonRepository {
 
         return await HandwritingComparisonModel.find(query).sort({ comparedAt: -1 });
     }
+
+    /** Removes expired comparison evidence under the student's existing retention policy. */
+    async purgeExpired(studentId?: string): Promise<number> {
+        const query: QueryFilter<IHandwritingComparisonDocument> = {
+            retentionExpiresAt: { $lte: new Date() }
+        };
+        if (studentId && this.isValidObjectId(studentId)) {
+            query.student = new mongoose.Types.ObjectId(studentId);
+        }
+        const result = await HandwritingComparisonModel.deleteMany(query);
+        return result.deletedCount || 0;
+    }
 }
 
 export const handwritingComparisonRepository = new HandwritingComparisonRepository();

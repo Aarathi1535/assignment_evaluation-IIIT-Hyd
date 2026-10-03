@@ -35,6 +35,14 @@ export interface ResolveScriptFlagInput {
     ipAddress?: string;
 }
 
+export interface CreateHandwritingDiscrepancyFlagInput {
+    scriptId: string | mongoose.Types.ObjectId;
+    note: string;
+    userId: string | mongoose.Types.ObjectId;
+    userRole: UserRole | string;
+    ipAddress?: string;
+}
+
 export interface GetFlagAnalyticsOptions {
     userId: string | mongoose.Types.ObjectId;
     userRole: UserRole | string;
@@ -48,28 +56,8 @@ export interface FlagAnalyticsResult {
         RESOLVED: number;
         ESCALATED: number;
     };
-    byReason: {
-        CHEATING_SUSPECTED: number;
-        ILLEGIBLE: number;
-        OTHER: number;
-    };
-    byReasonAndStatus: {
-        CHEATING_SUSPECTED: {
-            OPEN: number;
-            RESOLVED: number;
-            ESCALATED: number;
-        };
-        ILLEGIBLE: {
-            OPEN: number;
-            RESOLVED: number;
-            ESCALATED: number;
-        };
-        OTHER: {
-            OPEN: number;
-            RESOLVED: number;
-            ESCALATED: number;
-        };
-    };
+    byReason: Record<FlagReason, number>;
+    byReasonAndStatus: Record<FlagReason, Record<FlagStatus, number>>;
 }
 
 export interface GetScriptFlagsOptions {
@@ -166,6 +154,85 @@ export interface FlagQueueResult {
 }
 
 export class ScriptFlagService {
+    /** Adds an analysis result to the existing Professor queue, idempotently per open script flag. */
+    static async createHandwritingDiscrepancyFlag(
+        input: CreateHandwritingDiscrepancyFlagInput
+    ): Promise<IScriptFlag> {
+        const { scriptId, note, userId, userRole, ipAddress } = input;
+        if (!mongoose.Types.ObjectId.isValid(scriptId) || !mongoose.Types.ObjectId.isValid(userId)) {
+            throw new HttpError('Invalid AnswerScript or User ID format', 400);
+        }
+        const role = String(userRole).toUpperCase();
+        if (role !== UserRole.PROFESSOR && role !== UserRole.ADMIN) {
+            throw new HttpError('Only Professors and Admins may raise handwriting discrepancy reviews', 403);
+        }
+        const trimmedNote = note.trim();
+        if (!trimmedNote || trimmedNote.length > 2000) {
+            throw new HttpError('Handwriting discrepancy details must be between 1 and 2000 characters', 400);
+        }
+
+        const scriptObjectId = new mongoose.Types.ObjectId(scriptId);
+        const userObjectId = new mongoose.Types.ObjectId(userId);
+        const script = await AnswerScript.findOne({ _id: scriptObjectId, isActive: true });
+        if (!script) throw new HttpError('AnswerScript not found', 404);
+
+        if (role === UserRole.PROFESSOR) {
+            const ownedExam = await Exam.exists({ _id: script.exam, createdBy: userObjectId });
+            if (!ownedExam) throw new HttpError('Forbidden: You do not own this AnswerScript exam', 403);
+        }
+
+        const query = {
+            answerScript: scriptObjectId,
+            reason: FlagReason.HANDWRITING_DISCREPANCY,
+            status: FlagStatus.OPEN
+        };
+        const existing = await ScriptFlag.findOne(query);
+        let flag: IScriptFlag | null;
+        try {
+            flag = await ScriptFlag.findOneAndUpdate(
+                query,
+                {
+                    $set: { note: trimmedNote },
+                    $setOnInsert: {
+                        exam: script.exam,
+                        raisedBy: userObjectId,
+                        status: FlagStatus.OPEN,
+                        reason: FlagReason.HANDWRITING_DISCREPANCY,
+                        resolution: null
+                    }
+                },
+                { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+            );
+        } catch (error: unknown) {
+            if (!isDuplicateKeyError(error)) throw error;
+            flag = await ScriptFlag.findOne(query);
+            if (flag) {
+                flag.note = trimmedNote;
+                await flag.save();
+            }
+        }
+        if (!flag) throw new HttpError('Unable to create handwriting discrepancy review flag', 500);
+
+        if (!existing && flag) {
+            await writeAuditLog({
+                user: userObjectId,
+                action: 'HANDWRITING_DISCREPANCY_FLAG_CREATED',
+                outcome: 'SUCCESS',
+                entityId: flag._id as mongoose.Types.ObjectId,
+                entityType: 'ScriptFlag',
+                details: {
+                    flagId: flag._id.toString(),
+                    answerScript: scriptObjectId.toString(),
+                    exam: script.exam.toString(),
+                    reason: FlagReason.HANDWRITING_DISCREPANCY,
+                    note: trimmedNote
+                },
+                ipAddress
+            });
+        }
+        return flag;
+    }
+
     /**
      * Creates a new ScriptFlag for an answer script or question (AE-162).
      * Enforces:
@@ -1130,23 +1197,13 @@ export class ScriptFlagService {
         ]);
 
         // 5. Initialize complete zero-count matrix for all reason × status combinations
-        const byReasonAndStatus: FlagAnalyticsResult['byReasonAndStatus'] = {
-            [FlagReason.CHEATING_SUSPECTED]: {
+        const byReasonAndStatus = Object.fromEntries(
+            Object.values(FlagReason).map(reason => [reason, {
                 [FlagStatus.OPEN]: 0,
                 [FlagStatus.RESOLVED]: 0,
                 [FlagStatus.ESCALATED]: 0
-            },
-            [FlagReason.ILLEGIBLE]: {
-                [FlagStatus.OPEN]: 0,
-                [FlagStatus.RESOLVED]: 0,
-                [FlagStatus.ESCALATED]: 0
-            },
-            [FlagReason.OTHER]: {
-                [FlagStatus.OPEN]: 0,
-                [FlagStatus.RESOLVED]: 0,
-                [FlagStatus.ESCALATED]: 0
-            }
-        };
+            }])
+        ) as FlagAnalyticsResult['byReasonAndStatus'];
 
         const byStatus: FlagAnalyticsResult['byStatus'] = {
             [FlagStatus.OPEN]: 0,
@@ -1154,11 +1211,9 @@ export class ScriptFlagService {
             [FlagStatus.ESCALATED]: 0
         };
 
-        const byReason: FlagAnalyticsResult['byReason'] = {
-            [FlagReason.CHEATING_SUSPECTED]: 0,
-            [FlagReason.ILLEGIBLE]: 0,
-            [FlagReason.OTHER]: 0
-        };
+        const byReason = Object.fromEntries(
+            Object.values(FlagReason).map(reason => [reason, 0])
+        ) as FlagAnalyticsResult['byReason'];
 
         let total = 0;
 

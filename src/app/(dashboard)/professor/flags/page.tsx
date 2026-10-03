@@ -47,7 +47,7 @@ export interface PopulatedQueueItem {
     name: string;
     email: string;
   };
-  reason: 'CHEATING_SUSPECTED' | 'ILLEGIBLE' | 'OTHER' | string;
+  reason: 'CHEATING_SUSPECTED' | 'ILLEGIBLE' | 'HANDWRITING_DISCREPANCY' | 'OTHER' | string;
   note?: string;
   status: 'OPEN' | 'RESOLVED' | 'ESCALATED';
   resolution?: {
@@ -187,6 +187,8 @@ export default function ProfessorFlagQueuePage() {
         return 'Cheating Suspected';
       case 'ILLEGIBLE':
         return 'Illegible Handwriting / Scan';
+      case 'HANDWRITING_DISCREPANCY':
+        return 'Handwriting Discrepancy';
       case 'OTHER':
         return 'Other Concern';
       default:
@@ -243,7 +245,7 @@ export default function ProfessorFlagQueuePage() {
   return (
     <DashboardLayout
       title="Flag Review Queue"
-      description="Review and investigate answer scripts and questions flagged by Teaching Assistants."
+      description="Review answer scripts flagged by Teaching Assistants or handwriting consistency analysis."
     >
       <div className="space-y-6">
         {/* Status Filters & Controls Bar */}
@@ -391,7 +393,7 @@ export default function ProfessorFlagQueuePage() {
               <h3 className="text-base font-bold text-slate-900">No flags to review</h3>
               <p className="text-xs text-slate-500 max-w-md">
                 {activeTab === 'OPEN'
-                  ? 'All flagged answer scripts have been reviewed or no TAs have raised flags for your exams.'
+                  ? 'All flagged answer scripts have been reviewed or no review flags have been raised for your exams.'
                   : `No ${activeTab.toLowerCase()} flags found for your exams.`}
               </p>
             </div>
@@ -538,7 +540,7 @@ export default function ProfessorFlagQueuePage() {
                     {/* Flag Note / Rationale */}
                     {flag.note && (
                       <div className="bg-slate-50 rounded p-2.5 text-xs text-slate-700 border border-slate-200/70 font-sans">
-                        <span className="font-bold text-slate-800 mr-1">TA Note:</span>
+                        <span className="font-bold text-slate-800 mr-1">Review note:</span>
                         <span className="italic">{flag.note}</span>
                       </div>
                     )}
@@ -547,7 +549,7 @@ export default function ProfessorFlagQueuePage() {
                     <div className="flex items-center gap-3 text-2xs text-slate-400">
                       <span className="flex items-center gap-1">
                         <User className="h-3 w-3" />
-                        <span>Raised by TA: <strong>{flag.raisedBy.name}</strong> ({flag.raisedBy.email})</span>
+                        <span>Raised by: <strong>{flag.raisedBy.name}</strong> ({flag.raisedBy.email})</span>
                       </span>
                       <span>•</span>
                       <span className="flex items-center gap-1">

@@ -61,6 +61,15 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
 
+      if (path.startsWith('/research/handwriting')) {
+        if (!isFeatureEnabled('HANDWRITING_CONSISTENCY')) {
+          return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+        }
+        if (userRole !== UserRole.PROFESSOR && userRole !== UserRole.ADMIN) {
+          return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
+        }
+      }
+
       if (path.startsWith('/admin/research/handwriting') && !isFeatureEnabled('HANDWRITING_CONSISTENCY')) {
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }

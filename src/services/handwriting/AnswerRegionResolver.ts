@@ -14,6 +14,7 @@ export interface RawAnswerRegion {
 export interface IResolvedAnswerRegion {
     regionId: string;
     answerScriptId: string;
+    examId?: string;
     studentId: string;
     questionNumber?: number;
     subQuestion?: string;
@@ -134,6 +135,7 @@ export class AnswerRegionResolver {
             resolvedRegions.push({
                 regionId: reg.regionId,
                 answerScriptId,
+                examId: matchedPage.examId,
                 studentId,
                 questionNumber: reg.questionNumber,
                 subQuestion: reg.subQuestion,

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
@@ -29,6 +29,7 @@ export interface ScriptData {
   anonymousId?: string;
   scriptReference?: string;
   pageCount?: number;
+  canAnalyzeHandwriting?: boolean;
   pages?: AnswerSheetPage[];
 }
 
@@ -76,6 +77,40 @@ export function GradingWorkspace({
   const [pages, setPages] = useState<AnswerSheetPage[]>([]);
   const [, setRubricData] = useState<RubricData | null>(null);
   const [activeFlag, setActiveFlag] = useState<FlagDetail | null>(null);
+  const [handwritingBusy, setHandwritingBusy] = useState<boolean>(false);
+  const [handwritingMessage, setHandwritingMessage] = useState<string | null>(null);
+  const [handwritingError, setHandwritingError] = useState<string | null>(null);
+  const [handwritingFlagId, setHandwritingFlagId] = useState<string | null>(null);
+
+  const runHandwritingAction = async () => {
+    setHandwritingBusy(true);
+    setHandwritingMessage(null);
+    setHandwritingError(null);
+    setHandwritingFlagId(null);
+    try {
+      const response = await fetch(`/api/research/handwriting/answerscripts/${encodeURIComponent(scriptId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.message || 'Handwriting analysis failed');
+      }
+      const summary = (json.data.comparisons as Array<{ pageNumber: number; status: string; distance: number; confidence: number }>)
+        .map(item => `Page ${item.pageNumber}: ${item.status}, distance ${item.distance.toFixed(4)}, confidence ${item.confidence.toFixed(4)}`)
+        .join(' | ');
+      setHandwritingMessage(json.data.outcome === 'DISCREPANCY_DETECTED'
+        ? `Handwriting discrepancy detected. Professor review recommended. ${summary}`
+        : json.data.outcome === 'INCONCLUSIVE'
+          ? 'Inconclusive: not enough usable handwriting evidence to assess this answer sheet.'
+          : `No significant handwriting discrepancy detected. ${summary}`);
+      setHandwritingFlagId(json.data.flagId || null);
+    } catch (err: unknown) {
+      setHandwritingError(err instanceof Error ? err.message : 'Handwriting analysis failed');
+    } finally {
+      setHandwritingBusy(false);
+    }
+  };
 
   // Resolution controls state (AE-164)
   const [resolutionAction, setResolutionAction] = useState<'CLEAR' | 'OVERRIDE' | 'ESCALATE'>('CLEAR');
@@ -253,6 +288,8 @@ export function GradingWorkspace({
         return 'Cheating Suspected';
       case 'ILLEGIBLE':
         return 'Illegible Handwriting / Scan';
+      case 'HANDWRITING_DISCREPANCY':
+        return 'Handwriting Discrepancy';
       case 'OTHER':
         return 'Other Concern';
       default:
@@ -288,7 +325,8 @@ export function GradingWorkspace({
       <div className="space-y-4">
         {/* Top Context & Navigation Bar */}
         <div className="bg-white border border-slate-200 rounded-brand-lg p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 w-full">
+            <div className="flex flex-wrap items-center gap-3">
             <Link href={isReviewMode ? '/professor/flags' : '/ta'}>
               <Button
                 variant="outline"
@@ -337,8 +375,32 @@ export function GradingWorkspace({
                 </span>
               )}
             </div>
+            </div>
+            {!isReviewMode && scriptData?.canAnalyzeHandwriting && (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={handwritingBusy}
+                  onClick={() => void runHandwritingAction()}
+                >
+                  {handwritingBusy ? 'Analyzing answer sheet…' : 'Analyze Handwriting Consistency'}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
+
+        {!isReviewMode && (handwritingMessage || handwritingError || handwritingBusy) && (
+          <section className="rounded-brand-lg border border-indigo-200 bg-indigo-50 p-4 text-sm" aria-live="polite">
+            <p className="font-semibold text-indigo-950">Handwriting consistency</p>
+            <p className="mt-1 text-indigo-900">Analysis uses each stored page as an explicit full-page region. It is a heuristic review signal, not authorship proof.</p>
+            {handwritingBusy && <p role="status" className="mt-2 text-indigo-800">Extracting features from stored pages and checking the existing baseline…</p>}
+            {handwritingMessage && <p className="mt-2 text-indigo-900">{handwritingMessage}</p>}
+            {handwritingError && <p role="alert" className="mt-2 text-rose-800">{handwritingError}</p>}
+            {handwritingFlagId && <Link className="mt-2 inline-block font-semibold text-indigo-800 underline" href={`/professor/flags?status=OPEN`}>Open Professor Flag Review Queue</Link>}
+          </section>
+        )}
 
         {/* Flag Review & Resolution Banner (AE-163 & AE-164) */}
         {isReviewMode && activeFlag && (
@@ -375,7 +437,7 @@ export function GradingWorkspace({
                 {typeof activeFlag.raisedBy === 'object' && activeFlag.raisedBy?.name && (
                   <span className="flex items-center gap-1">
                     <User className="h-3.5 w-3.5 text-slate-400" />
-                    <span>Flagged by TA: <strong>{activeFlag.raisedBy.name}</strong></span>
+                    <span>Raised by: <strong>{activeFlag.raisedBy.name}</strong></span>
                   </span>
                 )}
                 {activeFlag.createdAt && (
@@ -390,7 +452,7 @@ export function GradingWorkspace({
             {/* Flag Note / Rationale */}
             {activeFlag.note && (
               <div className="bg-white/80 rounded-brand p-3 border border-amber-200/60 text-xs text-slate-800">
-                <span className="font-bold text-slate-700 block mb-1">TA Note:</span>
+                <span className="font-bold text-slate-700 block mb-1">Review note:</span>
                 <p className="whitespace-pre-wrap leading-relaxed">{activeFlag.note}</p>
               </div>
             )}
@@ -403,7 +465,7 @@ export function GradingWorkspace({
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                    Resolve Flag (Professor / Admin Action)
+                    {activeFlag.reason === 'HANDWRITING_DISCREPANCY' ? 'Professor Review Action' : 'Resolve Flag (Professor / Admin Action)'}
                   </h4>
                   <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-brand text-xs font-semibold">
                     <button
@@ -416,20 +478,22 @@ export function GradingWorkspace({
                           : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
-                      Clear Flag
+                      {activeFlag.reason === 'HANDWRITING_DISCREPANCY' ? 'Mark Reviewed' : 'Clear Flag'}
                     </button>
-                    <button
-                      type="button"
-                      data-testid="btn-action-override"
-                      onClick={() => setResolutionAction('OVERRIDE')}
-                      className={`px-2.5 py-1 rounded text-xs transition-all ${
-                        resolutionAction === 'OVERRIDE'
-                          ? 'bg-brand-primary text-white shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      Override Grade
-                    </button>
+                    {activeFlag.reason !== 'HANDWRITING_DISCREPANCY' && (
+                      <button
+                        type="button"
+                        data-testid="btn-action-override"
+                        onClick={() => setResolutionAction('OVERRIDE')}
+                        className={`px-2.5 py-1 rounded text-xs transition-all ${
+                          resolutionAction === 'OVERRIDE'
+                            ? 'bg-brand-primary text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Override Grade
+                      </button>
+                    )}
                     <button
                       type="button"
                       data-testid="btn-action-escalate"
@@ -446,7 +510,7 @@ export function GradingWorkspace({
                 </div>
 
                 {/* OVERRIDE Score Input */}
-                {resolutionAction === 'OVERRIDE' && (
+                {resolutionAction === 'OVERRIDE' && activeFlag.reason !== 'HANDWRITING_DISCREPANCY' && (
                   <div className="bg-brand-primary/5 border border-brand-primary/20 rounded p-3 space-y-2">
                     <label
                       htmlFor="override-score"
@@ -546,7 +610,7 @@ export function GradingWorkspace({
                     className="flex items-center gap-3 font-mono text-xs bg-amber-50 p-2 rounded border border-amber-200 text-amber-900 font-bold"
                   >
                     <span>Previous Score: {activeFlag.resolution.previousScore ?? 'N/A'} pts</span>
-                    <span>→</span>
+                    <span>â†’</span>
                     <span className="text-emerald-700">
                       New Override Score: {activeFlag.resolution.newScore ?? 'N/A'} pts
                     </span>

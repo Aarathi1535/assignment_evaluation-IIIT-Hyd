@@ -516,5 +516,154 @@ describe('HandwritingAnswerSheetIntegration (Phase 4)', () => {
             expect(sample.sourceReference).toContain('trace_q5');
             expect(sample.extractionVersion).toBe('1.0.0');
         });
+
+        it('enrolls and compares real stored full-page regions idempotently', async () => {
+            const pageBuffers = [42, 43, 44].map(seed => HandwritingFixtureGenerator.createConsistentSample(seed));
+            mockDerivedStorage.readDerivedPage.mockImplementation(async (key: string) => {
+                const pageNumber = Number(key.match(/page_(\d+)/)?.[1] || 1);
+                return pageBuffers[pageNumber - 1];
+            });
+            await Page.deleteMany({ answerScript: answerScriptDoc._id });
+            await Promise.all(pageBuffers.map((_, index) => Page.create({
+                answerScript: answerScriptDoc._id,
+                pageNumber: index + 1,
+                imagePath: `derived/page_${index + 1}.png`
+            })));
+
+            const baseline = await integrationService.enrollAnswerScriptBaseline(
+                answerScriptDoc._id.toString(),
+                profAuth
+            );
+            expect(baseline).toHaveLength(3);
+            expect(baseline.every(result => !result.isDuplicate)).toBe(true);
+            expect(baseline[0].sample.boundingBox).toMatchObject({ x: 0, y: 0, width: 1, height: 1 });
+            const profile = await HandwritingProfileModel.findOne({ student: studentAUser._id, isCurrent: true });
+            expect(profile?.sampleCount).toBe(3);
+            expect(profile?.status).toBe(ProfileStatus.ESTABLISHED);
+
+            const comparisons = await integrationService.compareAnswerScriptPages(
+                answerScriptDoc._id.toString(),
+                profAuth
+            );
+            expect(comparisons).toHaveLength(3);
+            expect(comparisons.every(comparison => comparison.profile?.toString() === profile?._id.toString())).toBe(true);
+            expect(await HandwritingComparisonModel.countDocuments({ answerScriptId: answerScriptDoc._id })).toBe(3);
+
+            const repeatedComparisons = await integrationService.compareAnswerScriptPages(
+                answerScriptDoc._id.toString(),
+                profAuth
+            );
+            expect(repeatedComparisons.map(comparison => comparison._id.toString()))
+                .toEqual(comparisons.map(comparison => comparison._id.toString()));
+            expect(await HandwritingComparisonModel.countDocuments({ answerScriptId: answerScriptDoc._id })).toBe(3);
+        });
+
+        it('checks an initial internally consistent script before building a provisional profile', async () => {
+            const pageBuffer = HandwritingFixtureGenerator.createConsistentSample(42);
+            mockDerivedStorage.readDerivedPage.mockResolvedValue(pageBuffer);
+            await Page.deleteMany({ answerScript: answerScriptDoc._id });
+            await Promise.all([1, 2, 3, 4].map(pageNumber => Page.create({
+                answerScript: answerScriptDoc._id,
+                pageNumber,
+                imagePath: `derived/initial_consistent_${pageNumber}.png`
+            })));
+
+            const analysis = await integrationService.analyzeAnswerScript(answerScriptDoc._id.toString(), profAuth);
+
+            expect(analysis.outcome).toBe('BASELINE_BUILDING');
+            expect(analysis.profileSampleCount).toBe(4);
+            expect(analysis.profileStatus).toBe(ProfileStatus.ESTABLISHED);
+            expect((await HandwritingProfileModel.findOne({ student: studentAUser._id, isCurrent: true }))?.profileVersion).toBe(1);
+            expect(await HandwritingSampleModel.countDocuments({ student: studentAUser._id, isUsable: true })).toBe(4);
+        });
+
+        it('persists initial discrepancy evidence without admitting suspicious pages to the baseline', async () => {
+            const ordinary = HandwritingFixtureGenerator.createConsistentSample(42);
+            const different = HandwritingFixtureGenerator.createSlantedSample(-35);
+            mockDerivedStorage.readDerivedPage.mockImplementation(async (key: string) =>
+                key.includes('_4.png') ? different : ordinary
+            );
+            await Page.deleteMany({ answerScript: answerScriptDoc._id });
+            await Promise.all([1, 2, 3, 4].map(pageNumber => Page.create({
+                answerScript: answerScriptDoc._id,
+                pageNumber,
+                imagePath: `derived/initial_mixed_${pageNumber}.png`
+            })));
+
+            const analysis = await integrationService.analyzeAnswerScript(answerScriptDoc._id.toString(), profAuth);
+
+            expect(analysis.outcome).toBe('INITIAL_REVIEW_REQUIRED');
+            expect(analysis.comparisons.some(comparison => comparison.status === ComparisonMatchState.REVIEW_REQUIRED)).toBe(true);
+            expect(await HandwritingProfileModel.countDocuments({ student: studentAUser._id })).toBe(0);
+            expect(await HandwritingSampleModel.countDocuments({ student: studentAUser._id, isUsable: true })).toBe(0);
+            expect(await HandwritingSampleModel.countDocuments({ student: studentAUser._id, isUsable: false })).toBe(4);
+            expect(await HandwritingComparisonModel.countDocuments({ answerScriptId: answerScriptDoc._id })).toBe(4);
+        });
+
+        it('persists an insufficient initial assessment without creating a profile', async () => {
+            const pageBuffer = HandwritingFixtureGenerator.createConsistentSample(42);
+            mockDerivedStorage.readDerivedPage.mockResolvedValue(pageBuffer);
+            await Page.deleteMany({ answerScript: answerScriptDoc._id });
+            await Promise.all([1, 2, 3].map(pageNumber => Page.create({
+                answerScript: answerScriptDoc._id,
+                pageNumber,
+                imagePath: `derived/initial_insufficient_${pageNumber}.png`
+            })));
+
+            const analysis = await integrationService.analyzeAnswerScript(answerScriptDoc._id.toString(), profAuth);
+
+            expect(analysis.outcome).toBe('INSUFFICIENT_SAMPLE');
+            expect(await HandwritingProfileModel.countDocuments({ student: studentAUser._id })).toBe(0);
+            expect(await HandwritingSampleModel.countDocuments({ student: studentAUser._id, isUsable: true })).toBe(0);
+            expect(await HandwritingComparisonModel.countDocuments({ answerScriptId: answerScriptDoc._id, status: ComparisonMatchState.INSUFFICIENT_SAMPLE })).toBe(3);
+        });
+
+        it('analyzes internal consistency without consent or creating persistent samples and profiles', async () => {
+            const pageBuffer = HandwritingFixtureGenerator.createConsistentSample(42);
+            mockDerivedStorage.readDerivedPage.mockResolvedValue(pageBuffer);
+            await HandwritingConsentModel.deleteMany({ student: studentAUser._id });
+            await Page.deleteMany({ answerScript: answerScriptDoc._id });
+            await Promise.all([1, 2, 3, 4].map(pageNumber => Page.create({
+                answerScript: answerScriptDoc._id,
+                pageNumber,
+                imagePath: `derived/internal_only_${pageNumber}.png`
+            })));
+
+            const analysis = await integrationService.analyzeAnswerScriptInternalConsistency(
+                answerScriptDoc._id.toString(),
+                profAuth
+            );
+
+            expect(analysis.outcome).toBe('CONSISTENT');
+            expect(analysis.pagesProcessed).toBe(4);
+            expect(await HandwritingProfileModel.countDocuments({ student: studentAUser._id })).toBe(0);
+            expect(await HandwritingSampleModel.countDocuments({ student: studentAUser._id })).toBe(0);
+            expect(await HandwritingComparisonModel.countDocuments({ answerScriptId: answerScriptDoc._id })).toBe(0);
+        });
+
+        it('identifies an outlier page within the submitted paper without consent', async () => {
+            const ordinary = HandwritingFixtureGenerator.createConsistentSample(42);
+            const different = HandwritingFixtureGenerator.createSlantedSample(-35);
+            mockDerivedStorage.readDerivedPage.mockImplementation(async (key: string) =>
+                key.includes('_4.png') ? different : ordinary
+            );
+            await HandwritingConsentModel.deleteMany({ student: studentAUser._id });
+            await Page.deleteMany({ answerScript: answerScriptDoc._id });
+            await Promise.all([1, 2, 3, 4].map(pageNumber => Page.create({
+                answerScript: answerScriptDoc._id,
+                pageNumber,
+                imagePath: `derived/internal_mixed_${pageNumber}.png`
+            })));
+
+            const analysis = await integrationService.analyzeAnswerScriptInternalConsistency(
+                answerScriptDoc._id.toString(),
+                profAuth
+            );
+
+            expect(analysis.outcome).toBe('DISCREPANCY_DETECTED');
+            expect(analysis.comparisons.filter(item => item.status === ComparisonMatchState.REVIEW_REQUIRED).map(item => item.pageNumber)).toContain(4);
+            expect(await HandwritingProfileModel.countDocuments({ student: studentAUser._id })).toBe(0);
+            expect(await HandwritingSampleModel.countDocuments({ student: studentAUser._id })).toBe(0);
+        });
     });
 });

@@ -129,17 +129,22 @@ export default function DashboardLayout({
     });
   }
 
+  const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
+    { label: 'Courses', href: '/professor/courses', icon: BookOpen },
+    { label: 'Exams', href: '/professor/exams', icon: FileText },
+    { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
+    ...(isHandwritingConsistencyEnabled
+      ? [{ label: 'Handwriting Consistency', href: '/research/handwriting', icon: PenTool }]
+      : []),
+    { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
+    { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
+  ];
+
   // Define navigation items per role
   const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
     ADMIN: adminNavItems,
-    PROFESSOR: [
-      { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
-      { label: 'Courses', href: '/professor/courses', icon: BookOpen },
-      { label: 'Exams', href: '/professor/exams', icon: FileText },
-      { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
-      { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
-      { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
-    ],
+    PROFESSOR: professorNavItems,
     TA: [
       { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
     ],

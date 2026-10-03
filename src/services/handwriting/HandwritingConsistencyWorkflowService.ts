@@ -3,6 +3,7 @@ import {
     ComparisonMatchState,
     IBoundingBox,
     IHandwritingFeatures,
+    IHandwritingComparisonResult,
     IHandwritingProfileData,
     ProfileStatus,
     SampleExtractionStatus
@@ -39,6 +40,8 @@ export interface RegisterSampleWorkflowInput {
     pageNumber?: number;
     answerScriptId?: string;
     autoRebuildProfile?: boolean;
+    /** Keep an assessed sample persisted without allowing it into the trusted baseline. */
+    includeInProfile?: boolean;
 }
 
 export interface RegisterSampleWorkflowResult {
@@ -55,6 +58,29 @@ export interface CompareSampleWorkflowInput {
     sourceReference?: string;
     pageNumber?: number;
     answerScriptId?: string;
+    examId?: string;
+    questionNumber?: number;
+    sampleType?: HandwritingSampleType;
+    updateProfileOnMatch?: boolean;
+}
+
+export interface WithinScriptAssessmentInput {
+    sourceReference: string;
+    pageNumber: number;
+    imageBuffer: Buffer;
+    answerScriptId: string;
+    examId?: string;
+}
+
+export interface WithinScriptAssessmentPage extends WithinScriptAssessmentInput {
+    features?: IHandwritingFeatures;
+    status: ComparisonMatchState;
+    distance: number;
+    confidence: number;
+    featureDeviations: IHandwritingComparisonResult['featureDeviations'];
+    anomalyFactors: string[];
+    sampleQuality?: IHandwritingComparisonResult['sampleQuality'];
+    comparedAt: Date;
 }
 
 /**
@@ -273,7 +299,9 @@ export class HandwritingConsistencyWorkflowService {
             disqualificationReason = 'No image buffer or feature vector provided';
         }
 
-        const isUsable = status === SampleExtractionStatus.VALID && (features?.quality?.isSufficient ?? false);
+        const isUsable = input.includeInProfile !== false &&
+            status === SampleExtractionStatus.VALID &&
+            (features?.quality?.isSufficient ?? false);
 
         const retentionDays = consent.retentionDays || HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS;
         const retentionExpiresAt = consent.retentionExpiresAt ?? new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000);
@@ -429,7 +457,7 @@ export class HandwritingConsistencyWorkflowService {
         authContext: HandwritingAuthContext
     ): Promise<IHandwritingComparisonDocument> {
         this.verifyAccess(authContext, studentId);
-        await this.verifyConsent(studentId);
+        const consent = await this.verifyConsent(studentId);
 
         const currentProfile = await this.profileRepo.findByStudent(studentId);
 
@@ -461,8 +489,9 @@ export class HandwritingConsistencyWorkflowService {
                 boundingBox: input.boundingBox,
                 pageNumber: input.pageNumber,
                 answerScriptId: input.answerScriptId,
-                sampleType: 'GENERAL_SUBMISSION',
-                autoRebuildProfile: false // Comparisons do not automatically alter baseline profiles
+                sampleType: input.sampleType || 'EXAM_SCRIPT',
+                autoRebuildProfile: false,
+                includeInProfile: false // Admit only after a MATCH result below.
             }, authContext);
             sampleDoc = regResult.sample;
             sampleInputForEngine = {
@@ -473,6 +502,19 @@ export class HandwritingConsistencyWorkflowService {
             };
         } else {
             throw new HttpError('Either sampleId, imageBuffer, or features must be provided for comparison', 400);
+        }
+
+        // Repeated analysis of the same sample against the same immutable profile
+        // returns its prior comparison instead of creating a duplicate record.
+        const priorComparisons = await this.comparisonRepo.findBySample(sampleDoc._id.toString(), studentId);
+        const sameProfileComparison = priorComparisons.find(comparison => {
+            const comparisonProfileId = comparison.profile?.toString();
+            const currentProfileId = currentProfile?._id.toString();
+            return comparisonProfileId === currentProfileId &&
+                comparison.profileVersion === currentProfile?.profileVersion;
+        });
+        if (sameProfileComparison) {
+            return sameProfileComparison;
         }
 
         // Convert Mongoose profile document to clean Phase 2 IHandwritingProfileData interface
@@ -501,9 +543,29 @@ export class HandwritingConsistencyWorkflowService {
         // Run Phase 2 comparison engine
         const comparisonResult = await this.comparisonEngine.compare(profileData, sampleInputForEngine);
 
+        // Candidate samples remain outside the trusted baseline unless the existing
+        // comparison engine accepts them. A review or inconclusive result cannot contaminate it.
+        if (input.updateProfileOnMatch === true &&
+            comparisonResult.status === ComparisonMatchState.MATCH &&
+            !sampleDoc.isUsable) {
+            sampleDoc.isUsable = true;
+            await sampleDoc.save();
+            await this.rebuildProfile(studentId, authContext);
+        }
+
         // Persist immutable comparison record referencing the exact profile version
         const comparisonDocData: Partial<IHandwritingComparisonDocument> = {
             student: new mongoose.Types.ObjectId(studentId),
+            answerScriptId: input.answerScriptId && this.isValidObjectId(input.answerScriptId)
+                ? new mongoose.Types.ObjectId(input.answerScriptId)
+                : undefined,
+            examId: input.examId && this.isValidObjectId(input.examId)
+                ? new mongoose.Types.ObjectId(input.examId)
+                : undefined,
+            pageNumber: input.pageNumber,
+            questionNumber: input.questionNumber,
+            boundingBox: input.boundingBox,
+            analysisVersion: '1.0.0',
             profile: currentProfile?._id as mongoose.Types.ObjectId | undefined,
             profileVersion: currentProfile?.profileVersion,
             sample: sampleDoc._id as mongoose.Types.ObjectId,
@@ -513,10 +575,148 @@ export class HandwritingConsistencyWorkflowService {
             featureDeviations: comparisonResult.featureDeviations,
             anomalyFactors: comparisonResult.anomalyFactors,
             sampleQuality: comparisonResult.sampleQuality,
-            comparedAt: comparisonResult.comparedAt
+            comparedAt: comparisonResult.comparedAt,
+            retentionExpiresAt: consent.retentionExpiresAt ?? new Date(
+                Date.now() + (consent.retentionDays || HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS) * 24 * 60 * 60 * 1000
+            ),
+            retentionPolicy: HANDWRITING_RETENTION_POLICY.POLICY_NAME
         };
 
         return await this.comparisonRepo.create(comparisonDocData);
+    }
+
+    /** Adds a fully matched AnswerScript's candidate samples to the baseline as one update. */
+    public async acceptMatchedSamplesIntoProfile(
+        studentId: string,
+        sampleIds: string[],
+        authContext: HandwritingAuthContext
+    ): Promise<IHandwritingProfileDocument | null> {
+        this.verifyAccess(authContext, studentId);
+        await this.verifyConsent(studentId);
+        let changed = false;
+        for (const sampleId of [...new Set(sampleIds)]) {
+            const sample = await this.sampleRepo.findById(sampleId, studentId);
+            if (sample && !sample.isUsable && sample.status === SampleExtractionStatus.VALID) {
+                sample.isUsable = true;
+                await sample.save();
+                changed = true;
+            }
+        }
+        return changed ? await this.rebuildProfile(studentId, authContext) : this.profileRepo.findByStudent(studentId);
+    }
+
+    /** Persists a comparison made against an in-memory within-script baseline. */
+    public async persistWithinScriptComparison(
+        studentId: string,
+        sampleId: string,
+        details: {
+            answerScriptId: string;
+            examId?: string;
+            pageNumber?: number;
+            boundingBox?: IBoundingBox;
+            result: IHandwritingComparisonResult;
+        },
+        authContext: HandwritingAuthContext
+    ): Promise<IHandwritingComparisonDocument> {
+        this.verifyAccess(authContext, studentId);
+        const consent = await this.verifyConsent(studentId);
+        const sample = await this.sampleRepo.findById(sampleId, studentId);
+        if (!sample) throw new HttpError('Handwriting sample not found or access denied', 404);
+
+        const existing = await this.comparisonRepo.findBySample(sampleId, studentId);
+        const prior = existing.find(item => item.answerScriptId?.toString() === details.answerScriptId);
+        if (prior) return prior;
+
+        return await this.comparisonRepo.create({
+            student: new mongoose.Types.ObjectId(studentId),
+            answerScriptId: new mongoose.Types.ObjectId(details.answerScriptId),
+            examId: details.examId && this.isValidObjectId(details.examId)
+                ? new mongoose.Types.ObjectId(details.examId)
+                : undefined,
+            pageNumber: details.pageNumber,
+            boundingBox: details.boundingBox,
+            analysisVersion: '1.0.0',
+            sample: sample._id as mongoose.Types.ObjectId,
+            status: details.result.status,
+            distance: details.result.distance,
+            confidence: details.result.confidence,
+            featureDeviations: details.result.featureDeviations,
+            anomalyFactors: details.result.anomalyFactors,
+            sampleQuality: details.result.sampleQuality,
+            comparedAt: details.result.comparedAt,
+            retentionExpiresAt: consent.retentionExpiresAt ?? new Date(
+                Date.now() + (consent.retentionDays || HANDWRITING_RETENTION_POLICY.DEFAULT_RETENTION_DAYS) * 24 * 60 * 60 * 1000
+            ),
+            retentionPolicy: HANDWRITING_RETENTION_POLICY.POLICY_NAME
+        });
+    }
+
+    /** Uses the existing extractor, profile builder and comparison engine to check pages
+     * against the other usable pages in an initial AnswerScript, without creating a profile. */
+    public async assessWithinScriptConsistency(
+        studentId: string,
+        pages: WithinScriptAssessmentInput[],
+        authContext: HandwritingAuthContext,
+        options: { requireConsent?: boolean } = {}
+    ): Promise<WithinScriptAssessmentPage[]> {
+        this.verifyAccess(authContext, studentId);
+        if (options.requireConsent !== false) await this.verifyConsent(studentId);
+
+        const extracted = await Promise.all(pages.map(async page => {
+            const result = await this.featureExtractor.extractFeatures(page.imageBuffer);
+            return { page, features: result.status === SampleExtractionStatus.VALID ? result.features : undefined };
+        }));
+        const usable = extracted.filter((item): item is typeof item & { features: IHandwritingFeatures } =>
+            Boolean(item.features?.quality?.isSufficient)
+        );
+        // The existing engine requires three baseline samples, leaving four usable pages
+        // as the minimum needed for a leave-one-page-out internal consistency check.
+        if (usable.length < 4) {
+            return usable.map(({ page, features }) => ({
+                ...page,
+                features,
+                status: ComparisonMatchState.INSUFFICIENT_SAMPLE,
+                distance: 0,
+                confidence: 0,
+                featureDeviations: [],
+                anomalyFactors: [`At least four usable pages are required for an internal check with the existing three-sample baseline minimum.`],
+                sampleQuality: features.quality,
+                comparedAt: new Date()
+            }));
+        }
+
+        const assessments: WithinScriptAssessmentPage[] = [];
+        for (const candidate of usable) {
+            const peers = usable.filter(item => item !== candidate).map((item, index) => ({
+                sampleId: `${item.page.sourceReference}:peer:${index}`,
+                studentId,
+                features: item.features,
+                status: SampleExtractionStatus.VALID,
+                pageNumber: item.page.pageNumber,
+                answerScriptId: item.page.answerScriptId
+            }));
+            const { profile } = await this.profileBuilder.buildProfile(studentId, peers);
+            const result = await this.comparisonEngine.compare(profile, {
+                sampleId: candidate.page.sourceReference,
+                studentId,
+                features: candidate.features,
+                status: SampleExtractionStatus.VALID,
+                pageNumber: candidate.page.pageNumber,
+                answerScriptId: candidate.page.answerScriptId
+            });
+            assessments.push({
+                ...candidate.page,
+                features: candidate.features,
+                status: result.status,
+                distance: result.distance,
+                confidence: result.confidence,
+                featureDeviations: result.featureDeviations,
+                anomalyFactors: result.anomalyFactors,
+                sampleQuality: result.sampleQuality,
+                comparedAt: result.comparedAt
+            });
+        }
+        return assessments;
     }
 
     /**
@@ -602,6 +802,7 @@ export class HandwritingConsistencyWorkflowService {
         }
         const samplesPurged = await this.sampleRepo.purgeExpired(studentId);
         const profilesPurged = await this.profileRepo.purgeExpired(studentId);
+        await this.comparisonRepo.purgeExpired(studentId);
         return { samplesPurged, profilesPurged };
     }
 }
