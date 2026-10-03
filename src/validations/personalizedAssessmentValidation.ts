@@ -94,6 +94,10 @@ export const createPersonalizedScheduleSchema = z
         }
     );
 
+export const assignPersonalizedStudentSchema = z.object({
+    studentId: objectIdSchema
+}).strict();
+
 export const submitStudentAssignmentSchema = z.object({
     answer: z.string().trim().min(1, 'Answer cannot be empty').max(50000, 'Answer exceeds maximum character limit')
 });
@@ -120,4 +124,3 @@ export const generateQuestionsSchema = z.object({
         .optional(),
     selectedTopics: z.array(z.string().trim()).optional()
 });
-

@@ -10,7 +10,7 @@ import { VertexAIQuestionGenerationProvider } from '../services/ai/AIQuestionGen
 import { ClassroomEvaluationService } from '../services/ClassroomEvaluationService';
 import { GeminiAICaller } from '../services/ai/types';
 import { HttpError } from '../lib/errors';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 describe('Shared Gemini AI Service Layer (@google/genai)', () => {
   const origEnv = { ...process.env };
@@ -199,10 +199,19 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
 
       service.setClient(mockClient);
 
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          answer: { type: Type.STRING },
+        },
+        required: ['answer'],
+      };
+
       const result = await service.generateContent({
         systemInstruction: 'Act as expert grader',
         promptText: 'Evaluate question 1',
         temperature: 0.2,
+        responseSchema,
       });
 
       expect(result).toContain('Mocked Gemini GenAI output');
@@ -214,6 +223,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
           systemInstruction: 'Act as expert grader',
           temperature: 0.2,
           responseMimeType: 'application/json',
+          responseSchema,
         },
       });
     });

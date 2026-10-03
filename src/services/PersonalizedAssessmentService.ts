@@ -5,6 +5,7 @@ import { IPersonalizedQuestion, QuestionDifficulty } from '../models/Personalize
 import { IPersonalizedAssessmentSchedule } from '../models/PersonalizedAssessmentSchedule';
 import { IPersonalizedStudentAssignment, AssignmentStatus } from '../models/PersonalizedStudentAssignment';
 import Course from '../models/Course';
+import User from '../models/User';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
 import classroomEvaluationService, {
@@ -472,6 +473,202 @@ export class PersonalizedAssessmentService {
         return personalizedAssessmentRepository.getSchedulesByProfessor(professorId);
     }
 
+    async enrollStudentsInCourseSchedules(courseId: string, studentIds: string[]): Promise<void> {
+        const schedules = await personalizedAssessmentRepository.getActiveSchedulesByCourse(courseId);
+
+        for (const schedule of schedules) {
+            const enrolledIds = schedule.enrolledStudents.map((studentId) => studentId.toString());
+            const enrolledSet = new Set(enrolledIds);
+            const newStudentIds = Array.from(new Set(studentIds)).filter((studentId) => !enrolledSet.has(studentId));
+            if (newStudentIds.length === 0) {
+                continue;
+            }
+
+            const allStudentIds = [...enrolledIds, ...newStudentIds];
+            const questionIds = schedule.questionPool.map((questionId) => questionId.toString());
+            const assignableSlots = Math.min(schedule.totalQuestionsTarget, questionIds.length);
+            const allocation = this.generateAllocationMatrix(allStudentIds, questionIds, assignableSlots);
+            const slotDates = this.generateAssessmentDates(
+                schedule.startDate,
+                schedule.totalWeeks,
+                schedule.activeDaysOfWeek,
+                schedule.totalQuestionsTarget
+            );
+            const assignmentsToInsert: Array<Partial<IPersonalizedStudentAssignment>> = [];
+
+            for (const studentId of newStudentIds) {
+                const studentQuestions = allocation.get(studentId)!;
+                for (let dayIndex = 0; dayIndex < assignableSlots; dayIndex++) {
+                    const scheduledDate = slotDates[dayIndex];
+                    const { windowStart, windowEnd } = this.computeWindowTimes(
+                        scheduledDate,
+                        schedule.dailyWindowStartTime,
+                        schedule.dailyWindowEndTime
+                    );
+
+                    assignmentsToInsert.push({
+                        schedule: schedule._id as mongoose.Types.ObjectId,
+                        student: new mongoose.Types.ObjectId(studentId),
+                        question: new mongoose.Types.ObjectId(studentQuestions[dayIndex]),
+                        dayNumber: dayIndex + 1,
+                        scheduledDate,
+                        windowStart,
+                        windowEnd,
+                        status: 'LOCKED',
+                        studentAnswer: null,
+                        score: null,
+                        feedback: null
+                    });
+                }
+            }
+
+            await personalizedAssessmentRepository.insertAssignmentsBatch(assignmentsToInsert);
+            const updatedSchedule = await personalizedAssessmentRepository.addStudentsToSchedule(
+                schedule._id as mongoose.Types.ObjectId,
+                newStudentIds
+            );
+            if (!updatedSchedule) {
+                throw new HttpError('Unable to enroll students in the personalized assessment schedule', 500);
+            }
+        }
+    }
+
+    async reconcileExistingCourseEnrollments(): Promise<number> {
+        const schedules = await personalizedAssessmentRepository.getActiveSchedules();
+        const courseIds = Array.from(new Set(schedules.map((schedule) => schedule.course.toString())));
+        let synchronizedEnrollments = 0;
+
+        for (const courseId of courseIds) {
+            const course = await Course.findById(courseId).select('enrolledStudents');
+            if (!course) {
+                throw new HttpError(`Course ${courseId} for an active personalized schedule was not found`, 404);
+            }
+
+            const courseStudentIds = (course.enrolledStudents || []).map((studentId) => studentId.toString());
+            const courseSchedules = schedules.filter((schedule) => schedule.course.toString() === courseId);
+            synchronizedEnrollments += courseSchedules.reduce((count, schedule) => {
+                const scheduleStudentIds = new Set(
+                    schedule.enrolledStudents.map((studentId) => studentId.toString())
+                );
+                return count + courseStudentIds.filter((studentId) => !scheduleStudentIds.has(studentId)).length;
+            }, 0);
+
+            await this.enrollStudentsInCourseSchedules(courseId, courseStudentIds);
+        }
+
+        return synchronizedEnrollments;
+    }
+
+    async manuallyAssignStudentToSchedule(
+        scheduleId: string,
+        studentId: string,
+        actingUserId: string,
+        actingUserRole: string
+    ): Promise<{ scheduleId: string; studentId: string; assignmentCount: number }> {
+        if (actingUserRole !== 'PROFESSOR' && actingUserRole !== 'ADMIN') {
+            throw new HttpError('Forbidden: Only professors or admins can assign students', 403);
+        }
+
+        const schedule = await personalizedAssessmentRepository.getScheduleForStudentAssignment(scheduleId);
+        if (!schedule) {
+            throw new HttpError('Schedule not found', 404);
+        }
+        if (schedule.status !== 'ACTIVE') {
+            throw new HttpError('Schedule is not active', 400);
+        }
+        if (actingUserRole !== 'ADMIN' && schedule.createdBy.toString() !== actingUserId) {
+            throw new HttpError('Forbidden: You are not authorized to manage this schedule', 403);
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(studentId)) {
+            throw new HttpError('Student not found', 404);
+        }
+        const student = await User.findById(studentId).select('_id role');
+        if (!student) {
+            throw new HttpError('Student not found', 404);
+        }
+        if (student.role !== 'STUDENT') {
+            throw new HttpError('Only students can be assigned', 400);
+        }
+
+        const existingAssignmentCount = await personalizedAssessmentRepository.countAssignmentsByStudentAndSchedule(
+            studentId,
+            scheduleId
+        );
+        if (existingAssignmentCount > 0) {
+            throw new HttpError('Student is already assigned', 409);
+        }
+
+        const existingStudentIds = schedule.enrolledStudents.map((id) => id.toString());
+        const allocationStudentIds = existingStudentIds.includes(studentId)
+            ? existingStudentIds
+            : [...existingStudentIds, studentId];
+        const questionIds = schedule.questionPool.map((id) => id.toString());
+        const assignableSlots = Math.min(schedule.totalQuestionsTarget, questionIds.length);
+        const allocation = this.generateAllocationMatrix(allocationStudentIds, questionIds, assignableSlots);
+        const studentQuestions = allocation.get(studentId);
+        if (!studentQuestions) {
+            throw new HttpError('Unable to generate personalized assignments for this student', 500);
+        }
+
+        const slotDates = this.generateAssessmentDates(
+            schedule.startDate,
+            schedule.totalWeeks,
+            schedule.activeDaysOfWeek,
+            schedule.totalQuestionsTarget
+        );
+        const assignmentsToInsert: Array<Partial<IPersonalizedStudentAssignment>> = [];
+        for (let dayIndex = 0; dayIndex < assignableSlots; dayIndex++) {
+            const scheduledDate = slotDates[dayIndex];
+            const { windowStart, windowEnd } = this.computeWindowTimes(
+                scheduledDate,
+                schedule.dailyWindowStartTime,
+                schedule.dailyWindowEndTime
+            );
+            assignmentsToInsert.push({
+                schedule: schedule._id as mongoose.Types.ObjectId,
+                student: new mongoose.Types.ObjectId(studentId),
+                question: new mongoose.Types.ObjectId(studentQuestions[dayIndex]),
+                dayNumber: dayIndex + 1,
+                scheduledDate,
+                windowStart,
+                windowEnd,
+                status: 'LOCKED',
+                studentAnswer: null,
+                score: null,
+                feedback: null
+            });
+        }
+
+        const updatedSchedule = await personalizedAssessmentRepository.addStudentsToSchedule(
+            schedule._id as mongoose.Types.ObjectId,
+            [studentId]
+        );
+        if (!updatedSchedule) {
+            throw new HttpError('Schedule not found', 404);
+        }
+        await personalizedAssessmentRepository.insertAssignmentsBatch(assignmentsToInsert);
+
+        await writeAuditLog({
+            user: actingUserId,
+            action: 'PERSONALIZED_STUDENT_ASSIGNED',
+            outcome: 'SUCCESS',
+            entityId: schedule._id as mongoose.Types.ObjectId,
+            entityType: 'PersonalizedAssessmentSchedule',
+            details: {
+                scheduleId: schedule._id,
+                studentId,
+                assignmentCount: assignmentsToInsert.length
+            }
+        });
+
+        return {
+            scheduleId: schedule._id.toString(),
+            studentId,
+            assignmentCount: assignmentsToInsert.length
+        };
+    }
+
     async getScheduleById(
         scheduleId: string,
         userId: string,
@@ -544,6 +741,14 @@ export class PersonalizedAssessmentService {
         };
     }
 
+    private toStudentSchedule(schedule: IPersonalizedAssessmentSchedule) {
+        const studentSchedule = schedule.toObject();
+        delete studentSchedule.enrolledStudents;
+        delete studentSchedule.questionPool;
+        delete studentSchedule.createdBy;
+        return studentSchedule;
+    }
+
     async getTodayAssignment(
         studentId: string,
         referenceNow: Date = new Date()
@@ -561,7 +766,7 @@ export class PersonalizedAssessmentService {
 
         if (!assignment) {
             return {
-                schedule: activeSchedule,
+                schedule: this.toStudentSchedule(activeSchedule),
                 assignment: null,
                 message: 'No personalized assessment scheduled for today.'
             };
@@ -581,7 +786,7 @@ export class PersonalizedAssessmentService {
         const redactedQuestion = this.redactQuestionContent(assignment, dynamicStatus);
 
         return {
-            schedule: activeSchedule,
+            schedule: this.toStudentSchedule(activeSchedule),
             assignment: {
                 _id: assignment._id,
                 dayNumber: assignment.dayNumber,
@@ -951,7 +1156,7 @@ export class PersonalizedAssessmentService {
         });
 
         return {
-            schedule: activeSchedule,
+            schedule: this.toStudentSchedule(activeSchedule),
             slots,
             stats: {
                 total: assignments.length,

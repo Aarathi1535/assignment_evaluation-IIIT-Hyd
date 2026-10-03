@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Type, type Schema } from '@google/genai';
 import { HttpError } from '../../lib/errors';
 import { QuestionDifficulty } from '../../models/PersonalizedQuestion';
 import { vertexAIService, VertexAIService } from './VertexAIService';
@@ -45,72 +46,72 @@ export const generatedQuestionsResponseSchema = z.preprocess(
  * Strict OpenAPI / Gemini-compliant schema for constrained structured generation.
  */
 export const GEMINI_QUESTIONS_RESPONSE_SCHEMA = {
-    type: 'OBJECT',
+    type: Type.OBJECT,
     properties: {
         questions: {
-            type: 'ARRAY',
+            type: Type.ARRAY,
             items: {
-                type: 'OBJECT',
+                type: Type.OBJECT,
                 properties: {
                     title: {
-                        type: 'STRING',
+                        type: Type.STRING,
                         description: 'Concise, academic title for the question'
                     },
                     topic: {
-                        type: 'STRING',
+                        type: Type.STRING,
                         description: 'Exact topic from the syllabus units'
                     },
                     unit: {
-                        type: 'STRING',
+                        type: Type.STRING,
                         description: 'Title of the syllabus unit containing this topic'
                     },
                     difficulty: {
-                        type: 'STRING',
+                        type: Type.STRING,
                         enum: ['EASY', 'MEDIUM', 'HARD'],
                         description: 'Difficulty tier: EASY, MEDIUM, or HARD'
                     },
                     questionPrompt: {
-                        type: 'STRING',
+                        type: Type.STRING,
                         description: 'Complete, clear question statement with problem specification'
                     },
                     expectedConcepts: {
-                        type: 'ARRAY',
-                        items: { type: 'STRING' },
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
                         description: 'Core concepts and keywords tested'
                     },
                     maxMarks: {
-                        type: 'NUMBER',
+                        type: Type.NUMBER,
                         description: 'Maximum marks for the question (default 10)'
                     },
                     hints: {
-                        type: 'ARRAY',
-                        items: { type: 'STRING' },
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
                         description: 'Progressive hints for students'
                     },
                     referenceAnswer: {
-                        type: 'STRING',
+                        type: Type.STRING,
                         description: 'Reference solution outline or formal answer derivation'
                     },
                     rubricCriteria: {
-                        type: 'ARRAY',
+                        type: Type.ARRAY,
                         items: {
-                            type: 'OBJECT',
+                            type: Type.OBJECT,
                             properties: {
-                                criterionName: { type: 'STRING' },
-                                points: { type: 'NUMBER' },
-                                description: { type: 'STRING' }
+                                criterionName: { type: Type.STRING },
+                                points: { type: Type.NUMBER },
+                                description: { type: Type.STRING }
                             },
                             required: ['criterionName', 'points']
                         },
                         description: 'Rubric criteria points breakdown summing up to maxMarks'
                     }
                 },
-                required: ['title', 'topic', 'difficulty', 'questionPrompt', 'maxMarks']
+                required: ['topic', 'difficulty', 'questionPrompt', 'maxMarks']
             }
         }
     },
     required: ['questions']
-};
+} satisfies Schema;
 
 export interface GeneratedQuestionItem {
     title: string;
@@ -568,6 +569,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
                     promptText,
                     model: currentModel,
                     responseMimeType: 'application/json',
+                    responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA,
                     temperature: 0.2
                 });
 

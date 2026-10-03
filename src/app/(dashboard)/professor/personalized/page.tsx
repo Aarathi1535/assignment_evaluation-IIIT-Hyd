@@ -26,6 +26,12 @@ interface CourseOption {
     enrolledStudents?: Array<{ _id: string; name: string; email: string }>;
 }
 
+interface StudentOption {
+    _id: string;
+    name: string;
+    email: string;
+}
+
 interface SyllabusUnit {
     unitNumber: number;
     unitTitle: string;
@@ -116,6 +122,11 @@ export default function ProfessorPersonalizedAssessmentPage() {
     // Schedules state
     const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
     const [selectedSchedule, setSelectedSchedule] = useState<ScheduleItem | null>(null);
+    const [students, setStudents] = useState<StudentOption[]>([]);
+    const [manualScheduleId, setManualScheduleId] = useState('');
+    const [manualStudentId, setManualStudentId] = useState('');
+    const [assigningStudent, setAssigningStudent] = useState(false);
+    const [manualAssignmentMessage, setManualAssignmentMessage] = useState<{ success: boolean; text: string } | null>(null);
     const [progressData, setProgressData] = useState<StudentProgressItem[]>([]);
     const [loadingProgress, setLoadingProgress] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -255,6 +266,13 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 setSelectedSchedule(first);
                 await loadScheduleProgress(first._id);
             }
+        }
+
+        const studentsRes = await safeFetchJson<StudentOption[]>('/api/users?role=STUDENT');
+        if (studentsRes.ok && studentsRes.data) {
+            setStudents(studentsRes.data.map(({ _id, name, email }) => ({ _id, name, email })));
+        } else {
+            setFormError(formatError(studentsRes, 'Failed to load students'));
         }
         setLoading(false);
     };
@@ -437,6 +455,48 @@ export default function ProfessorPersonalizedAssessmentPage() {
             setFormError(formatError(result, 'Failed to create schedule'));
         }
         setCreating(false);
+    };
+
+    const handleManualStudentAssignment = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!manualScheduleId || !manualStudentId) {
+            setManualAssignmentMessage({ success: false, text: 'Select an active schedule and student.' });
+            return;
+        }
+
+        setAssigningStudent(true);
+        setManualAssignmentMessage(null);
+        const result = await safeFetchJson(
+            `/api/personalized/schedules/${manualScheduleId}/assign-student`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ studentId: manualStudentId })
+            }
+        );
+
+        if (result.ok) {
+            setManualAssignmentMessage({ success: true, text: 'Student assigned successfully' });
+            const [schedulesRes, progressRes] = await Promise.all([
+                safeFetchJson<ScheduleItem[]>('/api/personalized/schedules'),
+                safeFetchJson<{ studentProgress: StudentProgressItem[] }>(
+                    `/api/personalized/schedules/${manualScheduleId}/progress`
+                )
+            ]);
+            if (schedulesRes.ok && schedulesRes.data) {
+                setSchedules(schedulesRes.data);
+                setSelectedSchedule(schedulesRes.data.find((schedule) => schedule._id === manualScheduleId) || null);
+            }
+            if (progressRes.ok && progressRes.data) {
+                setProgressData(progressRes.data.studentProgress || []);
+            }
+        } else {
+            setManualAssignmentMessage({
+                success: false,
+                text: result.message || result.error?.message || 'Failed to assign student'
+            });
+        }
+        setAssigningStudent(false);
     };
 
 
@@ -848,6 +908,65 @@ Unit 4: Advanced Data Structures
                             <span>Create Assessment Schedule</span>
                         </Button>
                     </div>
+
+                    <Card className="border-slate-200">
+                        <form onSubmit={handleManualStudentAssignment} className="grid grid-cols-1 gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+                            <div>
+                                <label htmlFor="manual-assignment-schedule" className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                                    Active Schedule
+                                </label>
+                                <select
+                                    id="manual-assignment-schedule"
+                                    value={manualScheduleId}
+                                    onChange={(event) => setManualScheduleId(event.target.value)}
+                                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                                    required
+                                >
+                                    <option value="">Select a schedule</option>
+                                    {schedules.filter((schedule) => schedule.status === 'ACTIVE').map((schedule) => (
+                                        <option key={schedule._id} value={schedule._id}>
+                                            {schedule.course?.courseCode || 'Course'} — {schedule.title}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label htmlFor="manual-assignment-student" className="mb-1 block text-xs font-bold uppercase text-slate-600">
+                                    Student
+                                </label>
+                                <select
+                                    id="manual-assignment-student"
+                                    value={manualStudentId}
+                                    onChange={(event) => setManualStudentId(event.target.value)}
+                                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                                    required
+                                >
+                                    <option value="">Select a student</option>
+                                    {students.map((student) => (
+                                        <option key={student._id} value={student._id}>
+                                            {student.name} — {student.email}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <Button
+                                variant="primary"
+                                size="md"
+                                type="submit"
+                                disabled={assigningStudent || schedules.every((schedule) => schedule.status !== 'ACTIVE') || students.length === 0}
+                            >
+                                {assigningStudent ? 'Assigning...' : 'Assign Student'}
+                            </Button>
+                        </form>
+                        {manualAssignmentMessage && (
+                            <p className={`mt-3 flex items-center gap-2 text-sm font-semibold ${manualAssignmentMessage.success ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                {manualAssignmentMessage.success
+                                    ? <CheckCircle2 className="h-4 w-4" />
+                                    : <AlertCircle className="h-4 w-4" />}
+                                {manualAssignmentMessage.text}
+                            </p>
+                        )}
+                    </Card>
 
                     {schedules.length === 0 ? (
                         <EmptyState

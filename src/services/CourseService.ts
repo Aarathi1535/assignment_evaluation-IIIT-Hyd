@@ -4,6 +4,7 @@ import User, { UserRole } from '../models/User';
 import { writeAuditLog } from '../lib/audit';
 import mongoose from 'mongoose';
 import { HttpError, isDuplicateKeyError } from '../lib/errors';
+import personalizedAssessmentService from './PersonalizedAssessmentService';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -322,6 +323,8 @@ class CourseService {
             if (!updatedCourse) {
                 return null;
             }
+
+            await personalizedAssessmentService.enrollStudentsInCourseSchedules(courseId, uniqueStudentIds);
 
             if (context?.actingUserId) {
                 await writeAuditLog({

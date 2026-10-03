@@ -64,7 +64,7 @@ function isAllowedPhotoFile(file: File): boolean {
     return /\.(jpe?g|png|webp)$/.test(name);
 }
 
-interface ScheduleInfo {
+export interface ScheduleInfo {
     _id: string;
     title: string;
     totalQuestionsTarget: number;
@@ -93,7 +93,7 @@ interface SlotSummary {
     } | null;
 }
 
-interface StatsSummary {
+export interface StatsSummary {
     total: number;
     completed: number;
     missed: number;
@@ -101,6 +101,56 @@ interface StatsSummary {
     inProgress: number;
     streak: number;
     completionPercentage: number;
+}
+
+export function PersonalizedEnrollmentCard({
+    schedule,
+    stats,
+    todayStatus
+}: {
+    schedule: ScheduleInfo;
+    stats: StatsSummary | null;
+    todayStatus: string;
+}) {
+    const progressTotal = schedule.totalQuestionsTarget;
+
+    return (
+        <Card className="border-brand-primary/20 bg-brand-primary/[0.03]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                    <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                        <h2 className="text-base font-bold text-slate-900">Personalized Assessment Enrollment</h2>
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
+                            Enrolled
+                        </span>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-600">
+                        {schedule.course?.courseName || schedule.course?.courseCode || 'Course'}
+                        {schedule.course?.courseCode && schedule.course.courseName
+                            ? ` (${schedule.course.courseCode})`
+                            : ''}
+                    </p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-xs font-semibold text-slate-500">Enrollment status</p>
+                        <p className="mt-1 text-sm font-bold text-emerald-700">Enrolled</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-xs font-semibold text-slate-500">Assessment progress</p>
+                        <p className="mt-1 text-sm font-bold text-slate-900">
+                            {stats?.completed ?? 0} / {progressTotal}
+                        </p>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-xs font-semibold text-slate-500">Today&apos;s assessment</p>
+                        <p className="mt-1 text-sm font-bold text-slate-900">{todayStatus}</p>
+                    </div>
+                </div>
+            </div>
+        </Card>
+    );
 }
 
 export default function StudentPersonalizedAssessmentPage() {
@@ -350,6 +400,14 @@ export default function StudentPersonalizedAssessmentPage() {
                     <span>{successMsg}</span>
                 </div>
             )}
+
+            <PersonalizedEnrollmentCard
+                schedule={scheduleInfo}
+                stats={stats}
+                todayStatus={todayData
+                    ? todayData.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())
+                    : 'No assessment scheduled today'}
+            />
 
             {/* Main Daily Assessment Hero Section */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

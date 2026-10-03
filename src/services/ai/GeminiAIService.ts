@@ -203,6 +203,7 @@ export class GeminiAIService {
       model = this.getModelName(),
       temperature = 0.2,
       responseMimeType = 'application/json',
+      responseSchema,
       isRealStudentData = false,
     } = params;
 
@@ -233,6 +234,7 @@ export class GeminiAIService {
           systemInstruction: systemInstruction.trim() || undefined,
           temperature,
           responseMimeType: responseMimeType || undefined,
+          ...(responseSchema ? { responseSchema } : {}),
         },
       });
 

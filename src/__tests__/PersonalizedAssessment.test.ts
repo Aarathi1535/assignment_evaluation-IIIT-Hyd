@@ -3,18 +3,23 @@ import mongoose from 'mongoose';
 import User, { IUser } from '../models/User';
 import Course, { ICourse } from '../models/Course';
 import PersonalizedQuestion, { IPersonalizedQuestion } from '../models/PersonalizedQuestion';
-import { IPersonalizedAssessmentSchedule } from '../models/PersonalizedAssessmentSchedule';
+import PersonalizedAssessmentSchedule, {
+    IPersonalizedAssessmentSchedule
+} from '../models/PersonalizedAssessmentSchedule';
 import PersonalizedStudentAssignment, { IPersonalizedStudentAssignment } from '../models/PersonalizedStudentAssignment';
 import personalizedAssessmentService from '../services/PersonalizedAssessmentService';
+import CourseService from '../services/CourseService';
 import syllabusProcessingService from '../services/SyllabusProcessingService';
 import personalizedQuestionGenerationService from '../services/PersonalizedQuestionGenerationService';
 import personalizationService from '../services/PersonalizationService';
 import {
     MockAIQuestionGenerationProvider,
     GeminiAIQuestionGenerationProvider,
+    GEMINI_QUESTIONS_RESPONSE_SCHEMA,
     parseGeneratedQuestions
 } from '../services/ai/AIQuestionGenerationProvider';
 import { GeminiAIService } from '../services/ai/GeminiAIService';
+import { HttpError } from '../lib/errors';
 import { UserRole } from '../constants/permissions';
 import {
     createPersonalizedQuestionSchema,
@@ -252,6 +257,331 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
                 const enriched = `Field '${fieldPath}': ${firstIssue.message}`;
                 expect(enriched).toContain('enrolledStudents');
             }
+        });
+    });
+
+    describe('Course enrollment synchronization', () => {
+        it('adds a newly enrolled course student to active schedules and exposes only their own assignments', async () => {
+            const newlyEnrolledStudent = await User.create({
+                name: 'Student Charlie',
+                email: 'charlie@students.iiit.ac.in',
+                password: 'hashedPassword123',
+                role: UserRole.STUDENT,
+                isActive: true
+            });
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Enrollment Sync Schedule',
+                    startDate: '2026-10-05',
+                    activeDaysOfWeek: [1, 2, 3],
+                    dailyWindowStartTime: '09:00',
+                    dailyWindowEndTime: '22:00',
+                    enrolledStudents: [studentUserA._id.toString()],
+                    totalQuestionsTarget: 3,
+                    totalWeeks: 1
+                },
+                professorUser._id.toString()
+            );
+
+            await CourseService.enrollStudents(
+                testCourse._id.toString(),
+                [newlyEnrolledStudent._id.toString()],
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            );
+
+            const enrolledCourse = await Course.findById(testCourse._id);
+            expect(enrolledCourse!.enrolledStudents?.map((student) => student.toString()) || [])
+                .toContain(newlyEnrolledStudent._id.toString());
+
+            const enrolledSchedule = await PersonalizedAssessmentSchedule.findById(schedule._id);
+            expect(enrolledSchedule).not.toBeNull();
+            expect(enrolledSchedule!.enrolledStudents.map((student) => student.toString()))
+                .toContain(newlyEnrolledStudent._id.toString());
+
+            const studentSchedule = await personalizedAssessmentService.getMySchedule(
+                newlyEnrolledStudent._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            );
+            expect(studentSchedule.schedule?._id.toString()).toBe(schedule._id.toString());
+            expect(studentSchedule.schedule).not.toBeNull();
+            expect(studentSchedule.slots).toHaveLength(3);
+            expect(studentSchedule.slots.every((slot) => slot._id)).toBe(true);
+            expect(studentSchedule.schedule).not.toHaveProperty('enrolledStudents');
+            expect(studentSchedule.schedule).not.toHaveProperty('questionPool');
+            expect(studentSchedule.schedule.course).toMatchObject({
+                courseCode: testCourse.courseCode,
+                courseName: testCourse.courseName
+            });
+
+            const firstAssignment = await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: newlyEnrolledStudent._id
+            }).sort({ dayNumber: 1 });
+            expect(firstAssignment).not.toBeNull();
+            const todayAssignment = await personalizedAssessmentService.getTodayAssignment(
+                newlyEnrolledStudent._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            );
+            expect(todayAssignment?.assignment?._id.toString()).toBe(firstAssignment!._id.toString());
+
+            const otherStudentSchedule = await personalizedAssessmentService.getMySchedule(
+                studentUserB._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            );
+            expect(otherStudentSchedule.schedule).toBeNull();
+            expect(otherStudentSchedule.slots).toHaveLength(0);
+            expect(await personalizedAssessmentService.getTodayAssignment(
+                studentUserB._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            )).toBeNull();
+        });
+
+        it('backfills a course enrollment created before an active personalized schedule was synchronized', async () => {
+            const previouslyEnrolledStudent = await User.create({
+                name: 'Student Legacy',
+                email: 'legacy@students.iiit.ac.in',
+                password: 'hashedPassword123',
+                role: UserRole.STUDENT,
+                isActive: true
+            });
+            await Course.findByIdAndUpdate(testCourse._id, {
+                $set: {
+                    enrolledStudents: [studentUserA._id, previouslyEnrolledStudent._id]
+                }
+            });
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Pre-existing Enrollment Schedule',
+                    startDate: '2026-10-05',
+                    activeDaysOfWeek: [1, 2, 3],
+                    dailyWindowStartTime: '09:00',
+                    dailyWindowEndTime: '22:00',
+                    enrolledStudents: [studentUserA._id.toString()],
+                    totalQuestionsTarget: 3,
+                    totalWeeks: 1
+                },
+                professorUser._id.toString()
+            );
+
+            expect(await PersonalizedStudentAssignment.countDocuments({
+                schedule: schedule._id,
+                student: previouslyEnrolledStudent._id
+            })).toBe(0);
+
+            expect(await personalizedAssessmentService.reconcileExistingCourseEnrollments()).toBe(1);
+
+            const enrolledCourse = await Course.findById(testCourse._id);
+            expect(enrolledCourse!.enrolledStudents?.map((student) => student.toString()) || [])
+                .toContain(previouslyEnrolledStudent._id.toString());
+            const enrolledSchedule = await PersonalizedAssessmentSchedule.findById(schedule._id);
+            expect(enrolledSchedule!.enrolledStudents.map((student) => student.toString()))
+                .toContain(previouslyEnrolledStudent._id.toString());
+            expect(await PersonalizedStudentAssignment.countDocuments({
+                schedule: schedule._id,
+                student: previouslyEnrolledStudent._id
+            })).toBe(3);
+
+            const studentSchedule = await personalizedAssessmentService.getMySchedule(
+                previouslyEnrolledStudent._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            );
+            expect(studentSchedule.schedule?._id.toString()).toBe(schedule._id.toString());
+            expect(studentSchedule.slots).toHaveLength(3);
+
+            const todayAssignment = await personalizedAssessmentService.getTodayAssignment(
+                previouslyEnrolledStudent._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            );
+            expect(todayAssignment?.assignment).toBeTruthy();
+            expect(await personalizedAssessmentService.getMySchedule(
+                studentUserB._id.toString(),
+                new Date('2026-10-05T10:00:00.000Z')
+            ).then((result) => result.schedule)).toBeNull();
+        });
+    });
+
+    describe('Manual personalized schedule assignment', () => {
+        let manualSchedule: IPersonalizedAssessmentSchedule;
+        let manuallyAssignedStudent: IUser;
+
+        beforeEach(async () => {
+            manuallyAssignedStudent = await User.create({
+                name: 'Manual Assignment Student',
+                email: 'manual.student@students.iiit.ac.in',
+                password: 'hashedPassword123',
+                role: UserRole.STUDENT,
+                isActive: true
+            });
+            await Course.findByIdAndUpdate(testCourse._id, {
+                $set: { enrolledStudents: [studentUserA._id] }
+            });
+            manualSchedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Manual Assignment Schedule',
+                    startDate: '2026-10-05',
+                    activeDaysOfWeek: [1, 2, 3],
+                    dailyWindowStartTime: '09:00',
+                    dailyWindowEndTime: '22:00',
+                    enrolledStudents: [studentUserA._id.toString()],
+                    totalQuestionsTarget: 3,
+                    totalWeeks: 1
+                },
+                professorUser._id.toString()
+            );
+        });
+
+        it('assigns a student directly to the schedule and exposes only that student’s assessment data', async () => {
+            const existingAssignmentsBefore = await PersonalizedStudentAssignment.find({
+                schedule: manualSchedule._id,
+                student: studentUserA._id
+            }).sort({ dayNumber: 1 }).lean();
+
+            const result = await personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                manuallyAssignedStudent._id.toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            );
+
+            expect(result).toEqual({
+                scheduleId: manualSchedule._id.toString(),
+                studentId: manuallyAssignedStudent._id.toString(),
+                assignmentCount: 3
+            });
+            const courseAfter = await Course.findById(testCourse._id);
+            expect(courseAfter!.enrolledStudents?.map((id) => id.toString()) || [])
+                .not.toContain(manuallyAssignedStudent._id.toString());
+
+            const scheduleAfter = await PersonalizedAssessmentSchedule.findById(manualSchedule._id);
+            expect(scheduleAfter!.enrolledStudents.map((id) => id.toString()))
+                .toContain(manuallyAssignedStudent._id.toString());
+
+            const studentAssignments = await PersonalizedStudentAssignment.find({
+                schedule: manualSchedule._id,
+                student: manuallyAssignedStudent._id
+            }).sort({ dayNumber: 1 }).lean();
+            expect(studentAssignments).toHaveLength(3);
+            expect(studentAssignments.map((assignment) => assignment.dayNumber)).toEqual([1, 2, 3]);
+            expect(new Set(studentAssignments.map((assignment) => assignment.question.toString())).size).toBe(3);
+
+            const existingAssignmentsAfter = await PersonalizedStudentAssignment.find({
+                schedule: manualSchedule._id,
+                student: studentUserA._id
+            }).sort({ dayNumber: 1 }).lean();
+            expect(existingAssignmentsAfter.map((assignment) => ({
+                id: assignment._id.toString(),
+                question: assignment.question.toString()
+            }))).toEqual(existingAssignmentsBefore.map((assignment) => ({
+                id: assignment._id.toString(),
+                question: assignment.question.toString()
+            })));
+
+            const today = new Date('2026-10-05T10:00:00.000Z');
+            const todayAssignment = await personalizedAssessmentService.getTodayAssignment(
+                manuallyAssignedStudent._id.toString(),
+                today
+            );
+            expect(todayAssignment?.schedule._id.toString()).toBe(manualSchedule._id.toString());
+            expect(todayAssignment?.assignment?.studentAnswer).toBeNull();
+
+            const mySchedule = await personalizedAssessmentService.getMySchedule(
+                manuallyAssignedStudent._id.toString(),
+                today
+            );
+            expect(mySchedule.schedule?._id.toString()).toBe(manualSchedule._id.toString());
+            expect(mySchedule.slots).toHaveLength(3);
+            expect(mySchedule.schedule).not.toHaveProperty('enrolledStudents');
+
+            expect(await personalizedAssessmentService.getTodayAssignment(
+                studentUserB._id.toString(),
+                today
+            )).toBeNull();
+            const anotherStudentsSchedule = await personalizedAssessmentService.getMySchedule(
+                studentUserB._id.toString(),
+                today
+            );
+            expect(anotherStudentsSchedule.schedule).toBeNull();
+            expect(anotherStudentsSchedule.slots).toHaveLength(0);
+        });
+
+        it('does not create duplicate assignments when the same student is assigned twice', async () => {
+            await personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                manuallyAssignedStudent._id.toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            );
+
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                manuallyAssignedStudent._id.toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            )).rejects.toMatchObject({ message: 'Student is already assigned', statusCode: 409 });
+            expect(await PersonalizedStudentAssignment.countDocuments({
+                schedule: manualSchedule._id,
+                student: manuallyAssignedStudent._id
+            })).toBe(3);
+        });
+
+        it('rejects unauthorized users and professors who do not own the schedule', async () => {
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                manuallyAssignedStudent._id.toString(),
+                studentUserA._id.toString(),
+                UserRole.STUDENT
+            )).rejects.toMatchObject({ statusCode: 403 });
+
+            const otherProfessor = await User.create({
+                name: 'Other Professor',
+                email: 'other.professor@iiit.ac.in',
+                password: 'hashedPassword123',
+                role: UserRole.PROFESSOR,
+                isActive: true
+            });
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                manuallyAssignedStudent._id.toString(),
+                otherProfessor._id.toString(),
+                UserRole.PROFESSOR
+            )).rejects.toMatchObject({ statusCode: 403 });
+        });
+
+        it('validates schedule status, student existence, and student role', async () => {
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                new mongoose.Types.ObjectId().toString(),
+                manuallyAssignedStudent._id.toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            )).rejects.toMatchObject({ message: 'Schedule not found', statusCode: 404 });
+
+            manualSchedule.status = 'PAUSED';
+            await manualSchedule.save();
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                manuallyAssignedStudent._id.toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            )).rejects.toMatchObject({ message: 'Schedule is not active', statusCode: 400 });
+
+            manualSchedule.status = 'ACTIVE';
+            await manualSchedule.save();
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                new mongoose.Types.ObjectId().toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            )).rejects.toMatchObject({ message: 'Student not found', statusCode: 404 });
+            await expect(personalizedAssessmentService.manuallyAssignStudentToSchedule(
+                manualSchedule._id.toString(),
+                professorUser._id.toString(),
+                professorUser._id.toString(),
+                UserRole.PROFESSOR
+            )).rejects.toMatchObject({ message: 'Only students can be assigned', statusCode: 400 });
         });
     });
 
@@ -1084,9 +1414,16 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
                 }
             ];
 
-            expect(() => parseGeneratedQuestions(malformedPayload, units)).toThrow(
-                /Gemini question generation returned malformed JSON/i
-            );
+            let parseError: unknown;
+            try {
+                parseGeneratedQuestions(malformedPayload, units);
+            } catch (error) {
+                parseError = error;
+            }
+
+            expect(parseError).toBeInstanceOf(HttpError);
+            expect((parseError as HttpError).statusCode).toBe(502);
+            expect((parseError as Error).message).toMatch(/Gemini question generation returned malformed JSON/i);
         });
 
         it('schema-invalid JSON response: rejects output missing required fields or having invalid enum values', () => {
@@ -1315,7 +1652,8 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
                     expect.objectContaining({
                         systemInstruction: 'Test system instruction',
                         promptText: 'Test prompt text',
-                        responseMimeType: 'application/json'
+                        responseMimeType: 'application/json',
+                        responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA
                     })
                 );
 

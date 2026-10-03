@@ -83,6 +83,42 @@ export class PersonalizedAssessmentRepository {
             .sort({ createdAt: -1 });
     }
 
+    async getActiveSchedulesByCourse(
+        courseId: string | mongoose.Types.ObjectId
+    ): Promise<IPersonalizedAssessmentSchedule[]> {
+        if (!courseId || !mongoose.Types.ObjectId.isValid(courseId.toString())) {
+            return [];
+        }
+        return PersonalizedAssessmentSchedule.find({
+            course: new mongoose.Types.ObjectId(courseId.toString()),
+            status: 'ACTIVE'
+        });
+    }
+
+    async getActiveSchedules(): Promise<IPersonalizedAssessmentSchedule[]> {
+        return PersonalizedAssessmentSchedule.find({ status: 'ACTIVE' });
+    }
+
+    async addStudentsToSchedule(
+        scheduleId: string | mongoose.Types.ObjectId,
+        studentIds: Array<string | mongoose.Types.ObjectId>
+    ): Promise<IPersonalizedAssessmentSchedule | null> {
+        if (!scheduleId || !mongoose.Types.ObjectId.isValid(scheduleId.toString())) {
+            return null;
+        }
+        return PersonalizedAssessmentSchedule.findByIdAndUpdate(
+            scheduleId,
+            {
+                $addToSet: {
+                    enrolledStudents: {
+                        $each: studentIds.map((id) => new mongoose.Types.ObjectId(id.toString()))
+                    }
+                }
+            },
+            { new: true }
+        );
+    }
+
     async getScheduleById(
         scheduleId: string | mongoose.Types.ObjectId
     ): Promise<IPersonalizedAssessmentSchedule | null> {
@@ -92,6 +128,15 @@ export class PersonalizedAssessmentRepository {
         return PersonalizedAssessmentSchedule.findById(scheduleId)
             .populate('course', 'courseCode courseName professor')
             .populate('enrolledStudents', 'name email');
+    }
+
+    async getScheduleForStudentAssignment(
+        scheduleId: string | mongoose.Types.ObjectId
+    ): Promise<IPersonalizedAssessmentSchedule | null> {
+        if (!scheduleId || !mongoose.Types.ObjectId.isValid(scheduleId.toString())) {
+            return null;
+        }
+        return PersonalizedAssessmentSchedule.findById(scheduleId);
     }
 
     async getActiveScheduleForStudent(
@@ -105,6 +150,7 @@ export class PersonalizedAssessmentRepository {
             enrolledStudents: studentObjId,
             status: 'ACTIVE'
         })
+            .select('title totalQuestionsTarget totalWeeks startDate endDate activeDaysOfWeek timezone dailyWindowStartTime dailyWindowEndTime course status')
             .populate('course', 'courseCode courseName')
             .sort({ startDate: -1 });
     }
@@ -144,6 +190,20 @@ export class PersonalizedAssessmentRepository {
         })
             .populate('question', 'title topic difficulty maxMarks questionPrompt hints')
             .sort({ dayNumber: 1 });
+    }
+
+    async countAssignmentsByStudentAndSchedule(
+        studentId: string | mongoose.Types.ObjectId,
+        scheduleId: string | mongoose.Types.ObjectId
+    ): Promise<number> {
+        if (!studentId || !mongoose.Types.ObjectId.isValid(studentId.toString()) ||
+            !scheduleId || !mongoose.Types.ObjectId.isValid(scheduleId.toString())) {
+            return 0;
+        }
+        return PersonalizedStudentAssignment.countDocuments({
+            student: new mongoose.Types.ObjectId(studentId.toString()),
+            schedule: new mongoose.Types.ObjectId(scheduleId.toString())
+        });
     }
 
     async getAssignmentForStudentByDate(

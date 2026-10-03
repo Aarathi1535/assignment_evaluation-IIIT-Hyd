@@ -1,3 +1,5 @@
+import type { Schema } from '@google/genai';
+
 export interface GeminiAIConfig {
   model: string;
   secretName: string;
@@ -27,6 +29,7 @@ export interface GenerateContentParams {
   model?: string;
   temperature?: number;
   responseMimeType?: string;
+  responseSchema?: Schema;
   isRealStudentData?: boolean;
 }
 
