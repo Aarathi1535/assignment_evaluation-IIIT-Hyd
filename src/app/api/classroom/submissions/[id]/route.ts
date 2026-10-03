@@ -13,6 +13,14 @@ export async function GET(
     return auth.response;
   }
 
+  if (auth.user.role === 'ADMIN') {
+    return NextResponse.json({
+      success: false,
+      message: 'Forbidden: Classroom Assessment is not available for Admin accounts',
+      data: null
+    }, { status: 403 });
+  }
+
   try {
     await connectDB();
     const resolvedParams = await params;

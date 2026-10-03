@@ -14,6 +14,14 @@ export async function GET(
     return auth.response;
   }
 
+  if (auth.user.role === 'ADMIN') {
+    return NextResponse.json({
+      success: false,
+      message: 'Forbidden: Classroom Assessment is not available for Admin accounts',
+      data: null
+    }, { status: 403 });
+  }
+
   try {
     await connectDB();
     const resolvedParams = await params;
@@ -49,10 +57,18 @@ export async function PATCH(
     return auth.response;
   }
 
-  if (auth.user.role !== 'PROFESSOR' && auth.user.role !== 'ADMIN') {
+  if (auth.user.role === 'ADMIN') {
     return NextResponse.json({
       success: false,
-      message: 'Forbidden: Only professors or admins can modify questions',
+      message: 'Forbidden: Classroom Assessment is not available for Admin accounts',
+      data: null
+    }, { status: 403 });
+  }
+
+  if (auth.user.role !== 'PROFESSOR') {
+    return NextResponse.json({
+      success: false,
+      message: 'Forbidden: Only professors can modify classroom questions',
       data: null
     }, { status: 403 });
   }

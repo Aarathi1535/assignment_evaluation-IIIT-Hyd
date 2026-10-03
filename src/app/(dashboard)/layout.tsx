@@ -119,7 +119,6 @@ export default function DashboardLayout({
     ADMIN: [
       { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
       { label: 'Users', href: '/admin/users', icon: Users },
-      { label: 'Classroom Assessment', href: '/professor/classroom', icon: Sparkles },
     ],
     PROFESSOR: [
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },

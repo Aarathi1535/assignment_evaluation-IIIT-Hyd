@@ -65,7 +65,7 @@ export class ClassroomEvaluationService {
     }
 
     getModelName(): string {
-        return process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+        return process.env.GEMINI_MODEL || 'gemini-3.8-flash';
     }
 
     /**
