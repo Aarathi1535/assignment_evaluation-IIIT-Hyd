@@ -48,8 +48,8 @@ export class ClassroomAssessmentService {
             throw new HttpError('Unauthorized', 401);
         }
 
-        if (context.actingUserRole !== 'PROFESSOR' && context.actingUserRole !== 'ADMIN') {
-            throw new HttpError('Forbidden: Only professors or admins can create classroom questions', 403);
+        if (context.actingUserRole !== 'PROFESSOR') {
+            throw new HttpError('Forbidden: Only professors can create classroom questions', 403);
         }
 
         if (!data.title || !data.title.trim()) {
@@ -176,8 +176,8 @@ export class ClassroomAssessmentService {
             throw new HttpError('Unauthorized', 401);
         }
 
-        if (context.actingUserRole !== 'PROFESSOR' && context.actingUserRole !== 'ADMIN') {
-            throw new HttpError('Forbidden: Only professors or admins can manage question status', 403);
+        if (context.actingUserRole !== 'PROFESSOR') {
+            throw new HttpError('Forbidden: Only professors can manage question status', 403);
         }
 
         const question = await ClassroomAssessmentRepository.getQuestionById(id);
@@ -321,13 +321,26 @@ export class ClassroomAssessmentService {
                 fileSize: input.fileBuffer.length
             });
 
+            // Debug: log the parsed evaluation outcome (no image data)
+            console.log('[ClassroomAssessment] Parsed evaluation outcome:', JSON.stringify({
+                score: evaluationResult.score,
+                maxMarks: evaluationResult.maxMarks,
+                feedback: evaluationResult.feedback,
+                confidence: evaluationResult.confidence,
+                criterionScores: evaluationResult.criterionScores
+            }));
+
             submission.status = 'EVALUATED';
             submission.score = evaluationResult.score;
             submission.feedback = evaluationResult.feedback;
             submission.criterionScores = evaluationResult.criterionScores;
             submission.confidence = evaluationResult.confidence;
             submission.evaluatedAt = new Date();
-            await submission.save();
+            // Use the return value of .save() — it is the authoritative persisted
+            // document after all Mongoose schema transforms (trim, defaults, etc.).
+            // Discarding it caused the caller to receive a stale in-memory object
+            // where score / feedback / criterionScores were not reflected correctly.
+            submission = await submission.save();
 
             await writeAuditLog({
                 user: input.studentId,

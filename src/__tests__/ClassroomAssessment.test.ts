@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+﻿/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import ClassroomQuestion from '../models/ClassroomQuestion';
@@ -121,6 +121,49 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
       const res = await questionDetailPATCH(req, { params: Promise.resolve({ id: q._id.toString() }) });
       const body = await res.json();
       expect(res.status).toBe(403);
+      expect(body.message).toContain('Forbidden');
+    });
+
+    it('Admin cannot access classroom questions list (GET) - returns 403', async () => {
+      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
+      const res = await questionsGET();
+      const body = await res.json();
+      expect(res.status).toBe(403);
+      expect(body.success).toBe(false);
+      expect(body.message).toContain('Forbidden');
+    });
+
+    it('Admin cannot create a classroom question (POST) - returns 403', async () => {
+      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
+      const req = { json: async () => ({ title: 'AdminQ', questionPrompt: 'Q', maxMarks: 5 }), headers: new Headers() } as any;
+      const res = await questionsPOST(req);
+      const body = await res.json();
+      expect(res.status).toBe(403);
+      expect(body.success).toBe(false);
+      expect(body.message).toContain('Forbidden');
+    });
+
+    it('Admin cannot access the active classroom question - returns 403', async () => {
+      await ClassroomQuestion.create({ title: 'AQ', questionPrompt: 'P', maxMarks: 5, createdBy: professorId, isActive: true, status: 'ACTIVE' });
+      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
+      const res = await activeQuestionGET();
+      const body = await res.json();
+      expect(res.status).toBe(403);
+      expect(body.success).toBe(false);
+      expect(body.message).toContain('Forbidden');
+    });
+
+    it('Admin cannot submit an answer to classroom assessment - returns 403', async () => {
+      const q = await ClassroomQuestion.create({ title: 'AQ', questionPrompt: 'P', maxMarks: 5, createdBy: professorId, isActive: true, status: 'ACTIVE' });
+      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
+      const buffer = Buffer.from('FAKE');
+      const fakeFile = { name: 'a.png', type: 'image/png', arrayBuffer: async () => Uint8Array.from(buffer).buffer };
+      const formData = new Map(); formData.set('questionId', q._id.toString()); formData.set('file', fakeFile);
+      const req = { formData: async () => formData, headers: new Headers() } as any;
+      const res = await submitPOST(req);
+      const body = await res.json();
+      expect(res.status).toBe(403);
+      expect(body.success).toBe(false);
       expect(body.message).toContain('Forbidden');
     });
   });
@@ -627,6 +670,68 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
       expect(capturedPayload.systemInstruction).toContain('CRITICAL EVALUATION RULES:');
     });
 
+
+    it('Scenario J: Evaluated score and overallFeedback propagate correctly to the API response body', async () => {
+      // Regression: submission.save() return value was discarded, causing the API
+      // to return a stale in-memory document with score=0 and feedback=''.
+      const q = await createTestQuestion();
+      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
+
+      const expectedScore = 7.5;
+      const expectedFeedback = 'Good integration setup with a minor sign error in the limit evaluation.';
+
+      classroomEvaluationService.setGeminiCaller(async () => {
+        return JSON.stringify({
+          criteria: [
+            {
+              criterion: 'Formula & Integral Setup',
+              maxMarks: 4,
+              awardedMarks: 4,
+              evidence: 'Correct CTFT integral form written from 0 to infinity.'
+            },
+            {
+              criterion: 'Integration & Limit Evaluation',
+              maxMarks: 4,
+              awardedMarks: 1.5,
+              evidence: 'Sign error during limit evaluation step.'
+            },
+            {
+              criterion: 'Final Expression',
+              maxMarks: 2,
+              awardedMarks: 2,
+              evidence: 'Correct final boxed expression X(jw) = 1/(2+jw).'
+            }
+          ],
+          totalMarks: 7.5,
+          maxMarks: 10,
+          overallFeedback: expectedFeedback,
+          confidence: 0.88
+        });
+      });
+
+      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
+      const body = await res.json();
+
+      expect(res.status).toBe(201);
+      expect(body.success).toBe(true);
+
+      // Score must NOT be 0 -- catches the stale-document return bug
+      expect(body.data.score).toBe(expectedScore);
+      expect(body.data.score).not.toBe(0);
+
+      // Overall feedback must NOT be empty -- catches the feedback propagation bug
+      expect(body.data.feedback).toBe(expectedFeedback);
+      expect(body.data.feedback).not.toBe('');
+
+      // Criterion scores must be populated
+      expect(body.data.criterionScores).toHaveLength(3);
+      expect(body.data.criterionScores[0].marksAwarded).toBe(4);
+      expect(body.data.criterionScores[1].marksAwarded).toBe(1.5);
+      expect(body.data.criterionScores[2].marksAwarded).toBe(2);
+
+      // Status must be EVALUATED
+      expect(body.data.status).toBe('EVALUATED');
+    });
     it('rejects submission when no active question exists for the question ID', async () => {
       const inactiveQ = await ClassroomQuestion.create({
         title: 'Closed Question',
