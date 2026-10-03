@@ -15,7 +15,11 @@ export const generatedRubricCriterionSchema = z
 
 export const generatedQuestionItemSchema = z
     .object({
-        title: z.string().trim().min(1, 'Title is required').max(200, 'Title too long'),
+        title: z
+            .string()
+            .refine((title) => title.trim().length > 0, 'Title is required')
+            .refine((title) => title.trim().length <= 200, 'Title too long')
+            .optional(),
         topic: z.string().trim().min(1, 'Topic is required').max(100, 'Topic too long'),
         unit: z.string().trim().optional(),
         difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']),
@@ -28,11 +32,14 @@ export const generatedQuestionItemSchema = z
     })
     .strict();
 
-export const generatedQuestionsResponseSchema = z
-    .object({
-        questions: z.array(generatedQuestionItemSchema).min(1, 'Response must contain at least one question')
-    })
-    .strict();
+export const generatedQuestionsResponseSchema = z.preprocess(
+    (value) => (Array.isArray(value) ? { questions: value } : value),
+    z
+        .object({
+            questions: z.array(generatedQuestionItemSchema).min(1, 'Response must contain at least one question')
+        })
+        .strict()
+);
 
 /**
  * Strict OpenAPI / Gemini-compliant schema for constrained structured generation.
@@ -364,7 +371,7 @@ export function parseGeneratedQuestions(
         }
 
         result.push({
-            title: q.title,
+            title: q.title ?? q.topic,
             topic: matchedTopic,
             unit: matchedUnit || q.unit || syllabusUnits[0]?.unitTitle || 'Module 1',
             difficulty: q.difficulty,
@@ -844,4 +851,3 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
 
 export const AIQuestionGenerationProvider = VertexAIQuestionGenerationProvider;
 export const GeminiQuestionGenerationProvider = GeminiAIQuestionGenerationProvider;
-
