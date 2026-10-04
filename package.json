@@ -6,6 +6,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "repair:derived-pages": "tsx src/scripts/repairDerivedPages.ts",
     "seed": "tsx src/scripts/seed.ts"
   },
   "dependencies": {

@@ -4,7 +4,10 @@ import mongoose from 'mongoose';
 import IngestionPage, { PageProcessingStatus, IIngestionPage } from '../models/IngestionPage';
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
 import { IPageRenderer, DefaultPdfRenderer, DefaultImageRenderer, RenderPageResult } from './PageRenderer';
-import defaultDerivedStorageService, { IDerivedStorageService } from './DerivedStorageService';
+import defaultDerivedStorageService, {
+    IDerivedStorageService,
+    StoredDerivedPageResult
+} from './DerivedStorageService';
 import defaultThumbnailGenerator, { IThumbnailGenerator } from './ThumbnailGenerator';
 import defaultCoverSheetDetector, { ICoverSheetDetector } from './CoverSheetDetector';
 import { writeAuditLog } from '../lib/audit';
@@ -84,6 +87,59 @@ export class PageIngestionService {
 
     getRenderer(): IPageRenderer {
         return this.renderer;
+    }
+
+    async regenerateDerivedPage(input: {
+        batchId: string;
+        fileId: string;
+        pageNumber: number;
+        fileType: string;
+        originalStorageKey: string;
+        fileBuffer: Buffer;
+    }): Promise<StoredDerivedPageResult> {
+        const isImage =
+            input.fileType === 'image' ||
+            input.fileType === 'jpg' ||
+            input.fileType === 'jpeg' ||
+            input.fileType === 'png' ||
+            input.fileType === 'webp' ||
+            input.fileType?.startsWith('image/');
+        const renderer = isImage ? this.imageRenderer : this.renderer;
+        const renderResult = await this.executeWithTimeout(
+            () => renderer.renderPage({
+                batchId: input.batchId,
+                fileId: input.fileId,
+                pageNumber: input.pageNumber,
+                fileType: input.fileType,
+                storageKey: input.originalStorageKey,
+                fileBuffer: input.fileBuffer,
+                config: { outputFormat: 'png' }
+            }),
+            this.defaultPageTimeoutMs,
+            `Page ${input.pageNumber} repair rendering timed out`
+        );
+
+        if (!renderResult.success || !renderResult.image?.buffer) {
+            throw new Error(renderResult.failureReason || `Failed to render page ${input.pageNumber}`);
+        }
+
+        let pageBuffer = renderResult.image.buffer;
+        try {
+            const enhancement = await this.imageEnhancer.enhancePage(pageBuffer, 'png');
+            if (enhancement.applied) {
+                pageBuffer = enhancement.buffer;
+            }
+        } catch (error) {
+            console.error(`Enhancement failed while repairing page ${input.pageNumber}:`, error);
+        }
+
+        return this.derivedStorage.storeDerivedPage({
+            batchId: input.batchId,
+            fileId: input.fileId,
+            pageNumber: input.pageNumber,
+            buffer: pageBuffer,
+            format: 'png'
+        });
     }
 
     setImageRenderer(imageRenderer: IPageRenderer): void {

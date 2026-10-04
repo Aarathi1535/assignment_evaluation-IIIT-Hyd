@@ -21,6 +21,7 @@ export interface StoredDerivedPageResult {
 
 export interface IDerivedStorageService {
     storeDerivedPage(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult>;
+    derivedPageExists?(storageKey: string): Promise<boolean>;
     getDerivedPageKey(batchId: string, fileId: string, pageNumber: number, format?: string): string;
     storeDerivedThumbnail(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult>;
     getDerivedThumbnailKey(batchId: string, fileId: string, pageNumber: number, format?: string): string;
@@ -56,6 +57,24 @@ export class DerivedStorageService implements IDerivedStorageService {
         const storageRoot = this.getStorageRoot();
         const relative = storageKey.replace(/^batches\//, '');
         return path.join(storageRoot, relative);
+    }
+
+    async derivedPageExists(storageKey: string): Promise<boolean> {
+        const bucket = getConfiguredStorageBucket();
+        if (bucket) {
+            const [exists] = await bucket.file(storageKey).exists();
+            return exists;
+        }
+
+        try {
+            await fs.promises.access(this.getDerivedDiskPath(storageKey));
+            return true;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+                return false;
+            }
+            throw error;
+        }
     }
 
     /**
