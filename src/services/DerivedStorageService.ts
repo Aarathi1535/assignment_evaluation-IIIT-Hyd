@@ -5,6 +5,12 @@ import { getConfiguredStorageBucket } from '../lib/cloudStorage';
 
 export { CloudStorageConfigurationError as DerivedStorageConfigurationError } from '../lib/cloudStorage';
 
+function isMissingGcsObject(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const gcsError = error as { code?: number | string; statusCode?: number };
+    return gcsError.code === 404 || gcsError.code === '404' || gcsError.statusCode === 404;
+}
+
 export interface StoreDerivedPageInput {
     batchId: string;
     fileId: string;
@@ -175,8 +181,12 @@ export class DerivedStorageService implements IDerivedStorageService {
     async readDerivedPage(storageKey: string): Promise<Buffer> {
         const bucket = getConfiguredStorageBucket();
         if (bucket) {
-            const [buffer] = await bucket.file(storageKey).download();
-            return buffer;
+            try {
+                const [buffer] = await bucket.file(storageKey).download();
+                return buffer;
+            } catch (error) {
+                if (!isMissingGcsObject(error)) throw error;
+            }
         }
 
         const filePath = this.getDerivedDiskPath(storageKey);
@@ -187,11 +197,15 @@ export class DerivedStorageService implements IDerivedStorageService {
         const bucket = getConfiguredStorageBucket();
         if (bucket) {
             const file = bucket.file(storageKey);
-            const [metadata] = await file.getMetadata();
-            return {
-                stream: file.createReadStream(),
-                size: Number(metadata.size),
-            };
+            try {
+                const [metadata] = await file.getMetadata();
+                return {
+                    stream: file.createReadStream(),
+                    size: Number(metadata.size),
+                };
+            } catch (error) {
+                if (!isMissingGcsObject(error)) throw error;
+            }
         }
 
         const filePath = this.getDerivedDiskPath(storageKey);

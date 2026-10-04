@@ -153,6 +153,60 @@ describe('DerivedStorageService on Cloud Run', () => {
         }
     });
 
+    it('falls back to the mounted legacy path when the canonical GCS object is missing', async () => {
+        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'derived-storage-legacy-'));
+        const storageRoot = path.join(tempRoot, 'derived');
+        const storageKey = 'batches/legacy-batch/derived/legacy-file/3/page.png';
+        const legacyPath = path.join(
+            storageRoot,
+            'legacy-batch',
+            'derived',
+            'legacy-file',
+            '3',
+            'page.png'
+        );
+        const legacyBytes = Buffer.from('legacy-mounted-page');
+        const notFound = Object.assign(new Error('No such object'), { code: 404 });
+        vi.stubEnv('DERIVED_STORAGE_PATH', storageRoot);
+        storageMocks.download.mockRejectedValue(notFound);
+        storageMocks.getMetadata.mockRejectedValue(notFound);
+        await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+        await fs.writeFile(legacyPath, legacyBytes);
+
+        try {
+            const service = new DerivedStorageService();
+
+            await expect(service.readDerivedPage(storageKey)).resolves.toEqual(legacyBytes);
+            const opened = await service.openDerivedPage(storageKey);
+            expect(opened.size).toBe(legacyBytes.length);
+            const chunks: Buffer[] = [];
+            for await (const chunk of opened.stream) {
+                chunks.push(Buffer.from(chunk));
+            }
+            expect(Buffer.concat(chunks)).toEqual(legacyBytes);
+            expect(storageMocks.file).toHaveBeenCalledWith(storageKey);
+            expect(storageMocks.download).toHaveBeenCalledOnce();
+            expect(storageMocks.getMetadata).toHaveBeenCalledOnce();
+        } finally {
+            await fs.rm(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('does not fall back to mounted storage for non-404 GCS read failures', async () => {
+        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'derived-storage-gcs-error-'));
+        vi.stubEnv('DERIVED_STORAGE_PATH', tempRoot);
+        const permissionError = Object.assign(new Error('Permission denied'), { code: 403 });
+        storageMocks.download.mockRejectedValue(permissionError);
+
+        try {
+            await expect(new DerivedStorageService().readDerivedPage(
+                'batches/private/derived/file/1/page.png'
+            )).rejects.toBe(permissionError);
+        } finally {
+            await fs.rm(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     it('logs GCS write failures with the original error and rethrows them', async () => {
         const service = new DerivedStorageService();
         const buffer = Buffer.from('page-bytes');
