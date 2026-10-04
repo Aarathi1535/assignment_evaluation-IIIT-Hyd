@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import path from 'node:path';
+import os from 'node:os';
 import { calculateImageFitBounds } from '../lib/annotations';
 import DerivedStorageService from '../services/DerivedStorageService';
 
@@ -186,10 +188,22 @@ describe('AE-123: Answer-Sheet Page Image Fit & Scale', () => {
 
     it('resolves correct disk path for page assets', () => {
       const key = 'batches/batch-123/derived/file-456/2/page.png';
-      const diskPath = DerivedStorageService.getDerivedDiskPath(key);
-      expect(diskPath).toContain('batch-123');
-      expect(diskPath).toContain('file-456');
-      expect(diskPath).toContain('page.png');
+      const storageRoot = path.join(os.tmpdir(), 'derived');
+      const previousStoragePath = process.env.DERIVED_STORAGE_PATH;
+      vi.stubEnv('DERIVED_STORAGE_PATH', storageRoot);
+
+      try {
+        const diskPath = DerivedStorageService.getDerivedDiskPath(key);
+        expect(diskPath).toBe(
+          path.join(storageRoot, 'batch-123', 'file-456', '2', 'page.png')
+        );
+        expect(
+          diskPath.split(path.sep).filter((segment) => segment === 'derived')
+        ).toHaveLength(1);
+      } finally {
+        if (previousStoragePath === undefined) delete process.env.DERIVED_STORAGE_PATH;
+        else process.env.DERIVED_STORAGE_PATH = previousStoragePath;
+      }
     });
   });
 });

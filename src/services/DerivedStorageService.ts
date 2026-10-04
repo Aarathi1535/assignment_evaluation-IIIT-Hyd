@@ -76,7 +76,7 @@ export class DerivedStorageService implements IDerivedStorageService {
      */
     getDerivedDiskPath(storageKey: string): string {
         const storageRoot = this.getStorageRoot();
-        const relative = storageKey.replace(/^batches\//, '');
+        const relative = storageKey.replace(/^batches\/([^/]+)\/derived\//, '$1/');
         return path.join(storageRoot, relative);
     }
 

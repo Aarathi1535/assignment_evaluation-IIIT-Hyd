@@ -2,6 +2,9 @@
 import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import mongoose from 'mongoose';
 import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
@@ -685,6 +688,60 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.message).toContain('DERIVED_PAGE_STORAGE_BUCKET');
+  });
+
+  it('serves an existing disk page from the configured derived root without duplicating derived', async () => {
+    mockSessionUser = {
+      id: taUser._id.toString(),
+      email: taUser.email,
+      name: taUser.name,
+      role: UserRole.TA,
+    };
+
+    const previousEnv = {
+      storagePath: process.env.DERIVED_STORAGE_PATH,
+      bucket: process.env.DERIVED_PAGE_STORAGE_BUCKET,
+      cloudRun: process.env.K_SERVICE,
+    };
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'derived-page-api-'));
+    const storageRoot = path.join(tempRoot, 'derived');
+    const imageBytes = Buffer.from('existing-derived-page');
+
+    try {
+      vi.stubEnv('DERIVED_STORAGE_PATH', storageRoot);
+      vi.stubEnv('DERIVED_PAGE_STORAGE_BUCKET', '');
+      vi.stubEnv('K_SERVICE', '');
+
+      const expectedPath = path.join(
+        storageRoot,
+        testBatch.batchId,
+        'file-1',
+        '1',
+        'page.png'
+      );
+      expect(DerivedStorageService.getDerivedDiskPath(pagePng.storageKey)).toBe(expectedPath);
+      await fs.mkdir(path.dirname(expectedPath), { recursive: true });
+      await fs.writeFile(expectedPath, imageBytes);
+
+      const req = new NextRequest(
+        `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+        { method: 'GET' }
+      );
+      const res = await imageGET(req, {
+        params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(imageBytes);
+    } finally {
+      if (previousEnv.storagePath === undefined) delete process.env.DERIVED_STORAGE_PATH;
+      else process.env.DERIVED_STORAGE_PATH = previousEnv.storagePath;
+      if (previousEnv.bucket === undefined) delete process.env.DERIVED_PAGE_STORAGE_BUCKET;
+      else process.env.DERIVED_PAGE_STORAGE_BUCKET = previousEnv.bucket;
+      if (previousEnv.cloudRun === undefined) delete process.env.K_SERVICE;
+      else process.env.K_SERVICE = previousEnv.cloudRun;
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('13. verifies shared helper requireGradingOrAnnotationAccess and requireAnyPermission contract', async () => {
