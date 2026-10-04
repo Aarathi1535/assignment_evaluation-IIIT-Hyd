@@ -72,69 +72,74 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
   const [courseStudents, setCourseStudents] = useState<{ value: string; label: string }[]>([]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [fetchingRoster, setFetchingRoster] = useState(false);
+  const [rosterLoadError, setRosterLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
     if (!selectedCourseId) {
       setCourseStudents([]);
       setSelectedStudentIds([]);
-      return;
+      setRosterLoadError(null);
+      return () => controller.abort();
     }
 
     async function loadCourseRoster() {
       setFetchingRoster(true);
+      setRosterLoadError(null);
       try {
-        const courseRes = await fetch(`/api/courses/${selectedCourseId}`);
+        const courseRes = await fetch(`/api/courses/${selectedCourseId}`, {
+          cache: 'no-store',
+          signal: controller.signal
+        });
         const courseData = await courseRes.json();
-        
-        if (courseData.success && courseData.data) {
-          const enrolled = courseData.data.enrolledStudents || [];
-          const options = enrolled.map((s: { _id: string; name: string; email: string }) => ({
-            value: s._id,
-            label: `${s.name} (${s.email})`,
-          }));
+        if (!courseRes.ok || !courseData.success || !courseData.data) {
+          throw new Error(courseData.message || 'Failed to load course roster.');
+        }
+
+        const enrolled = courseData.data.enrolledStudents || [];
+        const options = enrolled.map((student: { _id: string; name: string; email: string }) => ({
+          value: student._id,
+          label: `${student.name} (${student.email})`,
+        }));
+        const examStudentsRes = await fetch(`/api/exams/${id}/students`, {
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        const examStudentsData = await examStudentsRes.json();
+        if (!examStudentsRes.ok || !examStudentsData.success || !Array.isArray(examStudentsData.data)) {
+          throw new Error(examStudentsData.message || 'Failed to load the current exam roster.');
+        }
+
+        if (!controller.signal.aborted) {
+          const examStudentIds = examStudentsData.data.map((mapping: { student: string | { _id: string } }) =>
+            typeof mapping.student === 'object' && mapping.student ? mapping.student._id : mapping.student
+          );
           setCourseStudents(options);
-
-          // Fetch exam's current student roster
-          const examStudentsRes = await fetch(`/api/exams/${id}/students`);
-          const examStudentsData = await examStudentsRes.json();
-
-          if (examStudentsData.success && Array.isArray(examStudentsData.data)) {
-            const examStudentIds = examStudentsData.data.map((m: { student: string | { _id: string } }) => 
-              typeof m.student === 'object' && m.student ? m.student._id : m.student
-            );
-            const currentSelected = options
-              .filter((opt: { value: string; label: string }) => examStudentIds.includes(opt.value))
-              .map((opt: { value: string; label: string }) => opt.value);
-            
-            if (currentSelected.length > 0) {
-              setSelectedStudentIds(currentSelected);
-            } else {
-              setSelectedStudentIds(options.map((o: { value: string; label: string }) => o.value));
-            }
-          } else {
-            setSelectedStudentIds(options.map((o: { value: string; label: string }) => o.value));
-          }
-        } else {
+          setSelectedStudentIds(options
+            .filter((option: { value: string }) => examStudentIds.includes(option.value))
+            .map((option: { value: string }) => option.value));
+        }
+      } catch (reason) {
+        if (!controller.signal.aborted) {
           setCourseStudents([]);
           setSelectedStudentIds([]);
+          setRosterLoadError(reason instanceof Error ? reason.message : 'Failed to load exam roster.');
         }
-      } catch {
-        setCourseStudents([]);
-        setSelectedStudentIds([]);
       } finally {
-        setFetchingRoster(false);
+        if (!controller.signal.aborted) setFetchingRoster(false);
       }
     }
 
     loadCourseRoster();
+    return () => controller.abort();
   }, [selectedCourseId, id]);
 
   useEffect(() => {
     async function loadData() {
       try {
         const [coursesRes, examRes] = await Promise.all([
-          fetch('/api/courses'),
-          fetch(`/api/exams/${id}`)
+          fetch('/api/courses', { cache: 'no-store' }),
+          fetch(`/api/exams/${id}`, { cache: 'no-store' })
         ]);
         const coursesData = await coursesRes.json();
         const examData = await examRes.json();
@@ -211,22 +216,19 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
         throw new Error(data.message || 'Failed to update exam');
       }
 
-      // Sync exam student enrollment
-      if (selectedStudentIds.length > 0) {
-        const enrollRes = await fetch(`/api/exams/${id}/enroll`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ studentIds: selectedStudentIds }),
-        });
-        const enrollData = await enrollRes.json();
-        if (!enrollRes.ok || !enrollData.success) {
-          throw new Error(enrollData.message || 'Failed to enroll students in exam');
-        }
+      const enrollRes = await fetch(`/api/exams/${id}/enroll`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ studentIds: selectedStudentIds }),
+      });
+      const enrollData = await enrollRes.json();
+      if (!enrollRes.ok || !enrollData.success) {
+        throw new Error(enrollData.message || 'Failed to update students in exam roster');
       }
 
-      setSuccessMsg('Exam and student enrollment updated successfully!');
+      setSuccessMsg('Exam and student roster updated successfully!');
       
       setTimeout(() => {
         router.push('/professor/exams');
@@ -351,6 +353,9 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
                       placeholder="Search and select students to take this exam..."
                     />
                   )}
+                  {rosterLoadError && (
+                    <p role="alert" className="mt-2 text-sm font-semibold text-rose-700">{rosterLoadError}</p>
+                  )}
                 </div>
               )}
 
@@ -402,6 +407,7 @@ export default function EditExamPage({ params }: { params: Promise<{ id: string 
                 type="submit"
                 variant="primary"
                 isLoading={loading}
+                disabled={fetchingRoster || Boolean(rosterLoadError)}
               >
                 Save Changes
               </Button>

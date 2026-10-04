@@ -14,7 +14,8 @@ import {
   ChevronRight, 
   FileText,
   ArrowRightLeft,
-  X
+  X,
+  Trash2
 } from 'lucide-react';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
@@ -220,6 +221,7 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
   const [reassignTarget, setReassignTarget] = useState<ReassignAllocationTarget | null>(null);
   const [courseTas, setCourseTas] = useState<EligibleTa[]>([]);
   const [reassignSuccessMsg, setReassignSuccessMsg] = useState<string | null>(null);
+  const [removingAllocationId, setRemovingAllocationId] = useState<string | null>(null);
 
   // Fetch baseline progress from REST API: GET /api/exams/[id]/progress
   const fetchProgress = useCallback(async (isManual = false) => {
@@ -321,6 +323,28 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
       fetchTaWorkload(selectedTaId);
     }
     fetchProgress();
+  };
+
+  const handleRemoveAllocation = async (item: TaAllocatedScriptItem) => {
+    if (!selectedTaId || item.status !== 'PENDING') return;
+    if (!window.confirm(`Remove the pending allocation for ${item.scriptId}?`)) return;
+
+    setRemovingAllocationId(item.allocationId);
+    setWorkloadError(null);
+    try {
+      const response = await fetch(`/api/allocations/${item.allocationId}`, { method: 'DELETE' });
+      const body = await response.json();
+      if (!response.ok || !body.success) {
+        throw new Error(body.message || 'Failed to remove pending allocation.');
+      }
+      setReassignSuccessMsg(`Removed the pending allocation for ${item.scriptId}.`);
+      await fetchTaWorkload(selectedTaId);
+      await fetchProgress();
+    } catch (reason) {
+      setWorkloadError(reason instanceof Error ? reason.message : 'Failed to remove pending allocation.');
+    } finally {
+      setRemovingAllocationId(null);
+    }
   };
 
   // Initial load
@@ -660,17 +684,35 @@ export default function TaLiveProgressView({ examId }: TaLiveProgressViewProps) 
                             </td>
                             <td className="px-5 py-3.5 text-right">
                               {item.status === 'PENDING' ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleOpenReassign(item)}
-                                  className="text-xs px-2.5 py-1 text-brand-primary border-brand-primary/30 hover:bg-brand-primary/5 cursor-pointer"
-                                  data-testid={`reassign-button-${item.allocationId}`}
-                                >
-                                  <ArrowRightLeft className="h-3.5 w-3.5 mr-1" />
-                                  <span>Reassign</span>
-                                </Button>
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleOpenReassign(item)}
+                                    className="text-xs px-2.5 py-1 text-brand-primary border-brand-primary/30 hover:bg-brand-primary/5 cursor-pointer"
+                                    data-testid={`reassign-button-${item.allocationId}`}
+                                  >
+                                    <ArrowRightLeft className="h-3.5 w-3.5 mr-1" />
+                                    <span>Reassign</span>
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={removingAllocationId === item.allocationId}
+                                    onClick={() => void handleRemoveAllocation(item)}
+                                    className="text-xs px-2.5 py-1 text-rose-700 border-rose-200 hover:bg-rose-50 cursor-pointer"
+                                    data-testid={`remove-allocation-button-${item.allocationId}`}
+                                  >
+                                    {removingAllocationId === item.allocationId ? (
+                                      <LoadingSpinner size="sm" />
+                                    ) : (
+                                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                    )}
+                                    <span>Remove</span>
+                                  </Button>
+                                </div>
                               ) : (
                                 <span className="text-4xs font-semibold text-slate-400 uppercase">
                                   {item.status === 'COMPLETED' ? 'Graded' : 'Locked'}

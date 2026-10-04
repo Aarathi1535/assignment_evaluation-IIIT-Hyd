@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import { Readable } from 'node:stream';
 import mongoose from 'mongoose';
 import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
@@ -20,6 +21,12 @@ import {
 import { Permission } from '../constants/permissions';
 
 let mockSessionUser: any = null;
+
+const mockOpenDerivedPage = (buffer: Buffer) =>
+  vi.spyOn(DerivedStorageService, 'openDerivedPage').mockResolvedValue({
+    stream: Readable.from([buffer]),
+    size: buffer.length,
+  });
 
 vi.mock('next-auth', async (importOriginal) => {
   const original = await importOriginal<typeof import('next-auth')>();
@@ -364,7 +371,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const mockBuffer = Buffer.from('mock-png-binary-stream-data');
-    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
+    const spyRead = mockOpenDerivedPage(mockBuffer);
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
@@ -377,6 +384,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
     expect(res.headers.get('Content-Length')).toBe(mockBuffer.length.toString());
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
 
     const returnedData = await res.arrayBuffer();
     expect(Buffer.from(returnedData).toString()).toBe('mock-png-binary-stream-data');
@@ -392,7 +400,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const mockBuffer = Buffer.from('mock-ta-image-data');
-    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
+    const spyRead = mockOpenDerivedPage(mockBuffer);
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
@@ -420,7 +428,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const mockBuffer = Buffer.from('mock-admin-image-data');
-    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
+    mockOpenDerivedPage(mockBuffer);
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
@@ -443,7 +451,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const dummyBuf = Buffer.from('img-bytes');
-    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(dummyBuf);
+    mockOpenDerivedPage(dummyBuf);
 
     // JPEG
     const reqJpg = new NextRequest(
@@ -631,7 +639,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(body.message).toBe('Page image key is missing or not processed yet');
   });
 
-  it('12. returns 404 when DerivedStorageService fails to read the file on disk', async () => {
+  it('12. returns 404 when DerivedStorageService cannot open the derived image', async () => {
     mockSessionUser = {
       id: taUser._id.toString(),
       email: taUser.email,
@@ -639,7 +647,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       role: UserRole.TA,
     };
 
-    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockRejectedValue(new Error('ENOENT: no such file'));
+    vi.spyOn(DerivedStorageService, 'openDerivedPage').mockRejectedValue(new Error('ENOENT: no such file'));
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
@@ -651,7 +659,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
 
     expect(res.status).toBe(404);
     const body = await res.json();
-    expect(body.message).toBe('Page image file not found on disk');
+    expect(body.message).toBe('Page image file not found in derived storage');
   });
 
   it('returns a clear server configuration error when the Cloud Run derived bucket is missing', async () => {
@@ -662,7 +670,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       role: UserRole.TA,
     };
 
-    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockRejectedValue(
+    vi.spyOn(DerivedStorageService, 'openDerivedPage').mockRejectedValue(
       new DerivedStorageConfigurationError('DERIVED_PAGE_STORAGE_BUCKET must be set on Cloud Run.')
     );
 
@@ -856,7 +864,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const mockBuffer = Buffer.from('mock-exam-owner-image-bytes');
-    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
+    mockOpenDerivedPage(mockBuffer);
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${batchIdAdmin}/pages/${pageAdmin._id}/image`,

@@ -6,9 +6,13 @@ import { Permission } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
 import IngestionApprovalService from '../../../../../services/IngestionApprovalService';
 import AllocationService from '../../../../../services/AllocationService';
-import { AllocationRule } from '../../../../../models/Allocation';
+import Allocation, { AllocationRule, AllocationStatus } from '../../../../../models/Allocation';
 import Exam from '../../../../../models/Exam';
 import Course from '../../../../../models/Course';
+import User from '../../../../../models/User';
+import AnswerScript from '../../../../../models/AnswerScript';
+import Grade from '../../../../../models/Grade';
+import ExamRepository from '../../../../../repositories/ExamRepository';
 
 /**
  * POST /api/exams/[id]/allocate
@@ -40,6 +44,11 @@ export async function POST(
 
   try {
     await connectDB();
+
+    const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
+    if (!exam) {
+      return NextResponse.json({ success: false, message: 'Exam not found', data: null }, { status: 404 });
+    }
 
     // AE-074 gate: exam ingestion must be APPROVED before grading/allocation
     await IngestionApprovalService.requireApproved(id);
@@ -124,6 +133,50 @@ export async function POST(
       resultData = createdAllocations;
     }
 
+    const [selectedUsers, persistedAllocations] = await Promise.all([
+      // Log identity metadata only for this temporary allocation trace.
+      User.find({ _id: { $in: taIds } })
+        .select('_id email name role isActive')
+        .lean(),
+      Allocation.find({ exam: new mongoose.Types.ObjectId(id) })
+        .select('_id ta exam answerScript status rule question')
+        .lean()
+    ]);
+    const allocatedScripts = await AnswerScript.find({
+      _id: { $in: persistedAllocations.map(allocation => allocation.answerScript) }
+    })
+      .select('_id exam student isActive batchId identificationStatus')
+      .lean();
+    console.info('[PROFESSOR ALLOCATION DEBUG]', JSON.stringify({
+      examId: id,
+      actingUserId,
+      selectedTaIds: taIds,
+      selectedUsers: selectedUsers.map(user => ({
+        userId: user._id.toString(),
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        isActive: user.isActive
+      })),
+      allocations: persistedAllocations.map(allocation => ({
+        allocationId: allocation._id.toString(),
+        ta: allocation.ta.toString(),
+        answerScript: allocation.answerScript.toString(),
+        exam: allocation.exam.toString(),
+        status: allocation.status,
+        rule: allocation.rule,
+        question: allocation.question ?? null
+      })),
+      answerScripts: allocatedScripts.map(script => ({
+        answerScriptId: script._id.toString(),
+        exam: script.exam.toString(),
+        student: script.student?.toString() ?? null,
+        isActive: script.isActive,
+        batchId: script.batchId ?? null,
+        identificationStatus: script.identificationStatus ?? null
+      }))
+    }));
+
     return NextResponse.json({
       success: true,
       message: 'Allocation completed successfully',
@@ -169,6 +222,11 @@ export async function GET(
   try {
     await connectDB();
 
+    const authorizedExam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
+    if (!authorizedExam) {
+      return NextResponse.json({ success: false, message: 'Exam not found', data: null }, { status: 404 });
+    }
+
     const exam = await Exam.findOne({ _id: id, isActive: true }).lean();
     if (!exam) {
       return NextResponse.json({
@@ -191,6 +249,43 @@ export async function GET(
       }, { status: 404 });
     }
 
+    // Query allocation status from MongoDB (source of truth)
+    const existingAllocations = await Allocation.find({ exam: new mongoose.Types.ObjectId(id) })
+      .select('ta status rule createdAt')
+      .lean();
+
+    const allocationCount = existingAllocations.length;
+    const isAllocated = allocationCount > 0;
+    const allocatedTaIds = [...new Set(existingAllocations.map(a => a.ta.toString()))];
+    const allocatedTaCount = allocatedTaIds.length;
+
+    // Determine the allocation rule (all allocations for an exam share the same rule)
+    const allocationRule = isAllocated ? (existingAllocations[0].rule || null) : null;
+
+    // Latest allocation timestamp
+    const latestAllocationTime = isAllocated
+      ? existingAllocations.reduce((latest, a) => {
+          const t = new Date(a.createdAt).getTime();
+          return t > latest ? t : latest;
+        }, 0)
+      : null;
+
+    // Check if grading has commenced (any allocation not PENDING, or any Grade exists)
+    const hasGradingCommenced = existingAllocations.some(
+      a => a.status !== AllocationStatus.PENDING
+    );
+    let hasGrades = false;
+    if (isAllocated && !hasGradingCommenced) {
+      const scriptIds = await AnswerScript.find({ exam: new mongoose.Types.ObjectId(id) })
+        .select('_id')
+        .lean();
+      if (scriptIds.length > 0) {
+        hasGrades = !!(await Grade.findOne({ answerScript: { $in: scriptIds.map(s => s._id) } })
+          .select('_id')
+          .lean());
+      }
+    }
+
     return NextResponse.json({
       success: true,
       message: 'Allocation settings retrieved successfully',
@@ -201,7 +296,16 @@ export async function GET(
           numberOfQuestions: exam.numberOfQuestions,
           ingestionApprovalStatus: exam.ingestionApprovalStatus
         },
-        teachingAssistants: course.teachingAssistants || []
+        teachingAssistants: course.teachingAssistants || [],
+        allocationStatus: {
+          isAllocated,
+          allocationCount,
+          allocatedTaCount,
+          allocationRule,
+          latestAllocationTime: latestAllocationTime ? new Date(latestAllocationTime).toISOString() : null,
+          hasGradingCommenced: hasGradingCommenced || hasGrades,
+          allocatedTaIds
+        }
       }
     }, { status: 200 });
 
@@ -215,4 +319,3 @@ export async function GET(
     }, { status });
   }
 }
-

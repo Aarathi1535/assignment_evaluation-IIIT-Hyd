@@ -77,7 +77,7 @@ export default function StudentDashboardPage() {
     };
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
-    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    const intervalId = window.setInterval(refreshWhenVisible, 60_000);
     return () => {
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
@@ -150,9 +150,11 @@ export default function StudentDashboardPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section className="space-y-3" aria-labelledby="student-courses-heading">
           <h2 id="student-courses-heading" className="text-xl font-bold text-slate-900">My Courses</h2>
-          {courses === null && refreshing ? (
-            <p role="status" className="text-sm text-slate-600">Loading your courses…</p>
-          ) : courses?.length ? (
+          {courses === null ? (
+            <p role={refreshing ? 'status' : 'alert'} className="text-sm text-slate-600">
+              {refreshing ? 'Loading your courses…' : 'Your courses could not be loaded.'}
+            </p>
+          ) : courses.length > 0 ? (
             <ul className="space-y-3">
               {courses.map(course => (
                 <li key={course._id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -172,9 +174,11 @@ export default function StudentDashboardPage() {
 
         <section className="space-y-3" aria-labelledby="student-exams-heading">
           <h2 id="student-exams-heading" className="text-xl font-bold text-slate-900">My Exams</h2>
-          {exams === null && refreshing ? (
-            <p role="status" className="text-sm text-slate-600">Loading your exams…</p>
-          ) : exams?.length ? (
+          {exams === null ? (
+            <p role={refreshing ? 'status' : 'alert'} className="text-sm text-slate-600">
+              {refreshing ? 'Loading your exams…' : 'Your exams could not be loaded.'}
+            </p>
+          ) : exams.length > 0 ? (
             <ul className="space-y-3">
               {exams.map(exam => (
                 <li key={exam._id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

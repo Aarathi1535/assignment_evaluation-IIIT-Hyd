@@ -142,14 +142,8 @@ export class StudentRosterMappingService {
             return [];
         }
 
-        // Step 4: Load Exam Roster (Exam.enrolledStudents, StudentMapping, Course.enrolledStudents)
+        // Step 4: Load exam and course rosters from their authoritative records.
         const enrolledUserIds = new Set<string>();
-
-        if (exam.enrolledStudents && Array.isArray(exam.enrolledStudents)) {
-            for (const sid of exam.enrolledStudents) {
-                if (sid) enrolledUserIds.add(sid.toString());
-            }
-        }
 
         const studentMappings = await StudentMapping.find({ exam: exam._id });
         for (const mapping of studentMappings) {
@@ -598,4 +592,3 @@ export class StudentRosterMappingService {
 
 export const defaultStudentRosterMappingService = new StudentRosterMappingService();
 export default defaultStudentRosterMappingService;
-

@@ -22,6 +22,7 @@ vi.mock('next-auth', async (importOriginal) => {
 
 describe('TA Work Queue API Tests (AE-094)', () => {
   let allocationsGET: any;
+  let allocationDELETE: any;
 
   // DB entities
   let course: any;
@@ -45,6 +46,7 @@ describe('TA Work Queue API Tests (AE-094)', () => {
   beforeAll(async () => {
     // Import API route handler
     allocationsGET = (await import('../app/api/allocations/route')).GET;
+    allocationDELETE = (await import('../app/api/allocations/[id]/route')).DELETE;
 
     // Set HMAC secret environment variables for anonymizer
     process.env.ORIGINAL_STORAGE_HMAC_SECRET = 'test-storage-hmac-secret-32-chars';
@@ -462,6 +464,82 @@ describe('TA Work Queue API Tests (AE-094)', () => {
 
       // Verify deterministic order pagination (different allocations)
       expect(firstAllocId).not.toBe(secondAllocId);
+    });
+
+    it('reports queue counts across all pages with private no-store responses', async () => {
+      const response = await allocationsGET(new Request('http://localhost:3000/api/allocations?page=1&limit=1') as any);
+      const body = await response.json();
+
+      expect(response.headers.get('cache-control')).toContain('no-store');
+      expect(body.data.allocations).toHaveLength(1);
+      expect(body.data.stats).toEqual({
+        pending: 1,
+        inProgress: 1,
+        completed: 0,
+        assignedExams: 2
+      });
+    });
+
+    it('allows the owning Professor to remove only a pending allocation and refreshes queue counts', async () => {
+      mockSessionUser = {
+        id: profUser._id.toString(),
+        email: profUser.email,
+        name: profUser.name,
+        role: UserRole.PROFESSOR
+      };
+      const response = await allocationDELETE(new Request(
+        `http://localhost:3000/api/allocations/${allocWholeScript._id}`,
+        { method: 'DELETE' }
+      ) as any, { params: Promise.resolve({ id: allocWholeScript._id.toString() }) });
+      expect(response.status).toBe(200);
+      expect(await Allocation.findById(allocWholeScript._id)).toBeNull();
+
+      mockSessionUser = {
+        id: taUser1._id.toString(),
+        email: taUser1.email,
+        name: taUser1.name,
+        role: UserRole.TA
+      };
+      const queueResponse = await allocationsGET(new Request('http://localhost:3000/api/allocations') as any);
+      const queueBody = await queueResponse.json();
+      expect(queueBody.data.pagination.total).toBe(1);
+      expect(queueBody.data.stats.pending).toBe(0);
+      expect(queueBody.data.stats.inProgress).toBe(1);
+    });
+
+    it('rejects removal of in-progress allocations and isolates other Professors', async () => {
+      mockSessionUser = {
+        id: profUser._id.toString(),
+        email: profUser.email,
+        name: profUser.name,
+        role: UserRole.PROFESSOR
+      };
+      const inProgressResponse = await allocationDELETE(new Request(
+        `http://localhost:3000/api/allocations/${allocQuestionWise._id}`,
+        { method: 'DELETE' }
+      ) as any, { params: Promise.resolve({ id: allocQuestionWise._id.toString() }) });
+      expect(inProgressResponse.status).toBe(409);
+      expect(await Allocation.findById(allocQuestionWise._id)).not.toBeNull();
+
+      const otherProfessor = await User.create({
+        name: 'Different Professor',
+        email: 'different-professor@hogwarts.edu',
+        password: 'password123',
+        role: UserRole.PROFESSOR,
+        isActive: true
+      });
+      mockSessionUser = {
+        id: otherProfessor._id.toString(),
+        email: otherProfessor.email,
+        name: otherProfessor.name,
+        role: UserRole.PROFESSOR
+      };
+      const unauthorizedResponse = await allocationDELETE(new Request(
+        `http://localhost:3000/api/allocations/${allocWholeScript._id}`,
+        { method: 'DELETE' }
+      ) as any, { params: Promise.resolve({ id: allocWholeScript._id.toString() }) });
+      expect(unauthorizedResponse.status).toBe(404);
+      expect(await Allocation.findById(allocWholeScript._id)).not.toBeNull();
     });
 
     it('should reject invalid page parameter with 400 Bad Request', async () => {

@@ -40,10 +40,17 @@ class ExamRepository {
 
             const StudentMapping = mongoose.models.StudentMapping || await import('../models/StudentMapping').then(m => m.default);
             const studentMappings = await StudentMapping.find({ student: actingUserId });
-            const enrolledExamIds = studentMappings.map(m => m.exam);
+            const AnswerScript = mongoose.models.AnswerScript || await import('../models/AnswerScript').then(m => m.default);
+            const assignedScriptExamIds = await AnswerScript.distinct('exam', {
+                student: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            });
+            const enrolledExamIds = [
+                ...studentMappings.map(m => m.exam),
+                ...assignedScriptExamIds
+            ];
 
             query.$or = [
-                { enrolledStudents: new mongoose.Types.ObjectId(actingUserId) },
                 { _id: { $in: enrolledExamIds } },
                 { course: { $in: enrolledCourseIds } }
             ];

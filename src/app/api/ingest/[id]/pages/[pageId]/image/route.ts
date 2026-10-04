@@ -7,6 +7,30 @@ import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
 import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
+import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
+
+function toWebReadableStream(
+  stream: NodeJS.ReadableStream & AsyncIterable<Uint8Array | string>
+): ReadableStream<Uint8Array> {
+  const iterator = stream[Symbol.asyncIterator]();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const chunk = await iterator.next();
+      if (chunk.done) {
+        controller.close();
+      } else {
+        const bytes =
+          typeof chunk.value === 'string'
+            ? new TextEncoder().encode(chunk.value)
+            : new Uint8Array(chunk.value);
+        controller.enqueue(bytes);
+      }
+    },
+    async cancel() {
+      await iterator.return?.();
+    },
+  });
+}
 
 /**
  * GET /api/ingest/[id]/pages/[pageId]/image
@@ -18,6 +42,7 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
 ) {
+  const requestStartedAt = performance.now();
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -152,9 +177,13 @@ export async function GET(
       );
     }
 
-    // 5. Read the full-resolution page image file from derived storage
+    // 5. Open the stored page image after checking metadata so missing assets can
+    // still be returned as a controlled API error before the response starts.
     try {
-      const buffer = await DerivedStorageService.readDerivedPage(page.storageKey);
+      const storageOpenStartedAt = performance.now();
+      const { stream, size } = await DerivedStorageService.openDerivedPage(page.storageKey);
+      logGraderTiming('page-object-opened', storageOpenStartedAt, { sizeBytes: size });
+      logGraderTiming('page-image-api-ready', requestStartedAt, { status: 200 });
 
       // Determine proper Content-Type
       let contentType = 'image/png';
@@ -167,10 +196,12 @@ export async function GET(
         contentType = 'image/gif';
       }
 
-      return new NextResponse(new Uint8Array(buffer), {
+      return new NextResponse(toWebReadableStream(stream), {
         headers: {
           'Content-Type': contentType,
-          'Content-Length': buffer.length.toString(),
+          'Content-Length': size.toString(),
+          'Cache-Control': 'private, no-store',
+          'X-Content-Type-Options': 'nosniff',
         },
       });
     } catch (readError) {
@@ -188,7 +219,7 @@ export async function GET(
       return NextResponse.json(
         {
           success: false,
-          message: 'Page image file not found on disk',
+          message: 'Page image file not found in derived storage',
           data: null,
         },
         { status: 404 }

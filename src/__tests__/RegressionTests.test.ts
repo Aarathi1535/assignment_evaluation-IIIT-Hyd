@@ -289,13 +289,8 @@ describe('Regression Tests (Mentor Review)', () => {
         expect(mappedStudentIds).toContain(sid);
       }
 
-      // Verify the Exam document's enrolledStudents array is also correct
-      const dbExam = await Exam.findById(testExamId);
-      const examEnrolledIds = dbExam!.enrolledStudents!.map((id) => id.toString());
-      expect(examEnrolledIds.length).toBe(studentIds.length);
-      for (const sid of studentIds) {
-        expect(examEnrolledIds).toContain(sid);
-      }
+      // StudentMapping is the only authoritative exam-roster record.
+      expect((await Exam.collection.findOne({ _id: testExamId }))?.enrolledStudents).toBeUndefined();
     });
 
     it('concurrent enrollment of the SAME student by multiple requests causes no duplicate mappings', async () => {
@@ -325,12 +320,7 @@ describe('Regression Tests (Mentor Review)', () => {
       });
       expect(mappings.length).toBe(1);
 
-      // Exam.enrolledStudents must also have exactly 1 entry for this student
-      const dbExam = await Exam.findById(testExamId);
-      const enrolledForStudent = dbExam!.enrolledStudents!.filter(
-        (id) => id.toString() === singleStudentId
-      );
-      expect(enrolledForStudent.length).toBe(1);
+      expect((await Exam.collection.findOne({ _id: testExamId }))?.enrolledStudents).toBeUndefined();
     });
   });
 

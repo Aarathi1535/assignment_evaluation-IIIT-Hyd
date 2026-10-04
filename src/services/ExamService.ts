@@ -3,6 +3,7 @@ import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose from 'mongoose';
 import { writeAuditLog } from '../lib/audit';
 import StudentMapping, { IStudentMapping } from '../models/StudentMapping';
+import AnswerScript from '../models/AnswerScript';
 import User, { UserRole, IUser } from '../models/User';
 import crypto from 'crypto';
 import { HttpError, isDuplicateKeyError } from '../lib/errors';
@@ -93,14 +94,12 @@ class ExamService {
             // Student mapping check
             const studentMappings = await StudentMapping.find({ student: actingUserId });
             const enrolledExamIds = new Set(studentMappings.map(m => m.exam.toString()));
-
-            const directlyEnrolledExams = await Exam.find({
-                enrolledStudents: new mongoose.Types.ObjectId(actingUserId),
-                isActive: true,
-                status: ExamStatus.PUBLISHED
-            }).select('_id');
-            for (const exam of directlyEnrolledExams) {
-                enrolledExamIds.add(exam._id.toString());
+            const assignedScriptExamIds = await AnswerScript.distinct('exam', {
+                student: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            });
+            for (const examId of assignedScriptExamIds) {
+                enrolledExamIds.add(examId.toString());
             }
 
             // Course enrollment check
@@ -148,13 +147,15 @@ class ExamService {
                 return null;
             }
 
-            const isDirectlyEnrolled = (exam.enrolledStudents || []).some(
-                studentId => studentId.toString() === actingUserId
-            );
-            const isMapped = isDirectlyEnrolled || Boolean(
-                await StudentMapping.exists({ exam: id, student: actingUserId })
-            );
-            if (!isMapped) {
+            const [isMapped, hasAssignedScript] = await Promise.all([
+                StudentMapping.exists({ exam: id, student: actingUserId }),
+                AnswerScript.exists({
+                    exam: id,
+                    student: actingUserId,
+                    isActive: true
+                })
+            ]);
+            if (!isMapped && !hasAssignedScript) {
                 const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
                 const isCourseEnrolled = await Course.exists({ _id: exam.course, enrolledStudents: actingUserId, isActive: true });
                 if (!isCourseEnrolled) {
@@ -385,7 +386,8 @@ class ExamService {
         studentIds: string[],
         actingUserId: string,
         actingUserRole: string,
-        context?: EnrollContext
+        context?: EnrollContext,
+        replaceRoster = false
     ): Promise<IStudentMapping[] | null> {
         try {
             if (!mongoose.Types.ObjectId.isValid(examId)) {
@@ -437,8 +439,6 @@ class ExamService {
             const existingMappings = await StudentMapping.find({ exam: examId, student: { $in: uniqueStudentIds } });
             const enrolledStudentIds = new Set(existingMappings.map(m => m.student.toString()));
 
-            const createdMappings: IStudentMapping[] = [];
-
             // Helper to generate a unique anonymousId for the exam
             const generateAnonId = async (): Promise<string> => {
                 while (true) {
@@ -463,12 +463,24 @@ class ExamService {
                             isVerified: false
                         });
                         await mapping.save();
-                        createdMappings.push(mapping);
+                        enrolledStudentIds.add(sid);
                     } catch (err: unknown) {
                         if (isDuplicateKeyError(err)) {
-                            throw new HttpError('Roll number already exists for this exam', 409);
+                            const concurrentMapping = await StudentMapping.findOne({ exam: examId, student: sid });
+                            if (!concurrentMapping) {
+                                throw new HttpError('Roll number already exists for this exam', 409);
+                            }
+                            enrolledStudentIds.add(sid);
+                            if (context?.rollNumbers && sid in context.rollNumbers) {
+                                await StudentMapping.updateOne(
+                                    { exam: examId, student: sid },
+                                    { $set: { rollNumber: normalizedRoll } },
+                                    { runValidators: true }
+                                );
+                            }
+                        } else {
+                            throw err;
                         }
-                        throw err;
                     }
                 } else if (context?.rollNumbers && sid in context.rollNumbers) {
                     try {
@@ -486,24 +498,32 @@ class ExamService {
                 }
             }
 
-            // Store enrolled student roster directly on the Exam document as well atomically
-            await Exam.findOneAndUpdate(
-                { _id: examId, isActive: true },
-                { $addToSet: { enrolledStudents: { $each: uniqueStudentIds.map(sid => new mongoose.Types.ObjectId(sid)) } } },
-                { new: true }
+            if (replaceRoster) {
+                await StudentMapping.deleteMany({
+                    exam: examId,
+                    student: { $nin: uniqueStudentIds.map(sid => new mongoose.Types.ObjectId(sid)) }
+                });
+            }
+
+            // Remove the legacy mirror; StudentMapping is the sole exam-roster source.
+            await Exam.collection.updateOne(
+                { _id: new mongoose.Types.ObjectId(examId), isActive: true },
+                { $unset: { enrolledStudents: '' } }
             );
 
             if (context?.actingUserId) {
                 await writeAuditLog({
                     user: context.actingUserId,
-                    action: 'STUDENTS_ENROLLED_TO_EXAM',
+                    action: replaceRoster ? 'EXAM_ROSTER_REPLACED' : 'STUDENTS_ENROLLED_TO_EXAM',
                     outcome: 'SUCCESS',
                     entityId: exam._id as mongoose.Types.ObjectId,
                     entityType: 'Exam',
                     details: {
                         title: exam.title,
                         course: exam.course,
-                        enrolledStudentCount: uniqueStudentIds.length,
+                        enrolledStudentCount: replaceRoster
+                            ? uniqueStudentIds.length
+                            : (await StudentMapping.countDocuments({ exam: examId })),
                         studentIds: uniqueStudentIds
                     },
                     ipAddress: context.ipAddress
@@ -515,7 +535,7 @@ class ExamService {
             if (context?.actingUserId) {
                 await writeAuditLog({
                     user: context.actingUserId,
-                    action: 'STUDENTS_ENROLLED_TO_EXAM',
+                    action: replaceRoster ? 'EXAM_ROSTER_REPLACED' : 'STUDENTS_ENROLLED_TO_EXAM',
                     outcome: 'FAILURE',
                     entityId: mongoose.Types.ObjectId.isValid(examId) ? new mongoose.Types.ObjectId(examId) : undefined,
                     entityType: 'Exam',

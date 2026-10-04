@@ -51,8 +51,15 @@ interface Pagination {
   hasPreviousPage: boolean;
 }
 
-async function fetchAssignedList<T>(url: string): Promise<T[]> {
-  const response = await fetch(url, { cache: 'no-store' });
+interface AllocationStats {
+  pending: number;
+  inProgress: number;
+  completed: number;
+  assignedExams: number;
+}
+
+async function fetchAssignedList<T>(url: string, signal: AbortSignal): Promise<T[]> {
+  const response = await fetch(url, { cache: 'no-store', signal });
   const body = await response.json() as { success?: boolean; message?: string; data?: unknown };
   if (!response.ok || !body.success || !Array.isArray(body.data)) {
     throw new Error(body.message || `Could not load assigned items (${response.status}).`);
@@ -65,10 +72,12 @@ export default function TaDashboardPage() {
   const [assignedCourses, setAssignedCourses] = useState<AssignedCourse[]>([]);
   const [assignedExams, setAssignedExams] = useState<AssignedExam[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [allocationStats, setAllocationStats] = useState<AllocationStats | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [assignmentContextError, setAssignmentContextError] = useState<string | null>(null);
+  const [assignmentContextLoaded, setAssignmentContextLoaded] = useState(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -77,39 +86,70 @@ export default function TaDashboardPage() {
   const [isExamPickerOpen, setIsExamPickerOpen] = useState(false);
 
   const currentPageRef = useRef(currentPage);
+  const activeRequest = useRef<AbortController | null>(null);
+  const requestSequence = useRef(0);
 
-  const fetchAllocations = useCallback(async (pageToFetch: number) => {
+  const fetchAllocations = useCallback(async (pageToFetch: number, showLoading = false) => {
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const sequence = ++requestSequence.current;
+    if (showLoading) setIsLoading(true);
+    setError(null);
+
     const [allocationsResult, coursesResult, examsResult] = await Promise.allSettled([
-      fetch(`/api/allocations?page=${pageToFetch}&limit=20`, { cache: 'no-store' })
+      fetch(`/api/allocations?page=${pageToFetch}&limit=20`, {
+        cache: 'no-store',
+        signal: controller.signal
+      })
         .then(async response => {
           const body = await response.json() as {
             success?: boolean;
             message?: string;
-            data?: { allocations?: Allocation[]; pagination?: Pagination | null; unreadNotificationCount?: number };
+            data?: {
+              allocations?: Allocation[];
+              pagination?: Pagination | null;
+              stats?: AllocationStats;
+              unreadNotificationCount?: number;
+            };
           };
           if (!response.ok || !body.success || !body.data) {
             throw new Error(body.message || `Failed to retrieve allocations (${response.status}).`);
           }
           return body.data;
         }),
-      fetchAssignedList<AssignedCourse>('/api/courses'),
-      fetchAssignedList<AssignedExam>('/api/exams')
+      fetchAssignedList<AssignedCourse>('/api/courses', controller.signal),
+      fetchAssignedList<AssignedExam>('/api/exams', controller.signal)
     ]);
 
+    if (controller.signal.aborted || sequence !== requestSequence.current) return;
+
     if (allocationsResult.status === 'fulfilled') {
+      console.info('[TA DASHBOARD DEBUG]', JSON.stringify({
+        requestedPage: pageToFetch,
+        returnedCount: allocationsResult.value.allocations?.length ?? 0,
+        pagination: allocationsResult.value.pagination ?? null,
+        stats: allocationsResult.value.stats ?? null,
+        allocations: (allocationsResult.value.allocations || []).map(allocation => ({
+          allocationId: allocation._id,
+          exam: allocation.exam,
+          answerScriptId: allocation.answerScript?._id ?? null,
+          status: allocation.status
+        }))
+      }));
       setAllocations(allocationsResult.value.allocations || []);
       setPagination(allocationsResult.value.pagination || null);
+      setAllocationStats(allocationsResult.value.stats || null);
       setUnreadNotificationCount(allocationsResult.value.unreadNotificationCount || 0);
       setCurrentPage(pageToFetch);
       setError(null);
     } else {
       setError(allocationsResult.reason instanceof Error ? allocationsResult.reason.message : 'Failed to retrieve allocations.');
-      setAllocations([]);
-      setPagination(null);
     }
     if (coursesResult.status === 'fulfilled' && examsResult.status === 'fulfilled') {
       setAssignedCourses(coursesResult.value);
       setAssignedExams(examsResult.value);
+      setAssignmentContextLoaded(true);
       setAssignmentContextError(null);
     } else {
       const failedRequest = [coursesResult, examsResult].find(result => result.status === 'rejected');
@@ -120,12 +160,11 @@ export default function TaDashboardPage() {
       );
     }
     setIsLoading(false);
+    activeRequest.current = null;
   }, []);
 
-  const refreshAllocations = useCallback((pageToFetch: number) => {
-    setIsLoading(true);
-    setError(null);
-    void fetchAllocations(pageToFetch);
+  const refreshAllocations = useCallback((pageToFetch: number, showLoading = true) => {
+    void fetchAllocations(pageToFetch, showLoading);
   }, [fetchAllocations]);
 
   useEffect(() => {
@@ -136,25 +175,29 @@ export default function TaDashboardPage() {
     const initialLoadId = window.setTimeout(() => void fetchAllocations(1), 0);
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') {
-        refreshAllocations(currentPageRef.current);
+        refreshAllocations(currentPageRef.current, false);
       }
     };
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
-    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    const intervalId = window.setInterval(refreshWhenVisible, 60_000);
     return () => {
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.clearTimeout(initialLoadId);
       window.clearInterval(intervalId);
+      activeRequest.current?.abort();
     };
   }, [fetchAllocations, refreshAllocations]);
 
   // Compute stats
   const uniqueExamIds = Array.from(new Set(allocations.map((a) => a.exam).filter(Boolean)));
-  const uniqueExams = uniqueExamIds.length;
-  const pendingCount = allocations.filter(a => a.status !== 'COMPLETED').length;
-  const completedCount = allocations.filter(a => a.status === 'COMPLETED').length;
+  const uniqueExams = allocationStats?.assignedExams ?? uniqueExamIds.length;
+  const pendingCount = allocationStats
+    ? allocationStats.pending + allocationStats.inProgress
+    : allocations.filter(a => a.status !== 'COMPLETED').length;
+  const completedCount = allocationStats?.completed
+    ?? allocations.filter(a => a.status === 'COMPLETED').length;
 
   const handleBulkSubmitClick = (targetExamId?: string) => {
     if (targetExamId) {
@@ -329,8 +372,10 @@ export default function TaDashboardPage() {
                     </li>
                   ))}
                 </ul>
-              ) : (
+              ) : assignmentContextLoaded ? (
                 <p className="mt-2 text-sm text-slate-500">No courses are currently assigned to you.</p>
+              ) : (
+                <p role="status" className="mt-2 text-sm text-slate-500">Loading assigned courses…</p>
               )}
             </section>
             <section aria-labelledby="ta-assigned-exams-heading">
@@ -343,8 +388,10 @@ export default function TaDashboardPage() {
                     </li>
                   ))}
                 </ul>
-              ) : (
+              ) : assignmentContextLoaded ? (
                 <p className="mt-2 text-sm text-slate-500">No exams are currently available through your assigned courses.</p>
+              ) : (
+                <p role="status" className="mt-2 text-sm text-slate-500">Loading assigned exams…</p>
               )}
             </section>
           </div>
@@ -482,17 +529,25 @@ export default function TaDashboardPage() {
 
                           {/* Open Action */}
                           <td className="px-6 py-4.5 whitespace-nowrap text-right">
-                            <Link href={targetUrl} passHref legacyBehavior>
+                            {script ? (
+                              <Link
+                                href={targetUrl}
+                                className="inline-flex items-center justify-center gap-2 font-semibold transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary cursor-pointer border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 px-3 py-1.5 text-xs rounded-brand-sm border-slate-200 text-slate-650 hover:bg-brand-primary/5 hover:text-brand-primary hover:border-brand-primary"
+                              >
+                                <span>Open Grader</span>
+                                <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                              </Link>
+                            ) : (
                               <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={!script}
+                                disabled
                                 className="border-slate-200 text-slate-650 hover:bg-brand-primary/5 hover:text-brand-primary hover:border-brand-primary"
                               >
                                 <span>Open Grader</span>
                                 <ArrowRight className="h-3.5 w-3.5 ml-1" />
                               </Button>
-                            </Link>
+                            )}
                           </td>
                         </tr>
                       );

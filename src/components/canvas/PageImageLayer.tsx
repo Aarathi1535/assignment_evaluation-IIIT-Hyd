@@ -16,6 +16,7 @@ import {
   TouchPoint,
 } from '@/lib/panZoom';
 import type { PageImageLayerProps } from './types';
+import { logGraderTiming } from '@/lib/graderPerformance';
 
 export function PageImageLayer({
   src,
@@ -35,6 +36,7 @@ export function PageImageLayer({
 }: PageImageLayerProps) {
   const { stage: contextStage, dimensions } = useCanvasStage();
   const stage = propStage || contextStage;
+  const dimensionsRef = useRef(dimensions);
 
   const layerRef = useRef<Konva.Layer | null>(null);
   const groupRef = useRef<Konva.Group | null>(null);
@@ -54,6 +56,11 @@ export function PageImageLayer({
   const activeTransformRef = useRef<PanZoomTransform>(activeTransform);
   const brightnessRef = useRef<number>(brightness);
   const contrastRef = useRef<number>(contrast);
+
+  useEffect(() => {
+    dimensionsRef.current.width = dimensions.width;
+    dimensionsRef.current.height = dimensions.height;
+  }, [dimensions.width, dimensions.height]);
 
   useEffect(() => {
     activeTransformRef.current = activeTransform;
@@ -221,6 +228,8 @@ export function PageImageLayer({
     }
 
     let isCancelled = false;
+    const requestStartedAt = performance.now();
+    logGraderTiming('page-image-request-start', requestStartedAt, { page: alt });
     const img = new window.Image();
     if (src.startsWith('http://') || src.startsWith('https://')) {
       try {
@@ -238,8 +247,8 @@ export function PageImageLayer({
       if (isCancelled) return;
       loadedImageRef.current = img;
 
-      const stageW = stage?.width() || dimensions.width;
-      const stageH = stage?.height() || dimensions.height;
+      const stageW = stage?.width() || dimensionsRef.current.width;
+      const stageH = stage?.height() || dimensionsRef.current.height;
 
       const baseBounds = calculateImageFitBounds(
         stageW,
@@ -262,12 +271,21 @@ export function PageImageLayer({
       onTransformChange?.(initialTransform);
 
       updateImageLayout(img, stageW, stageH, initialTransform);
+      if (/\bpage\s+1\b/i.test(alt)) {
+        requestAnimationFrame(() =>
+          logGraderTiming('first-page-rendered', requestStartedAt, { page: alt })
+        );
+      } else {
+        logGraderTiming('page-image-loaded', requestStartedAt, { page: alt });
+      }
       onImageLoad?.(img, baseBounds);
     };
 
     img.onerror = () => {
       if (isCancelled) return;
-      const error = new Error(`Failed to load answer-sheet page image from: ${src}`);
+      const error = new Error(
+        `Unable to load the image for ${alt}. Try again, or contact support if the problem persists.`
+      );
       onImageError?.(error);
     };
 
@@ -276,7 +294,7 @@ export function PageImageLayer({
     return () => {
       isCancelled = true;
     };
-  }, [src, alt, stage, dimensions.width, dimensions.height, fitMode, updateImageLayout, onImageLoad, onImageError, onTransformChange]);
+  }, [src, alt, stage, fitMode, updateImageLayout, onImageLoad, onImageError, onTransformChange]);
 
   // Update layout when stage dimensions change
   useEffect(() => {

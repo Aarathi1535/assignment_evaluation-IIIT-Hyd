@@ -7,6 +7,8 @@ import { requirePermission } from '../../../../lib/apiAuth';
 import { Permission } from '../../../../constants/permissions';
 import { HttpError } from '../../../../lib/errors';
 
+export const dynamic = 'force-dynamic';
+
 export async function PUT(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }

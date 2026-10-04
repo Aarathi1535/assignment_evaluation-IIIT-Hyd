@@ -7,6 +7,7 @@ import { HttpError } from '../../../../../../lib/errors';
 import IngestionApprovalService from '../../../../../../services/IngestionApprovalService';
 import AllocationService from '../../../../../../services/AllocationService';
 import { AllocationRule } from '../../../../../../models/Allocation';
+import ExamRepository from '../../../../../../repositories/ExamRepository';
 
 /**
  * POST /api/exams/[id]/allocate/preview
@@ -35,6 +36,11 @@ export async function POST(
 
   try {
     await connectDB();
+
+    const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
+    if (!exam) {
+      return NextResponse.json({ success: false, message: 'Exam not found', data: null }, { status: 404 });
+    }
 
     // Ingestion must be APPROVED before previewing allocation
     await IngestionApprovalService.requireApproved(id);

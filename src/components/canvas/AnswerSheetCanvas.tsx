@@ -492,6 +492,7 @@ export function AnswerSheetCanvas({
   );
   const [hasError, setHasError] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [imageRetryCount, setImageRetryCount] = useState<number>(0);
   // Controlled vs uncontrolled rotation (AE-150)
   const [internalRotation, setInternalRotation] = useState<number>(initialRotation);
   const activeRotation = propRotation !== undefined ? propRotation : internalRotation;
@@ -1923,6 +1924,7 @@ export function AnswerSheetCanvas({
     setIsLoading(true);
     setHasError(false);
     setErrorMessage('');
+    setImageRetryCount((count) => count + 1);
   }, []);
 
   const handleTransformChange = useCallback(
@@ -2432,6 +2434,7 @@ export function AnswerSheetCanvas({
         onStageReady={handleStageReady}
       >
         <PageImageLayer
+          key={imageRetryCount}
           src={effectiveSrc}
           alt={effectivePageLabel}
           fitMode={fitMode}

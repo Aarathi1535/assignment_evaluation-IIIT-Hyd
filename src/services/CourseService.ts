@@ -11,6 +11,23 @@ export interface AuditContext {
 }
 
 class CourseService {
+    private async validateTeachingAssistants(teachingAssistantIds: string[]): Promise<void> {
+        for (const id of teachingAssistantIds) {
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                throw new HttpError(`Invalid teaching assistant ID format: ${id}`, 400);
+            }
+        }
+
+        const users = await User.find({ _id: { $in: teachingAssistantIds } });
+        const usersById = new Map(users.map(user => [user._id.toString(), user]));
+        for (const id of teachingAssistantIds) {
+            const user = usersById.get(id);
+            if (!user || user.role !== UserRole.TA || !user.isActive) {
+                throw new HttpError(`Invalid or inactive teaching assistant: ${id}`, 400);
+            }
+        }
+    }
+
     async createCourse(data: Partial<ICourse>, context?: AuditContext): Promise<ICourse> {
         try {
             if (data.courseCode) {
@@ -18,6 +35,9 @@ class CourseService {
                 if (existingCourse) {
                     throw new HttpError("Course code already exists", 409);
                 }
+            }
+            if (data.teachingAssistants) {
+                await this.validateTeachingAssistants(data.teachingAssistants.map(id => id.toString()));
             }
             const newCourse = await CourseRepository.createCourse(data);
 
@@ -124,6 +144,9 @@ class CourseService {
         delete data.professor;
 
         try {
+            if (data.teachingAssistants) {
+                await this.validateTeachingAssistants(data.teachingAssistants.map(id => id.toString()));
+            }
             const updatedCourse = await CourseRepository.updateCourse(id, data, actingUserId, actingUserRole);
 
             if (updatedCourse && context?.actingUserId) {
@@ -287,6 +310,7 @@ class CourseService {
                             ipAddress: context.ipAddress
                         });
                     }
+
                 }
                 return null;
             }
@@ -357,6 +381,54 @@ class CourseService {
             }
             throw error;
         }
+    }
+
+    async removeStudents(
+        courseId: string,
+        studentIds: string[],
+        actingUserId: string,
+        actingUserRole: string,
+        context?: AuditContext
+    ): Promise<ICourse | null> {
+        if (!mongoose.Types.ObjectId.isValid(courseId)) {
+            throw new HttpError('Invalid Course ID format', 400);
+        }
+        if (studentIds.some(id => !mongoose.Types.ObjectId.isValid(id))) {
+            throw new HttpError('Invalid student ID format', 400);
+        }
+
+        const course = await CourseRepository.getCourseById(courseId, actingUserId, actingUserRole);
+        if (!course) {
+            return null;
+        }
+
+        const uniqueStudentIds = Array.from(new Set(studentIds));
+        const updatedCourse = await Course.findOneAndUpdate(
+            { _id: courseId, isActive: true },
+            { $pullAll: { enrolledStudents: uniqueStudentIds.map(id => new mongoose.Types.ObjectId(id)) } },
+            { new: true }
+        ).populate('enrolledStudents', 'name email role isActive');
+
+        if (!updatedCourse) {
+            return null;
+        }
+
+        if (context?.actingUserId) {
+            await writeAuditLog({
+                user: context.actingUserId,
+                action: 'STUDENTS_REMOVED_FROM_COURSE',
+                outcome: 'SUCCESS',
+                entityId: updatedCourse._id as mongoose.Types.ObjectId,
+                entityType: 'Course',
+                details: {
+                    courseCode: updatedCourse.courseCode,
+                    removedStudentIds: uniqueStudentIds
+                },
+                ipAddress: context.ipAddress
+            });
+        }
+
+        return updatedCourse;
     }
 }
 

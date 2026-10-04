@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Readable } from 'node:stream';
 
 const storageMocks = vi.hoisted(() => ({
     bucket: vi.fn(),
     file: vi.fn(),
     save: vi.fn(),
     download: vi.fn(),
+    getMetadata: vi.fn(),
+    createReadStream: vi.fn(),
     deleteFiles: vi.fn()
 }));
 
@@ -27,10 +30,14 @@ describe('DerivedStorageService on Cloud Run', () => {
         });
         storageMocks.file.mockReturnValue({
             save: storageMocks.save,
-            download: storageMocks.download
+            download: storageMocks.download,
+            getMetadata: storageMocks.getMetadata,
+            createReadStream: storageMocks.createReadStream,
         });
         storageMocks.save.mockResolvedValue(undefined);
         storageMocks.download.mockResolvedValue([Buffer.from('stored-page')]);
+        storageMocks.getMetadata.mockResolvedValue([{ size: '11' }]);
+        storageMocks.createReadStream.mockReturnValue(Readable.from([Buffer.from('stored-page')]));
         storageMocks.deleteFiles.mockResolvedValue(undefined);
     });
 
@@ -64,6 +71,13 @@ describe('DerivedStorageService on Cloud Run', () => {
             metadata: { contentType: 'image/jpeg' }
         });
         await expect(service.readDerivedPage(key)).resolves.toEqual(Buffer.from('stored-page'));
+        const opened = await service.openDerivedPage(key);
+        expect(opened.size).toBe(11);
+        const chunks: Buffer[] = [];
+        for await (const chunk of opened.stream) {
+            chunks.push(Buffer.from(chunk));
+        }
+        expect(Buffer.concat(chunks)).toEqual(Buffer.from('stored-page'));
 
         await service.cleanupDerivedBatch('batch-1');
         expect(storageMocks.deleteFiles).toHaveBeenCalledWith({ prefix: 'batches/batch-1/derived/' });
@@ -75,6 +89,8 @@ describe('DerivedStorageService on Cloud Run', () => {
         await expect(new DerivedStorageService().readDerivedPage('batches/batch-1/page.png'))
             .rejects.toBeInstanceOf(DerivedStorageConfigurationError);
         await expect(new DerivedStorageService().readDerivedPage('batches/batch-1/page.png'))
+            .rejects.toThrow('DERIVED_PAGE_STORAGE_BUCKET');
+        await expect(new DerivedStorageService().openDerivedPage('batches/batch-1/page.png'))
             .rejects.toThrow('DERIVED_PAGE_STORAGE_BUCKET');
         expect(storageMocks.bucket).not.toHaveBeenCalled();
     });

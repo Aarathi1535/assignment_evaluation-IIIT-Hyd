@@ -6,6 +6,7 @@ import { Permission, UserRole } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
 import Allocation from '../../../../../models/Allocation';
 import AllocationService from '../../../../../services/AllocationService';
+import ExamRepository from '../../../../../repositories/ExamRepository';
 
 /**
  * POST /api/allocations/[id]/complete
@@ -51,6 +52,20 @@ export async function POST(
 
     const isBackupOperator =
       user.role === UserRole.PROFESSOR || user.role === UserRole.ADMIN;
+    if (isBackupOperator) {
+      const exam = await ExamRepository.getExamById(
+        allocation.exam.toString(),
+        user.id,
+        user.role
+      );
+      if (!exam) {
+        return NextResponse.json({
+          success: false,
+          message: 'Allocation not found',
+          data: null,
+        }, { status: 404 });
+      }
+    }
     if (!isBackupOperator && allocation.ta.toString() !== user.id) {
       return NextResponse.json({
         success: false,

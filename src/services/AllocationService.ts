@@ -142,7 +142,11 @@ export class AllocationService {
         await Allocation.deleteMany({ exam: examObjectId }, { session });
 
         // Clean up uncommenced assignment notifications for this exam to prevent orphaned records and inflated unread counts
-        await Notification.deleteMany({ exam: examObjectId, type: NotificationType.ASSIGNMENT }, { session });
+        await Notification.deleteMany({
+            exam: examObjectId,
+            type: { $in: [NotificationType.ASSIGNMENT, NotificationType.REASSIGNMENT] },
+            read: false
+        }, { session });
     }
 
     /**
@@ -681,6 +685,7 @@ export class AllocationService {
         if (!mongoose.Types.ObjectId.isValid(examId)) {
             throw new HttpError('Invalid Exam ID format', 400);
         }
+
         if (!mongoose.Types.ObjectId.isValid(allocationId)) {
             throw new HttpError('Invalid Allocation ID format', 400);
         }
@@ -791,6 +796,12 @@ export class AllocationService {
             allocation.allocatedBy = actingUserObjectId;
             await allocation.save({ session });
 
+            await Notification.deleteMany({
+                allocation: allocationObjectId,
+                recipient: new mongoose.Types.ObjectId(previousTaId),
+                read: false
+            }, { session });
+
             // 8. Audit log inside the transaction
             await AuditLog.create([{
                 user: actingUserObjectId,
@@ -832,6 +843,78 @@ export class AllocationService {
 
             return allocation;
         });
+    }
+
+    static async removePendingAllocation(
+        allocationId: string,
+        actingUserId: string
+    ): Promise<IAllocation> {
+        if (!mongoose.Types.ObjectId.isValid(allocationId)) {
+            throw new HttpError('Invalid Allocation ID format', 400);
+        }
+        if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
+            throw new HttpError('Invalid Acting User ID format', 400);
+        }
+
+        const allocationObjectId = new mongoose.Types.ObjectId(allocationId);
+        const actingUserObjectId = new mongoose.Types.ObjectId(actingUserId);
+
+        const removedAllocation = await this.runInTransaction(async (session) => {
+            const allocation = await Allocation.findById(allocationObjectId).session(session || null);
+            if (!allocation) {
+                throw new HttpError('Allocation not found', 404);
+            }
+            if (allocation.status !== AllocationStatus.PENDING) {
+                throw new HttpError('Only pending allocations can be removed.', 409);
+            }
+
+            const gradeQuery: {
+                answerScript: mongoose.Types.ObjectId;
+                question?: number;
+                $or?: Array<{ question: null } | { question: { $exists: false } }>;
+            } = { answerScript: allocation.answerScript };
+            if (allocation.question !== undefined && allocation.question !== null) {
+                gradeQuery.question = allocation.question;
+            } else {
+                gradeQuery.$or = [{ question: null }, { question: { $exists: false } }];
+            }
+            if (await Grade.exists(gradeQuery).session(session || null)) {
+                throw new HttpError('Allocations with existing grades cannot be removed.', 409);
+            }
+
+            const removed = await Allocation.findOneAndDelete({
+                _id: allocationObjectId,
+                status: AllocationStatus.PENDING
+            }, { session });
+            if (!removed) {
+                throw new HttpError('Allocation changed before it could be removed.', 409);
+            }
+
+            await Notification.deleteMany(
+                { allocation: allocationObjectId, read: false },
+                { session }
+            );
+            await AuditLog.create([{
+                user: actingUserObjectId,
+                action: 'ALLOCATION_REMOVED',
+                outcome: 'SUCCESS',
+                entityId: allocationObjectId,
+                entityType: 'Allocation',
+                details: {
+                    examId: allocation.exam.toString(),
+                    answerScriptId: allocation.answerScript.toString(),
+                    taId: allocation.ta.toString(),
+                    question: allocation.question
+                }
+            }], { session: session ?? undefined });
+            return removed;
+        });
+
+        await ProgressEventService.dispatchProgressEvent(
+            removedAllocation.exam.toString(),
+            removedAllocation.ta.toString()
+        );
+        return removedAllocation;
     }
 
     /**

@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/Button';
 import { AnswerSheetCanvas } from '@/components/canvas/AnswerSheetCanvas';
 import type { SaveStatus } from '@/components/canvas/types';
 import { clearDraftOnSubmit } from '@/lib/offlineDrafts';
+import { logGraderTiming } from '@/lib/graderPerformance';
 import { RubricSidebar, RubricData, RubricSidebarHandle } from './RubricSidebar';
 import { GradingSubmissionControls } from './GradingSubmissionControls';
 import type { AnswerSheetPage } from '@/lib/pageNavigation';
@@ -93,7 +94,6 @@ export function GradingWorkspace({
   const userId = session?.user?.id;
   const userRole = session?.user?.role;
   const isProfessorOrAdmin = userRole === 'PROFESSOR' || userRole === 'ADMIN';
-
 
 
   // Resolution controls state (AE-164)
@@ -202,8 +202,10 @@ export function GradingWorkspace({
     setError(null);
 
     try {
+      const requestStartedAt = performance.now();
       const baseUrl = `/api/scripts/${encodeURIComponent(scriptId)}`;
       const url = allocatedQuestionNumber ? `${baseUrl}?question=${allocatedQuestionNumber}` : baseUrl;
+      logGraderTiming('script-metadata-request-start', requestStartedAt);
       const res = await fetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
@@ -225,6 +227,11 @@ export function GradingWorkspace({
 
       const json = await res.json();
       const data: ScriptData = json?.data || json;
+      const pageCount = Array.isArray(data?.pages) ? data.pages.length : 0;
+      logGraderTiming('script-metadata-ready', requestStartedAt, {
+        status: res.status,
+        pageCount,
+      });
 
       setScriptData(data);
       setPages(Array.isArray(data?.pages) ? data.pages : []);

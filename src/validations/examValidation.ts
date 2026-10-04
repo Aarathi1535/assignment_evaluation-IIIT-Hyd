@@ -118,4 +118,11 @@ export const enrollStudentsSchema = z.object({
   rollNumbers: z.record(z.string(), z.string().nullable().optional()).optional(),
 }).strict();
 
+export const replaceExamRosterSchema = z.object({
+  studentIds: z.array(objectIdSchema)
+    .refine((items) => new Set(items).size === items.length, {
+      message: 'Duplicate student IDs are not allowed in the request',
+    }),
+  rollNumbers: z.record(z.string(), z.string().nullable().optional()).optional(),
+}).strict();
 

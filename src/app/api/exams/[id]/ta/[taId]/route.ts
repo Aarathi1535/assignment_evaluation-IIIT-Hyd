@@ -5,6 +5,7 @@ import { requirePermission } from '../../../../../../lib/apiAuth';
 import { Permission } from '../../../../../../constants/permissions';
 import { HttpError } from '../../../../../../lib/errors';
 import AllocationService from '../../../../../../services/AllocationService';
+import ExamRepository from '../../../../../../repositories/ExamRepository';
 
 /**
  * GET /api/exams/[id]/ta/[taId]
@@ -43,6 +44,11 @@ export async function GET(
 
   try {
     await connectDB();
+
+    const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
+    if (!exam) {
+      return NextResponse.json({ success: false, message: 'Exam not found', data: null }, { status: 404 });
+    }
 
     const workloadData = await AllocationService.getTaAllocationsForExam(id, taId);
 

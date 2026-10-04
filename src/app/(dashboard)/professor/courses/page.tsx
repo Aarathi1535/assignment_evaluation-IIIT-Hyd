@@ -49,6 +49,7 @@ export default function ProfessorCoursesPage() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [enrollStatus, setEnrollStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [savingEnrollment, setSavingEnrollment] = useState(false);
+  const [removingStudentId, setRemovingStudentId] = useState<string | null>(null);
 
   const handleCloseModal = () => {
     setEnrollCourseId(null);
@@ -147,6 +148,40 @@ export default function ProfessorCoursesPage() {
       setEnrollStatus({ success: false, message });
     } finally {
       setSavingEnrollment(false);
+    }
+  };
+
+  const handleRemoveStudent = async (studentId: string) => {
+    if (!enrollCourseId) return;
+
+    setRemovingStudentId(studentId);
+    setEnrollStatus(null);
+    try {
+      const response = await fetch(`/api/courses/${enrollCourseId}/enroll`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentIds: [studentId] }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.data) {
+        throw new Error(data.message || 'Failed to remove student from course.');
+      }
+
+      setEnrollingCourse(data.data);
+      setRoster(data.data.enrolledStudents || []);
+      setEnrollStatus({ success: true, message: 'Student removed from course.' });
+      const coursesResponse = await fetch('/api/courses', { cache: 'no-store' });
+      const coursesData = await coursesResponse.json();
+      if (coursesData.success && Array.isArray(coursesData.data)) {
+        setCourses(coursesData.data);
+      }
+    } catch (reason) {
+      setEnrollStatus({
+        success: false,
+        message: reason instanceof Error ? reason.message : 'Failed to remove student from course.'
+      });
+    } finally {
+      setRemovingStudentId(null);
     }
   };
 
@@ -499,6 +534,9 @@ export default function ProfessorCoursesPage() {
                             <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
                               Email
                             </th>
+                            <th className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">
+                              Actions
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-sm font-medium text-slate-800">
@@ -506,6 +544,21 @@ export default function ProfessorCoursesPage() {
                             <tr key={student._id} className="hover:bg-slate-50">
                               <td className="px-4 py-3 font-semibold text-slate-900">{student.name}</td>
                               <td className="px-4 py-3 text-slate-600">{student.email}</td>
+                              <td className="px-4 py-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRemoveStudent(student._id)}
+                                  disabled={removingStudentId === student._id}
+                                  aria-label={`Remove ${student.name} from course`}
+                                  className="rounded p-1 text-slate-500 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
+                                >
+                                  {removingStudentId === student._id ? (
+                                    <LoadingSpinner size="sm" />
+                                  ) : (
+                                    <X className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>

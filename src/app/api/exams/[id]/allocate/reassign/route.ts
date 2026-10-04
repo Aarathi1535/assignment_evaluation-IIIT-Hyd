@@ -5,6 +5,8 @@ import { requirePermission } from '../../../../../../lib/apiAuth';
 import { Permission } from '../../../../../../constants/permissions';
 import { HttpError } from '../../../../../../lib/errors';
 import AllocationService from '../../../../../../services/AllocationService';
+import ExamRepository from '../../../../../../repositories/ExamRepository';
+import Allocation from '../../../../../../models/Allocation';
 
 /**
  * PUT /api/exams/[id]/allocate/reassign
@@ -71,6 +73,19 @@ export async function PUT(
         message: 'Target TA ID is required',
         data: null
       }, { status: 400 });
+    }
+
+    const allocation = await Allocation.findById(allocationId).select('exam').lean();
+    if (allocation && allocation.exam.toString() !== id) {
+      return NextResponse.json({
+        success: false,
+        message: 'Allocation does not belong to the specified exam',
+        data: null
+      }, { status: 400 });
+    }
+    const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
+    if (!exam) {
+      return NextResponse.json({ success: false, message: 'Exam not found', data: null }, { status: 404 });
     }
 
     const actingUserId = auth.user?.id || '';

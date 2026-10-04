@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { Readable } from 'node:stream';
 import { Storage } from '@google-cloud/storage';
 
 export class DerivedStorageConfigurationError extends Error {
@@ -29,6 +30,7 @@ export interface IDerivedStorageService {
     storeDerivedThumbnail(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult>;
     getDerivedThumbnailKey(batchId: string, fileId: string, pageNumber: number, format?: string): string;
     readDerivedPage?(storageKey: string): Promise<Buffer>;
+    openDerivedPage?(storageKey: string): Promise<{ stream: Readable; size: number }>;
 }
 
 export class DerivedStorageService implements IDerivedStorageService {
@@ -156,6 +158,25 @@ export class DerivedStorageService implements IDerivedStorageService {
 
         const filePath = this.getDerivedDiskPath(storageKey);
         return await fs.promises.readFile(filePath);
+    }
+
+    async openDerivedPage(storageKey: string): Promise<{ stream: Readable; size: number }> {
+        const bucket = this.getCloudBucket();
+        if (bucket) {
+            const file = bucket.file(storageKey);
+            const [metadata] = await file.getMetadata();
+            return {
+                stream: file.createReadStream(),
+                size: Number(metadata.size),
+            };
+        }
+
+        const filePath = this.getDerivedDiskPath(storageKey);
+        const metadata = await fs.promises.stat(filePath);
+        return {
+            stream: fs.createReadStream(filePath),
+            size: metadata.size,
+        };
     }
 
     /**

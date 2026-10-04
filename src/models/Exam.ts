@@ -46,6 +46,7 @@ export interface IExam extends Document {
     totalMarks: number;
     status: ExamStatus;
     numberOfQuestions: number;
+    /** @deprecated Legacy roster mirror; StudentMapping is authoritative. */
     enrolledStudents?: mongoose.Types.ObjectId[];
     rubric?: mongoose.Types.ObjectId;
     splittingStrategy?: SplittingStrategyType;
@@ -130,12 +131,6 @@ const ExamSchema = new Schema<IExam>(
             type: Number,
             required: true
         },
-        enrolledStudents: [
-            {
-                type: Schema.Types.ObjectId,
-                ref: 'User'
-            }
-        ],
         rubric: {
             type: Schema.Types.ObjectId,
             ref: 'Rubric',

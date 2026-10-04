@@ -5,6 +5,8 @@ import { requirePermission } from '../../../../../lib/apiAuth';
 import { Permission, UserRole } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
 import AllocationService from '../../../../../services/AllocationService';
+import Allocation from '../../../../../models/Allocation';
+import ExamRepository from '../../../../../repositories/ExamRepository';
 
 /**
  * POST /api/allocations/[id]/release
@@ -45,6 +47,28 @@ export async function POST(
 
     // Professors and Admins are backup operators who can release other TAs' allocations.
     const isBackupOperator = user!.role === UserRole.PROFESSOR || user!.role === UserRole.ADMIN;
+    if (isBackupOperator) {
+      const allocation = await Allocation.findById(id).select('exam').lean();
+      if (!allocation) {
+        return NextResponse.json({
+          success: false,
+          message: 'Allocation not found',
+          data: null
+        }, { status: 404 });
+      }
+      const exam = await ExamRepository.getExamById(
+        allocation.exam.toString(),
+        user!.id,
+        user!.role
+      );
+      if (!exam) {
+        return NextResponse.json({
+          success: false,
+          message: 'Allocation not found',
+          data: null
+        }, { status: 404 });
+      }
+    }
 
     const updatedAllocation = await AllocationService.releaseAllocation(
       id,

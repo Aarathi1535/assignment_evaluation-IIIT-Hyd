@@ -6,6 +6,8 @@ import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   const auth = await requirePermission(Permission.VIEW_COURSES);
   if (!auth.authorized) {

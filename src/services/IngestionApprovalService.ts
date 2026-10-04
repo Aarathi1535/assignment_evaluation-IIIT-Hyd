@@ -307,7 +307,6 @@ class IngestionApprovalService {
                 }
             }
         );
-
         await writeAuditLog({
             user: context.actingUserId,
             action: 'INGESTION_APPROVAL_RESET_BY_NEW_BATCH',

@@ -7,6 +7,8 @@ import { Permission } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
 import { IUser } from '../../../../../models/User';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -115,4 +117,3 @@ export async function GET(
     }, { status });
   }
 }
-

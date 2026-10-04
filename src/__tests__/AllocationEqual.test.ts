@@ -27,6 +27,8 @@ vi.mock('next-auth', async (importOriginal) => {
 describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let allocatePOST: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let allocationsGET: any;
     let testExamId: mongoose.Types.ObjectId;
     let testCourseId: mongoose.Types.ObjectId;
     let professorId: mongoose.Types.ObjectId;
@@ -38,6 +40,7 @@ describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
 
     beforeAll(async () => {
         allocatePOST = (await import('../app/api/exams/[id]/allocate/route')).POST;
+        allocationsGET = (await import('../app/api/allocations/route')).GET;
 
         // Force indexes creation
         await Allocation.init();
@@ -178,6 +181,56 @@ describe('Allocation EQUAL Strategy Tests (AE-083)', () => {
             // Verify no answerScript appears more than once (AE-089)
             const scriptIds = result.map(a => a.answerScript.toString());
             expect(new Set(scriptIds).size).toBe(result.length);
+        });
+
+        it('routes a single script to only one of two selected TAs in the authenticated queue', async () => {
+            const script = await createScript(studentId1);
+            const selectedTaIds = [taId1.toString(), taId2.toString()];
+            const result = await AllocationService.allocateEqual(
+                testExamId.toString(),
+                selectedTaIds,
+                professorId.toString()
+            );
+
+            expect(result).toHaveLength(1);
+            expect(result[0].answerScript.toString()).toBe(script._id.toString());
+            expect(result[0].ta.toString()).toBe([...selectedTaIds].sort()[0]);
+
+            for (const taId of selectedTaIds) {
+                mockSessionUser = {
+                    id: taId,
+                    email: `${taId}@example.test`,
+                    name: `TA ${taId}`,
+                    role: UserRole.TA,
+                };
+                const response = await allocationsGET(
+                    new NextRequest('http://localhost:3000/api/allocations')
+                );
+                expect(response.status).toBe(200);
+                const body = await response.json() as {
+                    data: {
+                        allocations: Array<{
+                            _id: string;
+                            exam: string;
+                            status: string;
+                            answerScript: { _id: string } | null;
+                        }>;
+                        stats: { pending: number };
+                    };
+                };
+
+                const expectedAllocation = result[0].ta.toString() === taId;
+                expect(body.data.allocations).toHaveLength(expectedAllocation ? 1 : 0);
+                expect(body.data.stats.pending).toBe(expectedAllocation ? 1 : 0);
+                if (expectedAllocation) {
+                    expect(body.data.allocations[0]).toMatchObject({
+                        _id: result[0]._id.toString(),
+                        exam: testExamId.toString(),
+                        status: AllocationStatus.PENDING,
+                        answerScript: expect.objectContaining({ _id: script._id.toString() }),
+                    });
+                }
+            }
         });
 
         it('one TA', async () => {

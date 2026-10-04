@@ -6,6 +6,7 @@ import Exam from '../models/Exam';
 import AuditLog from '../models/AuditLog';
 import User from '../models/User';
 import StudentMapping from '../models/StudentMapping';
+import AnswerScript from '../models/AnswerScript';
 import { UserRole } from '../constants/permissions';
 
 let mockSessionUser: any = null;
@@ -39,7 +40,9 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
   let testExamId: mongoose.Types.ObjectId;
   let professorId: mongoose.Types.ObjectId;
   let courseEnrollPOST: any;
+  let courseEnrollDELETE: any;
   let examEnrollPOST: any;
+  let examEnrollPUT: any;
   let examStudentsGET: any;
   let testStudentId1: string;
   let testStudentId2: string;
@@ -57,7 +60,9 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
     examDetailDELETE = (await import('../app/api/exams/[id]/route')).DELETE;
     examDetailGET = (await import('../app/api/exams/[id]/route')).GET;
     courseEnrollPOST = (await import('../app/api/courses/[id]/enroll/route')).POST;
+    courseEnrollDELETE = (await import('../app/api/courses/[id]/enroll/route')).DELETE;
     examEnrollPOST = (await import('../app/api/exams/[id]/enroll/route')).POST;
+    examEnrollPUT = (await import('../app/api/exams/[id]/enroll/route')).PUT;
     examStudentsGET = (await import('../app/api/exams/[id]/students/route')).GET;
 
     professorId = new mongoose.Types.ObjectId('000000000000000000000003');
@@ -520,6 +525,7 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(mappings.length).toBe(2);
       expect(mappings.map(m => m.student.toString())).toContain(testStudentId1);
       expect(mappings[0].anonymousId).toMatch(/^ANON-[0-9A-F]{6}$/);
+      expect((await Exam.collection.findOne({ _id: testExamId }))?.enrolledStudents).toBeUndefined();
 
       // Check audit log
       const logs = await AuditLog.find({ entityId: testExamId, action: 'STUDENTS_ENROLLED_TO_EXAM' });
@@ -554,17 +560,177 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(examBody.data.map((exam: { _id: string }) => exam._id)).toContain(testExamId.toString());
     });
 
-    it('should return direct exam assignments without requiring a StudentMapping record', async () => {
-      await Course.updateOne(
-        { _id: testCourseId },
-        { $addToSet: { enrolledStudents: new mongoose.Types.ObjectId(testStudentId1) } }
-      );
-      await Exam.updateOne(
+    it('reflects TA course assignment additions and removals in refreshed course and exam queries', async () => {
+      const ta = await User.create({
+        name: 'Roster TA',
+        email: 'roster-ta@university.edu',
+        password: 'password123',
+        role: UserRole.TA,
+        isActive: true
+      });
+      const otherTa = await User.create({
+        name: 'Unassigned TA',
+        email: 'unassigned-ta@university.edu',
+        password: 'password123',
+        role: UserRole.TA,
+        isActive: true
+      });
+
+      mockSessionUser = {
+        id: ta._id.toString(),
+        email: ta.email,
+        name: ta.name,
+        role: UserRole.TA
+      };
+      const beforeAssignmentCourses = await coursesGET();
+      const beforeAssignmentExams = await examsGET();
+      expect((await beforeAssignmentCourses.json()).data).toHaveLength(0);
+      expect((await beforeAssignmentExams.json()).data).toHaveLength(0);
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor',
+        role: UserRole.PROFESSOR
+      };
+      const assignRequest = new Request(`http://localhost:3000/api/courses/${testCourseId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ teachingAssistants: [ta._id.toString()] }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      expect((await courseDetailPUT(assignRequest as any, {
+        params: Promise.resolve({ id: testCourseId.toString() })
+      })).status).toBe(200);
+
+      const storedCourse = await Course.collection.findOne({ _id: testCourseId });
+      expect(storedCourse?.teachingAssistants).toHaveLength(1);
+      expect(storedCourse?.teachingAssistants?.[0]).toBeInstanceOf(mongoose.Types.ObjectId);
+      expect(storedCourse?.teachingAssistants?.[0].toString()).toBe(ta._id.toString());
+
+      const duplicateAssignment = new Request(`http://localhost:3000/api/courses/${testCourseId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ teachingAssistants: [ta._id.toString(), ta._id.toString()] }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      expect((await courseDetailPUT(duplicateAssignment as any, {
+        params: Promise.resolve({ id: testCourseId.toString() })
+      })).status).toBe(400);
+      expect((await Course.collection.findOne({ _id: testCourseId }))?.teachingAssistants).toHaveLength(1);
+
+      mockSessionUser = { id: ta._id.toString(), email: ta.email, name: ta.name, role: UserRole.TA };
+      const [assignedCourses, assignedExams] = await Promise.all([coursesGET(), examsGET()]);
+      expect((await assignedCourses.json()).data.map((course: { _id: string }) => course._id))
+        .toContain(testCourseId.toString());
+      expect((await assignedExams.json()).data.map((exam: { _id: string }) => exam._id))
+        .toContain(testExamId.toString());
+
+      mockSessionUser = {
+        id: otherTa._id.toString(),
+        email: otherTa.email,
+        name: otherTa.name,
+        role: UserRole.TA
+      };
+      const [otherTaCourses, otherTaExams] = await Promise.all([coursesGET(), examsGET()]);
+      expect((await otherTaCourses.json()).data).toHaveLength(0);
+      expect((await otherTaExams.json()).data).toHaveLength(0);
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor',
+        role: UserRole.PROFESSOR
+      };
+      const removeRequest = new Request(`http://localhost:3000/api/courses/${testCourseId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ teachingAssistants: [] }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      expect((await courseDetailPUT(removeRequest as any, {
+        params: Promise.resolve({ id: testCourseId.toString() })
+      })).status).toBe(200);
+
+      mockSessionUser = { id: ta._id.toString(), email: ta.email, name: ta.name, role: UserRole.TA };
+      const [removedCourses, removedExams] = await Promise.all([coursesGET(), examsGET()]);
+      expect((await removedCourses.json()).data).toHaveLength(0);
+      expect((await removedExams.json()).data).toHaveLength(0);
+    });
+
+    it('reflects Student course enrollment additions and removals in the dashboard queries', async () => {
+      await Exam.updateOne({ _id: testExamId }, { $set: { status: 'PUBLISHED' } });
+
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT
+      };
+      const [coursesBeforeEnrollment, examsBeforeEnrollment] = await Promise.all([coursesGET(), examsGET()]);
+      expect((await coursesBeforeEnrollment.json()).data).toHaveLength(0);
+      expect((await examsBeforeEnrollment.json()).data).toHaveLength(0);
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor',
+        role: UserRole.PROFESSOR
+      };
+      const enrollment = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'POST',
+        body: JSON.stringify({ studentIds: [testStudentId1] }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      expect((await courseEnrollPOST(enrollment as any, {
+        params: Promise.resolve({ id: testCourseId.toString() })
+      })).status).toBe(200);
+
+      const storedCourse = await Course.collection.findOne({ _id: testCourseId });
+      expect(storedCourse?.enrolledStudents).toHaveLength(1);
+      expect(storedCourse?.enrolledStudents?.[0]).toBeInstanceOf(mongoose.Types.ObjectId);
+      expect(storedCourse?.enrolledStudents?.[0].toString()).toBe(testStudentId1);
+
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT
+      };
+      const [coursesAfterAdd, examsAfterAdd] = await Promise.all([coursesGET(), examsGET()]);
+      expect((await coursesAfterAdd.json()).data.map((course: { _id: string }) => course._id))
+        .toContain(testCourseId.toString());
+      expect((await examsAfterAdd.json()).data.map((exam: { _id: string }) => exam._id))
+        .toContain(testExamId.toString());
+
+      const removal = new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'DELETE',
+        body: JSON.stringify({ studentIds: [testStudentId1] }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@university.edu',
+        name: 'Professor',
+        role: UserRole.PROFESSOR
+      };
+      expect((await courseEnrollDELETE(removal as any, {
+        params: Promise.resolve({ id: testCourseId.toString() })
+      })).status).toBe(200);
+
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT
+      };
+      const [coursesAfterRemoval, examsAfterRemoval] = await Promise.all([coursesGET(), examsGET()]);
+      expect((await coursesAfterRemoval.json()).data).toHaveLength(0);
+      expect((await examsAfterRemoval.json()).data).toHaveLength(0);
+    });
+
+    it('should ignore legacy exam roster mirrors without a StudentMapping', async () => {
+      await Exam.updateOne({ _id: testExamId }, { $set: { status: 'PUBLISHED' } });
+      await Exam.collection.updateOne(
         { _id: testExamId },
-        {
-          $set: { status: 'PUBLISHED' },
-          $addToSet: { enrolledStudents: new mongoose.Types.ObjectId(testStudentId1) }
-        }
+        { $addToSet: { enrolledStudents: new mongoose.Types.ObjectId(testStudentId1) } }
       );
 
       mockSessionUser = {
@@ -578,9 +744,76 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       const courseBody = await courseResponse.json();
       const examBody = await examResponse.json();
 
-      expect(courseBody.data.map((course: { _id: string }) => course._id)).toContain(testCourseId.toString());
-      expect(examBody.data.map((exam: { _id: string }) => exam._id)).toContain(testExamId.toString());
+      expect(courseBody.data.map((course: { _id: string }) => course._id)).not.toContain(testCourseId.toString());
+      expect(examBody.data.map((exam: { _id: string }) => exam._id)).not.toContain(testExamId.toString());
       expect(await StudentMapping.countDocuments({ exam: testExamId, student: testStudentId1 })).toBe(0);
+    });
+
+    it('shows a published exam to the Student currently assigned to an active answer script', async () => {
+      await Exam.updateOne({ _id: testExamId }, { $set: { status: 'PUBLISHED' } });
+      await AnswerScript.create({
+        exam: testExamId,
+        student: testStudentId2,
+        filename: 'assigned-script.pdf',
+        filePath: 'batches/assignment/derived/assigned-script.pdf',
+        isActive: true
+      });
+      mockSessionUser = {
+        id: testStudentId2,
+        email: 'student2@university.edu',
+        name: 'Student Two',
+        role: UserRole.STUDENT
+      };
+
+      const response = await examsGET();
+      const body = await response.json();
+      expect(body.data.map((exam: { _id: string }) => exam._id)).toContain(testExamId.toString());
+    });
+
+    it('shows an exam to its direct StudentMapping roster without course enrollment', async () => {
+      await Exam.updateOne({ _id: testExamId }, { $set: { status: 'PUBLISHED' } });
+      await StudentMapping.create({
+        exam: testExamId,
+        student: testStudentId2,
+        anonymousId: 'ANON-ROSTER-22'
+      });
+      mockSessionUser = {
+        id: testStudentId2,
+        email: 'student2@university.edu',
+        name: 'Student Two',
+        role: UserRole.STUDENT
+      };
+
+      const response = await examsGET();
+      expect((await response.json()).data.map((exam: { _id: string }) => exam._id))
+        .toContain(testExamId.toString());
+    });
+
+    it('replaces the exam roster exactly, including removal of every student', async () => {
+      const initial = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'PUT',
+        body: JSON.stringify({ studentIds: [testStudentId1, testStudentId2] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect((await examEnrollPUT(initial as any, { params: Promise.resolve({ id: testExamId.toString() }) })).status).toBe(200);
+      expect(await StudentMapping.countDocuments({ exam: testExamId })).toBe(2);
+
+      const repeated = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'PUT',
+        body: JSON.stringify({ studentIds: [testStudentId2] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect((await examEnrollPUT(repeated as any, { params: Promise.resolve({ id: testExamId.toString() }) })).status).toBe(200);
+      expect((await StudentMapping.distinct('student', { exam: testExamId })).map((id: mongoose.Types.ObjectId) => id.toString()))
+        .toEqual([testStudentId2]);
+
+      const emptyRoster = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
+        method: 'PUT',
+        body: JSON.stringify({ studentIds: [] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect((await examEnrollPUT(emptyRoster as any, { params: Promise.resolve({ id: testExamId.toString() }) })).status).toBe(200);
+      expect(await StudentMapping.countDocuments({ exam: testExamId })).toBe(0);
     });
 
     it('should prevent duplicate mappings when enrolling already enrolled students', async () => {
@@ -604,8 +837,7 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       const mappings = await StudentMapping.find({ exam: testExamId });
       expect(mappings.length).toBe(2); // Should only be 2, not 3
 
-      const dbExam = await Exam.findById(testExamId);
-      expect(dbExam!.enrolledStudents!.length).toBe(2); // Verify no duplicates in the array
+      expect((await Exam.collection.findOne({ _id: testExamId }))?.enrolledStudents).toBeUndefined();
     });
 
     it('should prevent duplicate course enrollments', async () => {
@@ -627,7 +859,26 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(res.status).toBe(200);
 
       const dbCourse = await Course.findById(testCourseId);
-      expect(dbCourse!.enrolledStudents!.length).toBe(2); // Verify no duplicates in the array
+      expect(dbCourse!.enrolledStudents!.length).toBe(2);
+    });
+
+    it('removes course enrollment idempotently and returns the authoritative roster', async () => {
+      await Course.updateOne(
+        { _id: testCourseId },
+        { $addToSet: { enrolledStudents: { $each: [testStudentId1, testStudentId2] } } }
+      );
+      const request = () => new Request(`http://localhost:3000/api/courses/${testCourseId}/enroll`, {
+        method: 'DELETE',
+        body: JSON.stringify({ studentIds: [testStudentId1] }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const first = await courseEnrollDELETE(request() as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      const second = await courseEnrollDELETE(request() as any, { params: Promise.resolve({ id: testCourseId.toString() }) });
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      const course = await Course.findById(testCourseId);
+      expect(course?.enrolledStudents?.map(id => id.toString())).toEqual([testStudentId2]);
     });
 
     it('should reject enrollment if any user ID does not exist or is not a student', async () => {
@@ -952,13 +1203,12 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       const bodyExam = await resExam.json();
       expect(bodyExam.success).toBe(true);
 
-      const dbExam = await Exam.findById(testExamId);
-      expect(dbExam!.enrolledStudents!.map(id => id.toString())).toContain(testStudentId1);
-      expect(dbExam!.enrolledStudents!.map(id => id.toString())).toContain(testStudentId2);
-
       // Verify student mapping created
       const mappings = await StudentMapping.find({ exam: testExamId });
       expect(mappings.length).toBe(2);
+      expect(mappings.map(mapping => mapping.student.toString())).toContain(testStudentId1);
+      expect(mappings.map(mapping => mapping.student.toString())).toContain(testStudentId2);
+      expect((await Exam.collection.findOne({ _id: testExamId }))?.enrolledStudents).toBeUndefined();
 
       // Verify audit log
       const auditExam = await AuditLog.find({ action: 'STUDENTS_ENROLLED_TO_EXAM', outcome: 'SUCCESS' });

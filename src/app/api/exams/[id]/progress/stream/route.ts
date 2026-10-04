@@ -4,9 +4,9 @@ import { connectDB } from '../../../../../../lib/db';
 import { requirePermission } from '../../../../../../lib/apiAuth';
 import { Permission } from '../../../../../../constants/permissions';
 import { HttpError } from '../../../../../../lib/errors';
-import Exam from '../../../../../../models/Exam';
 import AllocationService from '../../../../../../services/AllocationService';
 import ProgressEventService, { LIVE_UPDATES_UNAVAILABLE_MESSAGE } from '../../../../../../services/ProgressEventService';
+import ExamRepository from '../../../../../../repositories/ExamRepository';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,8 +42,8 @@ export async function GET(
   try {
     await connectDB();
 
-    const examExists = await Exam.exists({ _id: new mongoose.Types.ObjectId(id), isActive: true });
-    if (!examExists) {
+    const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
+    if (!exam) {
       return NextResponse.json({
         success: false,
         message: 'Exam not found',

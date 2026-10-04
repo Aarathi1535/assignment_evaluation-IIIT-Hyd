@@ -65,12 +65,6 @@ export class CoverSheetService {
         // 3. Aggregate all enrolled student IDs for the exam
         const enrolledStudentIdSet = new Set<string>();
 
-        if (exam.enrolledStudents && Array.isArray(exam.enrolledStudents)) {
-            for (const sId of exam.enrolledStudents) {
-                if (sId) enrolledStudentIdSet.add(sId.toString());
-            }
-        }
-
         const mappings = await StudentMapping.find({ exam: exam._id });
         for (const m of mappings) {
             if (m.student) enrolledStudentIdSet.add(m.student.toString());
