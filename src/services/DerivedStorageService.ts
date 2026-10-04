@@ -89,9 +89,35 @@ export class DerivedStorageService implements IDerivedStorageService {
         const storageKey = this.getDerivedPageKey(batchId, fileId, pageNumber, format);
         const bucket = this.getCloudBucket();
         if (bucket) {
-            await bucket.file(storageKey).save(buffer, {
-                resumable: false,
-                metadata: { contentType: this.getContentType(format) }
+            const file = bucket.file(storageKey);
+            console.info('[DerivedStorageService] Writing derived page to GCS', {
+                bucket: bucket.name,
+                storageKey,
+                bufferSize: buffer.length,
+                status: 'started',
+            });
+            try {
+                await file.save(buffer, {
+                    resumable: false,
+                    metadata: { contentType: this.getContentType(format) }
+                });
+            } catch (error) {
+                console.error('[DerivedStorageService] Failed to write derived page to GCS', {
+                    bucket: bucket.name,
+                    storageKey,
+                    bufferSize: buffer.length,
+                    success: false,
+                    error: error instanceof Error
+                        ? { name: error.name, message: error.message, stack: error.stack }
+                        : error,
+                });
+                throw error;
+            }
+            console.info('[DerivedStorageService] Wrote derived page to GCS', {
+                bucket: bucket.name,
+                storageKey,
+                bufferSize: buffer.length,
+                success: true,
             });
             return {
                 storageKey,
