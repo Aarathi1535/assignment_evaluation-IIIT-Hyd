@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Readable } from 'node:stream';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const storageMocks = vi.hoisted(() => ({
     bucket: vi.fn(),
@@ -89,8 +92,8 @@ describe('DerivedStorageService on Cloud Run', () => {
                 success: true,
             }
         );
-        await expect(service.readDerivedPage(key)).resolves.toEqual(Buffer.from('stored-page'));
-        const opened = await service.openDerivedPage(key);
+        await expect(service.readDerivedPage(stored.storageKey)).resolves.toEqual(Buffer.from('stored-page'));
+        const opened = await service.openDerivedPage(stored.storageKey);
         expect(opened.size).toBe(11);
         expect(storageMocks.file.mock.calls.map(([objectKey]) => objectKey)).toEqual([
             key,
@@ -105,6 +108,49 @@ describe('DerivedStorageService on Cloud Run', () => {
 
         await service.cleanupDerivedBatch('batch-1');
         expect(storageMocks.deleteFiles).toHaveBeenCalledWith({ prefix: 'batches/batch-1/derived/' });
+    });
+
+    it('stores and opens local derived pages at the established path when no bucket is configured', async () => {
+        vi.stubEnv('K_SERVICE', '');
+        vi.stubEnv('DERIVED_PAGE_STORAGE_BUCKET', '');
+        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'derived-storage-local-'));
+        const storageRoot = path.join(tempRoot, 'derived');
+        vi.stubEnv('DERIVED_STORAGE_PATH', storageRoot);
+        const service = new DerivedStorageService();
+        const buffer = Buffer.from('local-page-bytes');
+
+        try {
+            const stored = await service.storeDerivedPage({
+                batchId: 'batch-local',
+                fileId: 'file-local',
+                pageNumber: 1,
+                buffer,
+            });
+            const expectedKey = 'batches/batch-local/derived/file-local/1/page.png';
+            const expectedPath = path.join(
+                storageRoot,
+                'batch-local',
+                'derived',
+                'file-local',
+                '1',
+                'page.png'
+            );
+
+            expect(stored.storageKey).toBe(expectedKey);
+            expect(stored.storagePath).toBe(expectedPath);
+            expect(await fs.readFile(expectedPath)).toEqual(buffer);
+
+            const opened = await service.openDerivedPage(stored.storageKey);
+            expect(opened.size).toBe(buffer.length);
+            const chunks: Buffer[] = [];
+            for await (const chunk of opened.stream) {
+                chunks.push(Buffer.from(chunk));
+            }
+            expect(Buffer.concat(chunks)).toEqual(buffer);
+            expect(storageMocks.bucket).not.toHaveBeenCalled();
+        } finally {
+            await fs.rm(tempRoot, { recursive: true, force: true });
+        }
     });
 
     it('logs GCS write failures with the original error and rethrows them', async () => {

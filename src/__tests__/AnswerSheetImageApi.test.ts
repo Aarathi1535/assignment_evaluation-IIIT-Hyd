@@ -715,6 +715,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       const expectedPath = path.join(
         storageRoot,
         testBatch.batchId,
+        'derived',
         'file-1',
         '1',
         'page.png'

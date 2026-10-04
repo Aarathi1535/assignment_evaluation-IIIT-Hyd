@@ -195,11 +195,11 @@ describe('AE-123: Answer-Sheet Page Image Fit & Scale', () => {
       try {
         const diskPath = DerivedStorageService.getDerivedDiskPath(key);
         expect(diskPath).toBe(
-          path.join(storageRoot, 'batch-123', 'file-456', '2', 'page.png')
+          path.join(storageRoot, 'batch-123', 'derived', 'file-456', '2', 'page.png')
         );
         expect(
           diskPath.split(path.sep).filter((segment) => segment === 'derived')
-        ).toHaveLength(1);
+        ).toHaveLength(2);
       } finally {
         if (previousStoragePath === undefined) delete process.env.DERIVED_STORAGE_PATH;
         else process.env.DERIVED_STORAGE_PATH = previousStoragePath;
