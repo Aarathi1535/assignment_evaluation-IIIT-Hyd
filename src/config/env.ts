@@ -6,7 +6,8 @@ const envSchema = z.object({
     NEXTAUTH_URL: z.string().min(1, 'NEXTAUTH_URL is required'),
     ORIGINAL_STORAGE_HMAC_SECRET: z.string().min(1, 'ORIGINAL_STORAGE_HMAC_SECRET is required'),
     ORIGINAL_STORAGE_KEY_ID: z.string().default('v1'),
-    ORIGINAL_STORAGE_PATH: z.string().optional()
+    ORIGINAL_STORAGE_PATH: z.string().optional(),
+    DERIVED_PAGE_STORAGE_BUCKET: z.string().trim().min(1).optional()
 });
 
 export function validateEnv() {

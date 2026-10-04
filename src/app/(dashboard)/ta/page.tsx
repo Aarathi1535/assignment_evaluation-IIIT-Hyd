@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight, Bell, Send } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
@@ -30,6 +30,18 @@ interface Allocation {
   answerScript: AnswerScript | null;
 }
 
+interface AssignedCourse {
+  _id: string;
+  courseCode: string;
+  courseName: string;
+}
+
+interface AssignedExam {
+  _id: string;
+  title: string;
+  examDate: string;
+}
+
 interface Pagination {
   page: number;
   limit: number;
@@ -39,13 +51,24 @@ interface Pagination {
   hasPreviousPage: boolean;
 }
 
+async function fetchAssignedList<T>(url: string): Promise<T[]> {
+  const response = await fetch(url, { cache: 'no-store' });
+  const body = await response.json() as { success?: boolean; message?: string; data?: unknown };
+  if (!response.ok || !body.success || !Array.isArray(body.data)) {
+    throw new Error(body.message || `Could not load assigned items (${response.status}).`);
+  }
+  return body.data as T[];
+}
 
 export default function TaDashboardPage() {
   const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [assignedCourses, setAssignedCourses] = useState<AssignedCourse[]>([]);
+  const [assignedExams, setAssignedExams] = useState<AssignedExam[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [assignmentContextError, setAssignmentContextError] = useState<string | null>(null);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -53,37 +76,79 @@ export default function TaDashboardPage() {
   const [selectedExamFilter, setSelectedExamFilter] = useState<string>('ALL');
   const [isExamPickerOpen, setIsExamPickerOpen] = useState(false);
 
-  const fetchAllocations = async (pageToFetch: number) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/allocations?page=${pageToFetch}&limit=20`);
-      const data = await res.json();
-      if (res.ok) {
-        setAllocations(data.data?.allocations || []);
-        setPagination(data.data?.pagination || null);
-        setUnreadNotificationCount(data.data?.unreadNotificationCount || 0);
-        setCurrentPage(pageToFetch);
-      } else {
-        setError(data.message || 'Failed to retrieve allocations');
-        setAllocations([]);
-        setPagination(null);
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+  const currentPageRef = useRef(currentPage);
+
+  const fetchAllocations = useCallback(async (pageToFetch: number) => {
+    const [allocationsResult, coursesResult, examsResult] = await Promise.allSettled([
+      fetch(`/api/allocations?page=${pageToFetch}&limit=20`, { cache: 'no-store' })
+        .then(async response => {
+          const body = await response.json() as {
+            success?: boolean;
+            message?: string;
+            data?: { allocations?: Allocation[]; pagination?: Pagination | null; unreadNotificationCount?: number };
+          };
+          if (!response.ok || !body.success || !body.data) {
+            throw new Error(body.message || `Failed to retrieve allocations (${response.status}).`);
+          }
+          return body.data;
+        }),
+      fetchAssignedList<AssignedCourse>('/api/courses'),
+      fetchAssignedList<AssignedExam>('/api/exams')
+    ]);
+
+    if (allocationsResult.status === 'fulfilled') {
+      setAllocations(allocationsResult.value.allocations || []);
+      setPagination(allocationsResult.value.pagination || null);
+      setUnreadNotificationCount(allocationsResult.value.unreadNotificationCount || 0);
+      setCurrentPage(pageToFetch);
+      setError(null);
+    } else {
+      setError(allocationsResult.reason instanceof Error ? allocationsResult.reason.message : 'Failed to retrieve allocations.');
       setAllocations([]);
       setPagination(null);
-    } finally {
-      setIsLoading(false);
     }
-  };
+    if (coursesResult.status === 'fulfilled' && examsResult.status === 'fulfilled') {
+      setAssignedCourses(coursesResult.value);
+      setAssignedExams(examsResult.value);
+      setAssignmentContextError(null);
+    } else {
+      const failedRequest = [coursesResult, examsResult].find(result => result.status === 'rejected');
+      setAssignmentContextError(
+        failedRequest?.status === 'rejected' && failedRequest.reason instanceof Error
+          ? failedRequest.reason.message
+          : 'Could not refresh assigned courses and exams.'
+      );
+    }
+    setIsLoading(false);
+  }, []);
+
+  const refreshAllocations = useCallback((pageToFetch: number) => {
+    setIsLoading(true);
+    setError(null);
+    void fetchAllocations(pageToFetch);
+  }, [fetchAllocations]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchAllocations(1);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, []);
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  useEffect(() => {
+    const initialLoadId = window.setTimeout(() => void fetchAllocations(1), 0);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshAllocations(currentPageRef.current);
+      }
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000);
+    return () => {
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      window.clearTimeout(initialLoadId);
+      window.clearInterval(intervalId);
+    };
+  }, [fetchAllocations, refreshAllocations]);
 
   // Compute stats
   const uniqueExamIds = Array.from(new Set(allocations.map((a) => a.exam).filter(Boolean)));
@@ -165,7 +230,7 @@ export default function TaDashboardPage() {
           </span>
         )}
       </Button>
-      <Button type="button" variant="outline" size="md" onClick={() => fetchAllocations(currentPage)}>
+      <Button type="button" variant="outline" size="md" onClick={() => refreshAllocations(currentPage)}>
         <Clock className="h-4 w-4 text-slate-500" aria-hidden="true" />
         <span>Refresh Queue</span>
       </Button>
@@ -245,6 +310,45 @@ export default function TaDashboardPage() {
             <span>{error}</span>
           </div>
         )}
+
+        <Card className="space-y-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Courses and exams assigned to you</h2>
+            <p className="mt-1 text-sm text-slate-600">Course access and grading allocations are managed separately. Newly allocated scripts appear in the grading queue below.</p>
+          </div>
+          {assignmentContextError && <p role="alert" className="text-sm text-rose-700">{assignmentContextError}</p>}
+          <div className="grid gap-5 md:grid-cols-2">
+            <section aria-labelledby="ta-assigned-courses-heading">
+              <h3 id="ta-assigned-courses-heading" className="font-semibold text-slate-800">Courses</h3>
+              {assignedCourses.length > 0 ? (
+                <ul className="mt-2 space-y-2">
+                  {assignedCourses.map(course => (
+                    <li key={course._id} className="rounded-lg border border-slate-200 px-3 py-2">
+                      <span className="font-medium text-slate-900">{course.courseName}</span>
+                      <span className="ml-2 text-sm text-slate-600">{course.courseCode}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No courses are currently assigned to you.</p>
+              )}
+            </section>
+            <section aria-labelledby="ta-assigned-exams-heading">
+              <h3 id="ta-assigned-exams-heading" className="font-semibold text-slate-800">Exams</h3>
+              {assignedExams.length > 0 ? (
+                <ul className="mt-2 space-y-2">
+                  {assignedExams.map(exam => (
+                    <li key={exam._id} className="rounded-lg border border-slate-200 px-3 py-2 text-slate-900">
+                      {exam.title}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No exams are currently available through your assigned courses.</p>
+              )}
+            </section>
+          </div>
+        </Card>
 
         {/* Allocations Queue Card */}
         <Card className="p-0 overflow-hidden">
@@ -408,7 +512,7 @@ export default function TaDashboardPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => fetchAllocations(currentPage - 1)}
+                      onClick={() => refreshAllocations(currentPage - 1)}
                       disabled={!pagination.hasPreviousPage || isLoading}
                       id="prev-page-btn"
                     >
@@ -417,7 +521,7 @@ export default function TaDashboardPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => fetchAllocations(currentPage + 1)}
+                      onClick={() => refreshAllocations(currentPage + 1)}
                       disabled={!pagination.hasNextPage || isLoading}
                       id="next-page-btn"
                     >
@@ -501,7 +605,7 @@ export default function TaDashboardPage() {
           onClose={() => setIsBulkModalOpen(false)}
           examId={selectedExamId}
           onComplete={() => {
-            fetchAllocations(currentPage);
+            refreshAllocations(currentPage);
           }}
         />
       )}

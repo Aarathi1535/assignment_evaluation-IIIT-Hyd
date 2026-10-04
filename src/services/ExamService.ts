@@ -92,7 +92,16 @@ class ExamService {
 
             // Student mapping check
             const studentMappings = await StudentMapping.find({ student: actingUserId });
-            const enrolledExamIds = studentMappings.map(m => m.exam);
+            const enrolledExamIds = new Set(studentMappings.map(m => m.exam.toString()));
+
+            const directlyEnrolledExams = await Exam.find({
+                enrolledStudents: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true,
+                status: ExamStatus.PUBLISHED
+            }).select('_id');
+            for (const exam of directlyEnrolledExams) {
+                enrolledExamIds.add(exam._id.toString());
+            }
 
             // Course enrollment check
             const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
@@ -100,7 +109,7 @@ class ExamService {
             const enrolledCourseIds = enrolledCourses.map(c => c._id);
 
             filter.$or = [
-                { _id: { $in: enrolledExamIds } },
+                { _id: { $in: Array.from(enrolledExamIds, id => new mongoose.Types.ObjectId(id)) } },
                 { course: { $in: enrolledCourseIds } }
             ];
         } else if (actingUserRole === 'TA' && actingUserId) {
@@ -139,7 +148,12 @@ class ExamService {
                 return null;
             }
 
-            const isMapped = await StudentMapping.exists({ exam: id, student: actingUserId });
+            const isDirectlyEnrolled = (exam.enrolledStudents || []).some(
+                studentId => studentId.toString() === actingUserId
+            );
+            const isMapped = isDirectlyEnrolled || Boolean(
+                await StudentMapping.exists({ exam: id, student: actingUserId })
+            );
             if (!isMapped) {
                 const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
                 const isCourseEnrolled = await Course.exists({ _id: exam.course, enrolledStudents: actingUserId, isActive: true });
@@ -650,4 +664,3 @@ class ExamService {
 
 const examService = new ExamService();
 export default examService;
-

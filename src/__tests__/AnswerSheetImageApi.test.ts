@@ -11,7 +11,7 @@ import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import BatchRepository from '../repositories/BatchRepository';
-import DerivedStorageService from '../services/DerivedStorageService';
+import DerivedStorageService, { DerivedStorageConfigurationError } from '../services/DerivedStorageService';
 import {
   requireAnyPermission,
   requireGradingOrAnnotationAccess,
@@ -652,6 +652,31 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.message).toBe('Page image file not found on disk');
+  });
+
+  it('returns a clear server configuration error when the Cloud Run derived bucket is missing', async () => {
+    mockSessionUser = {
+      id: taUser._id.toString(),
+      email: taUser.email,
+      name: taUser.name,
+      role: UserRole.TA,
+    };
+
+    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockRejectedValue(
+      new DerivedStorageConfigurationError('DERIVED_PAGE_STORAGE_BUCKET must be set on Cloud Run.')
+    );
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      { method: 'GET' }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.message).toContain('DERIVED_PAGE_STORAGE_BUCKET');
   });
 
   it('13. verifies shared helper requireGradingOrAnnotationAccess and requireAnyPermission contract', async () => {

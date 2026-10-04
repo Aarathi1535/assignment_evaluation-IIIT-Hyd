@@ -86,6 +86,8 @@ A clear cryptographic and operational distinction exists between original scan d
 | **Storage Location** | `ORIGINAL_STORAGE_PATH` (disk/cloud) | `DerivedStorageService` (derived/thumbnail keys) |
 | **Sealing Level** | HMAC computed over raw file content + upload metadata. | Not sealed. The final **Assembly Seal** covers only the logical arrangements. |
 
+On Cloud Run, configure `DERIVED_PAGE_STORAGE_BUCKET` with an existing Google Cloud Storage bucket for derived page images and thumbnails. The Cloud Run service account must have object read, write, and delete permissions on that bucket. The application uses Application Default Credentials, keeps the existing `batches/{batchId}/derived/...` object keys, and does not create buckets. Original uploaded files continue using their existing storage configuration.
+
 ---
 
 ## 5. Enhancement and Determinism

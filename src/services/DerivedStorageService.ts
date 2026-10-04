@@ -1,5 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import { Storage } from '@google-cloud/storage';
+
+export class DerivedStorageConfigurationError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'DerivedStorageConfigurationError';
+    }
+}
 
 export interface StoreDerivedPageInput {
     batchId: string;
@@ -24,8 +32,25 @@ export interface IDerivedStorageService {
 }
 
 export class DerivedStorageService implements IDerivedStorageService {
+    private storageClient: Storage | null = null;
+
     getStorageRoot(): string {
         return process.env.DERIVED_STORAGE_PATH || path.join(process.cwd(), 'data', 'derived');
+    }
+
+    private getCloudBucket() {
+        const bucketName = process.env.DERIVED_PAGE_STORAGE_BUCKET?.trim();
+        if (!bucketName) {
+            if (process.env.K_SERVICE) {
+                throw new DerivedStorageConfigurationError(
+                    'DERIVED_PAGE_STORAGE_BUCKET must be set on Cloud Run to store and serve derived answer-page images.'
+                );
+            }
+            return null;
+        }
+
+        this.storageClient ??= new Storage();
+        return this.storageClient.bucket(bucketName);
     }
 
     /**
@@ -60,6 +85,19 @@ export class DerivedStorageService implements IDerivedStorageService {
     async storeDerivedPage(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult> {
         const { batchId, fileId, pageNumber, buffer, format = 'png' } = input;
         const storageKey = this.getDerivedPageKey(batchId, fileId, pageNumber, format);
+        const bucket = this.getCloudBucket();
+        if (bucket) {
+            await bucket.file(storageKey).save(buffer, {
+                resumable: false,
+                metadata: { contentType: this.getContentType(format) }
+            });
+            return {
+                storageKey,
+                storagePath: `gs://${bucket.name}/${storageKey}`,
+                size: buffer.length
+            };
+        }
+
         const filePath = this.getDerivedDiskPath(storageKey);
         const dir = path.dirname(filePath);
 
@@ -80,6 +118,19 @@ export class DerivedStorageService implements IDerivedStorageService {
     async storeDerivedThumbnail(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult> {
         const { batchId, fileId, pageNumber, buffer, format = 'jpg' } = input;
         const storageKey = this.getDerivedThumbnailKey(batchId, fileId, pageNumber, format);
+        const bucket = this.getCloudBucket();
+        if (bucket) {
+            await bucket.file(storageKey).save(buffer, {
+                resumable: false,
+                metadata: { contentType: this.getContentType(format) }
+            });
+            return {
+                storageKey,
+                storagePath: `gs://${bucket.name}/${storageKey}`,
+                size: buffer.length
+            };
+        }
+
         const filePath = this.getDerivedDiskPath(storageKey);
         const dir = path.dirname(filePath);
 
@@ -97,19 +148,35 @@ export class DerivedStorageService implements IDerivedStorageService {
      * Reads a stored derived page image or thumbnail from disk.
      */
     async readDerivedPage(storageKey: string): Promise<Buffer> {
+        const bucket = this.getCloudBucket();
+        if (bucket) {
+            const [buffer] = await bucket.file(storageKey).download();
+            return buffer;
+        }
+
         const filePath = this.getDerivedDiskPath(storageKey);
         return await fs.promises.readFile(filePath);
     }
 
     /**
-     * Cleans up derived files for a batch.
+     * Cleans up derived assets for a batch.
      */
     async cleanupDerivedBatch(batchId: string): Promise<void> {
+        const bucket = this.getCloudBucket();
+        if (bucket) {
+            await bucket.deleteFiles({ prefix: `batches/${batchId}/derived/` });
+            return;
+        }
+
         const storageRoot = this.getStorageRoot();
         const batchDir = path.join(storageRoot, batchId);
         if (fs.existsSync(batchDir)) {
             await fs.promises.rm(batchDir, { recursive: true, force: true });
         }
+    }
+
+    private getContentType(format: string): string {
+        return `image/${format.toLowerCase() === 'jpg' ? 'jpeg' : format.toLowerCase()}`;
     }
 }
 

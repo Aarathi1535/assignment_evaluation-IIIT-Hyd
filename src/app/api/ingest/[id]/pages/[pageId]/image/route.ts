@@ -6,7 +6,7 @@ import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
 import AllocationService from '../../../../../../../services/AllocationService';
-import DerivedStorageService from '../../../../../../../services/DerivedStorageService';
+import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
 
 /**
  * GET /api/ingest/[id]/pages/[pageId]/image
@@ -174,6 +174,16 @@ export async function GET(
         },
       });
     } catch (readError) {
+      if (readError instanceof DerivedStorageConfigurationError) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: readError.message,
+            data: null,
+          },
+          { status: 500 }
+        );
+      }
       console.error(`Failed to read page image file for page ${pageId}:`, readError);
       return NextResponse.json(
         {

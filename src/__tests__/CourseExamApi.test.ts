@@ -526,6 +526,63 @@ describe('Course and Exam API & RBAC Tests (AE-034)', () => {
       expect(logs.length).toBe(1);
     });
 
+    it('should return newly assigned courses and exams to the assigned TA on refreshed dashboard queries', async () => {
+      const ta = await User.create({
+        name: 'Assigned TA',
+        email: 'assigned-ta@university.edu',
+        password: 'password123',
+        role: UserRole.TA,
+        isActive: true
+      });
+      await Course.updateOne(
+        { _id: testCourseId },
+        { $addToSet: { teachingAssistants: ta._id } }
+      );
+
+      mockSessionUser = {
+        id: ta._id.toString(),
+        email: ta.email,
+        name: ta.name,
+        role: UserRole.TA
+      };
+
+      const [courseResponse, examResponse] = await Promise.all([coursesGET(), examsGET()]);
+      const courseBody = await courseResponse.json();
+      const examBody = await examResponse.json();
+
+      expect(courseBody.data.map((course: { _id: string }) => course._id)).toContain(testCourseId.toString());
+      expect(examBody.data.map((exam: { _id: string }) => exam._id)).toContain(testExamId.toString());
+    });
+
+    it('should return direct exam assignments without requiring a StudentMapping record', async () => {
+      await Course.updateOne(
+        { _id: testCourseId },
+        { $addToSet: { enrolledStudents: new mongoose.Types.ObjectId(testStudentId1) } }
+      );
+      await Exam.updateOne(
+        { _id: testExamId },
+        {
+          $set: { status: 'PUBLISHED' },
+          $addToSet: { enrolledStudents: new mongoose.Types.ObjectId(testStudentId1) }
+        }
+      );
+
+      mockSessionUser = {
+        id: testStudentId1,
+        email: 'student1@university.edu',
+        name: 'Student One',
+        role: UserRole.STUDENT
+      };
+
+      const [courseResponse, examResponse] = await Promise.all([coursesGET(), examsGET()]);
+      const courseBody = await courseResponse.json();
+      const examBody = await examResponse.json();
+
+      expect(courseBody.data.map((course: { _id: string }) => course._id)).toContain(testCourseId.toString());
+      expect(examBody.data.map((exam: { _id: string }) => exam._id)).toContain(testExamId.toString());
+      expect(await StudentMapping.countDocuments({ exam: testExamId, student: testStudentId1 })).toBe(0);
+    });
+
     it('should prevent duplicate mappings when enrolling already enrolled students', async () => {
       // First enrollment
       const req1 = new Request(`http://localhost:3000/api/exams/${testExamId}/enroll`, {
