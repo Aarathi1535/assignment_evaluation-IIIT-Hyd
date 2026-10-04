@@ -1,5 +1,3 @@
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
 import BatchRepository from '../repositories/BatchRepository';
 import { IngestionStatus, IIngestionJob } from '../models/IngestionJob';
@@ -10,6 +8,7 @@ import defaultStudentRosterMappingService, { StudentRosterMappingService } from 
 import { sanitizeFailureReason } from '../validations/ingestionValidation';
 import { writeAuditLog } from '../lib/audit';
 import { SYSTEM_AUDIT_CONTEXT } from '../constants/permissions';
+import defaultImmutableStorageService, { ImmutableStorageService } from './ImmutableStorageService';
 
 export interface ProcessJobResult {
     processed: boolean;
@@ -29,6 +28,7 @@ export class IngestionWorker {
     private intervalHandle?: NodeJS.Timeout;
     private pageIngestionService: PageIngestionService;
     private studentRosterMappingService: StudentRosterMappingService;
+    private originalStorageService: Pick<ImmutableStorageService, 'readOriginalContent'>;
 
     constructor(options?: {
         workerId?: string;
@@ -36,12 +36,14 @@ export class IngestionWorker {
         staleTimeoutMs?: number;
         pageIngestionService?: PageIngestionService;
         studentRosterMappingService?: StudentRosterMappingService;
+        originalStorageService?: Pick<ImmutableStorageService, 'readOriginalContent'>;
     }) {
         this.workerId = options?.workerId || `worker-${crypto.randomUUID()}`;
         this.pollIntervalMs = options?.pollIntervalMs || 2000;
         this.staleTimeoutMs = options?.staleTimeoutMs || 60000;
         this.pageIngestionService = options?.pageIngestionService || defaultPageIngestionService;
         this.studentRosterMappingService = options?.studentRosterMappingService || defaultStudentRosterMappingService;
+        this.originalStorageService = options?.originalStorageService || defaultImmutableStorageService;
     }
 
     /**
@@ -104,36 +106,29 @@ export class IngestionWorker {
         }
 
         const renderer = this.pageIngestionService.getRenderer();
-        const storageRoot = process.env.ORIGINAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'originals');
-
         // Step 2: Authoritative Page-Count Discovery & Reconciliation (AE-046 Step 5)
         let totalAuthoritativePages = 0;
         const fileBuffers: Map<string, Buffer> = new Map();
+        const sourceReadErrors: Map<string, string> = new Map();
 
         for (const file of batch.files) {
             let fileBuffer: Buffer | undefined;
             if (file.storageKey) {
                 try {
-                    const relativePath = file.storageKey.replace(/^batches\//, '');
-                    const diskPath = path.join(storageRoot, relativePath);
-                    if (fs.existsSync(diskPath)) {
-                        fileBuffer = await fs.promises.readFile(diskPath);
-                        fileBuffers.set(file.fileId, fileBuffer);
-                    }
-                } catch {
-                    // Handled below if buffer is missing
+                    fileBuffer = await this.originalStorageService.readOriginalContent(file.storageKey);
+                    fileBuffers.set(file.fileId, fileBuffer);
+                } catch (error) {
+                    sourceReadErrors.set(
+                        file.fileId,
+                        error instanceof Error ? error.message : String(error)
+                    );
                 }
             }
 
             let authoritativeCount = file.pageCount || 1;
 
             if (file.fileType === 'pdf') {
-                if (!fileBuffer) {
-                    const failureReason = `Cannot process batch ${job.batchId}: original file ${file.fileId} not found in storage`;
-                    return await this.handleEarlyFailure(job, failureReason);
-                }
-
-                if (renderer.getPageCount) {
+                if (fileBuffer && renderer.getPageCount) {
                     try {
                         authoritativeCount = await renderer.getPageCount(fileBuffer);
                     } catch (err) {
@@ -185,6 +180,7 @@ export class IngestionWorker {
                     pageNumber: pageNum,
                     fileType: file.fileType,
                     fileBuffer,
+                    sourceReadError: sourceReadErrors.get(file.fileId),
                     timeoutMs: options?.pageTimeoutMs
                 });
 

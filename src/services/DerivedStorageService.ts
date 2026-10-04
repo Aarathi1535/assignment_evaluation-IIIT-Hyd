@@ -1,14 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'node:stream';
-import { Storage } from '@google-cloud/storage';
+import { getConfiguredStorageBucket } from '../lib/cloudStorage';
 
-export class DerivedStorageConfigurationError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = 'DerivedStorageConfigurationError';
-    }
-}
+export { CloudStorageConfigurationError as DerivedStorageConfigurationError } from '../lib/cloudStorage';
 
 export interface StoreDerivedPageInput {
     batchId: string;
@@ -34,25 +29,8 @@ export interface IDerivedStorageService {
 }
 
 export class DerivedStorageService implements IDerivedStorageService {
-    private storageClient: Storage | null = null;
-
     getStorageRoot(): string {
         return process.env.DERIVED_STORAGE_PATH || path.join(process.cwd(), 'data', 'derived');
-    }
-
-    private getCloudBucket() {
-        const bucketName = process.env.DERIVED_PAGE_STORAGE_BUCKET?.trim();
-        if (!bucketName) {
-            if (process.env.K_SERVICE) {
-                throw new DerivedStorageConfigurationError(
-                    'DERIVED_PAGE_STORAGE_BUCKET must be set on Cloud Run to store and serve derived answer-page images.'
-                );
-            }
-            return null;
-        }
-
-        this.storageClient ??= new Storage();
-        return this.storageClient.bucket(bucketName);
     }
 
     /**
@@ -87,7 +65,7 @@ export class DerivedStorageService implements IDerivedStorageService {
     async storeDerivedPage(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult> {
         const { batchId, fileId, pageNumber, buffer, format = 'png' } = input;
         const storageKey = this.getDerivedPageKey(batchId, fileId, pageNumber, format);
-        const bucket = this.getCloudBucket();
+        const bucket = getConfiguredStorageBucket();
         if (bucket) {
             const file = bucket.file(storageKey);
             console.info('[DerivedStorageService] Writing derived page to GCS', {
@@ -146,7 +124,7 @@ export class DerivedStorageService implements IDerivedStorageService {
     async storeDerivedThumbnail(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult> {
         const { batchId, fileId, pageNumber, buffer, format = 'jpg' } = input;
         const storageKey = this.getDerivedThumbnailKey(batchId, fileId, pageNumber, format);
-        const bucket = this.getCloudBucket();
+        const bucket = getConfiguredStorageBucket();
         if (bucket) {
             await bucket.file(storageKey).save(buffer, {
                 resumable: false,
@@ -176,7 +154,7 @@ export class DerivedStorageService implements IDerivedStorageService {
      * Reads a stored derived page image or thumbnail from disk.
      */
     async readDerivedPage(storageKey: string): Promise<Buffer> {
-        const bucket = this.getCloudBucket();
+        const bucket = getConfiguredStorageBucket();
         if (bucket) {
             const [buffer] = await bucket.file(storageKey).download();
             return buffer;
@@ -187,7 +165,7 @@ export class DerivedStorageService implements IDerivedStorageService {
     }
 
     async openDerivedPage(storageKey: string): Promise<{ stream: Readable; size: number }> {
-        const bucket = this.getCloudBucket();
+        const bucket = getConfiguredStorageBucket();
         if (bucket) {
             const file = bucket.file(storageKey);
             const [metadata] = await file.getMetadata();
@@ -209,7 +187,7 @@ export class DerivedStorageService implements IDerivedStorageService {
      * Cleans up derived assets for a batch.
      */
     async cleanupDerivedBatch(batchId: string): Promise<void> {
-        const bucket = this.getCloudBucket();
+        const bucket = getConfiguredStorageBucket();
         if (bucket) {
             await bucket.deleteFiles({ prefix: `batches/${batchId}/derived/` });
             return;

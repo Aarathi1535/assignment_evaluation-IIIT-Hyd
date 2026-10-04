@@ -11,6 +11,7 @@ import { writeAuditLog } from '../lib/audit';
 import { defaultImageEnhancer, IImageEnhancer, EnhancementParams } from './ImageEnhancer';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import defaultOMRReader, { OMRReader, OMRStatus, OMRResult } from './OMRReader';
+import defaultImmutableStorageService from './ImmutableStorageService';
 
 export interface ProcessPageInput {
     batchId: string;
@@ -21,6 +22,7 @@ export interface ProcessPageInput {
     pageNumber: number;
     fileType: string;
     fileBuffer?: Buffer;
+    sourceReadError?: string;
     timeoutMs?: number;
     renderer?: IPageRenderer;
     derivedStorage?: IDerivedStorageService;
@@ -138,6 +140,7 @@ export class PageIngestionService {
             pageNumber,
             fileType,
             fileBuffer,
+            sourceReadError,
             timeoutMs = this.defaultPageTimeoutMs,
             renderer,
             derivedStorage,
@@ -216,7 +219,7 @@ export class PageIngestionService {
 
         // Resolve file buffer from disk storage if not directly provided in input
         let bufferToProcess = fileBuffer;
-        if (!bufferToProcess && originalStorageKey) {
+        if (!bufferToProcess && originalStorageKey && !sourceReadError && !process.env.K_SERVICE) {
             try {
                 const storageRoot = process.env.ORIGINAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'originals');
                 const relativePath = originalStorageKey.replace(/^batches\//, '');
@@ -230,6 +233,10 @@ export class PageIngestionService {
         }
 
         try {
+            if (sourceReadError) {
+                throw new Error(sourceReadError);
+            }
+
             // Execute actual page processing with timeout protection via injected renderer
             const renderResult: RenderPageResult = await this.executeWithTimeout(
                 async () => {
@@ -258,7 +265,7 @@ export class PageIngestionService {
                         job: jobId,
                         fileId,
                         fileIndex,
-                        storageKey: originalStorageKey,
+                        storageKey: '',
                         thumbnailKey: null,
                         pageNumber,
                         status: PageProcessingStatus.FAILED,
@@ -282,7 +289,7 @@ export class PageIngestionService {
                             ...renderResult.metadata
                         }
                     },
-                    { upsert: true, returnDocument: 'after', runValidators: true }
+                    { upsert: true, returnDocument: 'after' }
                 );
 
                 return {
@@ -294,8 +301,11 @@ export class PageIngestionService {
                 };
             }
 
-            // If image is present on render result, enhance and store as mutable derived asset
-            let pageStorageKey = originalStorageKey;
+            if (!renderResult.image?.buffer) {
+                throw new Error('Renderer succeeded without producing a derived page image buffer');
+            }
+
+            const renderedImage = renderResult.image;
             let pageWidth = renderResult.image?.width;
             let pageHeight = renderResult.image?.height;
             let enhancementApplied = false;
@@ -304,12 +314,12 @@ export class PageIngestionService {
 
             let enhancementParams: Record<string, number> | undefined = undefined;
 
-            if (renderResult.image && renderResult.image.buffer) {
+            if (renderedImage.buffer) {
                 // AE-066: Auto-enhance (Deskew & Rotate)
                 try {
-                    const enhancement = await activeImageEnhancer.enhancePage(renderResult.image.buffer, renderResult.image.format);
+                    const enhancement = await activeImageEnhancer.enhancePage(renderedImage.buffer, renderedImage.format);
                     if (enhancement.applied) {
-                        renderResult.image.buffer = enhancement.buffer;
+                        renderedImage.buffer = enhancement.buffer;
                         enhancementApplied = true;
                         deskewAngle = enhancement.deskewAngle;
                         orientation = enhancement.orientation;
@@ -326,8 +336,8 @@ export class PageIngestionService {
                         // The buffer dimensions might have changed after rotation
                         // For exact dimensions, we would read it, but typically it swaps on 90/270
                         if (orientation === 90 || orientation === 270) {
-                            pageWidth = renderResult.image.height;
-                            pageHeight = renderResult.image.width;
+                            pageWidth = renderedImage.height;
+                            pageHeight = renderedImage.width;
                         }
                     }
                 } catch (e) {
@@ -335,15 +345,15 @@ export class PageIngestionService {
                     console.error(`Enhancement failed on page ${pageNumber}:`, e);
                 }
 
-                const storedDerived = await activeDerivedStorage.storeDerivedPage({
-                    batchId,
-                    fileId,
-                    pageNumber,
-                    buffer: renderResult.image.buffer,
-                    format: renderResult.image.format
-                });
-                pageStorageKey = storedDerived.storageKey;
             }
+            const storedDerived = await activeDerivedStorage.storeDerivedPage({
+                batchId,
+                fileId,
+                pageNumber,
+                buffer: renderedImage.buffer,
+                format: renderedImage.format
+            });
+            const pageStorageKey = storedDerived.storageKey;
 
             // AE-047: Generate and store deterministic thumbnail (Failure independent)
             let thumbnailKey: string | null = null;
@@ -540,7 +550,7 @@ export class PageIngestionService {
                     job: jobId,
                     fileId,
                     fileIndex,
-                    storageKey: originalStorageKey,
+                    storageKey: '',
                     thumbnailKey: null,
                     pageNumber,
                     status: PageProcessingStatus.FAILED,
@@ -563,7 +573,7 @@ export class PageIngestionService {
                         omrDecodeOutcome: null
                     }
                 },
-                { upsert: true, returnDocument: 'after', runValidators: true }
+                { upsert: true, returnDocument: 'after' }
             );
 
             return {
@@ -599,21 +609,7 @@ export class PageIngestionService {
             throw new Error('Original storage key not found in page metadata');
         }
 
-        let bufferToProcess: Buffer | undefined = undefined;
-        try {
-            const storageRoot = process.env.ORIGINAL_STORAGE_PATH || path.join(process.cwd(), 'data', 'originals');
-            const relativePath = originalStorageKey.replace(/^batches\//, '');
-            const diskPath = path.join(storageRoot, relativePath);
-            if (fs.existsSync(diskPath)) {
-                bufferToProcess = await fs.promises.readFile(diskPath);
-            }
-        } catch {
-            throw new Error('Could not read original immutable source file');
-        }
-
-        if (!bufferToProcess) {
-            throw new Error('Original immutable source file missing or inaccessible');
-        }
+        const bufferToProcess = await defaultImmutableStorageService.readOriginalContent(originalStorageKey);
 
         const fileType = page.metadata?.fileType as string || 'png';
         const isImage =

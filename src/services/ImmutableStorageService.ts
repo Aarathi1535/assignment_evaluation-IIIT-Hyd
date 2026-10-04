@@ -5,6 +5,7 @@ import BatchRepository from '../repositories/BatchRepository';
 import { generateHmacSeal, verifyHmacSeal, HmacSealResult } from '../utils/hmacStorage';
 import { writeAuditLog } from '../lib/audit';
 import { HttpError } from '../lib/errors';
+import { getConfiguredStorageBucket } from '../lib/cloudStorage';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -41,7 +42,7 @@ export class ImmutableStorageService {
     }
 
     /**
-     * Stores an original file immutably on disk, computes its HMAC integrity seal with metadata binding,
+     * Stores an original file immutably, computes its HMAC integrity seal with metadata binding,
      * and guarantees that previously stored originals cannot be overwritten.
      */
     async storeOriginal(input: StoreOriginalInput): Promise<StoredOriginalResult> {
@@ -56,28 +57,23 @@ export class ImmutableStorageService {
             context
         } = input;
 
-        const storageRoot = this.getStorageRoot();
-        const batchDir = path.join(storageRoot, batchId);
         const fileName = `${fileId}.${fileExtension}`;
-        const filePath = path.join(batchDir, fileName);
         const storageKey = `batches/${batchId}/${fileName}`;
+        const bucket = getConfiguredStorageBucket();
+        const storageRoot = bucket ? null : this.getStorageRoot();
+        const batchDir = storageRoot ? path.join(storageRoot, batchId) : null;
+        const filePath = batchDir ? path.join(batchDir, fileName) : null;
+        const cloudFile = bucket?.file(storageKey);
+        let cloudObjectWritten = false;
 
-        // Reject if target file already exists (application-layer immutability)
-        if (fs.existsSync(filePath)) {
+        if (filePath && fs.existsSync(filePath)) {
             throw new HttpError(
                 `Original file with key "${storageKey}" already exists and cannot be overwritten (immutable storage).`,
                 409
             );
         }
 
-        // Ensure target directory exists
-        await fs.promises.mkdir(batchDir, { recursive: true });
-
         try {
-            // Step 1: Write file with 'wx' flag to guarantee non-overwrite at filesystem level
-            await fs.promises.writeFile(filePath, buffer, { flag: 'wx' });
-
-            // Step 2: Generate HMAC seal covering file bytes + binding metadata
             const metadata: IBindingMetadata = {
                 batchId,
                 sequenceNumber,
@@ -87,7 +83,18 @@ export class ImmutableStorageService {
 
             const sealResult: HmacSealResult = generateHmacSeal(buffer, metadata);
 
-            // Step 3: Record audit log for storage operation
+            if (cloudFile) {
+                await cloudFile.save(buffer, {
+                    resumable: false,
+                    preconditionOpts: { ifGenerationMatch: 0 },
+                    metadata: { contentType: this.getContentType(fileExtension) }
+                });
+                cloudObjectWritten = true;
+            } else if (batchDir && filePath) {
+                await fs.promises.mkdir(batchDir, { recursive: true });
+                await fs.promises.writeFile(filePath, buffer, { flag: 'wx' });
+            }
+
             if (context?.actingUserId) {
                 await writeAuditLog({
                     user: context.actingUserId,
@@ -108,7 +115,7 @@ export class ImmutableStorageService {
             return {
                 fileId,
                 storageKey,
-                storagePath: filePath,
+                storagePath: bucket ? `gs://${bucket.name}/${storageKey}` : filePath!,
                 hmac: sealResult.hmac,
                 keyId: sealResult.keyId,
                 sequenceNumber,
@@ -116,13 +123,27 @@ export class ImmutableStorageService {
                 size: buffer.length
             };
         } catch (error) {
-            // Partial failure cleanup: remove partially written file from disk
+            const errorCode = (error as { code?: number | string })?.code;
+            if (errorCode === 412 || errorCode === '412') {
+                throw new HttpError(
+                    `Original file with key "${storageKey}" already exists and cannot be overwritten (immutable storage).`,
+                    409
+                );
+            }
+
             try {
-                if (fs.existsSync(filePath)) {
+                if (filePath && fs.existsSync(filePath)) {
                     await fs.promises.unlink(filePath);
                 }
             } catch (cleanupErr) {
                 console.error(`Failed to cleanup partial file at "${filePath}":`, cleanupErr);
+            }
+            if (cloudObjectWritten && cloudFile) {
+                try {
+                    await cloudFile.delete({ ignoreNotFound: true });
+                } catch (cleanupErr) {
+                    console.error(`Failed to cleanup partial GCS object at "${storageKey}":`, cleanupErr);
+                }
             }
 
             if (context?.actingUserId) {
@@ -162,15 +183,15 @@ export class ImmutableStorageService {
 
         const { batch, file } = result;
 
-        // Resolve disk location
-        const storageRoot = this.getStorageRoot();
-        const filePath = path.join(storageRoot, file.storageKey.replace(/^batches\//, ''));
-
         let buffer: Buffer;
         try {
-            buffer = await fs.promises.readFile(filePath);
-        } catch {
-            throw new HttpError('Original file content not found on storage backend', 404);
+            buffer = await this.readOriginalContent(file.storageKey);
+        } catch (error) {
+            const errorCode = (error as { code?: number | string })?.code;
+            if (errorCode === 404 || errorCode === '404' || errorCode === 'ENOENT') {
+                throw new HttpError('Original file content not found on storage backend', 404);
+            }
+            throw error;
         }
 
         // Verify HMAC integrity if seal metadata is present
@@ -191,6 +212,17 @@ export class ImmutableStorageService {
         }
 
         return { buffer, file, batch };
+    }
+
+    async readOriginalContent(storageKey: string): Promise<Buffer> {
+        const bucket = getConfiguredStorageBucket();
+        if (bucket) {
+            const [buffer] = await bucket.file(storageKey).download();
+            return buffer;
+        }
+
+        const filePath = path.join(this.getStorageRoot(), storageKey.replace(/^batches\//, ''));
+        return fs.promises.readFile(filePath);
     }
 
     /**
@@ -225,6 +257,22 @@ export class ImmutableStorageService {
             }
         } catch (err) {
             console.error(`Failed to cleanup batch directory at "${batchDir}":`, err);
+        }
+    }
+
+    private getContentType(extension: string): string {
+        switch (extension.toLowerCase()) {
+            case 'pdf':
+                return 'application/pdf';
+            case 'png':
+                return 'image/png';
+            case 'jpg':
+            case 'jpeg':
+                return 'image/jpeg';
+            case 'webp':
+                return 'image/webp';
+            default:
+                return 'application/octet-stream';
         }
     }
 }

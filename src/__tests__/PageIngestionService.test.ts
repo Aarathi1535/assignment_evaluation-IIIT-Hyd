@@ -385,8 +385,52 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
             const pageInDb = await IngestionPage.findOne({ batchId, fileIndex: 0, pageNumber: 1 });
             expect(pageInDb).not.toBeNull();
             expect(pageInDb!.status).toBe(PageProcessingStatus.FAILED);
-            // On failure, storageKey retains the original input reference rather than a fake derived asset
-            expect(pageInDb!.storageKey).toBe(storageKey);
+            expect(pageInDb!.storageKey).toBe('');
+            expect(pageInDb!.failureReason).toBe(result.failureReason);
+        });
+
+        it('keeps the page failed without a derived key when derived storage rejects the write', async () => {
+            const writeError = new Error('GCS permission denied for derived object');
+            const failingStorage: IDerivedStorageService = {
+                storeDerivedPage: vi.fn().mockRejectedValue(writeError),
+                getDerivedPageKey: vi.fn().mockReturnValue('unused'),
+                storeDerivedThumbnail: vi.fn(),
+                getDerivedThumbnailKey: vi.fn().mockReturnValue('unused')
+            };
+            const renderer: IPageRenderer = {
+                renderPage: vi.fn().mockResolvedValue({
+                    success: true,
+                    pageNumber: 1,
+                    image: {
+                        buffer: Buffer.from('rendered-page'),
+                        format: 'png',
+                        width: 10,
+                        height: 10,
+                        pageNumber: 1,
+                        sizeBytes: 13
+                    }
+                })
+            };
+            const service = new PageIngestionService(renderer, failingStorage);
+
+            const result = await service.processPage({
+                batchId,
+                jobId,
+                fileId,
+                fileIndex: 0,
+                storageKey,
+                pageNumber: 1,
+                fileType: 'pdf',
+                fileBuffer: Buffer.from('original')
+            });
+
+            expect(result.success).toBe(false);
+            expect(result.failureReason).toContain('GCS permission denied');
+            expect(failingStorage.storeDerivedPage).toHaveBeenCalledOnce();
+            const pageInDb = await IngestionPage.findOne({ batchId, fileIndex: 0, pageNumber: 1 });
+            expect(pageInDb?.status).toBe(PageProcessingStatus.FAILED);
+            expect(pageInDb?.storageKey).toBe('');
+            expect(pageInDb?.failureReason).toContain('GCS permission denied');
         });
     });
 
@@ -774,4 +818,3 @@ describe('PageIngestionService & Real DefaultPdfRenderer (AE-046)', () => {
         });
     });
 });
-
