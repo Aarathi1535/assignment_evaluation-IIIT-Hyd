@@ -6,6 +6,13 @@ import { countPdfPages, validateFiles } from '@/utils/clientFileValidation';
 
 interface ExamOption { _id: string; title: string; course?: string; }
 interface StudentOption { id: string; name: string; email: string; }
+interface ExamRosterState { examId: string; hasStudents: boolean; }
+interface StudentSearchState {
+    examId: string;
+    query: string;
+    students: StudentOption[];
+    complete: boolean;
+}
 interface AnalysisResult {
     answerScriptId: string;
     studentId: string;
@@ -41,9 +48,8 @@ export default function HandwritingProductWorkflow() {
     const [exams, setExams] = useState<ExamOption[]>([]);
     const [examId, setExamId] = useState('');
     const [studentQuery, setStudentQuery] = useState('');
-    const [students, setStudents] = useState<StudentOption[]>([]);
-    const [hasExamStudents, setHasExamStudents] = useState<boolean | null>(null);
-    const [studentSearchComplete, setStudentSearchComplete] = useState(false);
+    const [examRoster, setExamRoster] = useState<ExamRosterState | null>(null);
+    const [studentSearch, setStudentSearch] = useState<StudentSearchState | null>(null);
     const [selectedStudent, setSelectedStudent] = useState<StudentOption | null>(null);
     const [file, setFile] = useState<File | null>(null);
     const [pdfPageCount, setPdfPageCount] = useState<number | undefined>();
@@ -57,6 +63,17 @@ export default function HandwritingProductWorkflow() {
     const validation = useMemo(() => file ? validateFiles([file], file.name.toLowerCase().endsWith('.pdf') && pdfPageCount !== undefined
         ? { [file.name]: pdfPageCount }
         : {}) : { isValid: false, errors: [], generalError: undefined }, [file, pdfPageCount]);
+    const normalizedStudentQuery = studentQuery.trim();
+    const matchingSearch = studentSearch?.examId === examId && studentSearch.query === normalizedStudentQuery
+        ? studentSearch
+        : null;
+    const students = examId && normalizedStudentQuery.length >= 2 && !selectedStudent
+        ? matchingSearch?.students || []
+        : [];
+    const hasExamStudents = examId && examRoster?.examId === examId
+        ? examRoster.hasStudents
+        : null;
+    const studentSearchComplete = Boolean(matchingSearch?.complete);
 
     useEffect(() => {
         let cancelled = false;
@@ -70,15 +87,12 @@ export default function HandwritingProductWorkflow() {
     }, []);
 
     useEffect(() => {
-        if (!examId) {
-            setHasExamStudents(null);
-            return;
-        }
+        if (!examId) return;
         const controller = new AbortController();
         const query = new URLSearchParams({ examId });
         void fetch(`/api/research/handwriting/students?${query}`, { signal: controller.signal })
             .then(readJson)
-            .then(data => setHasExamStudents(Boolean(data.hasStudents)))
+            .then(data => setExamRoster({ examId, hasStudents: Boolean(data.hasStudents) }))
             .catch(reason => {
                 if (reason?.name !== 'AbortError') setError(reason instanceof Error ? reason.message : 'Could not load the exam roster.');
             });
@@ -86,31 +100,30 @@ export default function HandwritingProductWorkflow() {
     }, [examId]);
 
     useEffect(() => {
-        if (!examId || studentQuery.trim().length < 2 || selectedStudent) {
-            setStudents([]);
-            setStudentSearchComplete(false);
-            return;
-        }
-        setStudentSearchComplete(false);
+        if (!examId || normalizedStudentQuery.length < 2 || selectedStudent) return;
         const controller = new AbortController();
         const timer = setTimeout(() => {
-            const query = new URLSearchParams({ examId, q: studentQuery.trim() });
+            const query = new URLSearchParams({ examId, q: normalizedStudentQuery });
             void fetch(`/api/research/handwriting/students?${query}`, { signal: controller.signal })
                 .then(readJson)
                 .then(data => {
-                    setStudents(Array.isArray(data.students) ? data.students : []);
-                    setHasExamStudents(Boolean(data.hasStudents));
-                    setStudentSearchComplete(true);
+                    setExamRoster({ examId, hasStudents: Boolean(data.hasStudents) });
+                    setStudentSearch({
+                        examId,
+                        query: normalizedStudentQuery,
+                        students: Array.isArray(data.students) ? data.students : [],
+                        complete: true
+                    });
                 })
                 .catch(reason => {
                     if (reason?.name !== 'AbortError') {
-                        setStudentSearchComplete(true);
+                        setStudentSearch({ examId, query: normalizedStudentQuery, students: [], complete: true });
                         setError(reason instanceof Error ? reason.message : 'Could not search this exam roster.');
                     }
                 });
         }, 250);
         return () => { clearTimeout(timer); controller.abort(); };
-    }, [examId, studentQuery, selectedStudent]);
+    }, [examId, normalizedStudentQuery, selectedStudent]);
 
     const handleFileChange = async (nextFile: File | null) => {
         setFile(nextFile);
@@ -216,7 +229,8 @@ export default function HandwritingProductWorkflow() {
                             setExamId(event.target.value);
                             setSelectedStudent(null);
                             setStudentQuery('');
-                            setStudents([]);
+                            setExamRoster(null);
+                            setStudentSearch(null);
                         }}>
                             <option value="">Select an authorized exam</option>
                             {exams.map(exam => <option key={exam._id} value={exam._id}>{exam.title}</option>)}
@@ -224,9 +238,9 @@ export default function HandwritingProductWorkflow() {
                     </label>
                     <div className="relative text-sm font-semibold text-slate-800">
                         <label htmlFor="handwriting-student-search">Student</label>
-                        <input id="handwriting-student-search" className="mt-2 w-full rounded-lg border border-slate-300 p-3 font-normal" value={selectedStudent ? `${selectedStudent.name} (${selectedStudent.email})` : studentQuery} disabled={!examId || Boolean(selectedStudent)} onChange={event => setStudentQuery(event.target.value)} placeholder="Search student by name or email" />
-                        {selectedStudent && <button className="mt-1 text-xs text-indigo-700 underline" type="button" onClick={() => { setSelectedStudent(null); setStudentQuery(''); }}>Choose a different student</button>}
-                        {!selectedStudent && students.length > 0 && <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">{students.map(student => <li key={student.id}><button type="button" className="w-full px-3 py-2 text-left hover:bg-indigo-50" onClick={() => { setSelectedStudent(student); setStudentQuery(''); setStudents([]); }}>{student.name} <span className="text-slate-500">{student.email}</span></button></li>)}</ul>}
+                        <input id="handwriting-student-search" className="mt-2 w-full rounded-lg border border-slate-300 p-3 font-normal" value={selectedStudent ? `${selectedStudent.name} (${selectedStudent.email})` : studentQuery} disabled={!examId || Boolean(selectedStudent)} onChange={event => { setStudentQuery(event.target.value); setStudentSearch(null); }} placeholder="Search student by name or email" />
+                        {selectedStudent && <button className="mt-1 text-xs text-indigo-700 underline" type="button" onClick={() => { setSelectedStudent(null); setStudentQuery(''); setStudentSearch(null); }}>Choose a different student</button>}
+                        {!selectedStudent && students.length > 0 && <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">{students.map(student => <li key={student.id}><button type="button" className="w-full px-3 py-2 text-left hover:bg-indigo-50" onClick={() => { setSelectedStudent(student); setStudentQuery(''); setStudentSearch(null); }}>{student.name} <span className="text-slate-500">{student.email}</span></button></li>)}</ul>}
                         {examId && hasExamStudents === false && <p className="mt-2 text-xs text-slate-500">No students are assigned to this exam.</p>}
                         {examId && studentSearchComplete && hasExamStudents && studentQuery.trim().length >= 2 && !selectedStudent && students.length === 0 && <p className="mt-2 text-xs text-slate-500">No matching students found on this exam roster.</p>}
                     </div>
