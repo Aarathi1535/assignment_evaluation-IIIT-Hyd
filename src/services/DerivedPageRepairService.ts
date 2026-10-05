@@ -42,11 +42,66 @@ type DerivedStorage = Pick<DerivedStorageService, 'getDerivedPageKey' | 'derived
 type PageRegenerator = Pick<PageIngestionService, 'regenerateDerivedPage'>;
 
 export class DerivedPageRepairService {
+    private readonly repairsInFlight = new Map<string, Promise<void>>();
+
     constructor(
         private readonly originalStorage: OriginalReader = defaultImmutableStorageService,
         private readonly derivedStorage: DerivedStorage = defaultDerivedStorageService,
         private readonly pageIngestion: PageRegenerator = defaultPageIngestionService
     ) {}
+
+    async repairPage(pageId: string): Promise<void> {
+        const existingRepair = this.repairsInFlight.get(pageId);
+        if (existingRepair) return existingRepair;
+
+        const repair = this.repairPageOnce(pageId);
+        this.repairsInFlight.set(pageId, repair);
+        try {
+            await repair;
+        } finally {
+            if (this.repairsInFlight.get(pageId) === repair) {
+                this.repairsInFlight.delete(pageId);
+            }
+        }
+    }
+
+    private async repairPageOnce(pageId: string): Promise<void> {
+        const page = await IngestionPage.findById(pageId);
+        if (!page) throw new Error(`IngestionPage not found: ${pageId}`);
+        const batch = await Batch.findOne({ batchId: page.batchId }).lean();
+        const batchFile = batch?.files.find((file) => file.fileIndex === page.fileIndex);
+        const expectedKey = this.derivedStorage.getDerivedPageKey(
+            page.batchId, page.fileId, page.pageNumber, 'png'
+        );
+        if (await this.derivedStorage.derivedPageExists(expectedKey)) {
+            if (page.storageKey !== expectedKey) {
+                await IngestionPage.updateOne({ _id: page._id }, { $set: { storageKey: expectedKey } }, { timestamps: false });
+            }
+            return;
+        }
+
+        const originalStorageKey = this.getOriginalStorageKey(page, batchFile);
+        const originalBuffer = await this.originalStorage.readOriginalContent(originalStorageKey);
+        const fileType = typeof page.metadata?.fileType === 'string'
+            ? page.metadata.fileType
+            : batchFile?.fileType;
+        if (!fileType) throw new Error('Original file type is unavailable in page metadata and batch file record.');
+
+        const stored = await this.pageIngestion.regenerateDerivedPage({
+            batchId: page.batchId,
+            fileId: page.fileId,
+            pageNumber: page.pageNumber,
+            fileType,
+            originalStorageKey,
+            fileBuffer: originalBuffer
+        });
+        if (stored.storageKey !== expectedKey) {
+            throw new Error(`Page regeneration returned unexpected storage key "${stored.storageKey}".`);
+        }
+        if (page.storageKey !== expectedKey) {
+            await IngestionPage.updateOne({ _id: page._id }, { $set: { storageKey: expectedKey } }, { timestamps: false });
+        }
+    }
 
     async repair(options: DerivedPageRepairOptions): Promise<DerivedPageRepairResult> {
         const scriptIds = options.scriptIds || [];

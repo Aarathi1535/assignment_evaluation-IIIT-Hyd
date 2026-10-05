@@ -16,6 +16,7 @@ import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import BatchRepository from '../repositories/BatchRepository';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../services/DerivedStorageService';
+import DerivedPageRepairService from '../services/DerivedPageRepairService';
 import {
   requireAnyPermission,
   requireGradingOrAnnotationAccess,
@@ -650,7 +651,8 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
       role: UserRole.TA,
     };
 
-    vi.spyOn(DerivedStorageService, 'openDerivedPage').mockRejectedValue(new Error('ENOENT: no such file'));
+    vi.spyOn(DerivedStorageService, 'openDerivedPage').mockRejectedValue(Object.assign(new Error('missing'), { code: 404 }));
+    vi.spyOn(DerivedPageRepairService, 'repairPage').mockRejectedValue(new Error('original missing'));
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
@@ -663,6 +665,31 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.message).toBe('Page image file not found in derived storage');
+  });
+
+  it('regenerates a missing derived page from the original and retries serving it', async () => {
+    mockSessionUser = { id: taUser._id.toString(), email: taUser.email, role: UserRole.TA };
+    const bytes = Buffer.from('regenerated image');
+    const open = vi.spyOn(DerivedStorageService, 'openDerivedPage')
+      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 404 }))
+      .mockResolvedValueOnce({ stream: Readable.from([bytes]), size: bytes.length });
+    const repair = vi.spyOn(DerivedPageRepairService, 'repairPage').mockResolvedValue();
+    const req = new NextRequest(`http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`);
+    const res = await imageGET(req, { params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }) });
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
+    expect(repair).toHaveBeenCalledWith(pagePng._id.toString());
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns 500 for an unrelated derived storage error without attempting repair', async () => {
+    mockSessionUser = { id: taUser._id.toString(), email: taUser.email, role: UserRole.TA };
+    vi.spyOn(DerivedStorageService, 'openDerivedPage').mockRejectedValue(Object.assign(new Error('permission denied'), { code: 403 }));
+    const repair = vi.spyOn(DerivedPageRepairService, 'repairPage');
+    const req = new NextRequest(`http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`);
+    const res = await imageGET(req, { params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }) });
+    expect(res.status).toBe(500);
+    expect(repair).not.toHaveBeenCalled();
   });
 
   it('returns a clear server configuration error when the Cloud Run derived bucket is missing', async () => {
