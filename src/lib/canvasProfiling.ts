@@ -108,7 +108,7 @@ export function installCanvasProfileControls(): () => void {
         .filter((entry) => entry.startTime >= startedAt! && entry.startTime < endedAt)
         .map((entry) => ({ duration: entry.duration, startTime: entry.startTime }));
       const report: CanvasProfileReport = {
-        userAgent: navigator.userAgent,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
         durationMs: endedAt - startedAt,
         measures,
         longTaskCount: runLongTasks.length,
