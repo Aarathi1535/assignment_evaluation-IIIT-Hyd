@@ -28,26 +28,81 @@ export const ANNOTATION_DRAFT_PREFIX = 'ae_draft_annotations:';
 const memoryStorage = new Map<string, string>();
 
 const pendingDrafts = new Map<string, LocalAnnotationDraft>();
-const writeTimers = new Map<string, NodeJS.Timeout>();
+type DeferredWrite =
+  | { kind: 'idle'; handle: number; token: symbol }
+  | { kind: 'timeout'; handle: ReturnType<typeof setTimeout>; token: symbol };
+type IdleCallbackWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options: { timeout: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+const deferredWrites = new Map<string, DeferredWrite>();
+
+function cancelDeferredWrite(key: string): void {
+  const scheduled = deferredWrites.get(key);
+  if (!scheduled) return;
+
+  if (scheduled.kind === 'idle') {
+    const idleWindow = typeof window !== 'undefined' ? window as IdleCallbackWindow : null;
+    idleWindow?.cancelIdleCallback?.(scheduled.handle);
+  } else {
+    clearTimeout(scheduled.handle);
+  }
+  deferredWrites.delete(key);
+}
+
+function persistDraft(key: string, draft: LocalAnnotationDraft): void {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(draft);
+  } catch {
+    return;
+  }
+
+  if (isLocalStorageAvailable()) {
+    try {
+      window.localStorage.setItem(key, serialized);
+      memoryStorage.delete(key);
+      return;
+    } catch {}
+  }
+
+  // Keep memoryStorage as a fallback when localStorage is unavailable or fails.
+  memoryStorage.set(key, serialized);
+}
+
+function scheduleDeferredWrite(key: string): void {
+  cancelDeferredWrite(key);
+  const token = Symbol(key);
+  const run = () => {
+    if (deferredWrites.get(key)?.token !== token) return;
+    deferredWrites.delete(key);
+    const draft = pendingDrafts.get(key);
+    if (!draft) return;
+    persistDraft(key, draft);
+    pendingDrafts.delete(key);
+  };
+
+  const idleWindow = typeof window !== 'undefined' ? window as IdleCallbackWindow : null;
+  if (idleWindow?.requestIdleCallback) {
+    const handle = idleWindow.requestIdleCallback(run, { timeout: 250 });
+    deferredWrites.set(key, { kind: 'idle', handle, token });
+  } else {
+    const handle = setTimeout(run, 250);
+    deferredWrites.set(key, { kind: 'timeout', handle, token });
+  }
+}
 
 export function flushPendingWrites(): void {
+  deferredWrites.forEach((_, key) => cancelDeferredWrite(key));
   pendingDrafts.forEach((draft, key) => {
-    try {
-      const serialized = JSON.stringify(draft);
-      memoryStorage.set(key, serialized);
-      if (isLocalStorageAvailable()) {
-        window.localStorage.setItem(key, serialized);
-      }
-    } catch {}
+    persistDraft(key, draft);
   });
   pendingDrafts.clear();
-  writeTimers.forEach(timer => clearTimeout(timer));
-  writeTimers.clear();
 }
 
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', flushPendingWrites);
-  window.addEventListener('visibilitychange', () => {
+  document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       flushPendingWrites();
     }
@@ -167,26 +222,7 @@ export function saveLocalAnnotationDraft(
 
   pendingDrafts.set(key, draft);
 
-  if (writeTimers.has(key)) {
-    clearTimeout(writeTimers.get(key));
-  }
-
-  const timer = setTimeout(() => {
-    const d = pendingDrafts.get(key);
-    if (d) {
-      try {
-        const serialized = JSON.stringify(d);
-        memoryStorage.set(key, serialized);
-        if (isLocalStorageAvailable()) {
-          window.localStorage.setItem(key, serialized);
-        }
-      } catch {}
-      pendingDrafts.delete(key);
-    }
-    writeTimers.delete(key);
-  }, 200);
-
-  writeTimers.set(key, timer);
+  scheduleDeferredWrite(key);
 
   if (isDevProfiling) {
     markCanvasProfile('save-draft-end');
@@ -630,10 +666,7 @@ export function clearLocalAnnotationDraft(
   const effectiveUserId = userId || currentDraftUserId;
   const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
 
-  if (writeTimers.has(key)) {
-    clearTimeout(writeTimers.get(key));
-    writeTimers.delete(key);
-  }
+  cancelDeferredWrite(key);
   pendingDrafts.delete(key);
 
   if (isLocalStorageAvailable()) {
@@ -705,10 +738,7 @@ export function clearAllScriptDrafts(scriptId: string, userId?: string): void {
   memKeysToRemove.forEach((k) => {
     memoryStorage.delete(k);
     pendingDrafts.delete(k);
-    if (writeTimers.has(k)) {
-      clearTimeout(writeTimers.get(k));
-      writeTimers.delete(k);
-    }
+    cancelDeferredWrite(k);
   });
 }
 
@@ -748,10 +778,7 @@ export function clearUserDrafts(userId?: string): void {
   memKeysToRemove.forEach((k) => {
     memoryStorage.delete(k);
     pendingDrafts.delete(k);
-    if (writeTimers.has(k)) {
-      clearTimeout(writeTimers.get(k));
-      writeTimers.delete(k);
-    }
+    cancelDeferredWrite(k);
   });
 }
 
@@ -813,6 +840,9 @@ export function getPendingAnnotationDrafts(
 
   pendingDrafts.forEach((v, k) => {
     if (k.startsWith(expectedPrefix)) {
+      // A pending in-memory version supersedes any stale persisted version,
+      // including when the pending version is already synced or superseded.
+      draftsMap.delete(k);
       processDraft(k, v);
     }
   });
@@ -885,6 +915,5 @@ export function isServerDataNewer(
 export function clearAllMemoryDrafts(): void {
   memoryStorage.clear();
   pendingDrafts.clear();
-  writeTimers.forEach(timer => clearTimeout(timer));
-  writeTimers.clear();
+  deferredWrites.forEach((_, key) => cancelDeferredWrite(key));
 }
