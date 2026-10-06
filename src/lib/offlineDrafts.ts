@@ -1,4 +1,9 @@
 import type { SerializedPageAnnotations } from './annotationSerialization';
+import {
+  isCanvasProfilingEnabled,
+  markCanvasProfile,
+  measureCanvasProfile,
+} from './canvasProfiling';
 
 export interface LocalAnnotationDraft {
   userId?: string;
@@ -99,14 +104,12 @@ export function saveLocalAnnotationDraft(
   options?: SaveAnnotationDraftOptions,
   userId?: string
 ): LocalAnnotationDraft | null {
-  const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
-  if (isDevProfiling && typeof performance !== 'undefined') {
-    performance.mark('save-draft-start');
-  }
-
   if (!scriptId || typeof pageNumber !== 'number') {
     return null;
   }
+
+  const isDevProfiling = isCanvasProfilingEnabled();
+  if (isDevProfiling) markCanvasProfile('save-draft-start');
 
   const effectiveUserId = userId || options?.userId || currentDraftUserId;
   const existing = getLocalAnnotationDraft(scriptId, pageNumber, effectiveUserId);
@@ -141,9 +144,9 @@ export function saveLocalAnnotationDraft(
     memoryStorage.set(key, serialized);
   }
 
-  if (isDevProfiling && typeof performance !== 'undefined') {
-    performance.mark('save-draft-end');
-    performance.measure('saveLocalAnnotationDraft', 'save-draft-start', 'save-draft-end');
+  if (isDevProfiling) {
+    markCanvasProfile('save-draft-end');
+    measureCanvasProfile('saveLocalAnnotationDraft', 'save-draft-start', 'save-draft-end');
   }
 
   return draft;

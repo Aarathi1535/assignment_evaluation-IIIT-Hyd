@@ -79,6 +79,7 @@ export default withAuth(
         // Allow public routes
         if (
           path.startsWith('/api') ||
+          (process.env.NODE_ENV !== 'production' && process.env.AE174_PROFILE_ONLY === 'true' && path === '/ae174-profile') ||
           path === '/login' ||
           path === '/register' ||
           path === '/forgot-password' ||

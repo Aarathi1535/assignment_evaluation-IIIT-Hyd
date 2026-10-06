@@ -39,6 +39,12 @@ import { ShortcutHelpOverlay } from './ShortcutHelpOverlay';
 import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
+  installCanvasProfileControls,
+  isCanvasProfilingEnabled,
+  markCanvasProfile,
+  measureCanvasProfile,
+} from '@/lib/canvasProfiling';
+import {
   findMatchingShortcut,
   isTypingTarget,
   SHORTCUT_MAP,
@@ -259,6 +265,8 @@ export function AnswerSheetCanvas({
   onShortcutHelpOpenChange,
 }: AnswerSheetCanvasProps) {
   const effectiveUserId = userId || getCurrentDraftUser();
+
+  React.useEffect(() => installCanvasProfileControls(), []);
 
   useEffect(() => {
     if (userId && userId !== getCurrentDraftUser()) {
@@ -1596,10 +1604,10 @@ export function AnswerSheetCanvas({
 
   const handleStrokeComplete = useCallback(
     (newStroke: FreehandStroke) => {
-      const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
-      if (isDevProfiling && typeof performance !== 'undefined') {
-        performance.mark('stroke-end-start');
-        performance.mark('react-commit-start');
+      const isDevProfiling = isCanvasProfilingEnabled();
+      if (isDevProfiling) {
+        markCanvasProfile('stroke-end-start');
+        markCanvasProfile('react-commit-start');
       }
 
       const updated = [...allStrokes, newStroke];
@@ -1609,34 +1617,27 @@ export function AnswerSheetCanvas({
       setInternalStrokes(updated);
       onStrokesChange?.(updated);
 
-      if (isDevProfiling && typeof performance !== 'undefined') performance.mark('schedule-autosave-called');
+      if (isDevProfiling) markCanvasProfile('schedule-autosave-called');
       scheduleAutosave(updated, allAnnotations);
-      if (isDevProfiling && typeof performance !== 'undefined') {
-        performance.measure('stroke-end->scheduleAutosave', 'stroke-end-start', 'schedule-autosave-called');
+      if (isDevProfiling) {
+        measureCanvasProfile('stroke-end->scheduleAutosave', 'stroke-end-start', 'schedule-autosave-called');
       }
     },
     [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
   );
 
-  const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
-
   React.useLayoutEffect(() => {
-    if (isDevProfiling && typeof performance !== 'undefined') {
-      try {
-        const marks = performance.getEntriesByName('react-commit-start');
-        if (marks.length > 0) {
-          performance.measure('react-commit-per-stroke', 'react-commit-start');
-          performance.clearMarks('react-commit-start');
-        }
-      } catch (e) {}
+    if (isCanvasProfilingEnabled()) {
+      markCanvasProfile('react-commit-end');
+      measureCanvasProfile('react-commit-per-stroke', 'react-commit-start', 'react-commit-end');
     }
   });
 
   React.useEffect(() => {
-    if (isDevProfiling && typeof performance !== 'undefined') {
-      performance.mark('page-switch');
+    if (isCanvasProfilingEnabled()) {
+      markCanvasProfile('page-switch');
     }
-  }, [activePageIndex, isDevProfiling]);
+  }, [activePageIndex]);
 
   const handleAnnotationComplete = useCallback(
     (newAnnotation: MarkAnnotation) => {

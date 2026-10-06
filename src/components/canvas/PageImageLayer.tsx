@@ -17,6 +17,11 @@ import {
 } from '@/lib/panZoom';
 import type { PageImageLayerProps } from './types';
 import { logGraderTiming } from '@/lib/graderPerformance';
+import {
+  isCanvasProfilingEnabled,
+  markCanvasProfile,
+  measureCanvasProfile,
+} from '@/lib/canvasProfiling';
 
 export function PageImageLayer({
   src,
@@ -246,12 +251,9 @@ export function PageImageLayer({
     img.onload = () => {
       if (isCancelled) return;
 
-      const isDevProfiling = process.env.NEXT_PUBLIC_ENABLE_CANVAS_PROFILING === 'true';
-      if (isDevProfiling && typeof performance !== 'undefined') {
-        performance.mark('image-loaded');
-        try {
-          performance.measure('page-switch->image-loaded', 'page-switch', 'image-loaded');
-        } catch (e) {}
+      if (isCanvasProfilingEnabled()) {
+        markCanvasProfile('image-loaded');
+        measureCanvasProfile('page-switch->image-loaded', 'page-switch', 'image-loaded');
       }
 
       loadedImageRef.current = img;
