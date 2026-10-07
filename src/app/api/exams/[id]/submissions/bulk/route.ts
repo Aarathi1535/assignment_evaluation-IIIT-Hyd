@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../lib/errors';
@@ -14,11 +15,10 @@ import gradingService from '../../../../../../services/GradingService';
  * - optional allocationIds subset.
  * - batch cap / limit control.
  */
-export async function POST(
+export const POST = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
-  const __reqStart = Date.now();
+) => {
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -53,7 +53,7 @@ export async function POST(
           : 'Bulk submission completed successfully',
         data: result,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -67,4 +67,4 @@ export async function POST(
       { status }
     );
   }
-}
+});

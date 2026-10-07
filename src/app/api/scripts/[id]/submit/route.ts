@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../lib/errors';
@@ -18,11 +19,10 @@ import gradingService from '../../../../../services/GradingService';
  * - Safe & idempotent handling for already-submitted scripts.
  * - Authoritative audit logging (SCRIPT_SUBMITTED).
  */
-export async function POST(
+export const POST = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
-  const __reqStart = Date.now();
+) => {
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -53,7 +53,7 @@ export async function POST(
         message: 'Script submitted and locked successfully',
         data: result,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -67,4 +67,4 @@ export async function POST(
       { status }
     );
   }
-}
+});

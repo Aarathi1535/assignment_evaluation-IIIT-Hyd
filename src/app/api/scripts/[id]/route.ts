@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../lib/apiAuth';
@@ -20,11 +21,10 @@ import { HttpError } from '../../../../lib/errors';
  * - Professors/Admins: Verified access to the script's parent Exam.
  * - TAs: Verified allocation to the AnswerScript via AllocationService.verifyTaAllocation.
  */
-export async function GET(
+export const GET = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
-  const __reqStart = Date.now();
+) => {
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -45,7 +45,7 @@ export async function GET(
         message: 'Invalid AnswerScript ID format',
         data: null,
       },
-      {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 400 }
     );
   }
 
@@ -61,7 +61,7 @@ export async function GET(
           message: 'AnswerScript not found',
           data: null,
         },
-        {  status: 404 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+        { status: 404 }
       );
     }
 
@@ -86,7 +86,7 @@ export async function GET(
             message: 'Forbidden: Access denied to the exam for this answer script',
             data: null,
           },
-          {  status: 403 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+          { status: 403 }
         );
       }
       const query: { answerScript: mongoose.Types.ObjectId; question?: number } = { answerScript: script._id };
@@ -110,7 +110,7 @@ export async function GET(
             message: 'Forbidden: You are not allocated to grade this answer script',
             data: null,
           },
-          {  status: 403 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+          { status: 403 }
         );
       }
       scriptAllocationId = allocation._id.toString();
@@ -134,7 +134,10 @@ export async function GET(
 
     const ingestionPages = await IngestionPage.find({
       answerScript: script._id,
-    }).sort({ fileIndex: 1, pageNumber: 1 });
+    })
+      .select('_id pageNumber fileIndex batchId thumbnailKey width height nearBlank isDuplicate isCoverPage')
+      .sort({ fileIndex: 1, pageNumber: 1 })
+      .lean();
 
     if (ingestionPages.length > 0) {
       formattedPages = ingestionPages.map((p) => ({
@@ -157,7 +160,10 @@ export async function GET(
       const standardPages = await Page.find({
         answerScript: script._id,
         isActive: true,
-      }).sort({ pageNumber: 1 });
+      })
+        .select('_id pageNumber imagePath')
+        .sort({ pageNumber: 1 })
+        .lean();
 
       formattedPages = standardPages.map((p) => ({
         _id: p._id.toString(),
@@ -178,7 +184,6 @@ export async function GET(
       exam: script.exam.toString(),
       isActive: script.isActive,
     };
-
     return NextResponse.json(
       {
         success: true,
@@ -206,4 +211,4 @@ export async function GET(
       { status }
     );
   }
-}
+});

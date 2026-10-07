@@ -8,8 +8,8 @@
 
 import mongoose from 'mongoose';
 import AnswerScript from '../models/AnswerScript';
-import Page, { type IPage } from '../models/Page';
-import IngestionPage, { type IIngestionPage } from '../models/IngestionPage';
+import Page from '../models/Page';
+import IngestionPage from '../models/IngestionPage';
 import ExamRepository from '../repositories/ExamRepository';
 import AllocationService from './AllocationService';
 import { AllocationStatus } from '../models/Allocation';
@@ -325,74 +325,85 @@ export class AnnotationPersistenceService {
       }
     }
 
-    // 6. Resolve the target Page and verify it belongs to this AnswerScript
+    // 6. Resolve target Page and verify it belongs to this AnswerScript
     let targetPageId: mongoose.Types.ObjectId;
     let targetPageNumber: number;
-    let pageDoc: IPage | null = null;
-    let ingestionDoc: IIngestionPage | null = null;
+    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date } | null = null;
+    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date } | null = null;
 
     if (isObjectId) {
       const pageIdObj = new mongoose.Types.ObjectId(pageIdentifier);
 
-      // Check standard Page collection
-      pageDoc = await Page.findOne({ _id: pageIdObj, isActive: true });
-      if (pageDoc) {
-        if (pageDoc.answerScript.toString() !== script._id.toString()) {
+      const foundPage = await Page.findOne({ _id: pageIdObj, isActive: true })
+        .select('_id answerScript pageNumber updatedAt')
+        .lean();
+
+      if (foundPage) {
+        if (foundPage.answerScript.toString() !== script._id.toString()) {
           throw new HttpError('Page does not belong to the requested answer script', 400);
         }
-        targetPageId = pageDoc._id;
-        targetPageNumber = pageDoc.pageNumber;
+        pageDoc = foundPage;
+        targetPageId = foundPage._id;
+        targetPageNumber = foundPage.pageNumber;
       } else {
-        // Fallback to IngestionPage collection
-        ingestionDoc = await IngestionPage.findById(pageIdObj);
-        if (ingestionDoc) {
+        const foundIngestion = await IngestionPage.findById(pageIdObj)
+          .select('_id answerScript pageNumber updatedAt')
+          .lean();
+
+        if (foundIngestion) {
           if (
-            !ingestionDoc.answerScript ||
-            ingestionDoc.answerScript.toString() !== script._id.toString()
+            !foundIngestion.answerScript ||
+            foundIngestion.answerScript.toString() !== script._id.toString()
           ) {
             throw new HttpError('Page does not belong to the requested answer script', 400);
           }
-          targetPageId = ingestionDoc._id;
-          targetPageNumber = ingestionDoc.pageNumber;
+          ingestionDoc = foundIngestion;
+          targetPageId = foundIngestion._id;
+          targetPageNumber = foundIngestion.pageNumber;
         } else {
           throw new HttpError('Page not found', 404);
         }
       }
     } else {
-      // Numeric pageNumber lookup
       const pageNum = Number(pageIdentifier);
 
-      pageDoc = await Page.findOne({
+      const foundPage = await Page.findOne({
         answerScript: script._id,
         pageNumber: pageNum,
         isActive: true,
-      });
+      })
+        .select('_id answerScript pageNumber updatedAt')
+        .lean();
 
-      if (pageDoc) {
-        targetPageId = pageDoc._id;
-        targetPageNumber = pageDoc.pageNumber;
+      if (foundPage) {
+        pageDoc = foundPage;
+        targetPageId = foundPage._id;
+        targetPageNumber = foundPage.pageNumber;
       } else {
-        ingestionDoc = await IngestionPage.findOne({
+        const foundIngestion = await IngestionPage.findOne({
           answerScript: script._id,
           pageNumber: pageNum,
-        });
+        })
+          .select('_id answerScript pageNumber updatedAt')
+          .lean();
 
-        if (ingestionDoc) {
-          targetPageId = ingestionDoc._id;
-          targetPageNumber = ingestionDoc.pageNumber;
+        if (foundIngestion) {
+          ingestionDoc = foundIngestion;
+          targetPageId = foundIngestion._id;
+          targetPageNumber = foundIngestion.pageNumber;
         } else {
           throw new HttpError(`Page ${pageNum} not found for this answer script`, 404);
         }
       }
     }
 
-    // 6. Validate and normalize the vector annotation payload using AE-134 utilities
+    // 7. Validate and normalize the vector annotation payload
     const normalizedPageData = this.validateAndNormalizePayload(
       payload,
       targetPageId.toString()
     );
 
-    // AE-171: Atomic conditional update with baseUpdatedAt to ensure safe concurrency
+    // 8. Validate baseUpdatedAt for optimistic concurrency
     let baseDate: Date;
     if (options.baseUpdatedAt) {
       baseDate = new Date(options.baseUpdatedAt);
@@ -408,7 +419,7 @@ export class AnnotationPersistenceService {
       );
     }
 
-    // 7. Atomic update: updateOne({ _id, updatedAt: baseDate }, ...)
+    // 9. Atomic findOneAndUpdate
     let matchedCount = 0;
     let updatedDocTimestamp = new Date();
 
@@ -450,7 +461,6 @@ export class AnnotationPersistenceService {
       }
     }
 
-    // Treat matchedCount === 0 as a 409
     if (matchedCount === 0) {
       let currentServerAnnotations: SerializedPageAnnotations | null = null;
       let currentServerUpdatedAt: string | null = null;
@@ -476,13 +486,13 @@ export class AnnotationPersistenceService {
       );
     }
 
-    // 8. Record audit log
+    // 10. Record audit log
     await writeAuditLog({
       user: userId,
       action: 'PAGE_ANNOTATIONS_SAVED',
       outcome: 'SUCCESS',
       entityId: targetPageId,
-      entityType: 'Page',
+      entityType: pageDoc ? 'Page' : 'IngestionPage',
       details: {
         scriptId: script._id.toString(),
         pageNumber: targetPageNumber,

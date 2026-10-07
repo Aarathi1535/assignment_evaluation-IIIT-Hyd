@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../../lib/errors';
@@ -13,7 +14,6 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; p: string }> }
 ) {
-  const __reqStart = Date.now();
   // 1. Authenticate and enforce grading / exam permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -44,7 +44,7 @@ export async function GET(
         message: 'Annotations loaded successfully',
         data: result,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -65,11 +65,10 @@ export async function GET(
  *
  * Saves and deterministically replaces vector annotations for a specific answer script page.
  */
-export async function PUT(
+export const PUT = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string; p: string }> }
-) {
-  const __reqStart = Date.now();
+) => {
   // 1. Authenticate and enforce grading / exam permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -92,7 +91,7 @@ export async function PUT(
           message: 'Invalid JSON request body',
           data: null,
         },
-        {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+        { status: 400 }
       );
     }
 
@@ -127,7 +126,7 @@ export async function PUT(
         message: 'Annotations saved successfully',
         data: result,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -177,4 +176,4 @@ export async function PUT(
       { status }
     );
   }
-}
+});

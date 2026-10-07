@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../lib/errors';
@@ -15,11 +16,10 @@ import gradingService, { SavedGradeWithNext } from '../../../../../services/Grad
  * - Allocation lifecycle claiming (PENDING -> IN_PROGRESS on first save).
  * - Audit logging.
  */
-export async function POST(
+export const POST = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
-  const __reqStart = Date.now();
+) => {
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -66,7 +66,7 @@ export async function POST(
         message: 'Grade saved successfully',
         data: responseData,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -77,17 +77,12 @@ export async function POST(
         message,
         data: null,
       },
-      { status, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status }
     );
   }
-}
+});
 
-export async function PUT(
-  req: NextRequest,
-  context: { params: Promise<{ id: string }> }
-) {
-  return POST(req, context);
-}
+export const PUT = POST;
 
 /**
  * GET /api/scripts/[id]/grades
@@ -96,11 +91,10 @@ export async function PUT(
  * Enforces:
  * - RBAC & Allocation access control.
  */
-export async function GET(
+export const GET = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
-  const __reqStart = Date.now();
+) => {
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -120,7 +114,7 @@ export async function GET(
         message: 'Grades retrieved successfully',
         data: grades,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -131,8 +125,7 @@ export async function GET(
         message,
         data: null,
       },
-      { status, headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status }
     );
   }
-}
-
+});

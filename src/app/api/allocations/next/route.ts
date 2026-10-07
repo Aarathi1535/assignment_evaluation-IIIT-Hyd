@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import { requirePermission } from '../../../../lib/apiAuth';
@@ -14,8 +15,7 @@ import AllocationService from '../../../../services/AllocationService';
  * - examId (required): ID of the exam.
  * - currentAllocationId (optional): Current allocation to skip.
  */
-export async function GET(req: NextRequest) {
-  const __reqStart = Date.now();
+export const GET = withServerTiming(async (req: NextRequest) => {
   const auth = await requirePermission(Permission.VIEW_ASSIGNED_SCRIPTS);
   if (!auth.authorized) {
     return auth.response;
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
         message: 'Valid Exam ID is required',
         data: null,
       },
-      {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 400 }
     );
   }
 
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
         message: 'Invalid currentAllocationId format',
         data: null,
       },
-      {  status: 400 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 400 }
     );
   }
 
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
         message: nextAllocation ? 'Next allocation found' : 'No remaining allocations',
         data: nextAllocation,
       },
-      {  status: 200 , headers: { 'Server-Timing': `total;dur=${Date.now() - __reqStart}` } }
+      { status: 200 }
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
@@ -76,4 +76,4 @@ export async function GET(req: NextRequest) {
       { status }
     );
   }
-}
+});
