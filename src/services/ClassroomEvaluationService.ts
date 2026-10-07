@@ -2,6 +2,7 @@ import { HttpError } from '../lib/errors';
 import { IClassroomCriterion } from '../models/ClassroomQuestion';
 import { IClassroomCriterionScore } from '../models/ClassroomSubmission';
 import { isValidScoreStep, DEFAULT_SCORE_STEP } from './GradingService';
+import { geminiAIService, GeminiAIService } from './ai/GeminiAIService';
 
 export interface EvaluateClassroomAnswerInput {
     questionPrompt: string;
@@ -10,6 +11,7 @@ export interface EvaluateClassroomAnswerInput {
     sampleSolution?: string;
     imageBuffer: Buffer;
     mimeType: string;
+    isRealStudentData?: boolean;
 }
 
 export interface RawGeminiCriterionEvaluation {
@@ -47,6 +49,11 @@ export type GeminiCaller = (payload: {
 
 export class ClassroomEvaluationService {
     private customGeminiCaller: GeminiCaller | null = null;
+    private aiService: GeminiAIService;
+
+    constructor(aiService: GeminiAIService = geminiAIService) {
+        this.aiService = aiService;
+    }
 
     /**
      * Dependency injection hook for testing without live Gemini network requests.
@@ -56,16 +63,11 @@ export class ClassroomEvaluationService {
     }
 
     getApiKey(): string {
-        return (
-            process.env.GEMINI_API_KEY ||
-            process.env.GOOGLE_API_KEY ||
-            process.env.GOOGLE_GENAI_API_KEY ||
-            ''
-        );
+        return this.aiService.getApiKey() || '';
     }
 
     getModelName(): string {
-        return process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+        return this.aiService.getModelName();
     }
 
     /**
@@ -141,86 +143,6 @@ export class ClassroomEvaluationService {
         ].join('\n');
     }
 
-    /**
-     * Default live Gemini multimodal API caller using Google Generative Language REST endpoint.
-     */
-    async callGeminiApi(payload: {
-        model: string;
-        apiKey: string;
-        systemInstruction: string;
-        promptText: string;
-        imageBase64: string;
-        mimeType: string;
-    }): Promise<string> {
-        const { model, apiKey, systemInstruction, promptText, imageBase64, mimeType } = payload;
-
-        if (!apiKey) {
-            throw new HttpError(
-                'Gemini API key is not configured. Please set GEMINI_API_KEY or GOOGLE_API_KEY environment variable.',
-                503
-            );
-        }
-
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-            model
-        )}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-        const requestBody = {
-            systemInstruction: {
-                parts: [{ text: systemInstruction }]
-            },
-            contents: [
-                {
-                    role: 'user',
-                    parts: [
-                        { text: promptText },
-                        {
-                            inlineData: {
-                                mimeType,
-                                data: imageBase64
-                            }
-                        }
-                    ]
-                }
-            ],
-            generationConfig: {
-                responseMimeType: 'application/json',
-                temperature: 0.1
-            }
-        };
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody)
-        });
-
-        if (!response.ok) {
-            let errorDetails = '';
-            try {
-                const errJson = await response.json();
-                errorDetails = JSON.stringify(errJson);
-            } catch {
-                errorDetails = await response.text();
-            }
-            throw new HttpError(
-                `Gemini API returned error HTTP ${response.status}: ${errorDetails}`,
-                response.status === 401 || response.status === 403 ? 502 : 500
-            );
-        }
-
-        const data = await response.json();
-        const candidateText =
-            data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-        if (!candidateText) {
-            throw new HttpError('Gemini API returned an empty or invalid candidate response', 502);
-        }
-
-        return candidateText;
-    }
 
     /**
      * Validates Gemini structured output against question rubric constraints and computes
@@ -365,6 +287,14 @@ export class ClassroomEvaluationService {
         const apiKey = this.getApiKey();
         const model = this.getModelName();
 
+        // Paid-tier guard: Real student data requires a paid Gemini API key
+        if (input.isRealStudentData && !this.aiService.isPaidTier()) {
+            throw new HttpError(
+                'A paid Gemini API key must be used before any real student data is processed. Initially, only the free tier with test images is permitted.',
+                403
+            );
+        }
+
         let rawModelOutputText: string;
 
         try {
@@ -378,13 +308,13 @@ export class ClassroomEvaluationService {
                     mimeType
                 });
             } else {
-                rawModelOutputText = await this.callGeminiApi({
+                rawModelOutputText = await this.aiService.generateMultimodalContent({
                     model,
-                    apiKey,
                     systemInstruction,
                     promptText,
                     imageBase64,
-                    mimeType
+                    mimeType,
+                    isRealStudentData: input.isRealStudentData
                 });
             }
         } catch (apiErr) {

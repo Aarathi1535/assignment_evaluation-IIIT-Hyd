@@ -1,10 +1,11 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import ClassroomQuestion from '../models/ClassroomQuestion';
 import ClassroomSubmission from '../models/ClassroomSubmission';
 import ClassroomAssessmentService from '../services/ClassroomAssessmentService';
 import classroomEvaluationService from '../services/ClassroomEvaluationService';
+import { geminiAIService } from '../services/ai/GeminiAIService';
 import { UserRole } from '../constants/permissions';
 
 let mockSessionUser: any = null;
@@ -731,6 +732,41 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
 
       // Status must be EVALUATED
       expect(body.data.status).toBe('EVALUATED');
+    });
+
+    it('enforces paid-tier guard when evaluating real student data without paid tier configured', async () => {
+      geminiAIService.setPaidTier(false);
+      await expect(classroomEvaluationService.evaluateHandwrittenAnswer({
+        questionPrompt: 'Test prompt',
+        maxMarks: 10,
+        imageBuffer: Buffer.from('test-image'),
+        mimeType: 'image/png',
+        isRealStudentData: true,
+      })).rejects.toMatchObject({
+        statusCode: 403,
+        message: expect.stringContaining('paid Gemini API key'),
+      });
+      geminiAIService.setPaidTier(null);
+    });
+
+    it('uses shared GeminiAIService without leaking API key in URL', async () => {
+      const mockCaller = vi.fn().mockResolvedValue(JSON.stringify({
+        criteria: [{ criterion: 'Overall Correctness & Methodology', maxMarks: 10, awardedMarks: 10, evidence: 'Ok' }],
+        overallFeedback: 'All good',
+        confidence: 0.95
+      }));
+      geminiAIService.setCustomCaller(mockCaller);
+
+      const outcome = await classroomEvaluationService.evaluateHandwrittenAnswer({
+        questionPrompt: 'Test prompt',
+        maxMarks: 10,
+        imageBuffer: Buffer.from('test-image'),
+        mimeType: 'image/png',
+      });
+
+      expect(outcome.score).toBe(10);
+      expect(mockCaller).toHaveBeenCalled();
+      geminiAIService.setCustomCaller(null);
     });
     it('rejects submission when no active question exists for the question ID', async () => {
       const inactiveQ = await ClassroomQuestion.create({
