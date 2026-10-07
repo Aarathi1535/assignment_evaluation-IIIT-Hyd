@@ -59,7 +59,7 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
     vi.restoreAllMocks();
   });
 
-  it('1. Adjacent-page prefetch triggers after current page loads', () => {
+  it('1. Adjacent-page prefetch is disabled due to no-store cache policy', () => {
     const pages = [
       { id: '1', pageNumber: 1, imageUrl: '/api/img1', thumbnailUrl: '/api/thumb1' },
       { id: '2', pageNumber: 2, imageUrl: '/api/img2', thumbnailUrl: '/api/thumb2' },
@@ -75,16 +75,15 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
       }
     });
 
-    // After load, prefetch should happen for index 0 and 2
-    // AnswerSheetCanvas directly creates new window.Image() for prefetch
+    // Prefetch should NOT happen
     const prefetchedImg1 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img1');
     const prefetchedImg3 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img3');
     
-    expect(prefetchedImg1).toBeTruthy();
-    expect(prefetchedImg3).toBeTruthy();
+    expect(prefetchedImg1).toBeUndefined();
+    expect(prefetchedImg3).toBeUndefined();
   });
 
-  it('2. Invalid previous/next page indexes are not prefetched', () => {
+  it('2. Invalid previous/next page indexes are safely ignored', () => {
     const pages = [
       { id: '1', pageNumber: 1, imageUrl: '/api/img1', thumbnailUrl: '/api/thumb1' },
       { id: '2', pageNumber: 2, imageUrl: '/api/img2', thumbnailUrl: '/api/thumb2' },
@@ -98,12 +97,11 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
       }
     });
 
-    // We are on page 2 (index 1). Prev is index 0. Next is index 2 (invalid).
     const prefetchedImg1 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img1');
     const prefetchedImg3 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img3');
     
-    expect(prefetchedImg1).toBeTruthy(); // Should prefetch
-    expect(prefetchedImg3).toBeUndefined(); // Should NOT prefetch
+    expect(prefetchedImg1).toBeUndefined();
+    expect(prefetchedImg3).toBeUndefined();
   });
 
   it('3. Thumbnail is used while full-resolution image is loading', () => {

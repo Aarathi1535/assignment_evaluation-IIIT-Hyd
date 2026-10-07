@@ -963,7 +963,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.headers.get('Content-Type')).toBe('image/png');
   });
 
-  it('18. returns 304 Not Modified when If-None-Match matches the storageKey ETag (AE-176)', async () => {
+  it('18. returns 304 Not Modified when If-None-Match matches the hashed updatedAt ETag (AE-176)', async () => {
     mockSessionUser = {
       id: profUser._id.toString(),
       email: profUser.email,
@@ -972,12 +972,14 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const expectedETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
       {
         method: 'GET',
-        headers: { 'If-None-Match': `"${pagePng.storageKey}"` }
+        headers: { 'If-None-Match': expectedETag }
       }
     );
     const res = await imageGET(req, {
@@ -985,8 +987,8 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     });
 
     expect(res.status).toBe(304);
-    expect(res.headers.get('ETag')).toBe(`"${pagePng.storageKey}"`);
-    expect(res.headers.get('Cache-Control')).toBe('private, max-age=3600');
+    expect(res.headers.get('ETag')).toBe(expectedETag);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
     expect(spyRead).not.toHaveBeenCalled();
   });
 
@@ -1000,12 +1002,14 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const expectedETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
       {
         method: 'GET',
-        headers: { 'If-None-Match': `"${pagePng.storageKey}"` }
+        headers: { 'If-None-Match': expectedETag }
       }
     );
     const res = await imageGET(req, {
@@ -1017,7 +1021,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(spyRead).not.toHaveBeenCalled();
   });
 
-  it('20. thumbnail route returns 304 Not Modified when If-None-Match matches the thumbnailKey ETag (AE-176)', async () => {
+  it('20. thumbnail route returns 304 Not Modified when If-None-Match matches the hashed updatedAt ETag (AE-176)', async () => {
     mockSessionUser = {
       id: profUser._id.toString(),
       email: profUser.email,
@@ -1026,13 +1030,15 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const expectedETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
 
     const { GET: thumbnailGET } = await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route');
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/thumbnail`,
       {
         method: 'GET',
-        headers: { 'If-None-Match': `"${pagePng.thumbnailKey}"` }
+        headers: { 'If-None-Match': expectedETag }
       }
     );
     const res = await thumbnailGET(req, {
@@ -1040,7 +1046,7 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     });
 
     expect(res.status).toBe(304);
-    expect(res.headers.get('ETag')).toBe(`"${pagePng.thumbnailKey}"`);
+    expect(res.headers.get('ETag')).toBe(expectedETag);
     expect(spyRead).not.toHaveBeenCalled();
   });
 });

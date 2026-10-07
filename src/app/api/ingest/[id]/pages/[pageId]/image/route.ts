@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
@@ -185,7 +186,7 @@ export async function GET(
       );
     }
 
-    let etag = `"${page.storageKey}"`;
+    let etag = `"${crypto.createHash('md5').update(page.updatedAt.toISOString()).digest('hex')}"`;
     const ifNoneMatch = req.headers.get('if-none-match');
 
     if (ifNoneMatch && ifNoneMatch.includes(etag)) {
@@ -212,7 +213,7 @@ export async function GET(
           const refreshedPage = await IngestionPage.findById(pageId);
           if (!refreshedPage?.storageKey) throw new Error('Regenerated page has no storage key.');
           page.storageKey = refreshedPage.storageKey;
-          etag = `"${page.storageKey}"`;
+          etag = `"${crypto.createHash('md5').update(refreshedPage.updatedAt.toISOString()).digest('hex')}"`;
         } catch (repairError) {
           if (repairError && typeof repairError === 'object') {
             const storageError = repairError as { code?: number | string; statusCode?: number };

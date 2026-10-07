@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
-import { requirePermission } from '../../../../../../../lib/apiAuth';
-import { Permission } from '../../../../../../../constants/permissions';
+import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
+import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
+import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService from '../../../../../../../services/DerivedStorageService';
 
 export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
 ) {
-  const auth = await requirePermission(Permission.EDIT_EXAM);
+  const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
   }
@@ -58,7 +60,28 @@ export async function GET(
     }
 
     // 3. Verify authorized access to the batch
-    const batch = await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role);
+    const userRole = auth.user.role?.toUpperCase();
+    const isProfessor = userRole === UserRole.PROFESSOR;
+    const isAdmin = userRole === UserRole.ADMIN;
+    const isProfessorOrAdmin = isProfessor || isAdmin;
+
+    let batch = null;
+    if (isProfessor) {
+      batch = await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role);
+      if (!batch) {
+        const internalBatch = await BatchRepository.getBatchByBatchIdInternal(batchId);
+        if (internalBatch?.exam) {
+          const ExamRepository = (await import('../../../../../../../repositories/ExamRepository')).default;
+          const exam = await ExamRepository.getExamById(internalBatch.exam.toString(), auth.user.id, auth.user.role);
+          if (exam) {
+            batch = internalBatch;
+          }
+        }
+      }
+    } else {
+      batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
+    }
+
     if (!batch) {
       return NextResponse.json({
         success: false,
@@ -67,7 +90,37 @@ export async function GET(
       }, { status: 404 });
     }
 
-    // 4. Verify thumbnail is available
+    // 4. For TA users, enforce allocation-scoped authorization
+    if (!isProfessorOrAdmin) {
+      if (!page.answerScript) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Page not found',
+            data: null,
+          },
+          { status: 404 }
+        );
+      }
+
+      const allocation = await AllocationService.verifyTaAllocation(
+        page.answerScript,
+        auth.user.id
+      );
+
+      if (!allocation) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Page not found',
+            data: null,
+          },
+          { status: 404 }
+        );
+      }
+    }
+
+    // 5. Verify thumbnail is available
     if (!page.thumbnailKey) {
       return NextResponse.json({
         success: false,
@@ -76,7 +129,7 @@ export async function GET(
       }, { status: 404 });
     }
 
-    const etag = `"${page.thumbnailKey}"`;
+    const etag = `"${crypto.createHash('md5').update(page.updatedAt.toISOString()).digest('hex')}"`;
     const ifNoneMatch = req.headers.get('if-none-match');
 
     if (ifNoneMatch && ifNoneMatch.includes(etag)) {
@@ -84,7 +137,7 @@ export async function GET(
         status: 304,
         headers: {
           'ETag': etag,
-          'Cache-Control': 'private, max-age=3600',
+          'Cache-Control': 'private, no-store',
         },
       });
     }
@@ -109,7 +162,7 @@ export async function GET(
           'Content-Type': contentType,
           'Content-Length': buffer.length.toString(),
           'ETag': etag,
-          'Cache-Control': 'private, max-age=3600',
+          'Cache-Control': 'private, no-store',
         }
       });
 

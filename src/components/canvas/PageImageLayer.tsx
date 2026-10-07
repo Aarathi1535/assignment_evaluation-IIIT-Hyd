@@ -260,6 +260,10 @@ export function PageImageLayer({
         updateImageLayout(thumbImg, stageW, stageH, activeTransformRef.current);
       };
 
+      thumbImg.onerror = () => {
+        if (isCancelled || hasLoadedHighRes) return;
+        // Thumbnail failed. The full-res image is already loading in parallel.
+      };
       thumbImg.src = thumbnailUrl;
     }
 
