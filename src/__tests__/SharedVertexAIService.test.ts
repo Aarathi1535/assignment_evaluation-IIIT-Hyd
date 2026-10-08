@@ -2,8 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   GeminiAIService,
   geminiAIService,
-  VertexAIService,
-  vertexAIService,
   sharedAIService,
 } from '../services/ai/GeminiAIService';
 import { VertexAIQuestionGenerationProvider } from '../services/ai/AIQuestionGenerationProvider';
@@ -75,21 +73,18 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(Object.keys(config)).not.toContain('apiKey');
     });
 
-    it('defaults model to gemini-3.5-flash and supports environment override', () => {
+    it('defaults model to gemini-1.5-flash and supports environment override', () => {
       const service = new GeminiAIService();
-      expect(service.getModelName()).toBe('gemini-3.5-flash');
+      expect(service.getModelName()).toBe('gemini-1.5-flash');
 
       process.env.GEMINI_MODEL = 'gemini-2.0-flash';
       expect(service.getModelName()).toBe('gemini-2.0-flash');
     });
 
-    it('maintains backward-compatible singleton instances across aliases', () => {
+    it('maintains singleton instances', () => {
       const gInstance = GeminiAIService.getInstance();
-      const vInstance = VertexAIService.getInstance();
 
       expect(gInstance).toBe(geminiAIService);
-      expect(vInstance).toBe(vertexAIService);
-      expect(gInstance).toBe(vInstance);
       expect(sharedAIService).toBe(geminiAIService);
     });
   });
@@ -208,7 +203,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(result).toContain('Mocked Gemini GenAI output');
       expect(mockGenerateContent).toHaveBeenCalledTimes(1);
       expect(capturedArgs).toEqual({
-        model: 'gemini-3.5-flash',
+        model: 'gemini-1.5-flash',
         contents: 'Evaluate question 1',
         config: {
           systemInstruction: 'Act as expert grader',
@@ -252,7 +247,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(result).toContain('Good handwritten response');
       expect(mockGenerateContent).toHaveBeenCalledTimes(1);
       expect(capturedArgs).toEqual({
-        model: 'gemini-3.5-flash',
+        model: 'gemini-1.5-flash',
         contents: [
           { text: 'Grade this handwritten solution' },
           {
@@ -346,7 +341,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       });
 
       expect(capturedPayload).not.toBeNull();
-      expect(capturedPayload!.model).toBe('gemini-3.5-flash');
+      expect(capturedPayload!.model).toBe('gemini-1.5-flash');
       expect(capturedPayload!.promptText).toBe('Evaluate synthetic test work');
       expect(capturedPayload!.imageBase64).toBe('dGVzdA==');
       expect(capturedPayload!.mimeType).toBe('image/png');
@@ -359,7 +354,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
     it('uses the shared Gemini AI service instance and preserves scoring behavior without rewrites', async () => {
       const classroomService = new ClassroomEvaluationService(geminiAIService);
 
-      expect(classroomService.getModelName()).toBe('gemini-3.5-flash');
+      expect(classroomService.getModelName()).toBe('gemini-1.5-flash');
 
       geminiAIService.setCustomCaller(async () => {
         return JSON.stringify({
@@ -403,10 +398,6 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(outcome.criterionScores[1].marksAwarded).toBe(5.5);
     });
 
-    it('works identically when initialized with vertexAIService alias', async () => {
-      const classroomService = new ClassroomEvaluationService(vertexAIService);
-      expect(classroomService.getModelName()).toBe('gemini-3.5-flash');
-    });
   });
 
   describe('Personalized Assessment Integration with Shared AI Layer', () => {
@@ -414,7 +405,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       const provider = new VertexAIQuestionGenerationProvider(geminiAIService);
 
       expect(provider.providerName).toBe('VertexAI');
-      expect(provider.getModelName()).toBe('gemini-3.5-flash');
+      expect(provider.getModelName()).toBe('gemini-1.5-flash');
 
       geminiAIService.setCustomCaller(async () => {
         return JSON.stringify({

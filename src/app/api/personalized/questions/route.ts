@@ -59,7 +59,6 @@ export async function GET(req: NextRequest) {
             { status: 200 }
         );
     } catch (error: unknown) {
-        console.error('[DIAG] GET /api/personalized/questions ERROR:', error);
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         return NextResponse.json(

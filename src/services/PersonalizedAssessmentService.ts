@@ -697,7 +697,7 @@ export class PersonalizedAssessmentService {
             throw new HttpError('Forbidden: This is not your assignment', 403);
         }
 
-        if (assignment.status === 'SUBMITTED') {
+        if (assignment.status === 'SUBMITTED' && assignment.evaluationStatus !== 'FAILED') {
             throw new HttpError('This assignment has already been submitted and finalized', 400);
         }
 
@@ -767,8 +767,7 @@ export class PersonalizedAssessmentService {
             assignment.aiConfidence = evaluationOutcome.confidence;
             assignment.aiEvaluatedAt = new Date();
             await assignment.save();
-        } catch (err: unknown) {
-            console.error('AI Evaluation failed for personalized photo submission:', err);
+        } catch (_err: unknown) {
             assignment.evaluationStatus = 'FAILED';
             await assignment.save();
         }
@@ -832,7 +831,7 @@ export class PersonalizedAssessmentService {
             throw new HttpError('Forbidden: This is not your assignment', 403);
         }
 
-        if (assignment.status === 'SUBMITTED') {
+        if (assignment.status === 'SUBMITTED' && assignment.evaluationStatus !== 'FAILED') {
             throw new HttpError('This assignment has already been submitted and finalized', 400);
         }
 

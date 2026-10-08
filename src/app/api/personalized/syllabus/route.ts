@@ -64,7 +64,6 @@ export async function GET(req: NextRequest) {
             { status: 200 }
         );
     } catch (error: unknown) {
-        console.error('[DIAG] GET /api/personalized/syllabus ERROR:', error);
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         let code = 'INTERNAL_ERROR';
@@ -168,7 +167,6 @@ export async function POST(req: NextRequest) {
             { status: 201 }
         );
     } catch (error: unknown) {
-        console.error('[API /api/personalized/syllabus POST Error]:', error);
         const message = error instanceof Error ? error.message : 'An unexpected error occurred';
         const status = error instanceof HttpError ? error.statusCode : 500;
         let code = 'INTERNAL_ERROR';

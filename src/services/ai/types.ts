@@ -6,15 +6,6 @@ export interface GeminiAIConfig {
   region: string;
 }
 
-export interface VertexAIConfig {
-  model: string;
-  region: string;
-  projectId: string;
-  secretName?: string;
-  isConfigured?: boolean;
-  isPaidTier?: boolean;
-}
-
 export interface ServiceAccountCredentials {
   client_email: string;
   private_key: string;
@@ -43,5 +34,3 @@ export type GeminiAICaller = (payload: {
   imageBase64?: string;
   mimeType?: string;
 }) => Promise<string>;
-
-export type VertexAICaller = GeminiAICaller;

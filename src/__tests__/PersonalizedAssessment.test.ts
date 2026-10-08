@@ -945,7 +945,7 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
             expect(result.questions[0].sourceSyllabusTopic).toBeDefined();
         });
 
-        it('Gemini provider resolves model dynamically defaulting to gemini-3.8-flash and avoiding gemini-1.5-flash', () => {
+        it('Gemini provider resolves model dynamically defaulting to gemini-1.5-flash', () => {
             const originalPersonalized = process.env.GEMINI_PERSONALIZED_MODEL;
             const originalClassroom = process.env.GEMINI_CLASSROOM_MODEL;
             const originalLegacy = process.env.GEMINI_MODEL;
@@ -956,19 +956,15 @@ describe('Research Direction 2: Personalized Assessment Test Suite', () => {
                 delete process.env.GEMINI_MODEL;
 
                 const provider = new GeminiAIQuestionGenerationProvider();
-                expect(provider.getModelName()).toBe('gemini-3.8-flash');
+                expect(provider.getModelName()).toBe('gemini-1.5-flash');
 
-                process.env.GEMINI_PERSONALIZED_MODEL = 'gemini-3.8-flash';
-                expect(provider.getModelName()).toBe('gemini-3.8-flash');
-
-                // Deprecated model should be bypassed in favor of default
-                process.env.GEMINI_PERSONALIZED_MODEL = 'gemini-1.5-flash';
-                expect(provider.getModelName()).toBe('gemini-3.8-flash');
+                process.env.GEMINI_PERSONALIZED_MODEL = 'gemini-1.5-pro';
+                expect(provider.getModelName()).toBe('gemini-1.5-pro');
 
                 // Classroom model fallback
                 delete process.env.GEMINI_PERSONALIZED_MODEL;
-                process.env.GEMINI_CLASSROOM_MODEL = 'gemini-2.5-flash';
-                expect(provider.getModelName()).toBe('gemini-2.5-flash');
+                process.env.GEMINI_CLASSROOM_MODEL = 'gemini-1.5-flash';
+                expect(provider.getModelName()).toBe('gemini-1.5-flash');
             } finally {
                 if (originalPersonalized !== undefined) process.env.GEMINI_PERSONALIZED_MODEL = originalPersonalized;
                 else delete process.env.GEMINI_PERSONALIZED_MODEL;

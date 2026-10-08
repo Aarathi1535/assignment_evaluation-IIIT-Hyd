@@ -502,6 +502,64 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
             expect(submittedDoc?.isProvisional).toBe(true);
             expect(submittedDoc?.score).toBeNull();
         });
+
+        it('allows retrying submission when previous evaluation failed', async () => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const schedule = await personalizedAssessmentService.createSchedule(
+                {
+                    course: testCourse._id.toString(),
+                    title: 'Retry Handling Schedule',
+                    startDate: todayStr,
+                    activeDaysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+                    dailyWindowStartTime: '00:00',
+                    dailyWindowEndTime: '23:59',
+                    enrolledStudents: [studentUser._id.toString()]
+                },
+                professorUser._id.toString()
+            );
+
+            const assignment = (await PersonalizedStudentAssignment.findOne({
+                schedule: schedule._id,
+                student: studentUser._id,
+                dayNumber: 1
+            }))!;
+
+            // First attempt: mock error
+            vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer').mockRejectedValueOnce(
+                new HttpError('Transient error', 503)
+            );
+
+            await personalizedAssessmentService.submitTodayPhotoAssignment({
+                studentId: studentUser._id.toString(),
+                assignmentId: assignment._id.toString(),
+                fileBuffer: Buffer.from('dummy-image'),
+                mimeType: 'image/png'
+            });
+
+            const docAfterFail = await PersonalizedStudentAssignment.findById(assignment._id);
+            expect(docAfterFail?.evaluationStatus).toBe('FAILED');
+
+            // Second attempt: retry succeeds
+            vi.spyOn(classroomEvaluationService, 'evaluateHandwrittenAnswer').mockResolvedValueOnce({
+                score: 8,
+                maxMarks: 10,
+                feedback: 'Good on retry',
+                criterionScores: [],
+                confidence: 0.95
+            });
+
+            await personalizedAssessmentService.submitTodayPhotoAssignment({
+                studentId: studentUser._id.toString(),
+                assignmentId: assignment._id.toString(),
+                fileBuffer: Buffer.from('dummy-image-2'),
+                mimeType: 'image/png'
+            });
+
+            const docAfterRetry = await PersonalizedStudentAssignment.findById(assignment._id);
+            expect(docAfterRetry?.evaluationStatus).toBe('EVALUATED');
+            expect(docAfterRetry?.score).toBe(8);
+            expect(docAfterRetry?.feedback).toBe('Good on retry');
+        });
     });
 
     // =========================================================================
@@ -566,6 +624,7 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
     describe('6. Feature-Flag Protection', () => {
         it('rejects submissions with 404 when FEATURE_PERSONALIZED_ASSESSMENT is disabled', async () => {
             process.env.FEATURE_PERSONALIZED_ASSESSMENT = 'false';
+            process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT = 'false';
 
             const req = new NextRequest('http://localhost:3000/api/personalized/today/submit', {
                 method: 'POST',
@@ -581,10 +640,12 @@ describe('Mentor-Reviewed Personalized Assessment: Daily Photo Upload & Evaluate
             expect(json.message).toContain('disabled');
 
             process.env.FEATURE_PERSONALIZED_ASSESSMENT = 'true';
+            process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT = 'true';
         });
 
         it('processes multipart photo submissions when feature flag is enabled', async () => {
             process.env.FEATURE_PERSONALIZED_ASSESSMENT = 'true';
+            process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT = 'true';
             mockSessionUser = { id: studentUser._id.toString(), role: 'STUDENT' };
 
             const todayStr = new Date().toISOString().slice(0, 10);

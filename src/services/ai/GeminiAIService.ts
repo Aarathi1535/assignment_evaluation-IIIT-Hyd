@@ -2,7 +2,6 @@ import { GoogleGenAI } from '@google/genai';
 import { HttpError } from '../../lib/errors';
 import {
   GeminiAIConfig,
-  VertexAIConfig,
   GenerateContentParams,
   GenerateMultimodalContentParams,
   GeminiAICaller,
@@ -103,14 +102,13 @@ export class GeminiAIService {
   }
 
   /**
-   * Returns the model name. Defaults to 'gemini-3.5-flash'.
+   * Returns the model name. Defaults to 'gemini-1.5-flash'.
    */
   public getModelName(): string {
     return (
       process.env.GEMINI_MODEL?.trim() ||
       process.env.AI_MODEL?.trim() ||
-      process.env.VERTEX_AI_MODEL?.trim() ||
-      'gemini-3.5-flash'
+      'gemini-1.5-flash'
     );
   }
 
@@ -140,14 +138,13 @@ export class GeminiAIService {
   /**
    * Returns safe service configuration metadata without exposing secret values.
    */
-  public getConfig(): GeminiAIConfig & VertexAIConfig {
+  public getConfig(): GeminiAIConfig {
     return {
       model: this.getModelName(),
       secretName: this.getSecretName(),
       isConfigured: this.isConfigured(),
       isPaidTier: this.isPaidTier(),
       region: this.getRegion(),
-      projectId: this.getProjectId(),
     };
   }
 
@@ -358,5 +355,3 @@ export class GeminiAIService {
 
 export const geminiAIService = GeminiAIService.getInstance();
 export const sharedAIService = geminiAIService;
-export const VertexAIService = GeminiAIService;
-export const vertexAIService = geminiAIService;

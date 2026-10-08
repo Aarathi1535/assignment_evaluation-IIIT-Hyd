@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { HttpError } from '../../lib/errors';
 import { QuestionDifficulty } from '../../models/PersonalizedQuestion';
-import { vertexAIService, VertexAIService } from './VertexAIService';
 import { geminiAIService, GeminiAIService } from './GeminiAIService';
 import type { GeminiAICaller } from './types';
 
@@ -423,16 +422,13 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             process.env.GEMINI_PERSONALIZED_MODEL ||
             process.env.GEMINI_CLASSROOM_MODEL ||
             process.env.GEMINI_MODEL;
-        if (customModel && customModel.trim() && customModel.trim() !== 'gemini-1.5-flash') {
+        if (customModel && customModel.trim()) {
             return customModel.trim();
         }
-        return 'gemini-3.8-flash';
+        return 'gemini-1.5-flash';
     }
 
     isConfigured(): boolean {
-        if (vertexAIService.isConfigured()) {
-            return true;
-        }
         if (this.customGeminiCaller !== null) {
             return true;
         }
@@ -548,15 +544,11 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
 
         const preferredModel = (model || this.getModelName()).trim();
         const modelsToTry: string[] = [];
-        if (preferredModel && preferredModel !== 'gemini-1.5-flash') {
+        if (preferredModel) {
             modelsToTry.push(preferredModel);
         }
-        if (!modelsToTry.includes('gemini-3.8-flash')) {
-            modelsToTry.push('gemini-3.8-flash');
-        }
-
-        if (!modelsToTry.includes('gemini-flash-latest')) {
-            modelsToTry.push('gemini-flash-latest');
+        if (!modelsToTry.includes('gemini-1.5-flash')) {
+            modelsToTry.push('gemini-1.5-flash');
         }
 
         let lastError: Error | null = null;
@@ -636,8 +628,8 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             return parseGeneratedQuestions(rawOutput, syllabusUnits);
         }
 
-        // Live Vertex AI Service call when configured via Google Cloud credentials
-        if (vertexAIService.isConfigured()) {
+        // Live Shared Gemini Service call when configured
+        if (this.sharedGeminiService.isConfigured()) {
             const promptText = this.buildUserPrompt({
                 courseTitle,
                 syllabusUnits,
@@ -646,7 +638,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
                 selectedTopics,
                 learningObjectives
             });
-            const rawText = await vertexAIService.generateContent({
+            const rawText = await this.sharedGeminiService.generateContent({
                 systemInstruction,
                 promptText,
                 responseMimeType: 'application/json',
@@ -798,9 +790,9 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
  */
 export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerationProvider {
     override readonly providerName = 'VertexAI';
-    private sharedVertexService: VertexAIService;
+    private sharedVertexService: GeminiAIService;
 
-    constructor(aiService: VertexAIService = vertexAIService) {
+    constructor(aiService: GeminiAIService = geminiAIService) {
         super();
         this.sharedVertexService = aiService;
     }
@@ -824,7 +816,7 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
     override async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
         if (!this.isConfigured()) {
             throw new HttpError(
-                'Vertex AI question generation is not configured. Please configure Google Cloud service account credentials via GOOGLE_APPLICATION_CREDENTIALS.',
+                'AI question generation is not configured. Please configure credentials via GEMINI_API_KEY.',
                 503
             );
         }
@@ -849,5 +841,5 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
     }
 }
 
-export const AIQuestionGenerationProvider = VertexAIQuestionGenerationProvider;
+export const AIQuestionGenerationProvider = GeminiAIQuestionGenerationProvider;
 export const GeminiQuestionGenerationProvider = GeminiAIQuestionGenerationProvider;

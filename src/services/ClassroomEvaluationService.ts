@@ -2,7 +2,7 @@ import { HttpError } from '../lib/errors';
 import { IClassroomCriterion } from '../models/ClassroomQuestion';
 import { IClassroomCriterionScore } from '../models/ClassroomSubmission';
 import { isValidScoreStep, DEFAULT_SCORE_STEP } from './GradingService';
-import { vertexAIService, VertexAIService } from './ai/VertexAIService';
+import { geminiAIService, GeminiAIService } from './ai/GeminiAIService';
 
 export interface EvaluateClassroomAnswerInput {
     questionPrompt: string;
@@ -49,9 +49,9 @@ export type GeminiCaller = (payload: {
 
 export class ClassroomEvaluationService {
     private customGeminiCaller: GeminiCaller | null = null;
-    private aiService: VertexAIService;
+    private aiService: GeminiAIService;
 
-    constructor(aiService: VertexAIService = vertexAIService) {
+    constructor(aiService: GeminiAIService = geminiAIService) {
         this.aiService = aiService;
     }
 
