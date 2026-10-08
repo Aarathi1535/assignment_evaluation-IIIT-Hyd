@@ -652,7 +652,6 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     };
 
     vi.spyOn(DerivedStorageService, 'openDerivedPage').mockRejectedValue(Object.assign(new Error('missing'), { code: 404 }));
-    vi.spyOn(DerivedPageRepairService, 'repairPage').mockRejectedValue(new Error('original missing'));
 
     const req = new NextRequest(
       `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
@@ -667,19 +666,18 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(body.message).toBe('Page image file not found in derived storage');
   });
 
-  it('regenerates a missing derived page from the original and retries serving it', async () => {
+  it('never repairs or regenerates a missing derived page on GET, returning 404 instead', async () => {
     mockSessionUser = { id: taUser._id.toString(), email: taUser.email, role: UserRole.TA };
-    const bytes = Buffer.from('regenerated image');
     const open = vi.spyOn(DerivedStorageService, 'openDerivedPage')
-      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 404 }))
-      .mockResolvedValueOnce({ stream: Readable.from([bytes]), size: bytes.length });
-    const repair = vi.spyOn(DerivedPageRepairService, 'repairPage').mockResolvedValue();
+      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 404 }));
+    const repair = vi.spyOn(DerivedPageRepairService, 'repairPage');
     const req = new NextRequest(`http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`);
     const res = await imageGET(req, { params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }) });
-    expect(res.status).toBe(200);
-    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes);
-    expect(repair).toHaveBeenCalledWith(pagePng._id.toString());
-    expect(open).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.message).toBe('Page image file not found in derived storage');
+    expect(repair).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it('returns 500 for an unrelated derived storage error without attempting repair', async () => {

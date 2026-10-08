@@ -98,9 +98,20 @@ export class DerivedPageRepairService {
         if (stored.storageKey !== expectedKey) {
             throw new Error(`Page regeneration returned unexpected storage key "${stored.storageKey}".`);
         }
-        if (page.storageKey !== expectedKey) {
-            await IngestionPage.updateOne({ _id: page._id }, { $set: { storageKey: expectedKey } }, { timestamps: false });
+        const updateFields: Record<string, unknown> = { storageKey: expectedKey };
+        if (stored.width !== undefined) updateFields.width = stored.width;
+        if (stored.height !== undefined) updateFields.height = stored.height;
+        if (stored.enhancementParams !== undefined) updateFields.enhancementParams = stored.enhancementParams;
+        if (page.metadata || stored.width !== undefined || stored.height !== undefined) {
+            const nextMetadata: Record<string, unknown> = {
+                ...(page.metadata || {}),
+                derivedStorageKey: expectedKey
+            };
+            if (stored.width !== undefined) nextMetadata.width = stored.width;
+            if (stored.height !== undefined) nextMetadata.height = stored.height;
+            updateFields.metadata = nextMetadata;
         }
+        await IngestionPage.updateOne({ _id: page._id }, { $set: updateFields }, { timestamps: false });
     }
 
     async repair(options: DerivedPageRepairOptions): Promise<DerivedPageRepairResult> {
@@ -227,9 +238,23 @@ export class DerivedPageRepairService {
                     throw new Error(`Page regeneration returned unexpected storage key "${stored.storageKey}".`);
                 }
 
+                const updateFields: Record<string, unknown> = { storageKey: expectedKey };
+                if (stored.width !== undefined) updateFields.width = stored.width;
+                if (stored.height !== undefined) updateFields.height = stored.height;
+                if (stored.enhancementParams !== undefined) updateFields.enhancementParams = stored.enhancementParams;
+                if (page.metadata || stored.width !== undefined || stored.height !== undefined) {
+                    const nextMetadata: Record<string, unknown> = {
+                        ...(page.metadata || {}),
+                        derivedStorageKey: expectedKey
+                    };
+                    if (stored.width !== undefined) nextMetadata.width = stored.width;
+                    if (stored.height !== undefined) nextMetadata.height = stored.height;
+                    updateFields.metadata = nextMetadata;
+                }
+
                 await IngestionPage.updateOne(
                     { _id: page._id },
-                    { $set: { storageKey: expectedKey } },
+                    { $set: updateFields },
                     { timestamps: false }
                 );
                 result.repaired += 1;

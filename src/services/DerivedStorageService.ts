@@ -17,6 +17,7 @@ export interface StoreDerivedPageInput {
     pageNumber: number;
     buffer: Buffer;
     format?: string;
+    ifGenerationMatch?: number;
 }
 
 export interface StoredDerivedPageResult {
@@ -88,12 +89,12 @@ export class DerivedStorageService implements IDerivedStorageService {
      * Retries idempotently overwrite the existing asset without WORM or HMAC locking.
      */
     async storeDerivedPage(input: StoreDerivedPageInput): Promise<StoredDerivedPageResult> {
-        const { batchId, fileId, pageNumber, buffer, format = 'png' } = input;
+        const { batchId, fileId, pageNumber, buffer, format = 'png', ifGenerationMatch } = input;
         const storageKey = this.getDerivedPageKey(batchId, fileId, pageNumber, format);
         const bucket = getConfiguredStorageBucket();
         if (bucket) {
             const file = bucket.file(storageKey);
-            console.info('[DerivedStorageService] Writing derived page to GCS', {
+            console.debug('[DerivedStorageService] Writing derived page to GCS', {
                 bucket: bucket.name,
                 storageKey,
                 bufferSize: buffer.length,
@@ -102,7 +103,10 @@ export class DerivedStorageService implements IDerivedStorageService {
             try {
                 await file.save(buffer, {
                     resumable: false,
-                    metadata: { contentType: this.getContentType(format) }
+                    metadata: { contentType: this.getContentType(format) },
+                    ...(ifGenerationMatch !== undefined
+                        ? { preconditionOpts: { ifGenerationMatch } }
+                        : {})
                 });
             } catch (error) {
                 console.error('[DerivedStorageService] Failed to write derived page to GCS', {
@@ -116,7 +120,7 @@ export class DerivedStorageService implements IDerivedStorageService {
                 });
                 throw error;
             }
-            console.info('[DerivedStorageService] Wrote derived page to GCS', {
+            console.debug('[DerivedStorageService] Wrote derived page to GCS', {
                 bucket: bucket.name,
                 storageKey,
                 bufferSize: buffer.length,

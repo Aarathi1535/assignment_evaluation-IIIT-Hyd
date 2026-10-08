@@ -9,7 +9,6 @@ import AllocationService from '../../../../../services/AllocationService';
 import Allocation, { AllocationRule, AllocationStatus } from '../../../../../models/Allocation';
 import Exam from '../../../../../models/Exam';
 import Course from '../../../../../models/Course';
-import User from '../../../../../models/User';
 import AnswerScript from '../../../../../models/AnswerScript';
 import Grade from '../../../../../models/Grade';
 import ExamRepository from '../../../../../repositories/ExamRepository';
@@ -133,49 +132,6 @@ export async function POST(
       resultData = createdAllocations;
     }
 
-    const [selectedUsers, persistedAllocations] = await Promise.all([
-      // Log identity metadata only for this temporary allocation trace.
-      User.find({ _id: { $in: taIds } })
-        .select('_id email name role isActive')
-        .lean(),
-      Allocation.find({ exam: new mongoose.Types.ObjectId(id) })
-        .select('_id ta exam answerScript status rule question')
-        .lean()
-    ]);
-    const allocatedScripts = await AnswerScript.find({
-      _id: { $in: persistedAllocations.map(allocation => allocation.answerScript) }
-    })
-      .select('_id exam student isActive batchId identificationStatus')
-      .lean();
-    console.info('[PROFESSOR ALLOCATION DEBUG]', JSON.stringify({
-      examId: id,
-      actingUserId,
-      selectedTaIds: taIds,
-      selectedUsers: selectedUsers.map(user => ({
-        userId: user._id.toString(),
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        isActive: user.isActive
-      })),
-      allocations: persistedAllocations.map(allocation => ({
-        allocationId: allocation._id.toString(),
-        ta: allocation.ta.toString(),
-        answerScript: allocation.answerScript.toString(),
-        exam: allocation.exam.toString(),
-        status: allocation.status,
-        rule: allocation.rule,
-        question: allocation.question ?? null
-      })),
-      answerScripts: allocatedScripts.map(script => ({
-        answerScriptId: script._id.toString(),
-        exam: script.exam.toString(),
-        student: script.student?.toString() ?? null,
-        isActive: script.isActive,
-        batchId: script.batchId ?? null,
-        identificationStatus: script.identificationStatus ?? null
-      }))
-    }));
 
     return NextResponse.json({
       success: true,

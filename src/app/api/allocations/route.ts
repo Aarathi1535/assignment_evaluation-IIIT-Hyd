@@ -6,7 +6,6 @@ import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
 import Allocation, { AllocationStatus } from '../../../models/Allocation';
 import Notification from '../../../models/Notification';
-import User from '../../../models/User';
 import { Anonymizer } from '../../../lib/anonymizer';
 
 export const dynamic = 'force-dynamic';
@@ -29,12 +28,6 @@ export async function GET(req: NextRequest) {
   const examId = searchParams.get('examId');
   const status = searchParams.get('status');
   const sortParam = searchParams.get('sort') || searchParams.get('sortBy');
-  console.info('[TA ALLOCATION DEBUG]', JSON.stringify({
-    authenticatedUserId: auth.user.id,
-    authenticatedEmail: auth.user.email,
-    authenticatedRole: auth.user.role,
-    requestedExamId: examId
-  }));
 
   // Validate examId if provided
   if (examId && !mongoose.Types.ObjectId.isValid(examId)) {
@@ -99,18 +92,6 @@ export async function GET(req: NextRequest) {
 
   try {
     await connectDB();
-    const authenticatedUser = await User.findById(auth.user.id)
-      .select('_id email name role isActive')
-      .lean();
-    console.info('[TA ALLOCATION DEBUG]', JSON.stringify({
-      authenticatedUserDocument: authenticatedUser ? {
-        userId: authenticatedUser._id.toString(),
-        email: authenticatedUser.email,
-        name: authenticatedUser.name,
-        role: authenticatedUser.role,
-        isActive: authenticatedUser.isActive
-      } : null
-    }));
 
     const statusQuery: { ta: mongoose.Types.ObjectId; exam?: mongoose.Types.ObjectId } = {
       ta: new mongoose.Types.ObjectId(auth.user.id)
@@ -122,7 +103,6 @@ export async function GET(req: NextRequest) {
     if (status) {
       query.status = status as AllocationStatus;
     }
-    console.info('[TA ALLOCATION DEBUG]', JSON.stringify({ mongoQuery: query }));
 
     // Count the total matching allocations
     const [total, pending, inProgress, completed, assignedExamIds] = await Promise.all([
@@ -145,56 +125,24 @@ export async function GET(req: NextRequest) {
       .limit(limit)
       .populate('answerScript')
       .lean();
-    console.info('[TA ALLOCATION DEBUG]', JSON.stringify({
-      matchingAllocationCount: total,
-      returnedAllocationCount: allocations.length,
-      allocations: allocations.map(allocation => ({
-        allocationId: allocation._id.toString(),
-        ta: allocation.ta.toString(),
-        exam: allocation.exam.toString(),
-        rawAnswerScriptId: allocation.answerScript?._id?.toString() || allocation.answerScript?.toString() || null,
-        populatedAnswerScriptId: allocation.answerScript?._id?.toString() || null,
-        status: allocation.status
-      }))
-    }));
 
     // Extract populated answer script documents
     const scripts = allocations.map(a => a.answerScript).filter(Boolean);
 
     // Bulk serialize using the Anonymizer, passing the viewer context
-    let serializedScripts;
-    try {
-      serializedScripts = await Anonymizer.serializeAnswerScripts(
-        scripts,
-        { id: auth.user.id, role: auth.user.role }
-      );
-    } catch (error) {
-      console.error('[TA ALLOCATION DEBUG] AnswerScript serialization failed', JSON.stringify({
-        authenticatedUserId: auth.user.id,
-        allocationIds: allocations.map(allocation => allocation._id.toString()),
-        error: error instanceof Error ? error.message : 'Unknown serialization error'
-      }));
-      throw error;
-    }
+    const serializedScripts = await Anonymizer.serializeAnswerScripts(
+      scripts,
+      { id: auth.user.id, role: auth.user.role }
+    );
 
     // Map serialized scripts back to their allocations
     const scriptMap = new Map(
       serializedScripts.map(s => [s._id.toString(), s])
     );
-    console.info('[TA ALLOCATION DEBUG]', JSON.stringify({
-      serializedAnswerScriptIds: serializedScripts.map(script => script._id.toString()),
-      scriptMapKeys: Array.from(scriptMap.keys())
-    }));
 
     const result = allocations.map(a => {
       const scriptId = a.answerScript?._id?.toString() || a.answerScript?.toString();
       const serializedScript = scriptMap.get(scriptId);
-      console.info('[TA ALLOCATION DEBUG]', JSON.stringify({
-        allocationId: a._id.toString(),
-        rawAnswerScriptId: a.answerScript?._id?.toString() || a.answerScript?.toString() || null,
-        populatedAnswerScriptId: a.answerScript?._id?.toString() || null,
-        serializedAnswerScriptId: serializedScript?._id?.toString() || null
-      }));
       return {
         _id: a._id.toString(),
         exam: a.exam.toString(),
