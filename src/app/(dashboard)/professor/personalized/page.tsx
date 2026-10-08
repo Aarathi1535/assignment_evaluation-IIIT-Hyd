@@ -18,6 +18,8 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ProfessorSelfPacedSessionsView } from '@/components/personalized/ProfessorSelfPacedSessionsView';
+import { ProfessorTaxonomyInspector } from '@/components/personalized/ProfessorTaxonomyInspector';
 
 interface CourseOption {
     _id: string;
@@ -91,13 +93,13 @@ interface StudentProgressItem {
     completionPercentage: number;
 }
 
-type TabType = 'SYLLABUS' | 'QUESTION_BANK' | 'SCHEDULES';
+type TabType = 'TAXONOMY' | 'SELF_PACED_SESSIONS' | 'SYLLABUS' | 'QUESTION_BANK' | 'SCHEDULES';
 
 export default function ProfessorPersonalizedAssessmentPage() {
     const [loading, setLoading] = useState(true);
     const [courses, setCourses] = useState<CourseOption[]>([]);
     const [selectedCourseId, setSelectedCourseId] = useState('');
-    const [activeTab, setActiveTab] = useState<TabType>('SYLLABUS');
+    const [activeTab, setActiveTab] = useState<TabType>('TAXONOMY');
 
     // Syllabus state
     const [syllabus, setSyllabus] = useState<CourseSyllabusData | null>(null);
@@ -509,6 +511,31 @@ export default function ProfessorPersonalizedAssessmentPage() {
             {/* Workflow Navigation Tabs */}
             <div className="flex items-center gap-2 border-b border-slate-200">
                 <button
+                    onClick={() => setActiveTab('TAXONOMY')}
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
+                        activeTab === 'TAXONOMY'
+                            ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
+                            : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                >
+                    <Sparkles className="h-4 w-4" />
+                    <span>Taxonomy & AI Bank</span>
+                    {hasQuestions && (
+                        <span className="h-2 w-2 rounded-full bg-indigo-500 ml-1" title="Question Bank Available" />
+                    )}
+                </button>
+                <button
+                    onClick={() => setActiveTab('SELF_PACED_SESSIONS')}
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
+                        activeTab === 'SELF_PACED_SESSIONS'
+                            ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
+                            : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                >
+                    <Layers className="h-4 w-4" />
+                    <span>Student Sessions</span>
+                </button>
+                <button
                     onClick={() => setActiveTab('SYLLABUS')}
                     className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
                         activeTab === 'SYLLABUS'
@@ -548,6 +575,21 @@ export default function ProfessorPersonalizedAssessmentPage() {
                     <span>3. Assessment Schedules ({schedules.length})</span>
                 </button>
             </div>
+
+            {/* TAB: TAXONOMY & QUESTION BANK */}
+            {activeTab === 'TAXONOMY' && (
+                <ProfessorTaxonomyInspector
+                    courseId={selectedCourseId}
+                    courseCode={currentCourse?.courseCode}
+                    courseName={currentCourse?.courseName}
+                    onOpenGenerateModal={() => setShowGenerateModal(true)}
+                />
+            )}
+
+            {/* TAB: SELF PACED SESSIONS */}
+            {activeTab === 'SELF_PACED_SESSIONS' && (
+                <ProfessorSelfPacedSessionsView courseId={selectedCourseId} />
+            )}
 
             {/* TAB 1: SEMESTER SYLLABUS */}
             {activeTab === 'SYLLABUS' && (
