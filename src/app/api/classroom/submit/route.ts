@@ -21,33 +21,63 @@ export async function POST(req: NextRequest) {
   try {
     await connectDB();
 
-    const formData = await req.formData();
-    const questionId = formData.get('questionId') as string | null;
-    const file = formData.get('file') as File | null;
+    const contentType = req.headers.get('content-type') || '';
+    let questionId: string | null = null;
+    let selectedOption: number | null = null;
+    let textResponse: string | null = null;
+    let fileBuffer: Buffer | undefined = undefined;
+    let originalFilename: string | undefined = undefined;
+    let mimeType: string | undefined = undefined;
+
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      questionId = body.questionId;
+      if (typeof body.selectedOption === 'number') {
+        selectedOption = body.selectedOption;
+      }
+      if (typeof body.textResponse === 'string') {
+        textResponse = body.textResponse;
+      }
+    } else if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      questionId = formData.get('questionId') as string | null;
+      const opt = formData.get('selectedOption');
+      if (opt !== null && opt !== undefined) {
+        selectedOption = parseInt(opt.toString(), 10);
+      }
+      textResponse = (formData.get('textResponse') as string | null) || null;
+
+      const file = formData.get('file') as File | null;
+      if (file && file.size > 0) {
+        const arrayBuffer = await file.arrayBuffer();
+        fileBuffer = Buffer.from(new Uint8Array(arrayBuffer));
+        originalFilename = file.name || 'answer.png';
+        mimeType = file.type || 'image/png';
+      }
+    } else {
+      // Fallback: try json
+      try {
+        const body = await req.json();
+        questionId = body.questionId;
+        if (typeof body.selectedOption === 'number') {
+          selectedOption = body.selectedOption;
+        }
+        if (typeof body.textResponse === 'string') {
+          textResponse = body.textResponse;
+        }
+      } catch {
+        return NextResponse.json({
+          success: false,
+          message: 'Unsupported content-type. Expected application/json or multipart/form-data',
+          data: null
+        }, { status: 400 });
+      }
+    }
 
     if (!questionId || !questionId.trim()) {
       return NextResponse.json({
         success: false,
         message: 'Question ID is required',
-        data: null
-      }, { status: 400 });
-    }
-
-    if (!file) {
-      return NextResponse.json({
-        success: false,
-        message: 'Answer image file is required',
-        data: null
-      }, { status: 400 });
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-    const fileBuffer = Buffer.from(new Uint8Array(arrayBuffer));
-
-    if (fileBuffer.length === 0) {
-      return NextResponse.json({
-        success: false,
-        message: 'Uploaded file is empty',
         data: null
       }, { status: 400 });
     }
@@ -62,16 +92,18 @@ export async function POST(req: NextRequest) {
       {
         questionId: questionId.trim(),
         studentId: auth.user.id,
+        selectedOption,
+        textResponse,
         fileBuffer,
-        originalFilename: file.name || 'answer.png',
-        mimeType: file.type || 'image/png'
+        originalFilename,
+        mimeType
       },
       context
     );
 
     return NextResponse.json({
       success: true,
-      message: 'Classroom answer evaluated successfully',
+      message: 'Classroom answer submitted successfully',
       data: submission
     }, { status: 201 });
   } catch (error: unknown) {

@@ -4,8 +4,7 @@ import mongoose from 'mongoose';
 import ClassroomQuestion from '../models/ClassroomQuestion';
 import ClassroomSubmission from '../models/ClassroomSubmission';
 import ClassroomAssessmentService from '../services/ClassroomAssessmentService';
-import classroomEvaluationService from '../services/ClassroomEvaluationService';
-import { geminiAIService } from '../services/ai/GeminiAIService';
+import ClassroomEventService, { ClassroomRealtimeEvent } from '../services/ClassroomEventService';
 import { UserRole } from '../constants/permissions';
 
 let mockSessionUser: any = null;
@@ -21,16 +20,16 @@ vi.mock('next-auth', async (importOriginal) => {
   };
 });
 
-describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
+describe('Interactive Mentimeter-Style Classroom Assessment (Research Direction 1)', () => {
   let questionsGET: any;
   let questionsPOST: any;
   let activeQuestionGET: any;
   let questionDetailGET: any;
   let questionDetailPATCH: any;
+  let questionDetailDELETE: any;
   let submitPOST: any;
-  let questionSubmissionsGET: any;
-  let studentSubmissionsGET: any;
-  let singleSubmissionGET: any;
+  let resultsGET: any;
+  let nextQuestionPOST: any;
 
   let professorId: mongoose.Types.ObjectId;
   let otherProfessorId: mongoose.Types.ObjectId;
@@ -43,30 +42,30 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
     activeQuestionGET = (await import('../app/api/classroom/questions/active/route')).GET;
     questionDetailGET = (await import('../app/api/classroom/questions/[id]/route')).GET;
     questionDetailPATCH = (await import('../app/api/classroom/questions/[id]/route')).PATCH;
+    questionDetailDELETE = (await import('../app/api/classroom/questions/[id]/route')).DELETE;
     submitPOST = (await import('../app/api/classroom/submit/route')).POST;
-    questionSubmissionsGET = (await import('../app/api/classroom/questions/[id]/submissions/route')).GET;
-    studentSubmissionsGET = (await import('../app/api/classroom/submissions/route')).GET;
-    singleSubmissionGET = (await import('../app/api/classroom/submissions/[id]/route')).GET;
+    resultsGET = (await import('../app/api/classroom/questions/[id]/results/route')).GET;
+    nextQuestionPOST = (await import('../app/api/classroom/questions/next/route')).POST;
 
-    professorId = new mongoose.Types.ObjectId('000000000000000000000201');
-    otherProfessorId = new mongoose.Types.ObjectId('000000000000000000000202');
-    studentId = new mongoose.Types.ObjectId('000000000000000000000203');
-    otherStudentId = new mongoose.Types.ObjectId('000000000000000000000204');
+    professorId = new mongoose.Types.ObjectId('000000000000000000000301');
+    otherProfessorId = new mongoose.Types.ObjectId('000000000000000000000302');
+    studentId = new mongoose.Types.ObjectId('000000000000000000000303');
+    otherStudentId = new mongoose.Types.ObjectId('000000000000000000000304');
   });
 
   beforeEach(async () => {
     mockSessionUser = null;
     await ClassroomQuestion.deleteMany({});
     await ClassroomSubmission.deleteMany({});
-    classroomEvaluationService.setGeminiCaller(null);
+    ClassroomEventService.reset();
   });
 
   afterEach(() => {
-    classroomEvaluationService.setGeminiCaller(null);
+    ClassroomEventService.reset();
   });
 
-  describe('1. Authentication & Authorization Access Control', () => {
-    it('returns 401 Unauthorized when unauthenticated user tries to get questions', async () => {
+  describe('1. Authentication & Role-Based Access Control', () => {
+    it('returns 401 Unauthorized when unauthenticated user queries questions', async () => {
       mockSessionUser = null;
       const res = await questionsGET();
       const body = await res.json();
@@ -84,9 +83,10 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
 
       const req = {
         json: async () => ({
-          title: 'Math Quiz',
-          questionPrompt: 'Solve x^2 = 4',
-          maxMarks: 5,
+          title: 'Cache Policy',
+          questionPrompt: 'Which policy updates RAM immediately?',
+          type: 'MULTIPLE_CHOICE',
+          options: ['Write-through', 'Write-back'],
         }),
         headers: new Headers(),
       } as any;
@@ -97,25 +97,40 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
       expect(body.message).toContain('Forbidden');
     });
 
-    it('returns 403 Forbidden when a professor tries to modify another professors question', async () => {
+    it('returns 403 Forbidden when Admin accesses classroom questions', async () => {
+      mockSessionUser = {
+        id: '000000000000000000000399',
+        email: 'admin@iiit.ac.in',
+        name: 'Admin User',
+        role: UserRole.ADMIN,
+      };
+
+      const res = await questionsGET();
+      const body = await res.json();
+      expect(res.status).toBe(403);
+      expect(body.message).toContain('Forbidden');
+    });
+
+    it('returns 403 Forbidden when professor tries to modify another professors question', async () => {
       const q = await ClassroomQuestion.create({
-        title: 'Prof 1 Question',
-        questionPrompt: 'Derive Bayes Theorem',
-        maxMarks: 10,
-        createdBy: professorId,
-        isActive: true,
-        status: 'ACTIVE',
+        title: 'Prof A Question',
+        questionPrompt: 'Prompt',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        createdBy: otherProfessorId,
+        isActive: false,
+        status: 'DRAFT',
       });
 
       mockSessionUser = {
-        id: otherProfessorId.toString(),
-        email: 'otherprof@iiit.ac.in',
-        name: 'Prof Two',
+        id: professorId.toString(),
+        email: 'prof1@iiit.ac.in',
+        name: 'Professor One',
         role: UserRole.PROFESSOR,
       };
 
       const req = {
-        json: async () => ({ isActive: false }),
+        json: async () => ({ action: 'activate' }),
         headers: new Headers(),
       } as any;
 
@@ -124,70 +139,25 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
       expect(res.status).toBe(403);
       expect(body.message).toContain('Forbidden');
     });
-
-    it('Admin cannot access classroom questions list (GET) - returns 403', async () => {
-      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
-      const res = await questionsGET();
-      const body = await res.json();
-      expect(res.status).toBe(403);
-      expect(body.success).toBe(false);
-      expect(body.message).toContain('Forbidden');
-    });
-
-    it('Admin cannot create a classroom question (POST) - returns 403', async () => {
-      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
-      const req = { json: async () => ({ title: 'AdminQ', questionPrompt: 'Q', maxMarks: 5 }), headers: new Headers() } as any;
-      const res = await questionsPOST(req);
-      const body = await res.json();
-      expect(res.status).toBe(403);
-      expect(body.success).toBe(false);
-      expect(body.message).toContain('Forbidden');
-    });
-
-    it('Admin cannot access the active classroom question - returns 403', async () => {
-      await ClassroomQuestion.create({ title: 'AQ', questionPrompt: 'P', maxMarks: 5, createdBy: professorId, isActive: true, status: 'ACTIVE' });
-      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
-      const res = await activeQuestionGET();
-      const body = await res.json();
-      expect(res.status).toBe(403);
-      expect(body.success).toBe(false);
-      expect(body.message).toContain('Forbidden');
-    });
-
-    it('Admin cannot submit an answer to classroom assessment - returns 403', async () => {
-      const q = await ClassroomQuestion.create({ title: 'AQ', questionPrompt: 'P', maxMarks: 5, createdBy: professorId, isActive: true, status: 'ACTIVE' });
-      mockSessionUser = { id: '000000000000000000000200', email: 'admin@iiit.ac.in', name: 'Admin', role: UserRole.ADMIN };
-      const buffer = Buffer.from('FAKE');
-      const fakeFile = { name: 'a.png', type: 'image/png', arrayBuffer: async () => Uint8Array.from(buffer).buffer };
-      const formData = new Map(); formData.set('questionId', q._id.toString()); formData.set('file', fakeFile);
-      const req = { formData: async () => formData, headers: new Headers() } as any;
-      const res = await submitPOST(req);
-      const body = await res.json();
-      expect(res.status).toBe(403);
-      expect(body.success).toBe(false);
-      expect(body.message).toContain('Forbidden');
-    });
   });
 
-  describe('2. Professor Question Management & Activation Flow', () => {
-    it('allows a professor to create a question with rubric criteria and set it active', async () => {
+  describe('2. Question Creation & Single Active Question Invariant', () => {
+    it('creates a multiple choice question with options, correct answer, and explanation', async () => {
       mockSessionUser = {
         id: professorId.toString(),
         email: 'prof@iiit.ac.in',
-        name: 'Prof Jawahar',
+        name: 'Professor Jawahar',
         role: UserRole.PROFESSOR,
       };
 
       const req = {
         json: async () => ({
-          title: 'Linear Algebra: Eigenvalue Problem',
-          questionPrompt: 'Find all eigenvalues and corresponding eigenvectors for the matrix A = [[2, 1], [1, 2]].',
-          maxMarks: 10,
-          rubricCriteria: [
-            { criterionName: 'Characteristic Polynomial', points: 4, description: 'Correct det(A - lambda*I) = 0' },
-            { criterionName: 'Eigenvalues Calculation', points: 3, description: 'Roots lambda1=1, lambda2=3' },
-            { criterionName: 'Eigenvectors Derivation', points: 3, description: 'Normalized basis vectors' },
-          ],
+          title: 'Computer Architecture Quiz',
+          questionPrompt: 'Which cache write policy guarantees immediate consistency in main memory?',
+          type: 'MULTIPLE_CHOICE',
+          options: ['Write-through', 'Write-back', 'Write-allocate', 'No-write-allocate'],
+          correctOptionIndex: 0,
+          explanation: 'Write-through updates both cache and main memory concurrently on every write.',
           isActive: true,
         }),
         headers: new Headers(),
@@ -195,58 +165,32 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
 
       const res = await questionsPOST(req);
       const body = await res.json();
-
       expect(res.status).toBe(201);
       expect(body.success).toBe(true);
-      expect(body.data.title).toBe('Linear Algebra: Eigenvalue Problem');
+      expect(body.data.title).toBe('Computer Architecture Quiz');
+      expect(body.data.options).toHaveLength(4);
+      expect(body.data.correctOptionIndex).toBe(0);
       expect(body.data.isActive).toBe(true);
-      expect(body.data.rubricCriteria).toHaveLength(3);
-      expect(body.data.maxMarks).toBe(10);
+      expect(body.data.status).toBe('ACTIVE');
 
-      const dbQ = await ClassroomQuestion.findById(body.data._id);
-      expect(dbQ).not.toBeNull();
-      expect(dbQ?.isActive).toBe(true);
+      const inDb = await ClassroomQuestion.findById(body.data._id);
+      expect(inDb).not.toBeNull();
+      expect(inDb?.isActive).toBe(true);
     });
 
-    it('rejects question creation if rubric criteria points sum exceeds maxMarks', async () => {
+    it('enforces single active question invariant: activating Q2 deactivates Q1', async () => {
       mockSessionUser = {
         id: professorId.toString(),
         email: 'prof@iiit.ac.in',
-        name: 'Prof Jawahar',
-        role: UserRole.PROFESSOR,
-      };
-
-      const req = {
-        json: async () => ({
-          title: 'Calculus Quiz',
-          questionPrompt: 'Integrate e^(2x)',
-          maxMarks: 5,
-          rubricCriteria: [
-            { criterionName: 'Substitution', points: 4 },
-            { criterionName: 'Final Answer', points: 3 },
-          ],
-        }),
-        headers: new Headers(),
-      } as any;
-
-      const res = await questionsPOST(req);
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body.success).toBe(false);
-    });
-
-    it('ensures only one question remains active when a new question is activated', async () => {
-      mockSessionUser = {
-        id: professorId.toString(),
-        email: 'prof@iiit.ac.in',
-        name: 'Prof Jawahar',
+        name: 'Professor Jawahar',
         role: UserRole.PROFESSOR,
       };
 
       const q1 = await ClassroomQuestion.create({
         title: 'Question 1',
         questionPrompt: 'Prompt 1',
-        maxMarks: 10,
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
         createdBy: professorId,
         isActive: true,
         status: 'ACTIVE',
@@ -256,646 +200,119 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
         {
           title: 'Question 2',
           questionPrompt: 'Prompt 2',
-          maxMarks: 10,
+          type: 'MULTIPLE_CHOICE',
+          options: ['C', 'D'],
           isActive: true,
         },
         { actingUserId: professorId.toString(), actingUserRole: UserRole.PROFESSOR }
       );
 
-      const updatedQ1 = await ClassroomQuestion.findById(q1._id);
-      const updatedQ2 = await ClassroomQuestion.findById(q2._id);
+      const refreshedQ1 = await ClassroomQuestion.findById(q1._id);
+      const refreshedQ2 = await ClassroomQuestion.findById(q2._id);
 
-      expect(updatedQ1?.isActive).toBe(false);
-      expect(updatedQ2?.isActive).toBe(true);
-    });
-  });
-
-  describe('3. Student Active Question & No-Active-Question Scenarios', () => {
-    it('returns null when there is no active question', async () => {
-      mockSessionUser = {
-        id: studentId.toString(),
-        email: 'student@iiit.ac.in',
-        name: 'Student One',
-        role: UserRole.STUDENT,
-      };
-
-      const res = await activeQuestionGET();
-      const body = await res.json();
-      expect(res.status).toBe(200);
-      expect(body.data).toBeNull();
+      expect(refreshedQ1?.isActive).toBe(false);
+      expect(refreshedQ1?.status).toBe('CLOSED');
+      expect(refreshedQ2?.isActive).toBe(true);
+      expect(refreshedQ2?.status).toBe('ACTIVE');
     });
 
-    it('returns the active question when one is published', async () => {
-      await ClassroomQuestion.create({
-        title: 'Active Live Assessment',
-        questionPrompt: 'Show step by step matrix inversion.',
-        maxMarks: 10,
-        createdBy: professorId,
-        isActive: true,
-        status: 'ACTIVE',
-      });
-
-      mockSessionUser = {
-        id: studentId.toString(),
-        email: 'student@iiit.ac.in',
-        name: 'Student One',
-        role: UserRole.STUDENT,
-      };
-
-      const res = await activeQuestionGET();
-      const body = await res.json();
-      expect(res.status).toBe(200);
-      expect(body.data).not.toBeNull();
-      expect(body.data.title).toBe('Active Live Assessment');
-    });
-  });
-
-  describe('4. Multimodal Gemini Evaluation Quality & Robustness (Scenarios A - I)', () => {
-    // Helper to create an active test question
-    async function createTestQuestion(maxMarks = 10) {
-      return await ClassroomQuestion.create({
-        title: 'Fourier Transform Quiz',
-        questionPrompt: 'Find the continuous-time Fourier transform of x(t) = e^(-2t)u(t). Show integration steps.',
-        maxMarks,
-        rubricCriteria: [
-          { criterionName: 'Formula & Integral Setup', points: 4, description: 'Integral from 0 to infinity of e^(-(2+jw)t) dt' },
-          { criterionName: 'Integration & Limit Evaluation', points: 4, description: 'Evaluation at upper and lower limits' },
-          { criterionName: 'Final Expression', points: 2, description: 'X(jw) = 1 / (2 + jw)' }
-        ],
-        createdBy: professorId,
-        isActive: true,
-        status: 'ACTIVE',
-      });
-    }
-
-    // Helper to create mock submission request
-    function createMockSubmitRequest(questionId: string, imageBytes = 'VALID_HANDWRITTEN_IMAGE_BYTES', filename = 'answer.png', mimeType = 'image/png') {
-      const buffer = Buffer.from(imageBytes);
-      const fakeFile = {
-        name: filename,
-        type: mimeType,
-        arrayBuffer: async () => Uint8Array.from(buffer).buffer,
-      };
-      const formData = new Map();
-      formData.set('questionId', questionId);
-      formData.set('file', fakeFile);
-
-      return {
-        formData: async () => formData,
-        headers: new Headers(),
-      } as any;
-    }
-
-    it('Scenario A: Correct answer receives high score with criterion-level evidence', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      // Mock Gemini returning full marks with grounded evidence
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterion: 'Formula & Integral Setup',
-              maxMarks: 4,
-              awardedMarks: 4,
-              evidence: 'Handwritten integral setup correctly writes integral from 0 to inf of e^(-2t)e^(-jwt)dt = integral e^(-(2+jw)t)dt.'
-            },
-            {
-              criterion: 'Integration & Limit Evaluation',
-              maxMarks: 4,
-              awardedMarks: 4,
-              evidence: 'Correctly antiderivative [-1/(2+jw) * e^(-(2+jw)t)] evaluated from 0 to inf yielding 0 - (-1/(2+jw)).'
-            },
-            {
-              criterion: 'Final Expression',
-              maxMarks: 2,
-              awardedMarks: 2,
-              evidence: 'Boxed final answer clearly states X(jw) = 1 / (2 + jw).'
-            }
-          ],
-          totalMarks: 10,
-          maxMarks: 10,
-          overallFeedback: 'Flawless handwritten solution with clear algebraic steps and correct final expression.',
-          confidence: 0.96
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.success).toBe(true);
-      expect(body.data.score).toBe(10);
-      expect(body.data.maxMarks).toBe(10);
-      expect(body.data.status).toBe('EVALUATED');
-      expect(body.data.criterionScores).toHaveLength(3);
-      expect(body.data.criterionScores[0].evidence).toContain('integral setup correctly writes');
-      expect(body.data.confidence).toBe(0.96);
-    });
-
-    it('Scenario B: Partially correct answer receives partial score, NOT automatically full marks', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      // Mock Gemini evaluating student who missed the negative sign in antiderivative
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterion: 'Formula & Integral Setup',
-              maxMarks: 4,
-              awardedMarks: 4,
-              evidence: 'Student wrote the correct CTFT definition integral with limits from 0 to infinity.'
-            },
-            {
-              criterion: 'Integration & Limit Evaluation',
-              maxMarks: 4,
-              awardedMarks: 1.5,
-              evidence: 'Sign error during integration step: missed negative sign in the exponent antiderivative factor.'
-            },
-            {
-              criterion: 'Final Expression',
-              maxMarks: 2,
-              awardedMarks: 0.5,
-              evidence: 'Final expression carried forward the sign error, writing -1/(2+jw) instead of 1/(2+jw).'
-            }
-          ],
-          totalMarks: 6,
-          maxMarks: 10,
-          overallFeedback: 'Good initial setup, but sign error in intermediate calculus reduced score.',
-          confidence: 0.90
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.success).toBe(true);
-      expect(body.data.score).toBe(6); // 4 + 1.5 + 0.5 = 6.0
-      expect(body.data.score).not.toBe(10);
-      expect(body.data.criterionScores[1].marksAwarded).toBe(1.5);
-      expect(body.data.criterionScores[1].evidence).toContain('Sign error');
-    });
-
-    it('Scenario C: Wrong answer receives low / zero score', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterion: 'Formula & Integral Setup',
-              maxMarks: 4,
-              awardedMarks: 0,
-              evidence: 'Student applied Laplace s-domain differentiation theorem instead of CTFT integral.'
-            },
-            {
-              criterion: 'Integration & Limit Evaluation',
-              maxMarks: 4,
-              awardedMarks: 0,
-              evidence: 'No integration was performed.'
-            },
-            {
-              criterion: 'Final Expression',
-              maxMarks: 2,
-              awardedMarks: 0,
-              evidence: 'Incorrect result s/(s+2).'
-            }
-          ],
-          totalMarks: 0,
-          maxMarks: 10,
-          overallFeedback: 'The submitted answer uses incorrect transform formulas and does not address the required FT integral.',
-          confidence: 0.95
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.success).toBe(true);
-      expect(body.data.score).toBe(0);
-      expect(body.data.feedback).toContain('incorrect transform formulas');
-    });
-
-    it('Scenario D: Irrelevant answer receives low / zero score', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterion: 'Formula & Integral Setup',
-              maxMarks: 4,
-              awardedMarks: 0,
-              evidence: 'Submitted image contains a sketch of a tree, completely unrelated to Fourier Transforms.'
-            },
-            {
-              criterion: 'Integration & Limit Evaluation',
-              maxMarks: 4,
-              awardedMarks: 0,
-              evidence: 'No calculations present.'
-            },
-            {
-              criterion: 'Final Expression',
-              maxMarks: 2,
-              awardedMarks: 0,
-              evidence: 'No mathematical expression present.'
-            }
-          ],
-          totalMarks: 0,
-          maxMarks: 10,
-          overallFeedback: 'Image is completely irrelevant to the assessment question.',
-          confidence: 0.99
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.data.score).toBe(0);
-      expect(body.data.criterionScores[0].evidence).toContain('unrelated');
-    });
-
-    it('Scenario E: Blank / empty answer image receives zero score', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterion: 'Formula & Integral Setup',
-              maxMarks: 4,
-              awardedMarks: 0,
-              evidence: 'Page is completely blank. No handwritten content found.'
-            },
-            {
-              criterion: 'Integration & Limit Evaluation',
-              maxMarks: 4,
-              awardedMarks: 0,
-              evidence: 'Blank page.'
-            },
-            {
-              criterion: 'Final Expression',
-              maxMarks: 2,
-              awardedMarks: 0,
-              evidence: 'Blank page.'
-            }
-          ],
-          totalMarks: 0,
-          maxMarks: 10,
-          overallFeedback: 'Empty submission. No answer provided.',
-          confidence: 1.0
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.data.score).toBe(0);
-      expect(body.data.feedback).toContain('Empty submission');
-    });
-
-    it('Scenario F: Malformed Gemini response yields controlled evaluation error, NEVER 10/10', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      // Mock Gemini returning broken/malformed non-JSON output
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return 'SORRY_MODEL_OVERLOADED_ERROR';
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(500);
-      expect(body.success).toBe(false);
-      expect(body.message).toContain('Evaluation failed');
-
-      // Ensure failed submission is recorded as FAILED and never assigned full score
-      const failedSub = await ClassroomSubmission.findOne({ question: q._id, student: studentId });
-      expect(failedSub).not.toBeNull();
-      expect(failedSub?.status).toBe('FAILED');
-      expect(failedSub?.score).toBe(0);
-    });
-
-    it('Scenario G: Score exceeding rubric criterion maximum is clamped server-side', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      // Mock Gemini returning 99 marks for a 4-point criterion
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            { criterion: 'Formula & Integral Setup', maxMarks: 4, awardedMarks: 99, evidence: 'Good' },
-            { criterion: 'Integration & Limit Evaluation', maxMarks: 4, awardedMarks: 4, evidence: 'Good' },
-            { criterion: 'Final Expression', maxMarks: 2, awardedMarks: 2, evidence: 'Good' }
-          ],
-          totalMarks: 105,
-          maxMarks: 10,
-          overallFeedback: 'Exceeded points test',
-          confidence: 0.9
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      // Server-side validation clamps criterion 1 from 99 down to target max 4
-      expect(body.data.criterionScores[0].marksAwarded).toBe(4);
-      expect(body.data.score).toBe(10); // 4 + 4 + 2 = 10
-    });
-
-    it('Scenario H: Total score exceeding question maximum is bounded server-side', async () => {
-      const q = await createTestQuestion(10);
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            { criterion: 'Formula & Integral Setup', maxMarks: 4, awardedMarks: 4 },
-            { criterion: 'Integration & Limit Evaluation', maxMarks: 4, awardedMarks: 4 },
-            { criterion: 'Final Expression', maxMarks: 2, awardedMarks: 2 }
-          ],
-          totalMarks: 50, // Bogus total
-          maxMarks: 10,
-          overallFeedback: 'Total clamp test',
-          confidence: 0.9
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.data.score).toBeLessThanOrEqual(10);
-      expect(body.data.score).toBe(10);
-    });
-
-    it('Scenario I: Gemini evaluation receives the actual image input and MIME type', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      let capturedPayload: any = null;
-      const testImageBytes = 'SPECIFIC_RAW_PNG_PIXEL_DATA_12345';
-
-      classroomEvaluationService.setGeminiCaller(async (payload) => {
-        capturedPayload = payload;
-        return JSON.stringify({
-          criteria: [
-            { criterion: 'Formula & Integral Setup', maxMarks: 4, awardedMarks: 3, evidence: 'Saw formula' },
-            { criterion: 'Integration & Limit Evaluation', maxMarks: 4, awardedMarks: 3, evidence: 'Saw integration' },
-            { criterion: 'Final Expression', maxMarks: 2, awardedMarks: 2, evidence: 'Saw answer' }
-          ],
-          totalMarks: 8,
-          maxMarks: 10,
-          overallFeedback: 'Image inspect verify test',
-          confidence: 0.9
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString(), testImageBytes, 'handwriting.png', 'image/png'));
-      expect(res.status).toBe(201);
-
-      expect(capturedPayload).not.toBeNull();
-      expect(capturedPayload.imageBase64).toBe(Buffer.from(testImageBytes).toString('base64'));
-      expect(capturedPayload.mimeType).toBe('image/png');
-      expect(capturedPayload.promptText).toContain('=== ASSESSMENT QUESTION ===');
-      expect(capturedPayload.systemInstruction).toContain('CRITICAL EVALUATION RULES:');
-    });
-
-
-    it('Scenario J: Evaluated score and overallFeedback propagate correctly to the API response body', async () => {
-      // Regression: submission.save() return value was discarded, causing the API
-      // to return a stale in-memory document with score=0 and feedback=''.
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      const expectedScore = 7.5;
-      const expectedFeedback = 'Good integration setup with a minor sign error in the limit evaluation.';
-
-      classroomEvaluationService.setGeminiCaller(async () => {
-        return JSON.stringify({
-          criteria: [
-            {
-              criterion: 'Formula & Integral Setup',
-              maxMarks: 4,
-              awardedMarks: 4,
-              evidence: 'Correct CTFT integral form written from 0 to infinity.'
-            },
-            {
-              criterion: 'Integration & Limit Evaluation',
-              maxMarks: 4,
-              awardedMarks: 1.5,
-              evidence: 'Sign error during limit evaluation step.'
-            },
-            {
-              criterion: 'Final Expression',
-              maxMarks: 2,
-              awardedMarks: 2,
-              evidence: 'Correct final boxed expression X(jw) = 1/(2+jw).'
-            }
-          ],
-          totalMarks: 7.5,
-          maxMarks: 10,
-          overallFeedback: expectedFeedback,
-          confidence: 0.88
-        });
-      });
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-
-      expect(res.status).toBe(201);
-      expect(body.success).toBe(true);
-
-      // Score must NOT be 0 -- catches the stale-document return bug
-      expect(body.data.score).toBe(expectedScore);
-      expect(body.data.score).not.toBe(0);
-
-      // Overall feedback must NOT be empty -- catches the feedback propagation bug
-      expect(body.data.feedback).toBe(expectedFeedback);
-      expect(body.data.feedback).not.toBe('');
-
-      // Criterion scores must be populated
-      expect(body.data.criterionScores).toHaveLength(3);
-      expect(body.data.criterionScores[0].marksAwarded).toBe(4);
-      expect(body.data.criterionScores[1].marksAwarded).toBe(1.5);
-      expect(body.data.criterionScores[2].marksAwarded).toBe(2);
-
-      // Status must be EVALUATED
-      expect(body.data.status).toBe('EVALUATED');
-    });
-
-    it('enforces paid-tier guard when evaluating real student data without paid tier configured', async () => {
-      geminiAIService.setPaidTier(false);
-      await expect(classroomEvaluationService.evaluateHandwrittenAnswer({
-        questionPrompt: 'Test prompt',
-        maxMarks: 10,
-        imageBuffer: Buffer.from('test-image'),
-        mimeType: 'image/png',
-        isRealStudentData: true,
-      })).rejects.toMatchObject({
-        statusCode: 403,
-        message: expect.stringContaining('paid Gemini API key'),
-      });
-      geminiAIService.setPaidTier(null);
-    });
-
-    it('uses shared GeminiAIService without leaking API key in URL', async () => {
-      const mockCaller = vi.fn().mockResolvedValue(JSON.stringify({
-        criteria: [{ criterion: 'Overall Correctness & Methodology', maxMarks: 10, awardedMarks: 10, evidence: 'Ok' }],
-        overallFeedback: 'All good',
-        confidence: 0.95
-      }));
-      geminiAIService.setCustomCaller(mockCaller);
-
-      const outcome = await classroomEvaluationService.evaluateHandwrittenAnswer({
-        questionPrompt: 'Test prompt',
-        maxMarks: 10,
-        imageBuffer: Buffer.from('test-image'),
-        mimeType: 'image/png',
-      });
-
-      expect(outcome.score).toBe(10);
-      expect(mockCaller).toHaveBeenCalled();
-      geminiAIService.setCustomCaller(null);
-    });
-    it('rejects submission when no active question exists for the question ID', async () => {
-      const inactiveQ = await ClassroomQuestion.create({
-        title: 'Closed Question',
-        questionPrompt: 'Old question prompt',
-        maxMarks: 10,
+    it('retrieves question details by ID for the professor', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'Detail Check',
+        questionPrompt: 'Detail Prompt',
+        type: 'MULTIPLE_CHOICE',
+        options: ['X', 'Y'],
         createdBy: professorId,
         isActive: false,
-        status: 'CLOSED',
-      });
-
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      const res = await submitPOST(createMockSubmitRequest(inactiveQ._id.toString()));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body.message).toContain('No active classroom assessment question found');
-    });
-
-    it('handles invalid file format cleanly (e.g., PDF or text)', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString(), '%PDF-1.4 file', 'doc.pdf', 'application/pdf'));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body.message).toContain('Unsupported file format');
-    });
-
-    it('handles empty upload cleanly', async () => {
-      const q = await createTestQuestion();
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString(), '', 'empty.png', 'image/png'));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body.message).toContain('empty');
-    });
-
-    it('prevents accidental duplicate submissions for an already evaluated question', async () => {
-      const q = await createTestQuestion();
-
-      await ClassroomSubmission.create({
-        question: q._id,
-        student: studentId,
-        imagePath: 'classroom_submissions/test.png',
-        originalFilename: 'test.png',
-        fileSize: 100,
-        mimeType: 'image/png',
-        status: 'EVALUATED',
-        score: 8,
-        maxMarks: 10,
-        feedback: 'Good job',
-        submittedAt: new Date(),
-        evaluatedAt: new Date(),
-      });
-
-      mockSessionUser = { id: studentId.toString(), email: 'student@iiit.ac.in', name: 'Student One', role: UserRole.STUDENT };
-
-      const res = await submitPOST(createMockSubmitRequest(q._id.toString()));
-      const body = await res.json();
-      expect(res.status).toBe(409);
-      expect(body.message).toContain('already submitted an answer');
-    });
-  });
-
-  describe('5. Results Viewing & Scoping', () => {
-    it('allows professor to retrieve all student submissions for their question', async () => {
-      const q = await ClassroomQuestion.create({
-        title: 'Professor Question',
-        questionPrompt: 'Prompt',
-        maxMarks: 10,
-        createdBy: professorId,
-        isActive: true,
-        status: 'ACTIVE',
-      });
-
-      await ClassroomSubmission.create({
-        question: q._id,
-        student: studentId,
-        imagePath: 'path1.png',
-        originalFilename: 'sub1.png',
-        fileSize: 200,
-        mimeType: 'image/png',
-        status: 'EVALUATED',
-        score: 9,
-        maxMarks: 10,
-        feedback: 'Excellent',
-        submittedAt: new Date(),
+        status: 'DRAFT',
       });
 
       mockSessionUser = {
         id: professorId.toString(),
         email: 'prof@iiit.ac.in',
-        name: 'Prof Jawahar',
+        name: 'Professor',
         role: UserRole.PROFESSOR,
       };
 
-      const res = await questionSubmissionsGET({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
+      const res = await questionDetailGET({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
       const body = await res.json();
-
       expect(res.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(body.data).toHaveLength(1);
-      expect(body.data[0].score).toBe(9);
+      expect(body.data.title).toBe('Detail Check');
     });
 
-    it('allows a student to retrieve their own evaluation result', async () => {
+    it('excludes legacy un-typed or prototype questions from the question deck', async () => {
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor Jawahar',
+        role: UserRole.PROFESSOR,
+      };
+
+      // Legacy question without valid type in DB
+      await ClassroomQuestion.collection.insertOne({
+        title: 'Legacy Prototype Question',
+        questionPrompt: 'Untyped handwritten question',
+        createdBy: professorId,
+        isActive: false,
+        status: 'DRAFT',
+      });
+
+      const res = await questionsGET();
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data).toHaveLength(0);
+    });
+  });
+
+  describe('3. Student View Sanitization & Real-Time Active Question', () => {
+    it('sanitizes answer key and explanation from students while voting is active', async () => {
       const q = await ClassroomQuestion.create({
-        title: 'Student Question',
-        questionPrompt: 'Prompt',
-        maxMarks: 10,
+        title: 'Hidden Answer Question',
+        questionPrompt: 'What is 2 + 2?',
+        type: 'MULTIPLE_CHOICE',
+        options: ['3', '4', '5'],
+        correctOptionIndex: 1,
+        explanation: 'Basic arithmetic: 2 + 2 = 4.',
         createdBy: professorId,
         isActive: true,
         status: 'ACTIVE',
       });
 
-      const sub = await ClassroomSubmission.create({
-        question: q._id,
-        student: studentId,
-        imagePath: 'path1.png',
-        originalFilename: 'sub1.png',
-        fileSize: 200,
-        mimeType: 'image/png',
-        status: 'EVALUATED',
-        score: 8.5,
-        maxMarks: 10,
-        feedback: 'Good work',
-        submittedAt: new Date(),
+      // Student checks active question
+      mockSessionUser = {
+        id: studentId.toString(),
+        email: 'student@iiit.ac.in',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const res = await activeQuestionGET();
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data._id).toBe(q._id.toString());
+      expect(body.data.questionPrompt).toBe('What is 2 + 2?');
+      // Must NOT reveal answer key or explanation to student!
+      expect(body.data.correctOptionIndex).toBeUndefined();
+      expect(body.data.explanation).toBeUndefined();
+      expect(body.data.hasSubmitted).toBe(false);
+      expect(body.data.mySubmission).toBeNull();
+    });
+  });
+
+  describe('4. Student Response Submission & Validation', () => {
+    it('submits a student response to an active multiple choice question', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'Live Poll',
+        questionPrompt: 'What is your favorite topic?',
+        type: 'MULTIPLE_CHOICE',
+        options: ['Algorithms', 'Systems', 'AI', 'Security'],
+        correctOptionIndex: 0,
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
       });
 
       mockSessionUser = {
@@ -906,60 +323,484 @@ describe('Interactive Classroom Assessment Flow (Research Direction 1)', () => {
       };
 
       const req = {
-        url: `http://localhost:3000/api/classroom/submissions?questionId=${q._id.toString()}`,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          questionId: q._id.toString(),
+          selectedOption: 0,
+        }),
       } as any;
 
-      const res = await studentSubmissionsGET(req);
+      const res = await submitPOST(req);
       const body = await res.json();
-
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(201);
       expect(body.success).toBe(true);
-      expect(body.data).toHaveLength(1);
-      expect(body.data[0]._id.toString()).toBe(sub._id.toString());
-      expect(body.data[0].score).toBe(8.5);
+      expect(body.data.selectedOption).toBe(0);
+      expect(body.data.isCorrect).toBe(true);
+      expect(body.data.score).toBe(1);
 
-      const qRes = await questionDetailGET({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
-      const qBody = await qRes.json();
-      expect(qRes.status).toBe(200);
-      expect(qBody.data.title).toBe('Student Question');
+      // Verify persisted in DB
+      const sub = await ClassroomSubmission.findOne({ question: q._id, student: studentId });
+      expect(sub).not.toBeNull();
+      expect(sub?.selectedOption).toBe(0);
     });
 
-    it('forbids another student from inspecting a peer students private submission', async () => {
+    it('prevents duplicate responses from the same student on the same question (409 Conflict)', async () => {
       const q = await ClassroomQuestion.create({
-        title: 'Student Question',
-        questionPrompt: 'Prompt',
-        maxMarks: 10,
+        title: 'Duplicate Check',
+        questionPrompt: 'Select one',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
         createdBy: professorId,
         isActive: true,
         status: 'ACTIVE',
       });
 
-      const sub = await ClassroomSubmission.create({
-        question: q._id,
-        student: studentId,
-        imagePath: 'path1.png',
-        originalFilename: 'sub1.png',
-        fileSize: 200,
-        mimeType: 'image/png',
-        status: 'EVALUATED',
-        score: 8.5,
-        maxMarks: 10,
-        feedback: 'Good work',
-        submittedAt: new Date(),
-      });
-
       mockSessionUser = {
-        id: otherStudentId.toString(),
-        email: 'otherstudent@iiit.ac.in',
-        name: 'Student Two',
+        id: studentId.toString(),
+        email: 'student@iiit.ac.in',
+        name: 'Student One',
         role: UserRole.STUDENT,
       };
 
-      const res = await singleSubmissionGET({} as any, { params: Promise.resolve({ id: sub._id.toString() }) });
-      const body = await res.json();
+      // First submission
+      await submitPOST({
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          questionId: q._id.toString(),
+          selectedOption: 0,
+        }),
+      } as any);
 
-      expect(res.status).toBe(403);
-      expect(body.message).toContain('Forbidden');
+      // Duplicate submission
+      const secondRes = await submitPOST({
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          questionId: q._id.toString(),
+          selectedOption: 1,
+        }),
+      } as any);
+
+      const body = await secondRes.json();
+      expect(secondRes.status).toBe(409);
+      expect(body.message).toContain('already submitted');
+    });
+
+    it('rejects responses with 400 when question is closed or voting is locked', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'Closed Question',
+        questionPrompt: 'Time expired',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        createdBy: professorId,
+        isActive: true,
+        status: 'CLOSED',
+      });
+
+      mockSessionUser = {
+        id: studentId.toString(),
+        email: 'student@iiit.ac.in',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const res = await submitPOST({
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          questionId: q._id.toString(),
+          selectedOption: 0,
+        }),
+      } as any);
+
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.message).toContain('No active classroom assessment question found');
+    });
+
+    it('rejects responses with invalid option index (out of bounds)', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'Bounds Check',
+        questionPrompt: 'Pick 0 or 1',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      mockSessionUser = {
+        id: studentId.toString(),
+        email: 'student@iiit.ac.in',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const res = await submitPOST({
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          questionId: q._id.toString(),
+          selectedOption: 5,
+        }),
+      } as any);
+
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body.message).toContain('Invalid option');
+    });
+  });
+
+  describe('5. Real-Time Aggregation & Reveal Flow', () => {
+    it('aggregates response distribution correctly across multiple student submissions', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'Class Distribution',
+        questionPrompt: 'Vote for A, B, or C',
+        type: 'MULTIPLE_CHOICE',
+        options: ['Alpha', 'Beta', 'Gamma'],
+        correctOptionIndex: 1,
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      // Student 1 votes Alpha (0)
+      await ClassroomSubmission.create({
+        question: q._id,
+        student: studentId,
+        selectedOption: 0,
+        status: 'SUBMITTED',
+      });
+
+      // Student 2 votes Beta (1)
+      await ClassroomSubmission.create({
+        question: q._id,
+        student: otherStudentId,
+        selectedOption: 1,
+        status: 'SUBMITTED',
+      });
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor',
+        role: UserRole.PROFESSOR,
+      };
+
+      const res = await resultsGET({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data.totalResponses).toBe(2);
+      expect(body.data.options[0].count).toBe(1);
+      expect(body.data.options[0].percentage).toBe(50);
+      expect(body.data.options[1].count).toBe(1);
+      expect(body.data.options[1].percentage).toBe(50);
+      expect(body.data.options[2].count).toBe(0);
+      expect(body.data.options[2].percentage).toBe(0);
+    });
+
+    it('reveals results, correct answer, and explanation to students when professor reveals', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'Reveal Test',
+        questionPrompt: 'What is O(log N) search?',
+        type: 'MULTIPLE_CHOICE',
+        options: ['Linear Search', 'Binary Search'],
+        correctOptionIndex: 1,
+        explanation: 'Binary Search halves the search space each step.',
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      // Student submits Binary Search (index 1)
+      await ClassroomSubmission.create({
+        question: q._id,
+        student: studentId,
+        selectedOption: 1,
+        isCorrect: true,
+        score: 1,
+        status: 'SUBMITTED',
+      });
+
+      // Professor reveals question
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor',
+        role: UserRole.PROFESSOR,
+      };
+
+      const patchRes = await questionDetailPATCH(
+        {
+          json: async () => ({ action: 'reveal' }),
+          headers: new Headers(),
+        } as any,
+        { params: Promise.resolve({ id: q._id.toString() }) }
+      );
+      expect(patchRes.status).toBe(200);
+
+      // Student fetches active question after reveal
+      mockSessionUser = {
+        id: studentId.toString(),
+        email: 'student@iiit.ac.in',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      const activeRes = await activeQuestionGET();
+      const activeBody = await activeRes.json();
+      expect(activeRes.status).toBe(200);
+      expect(activeBody.data.status).toBe('REVEALED');
+      // Revealed state exposes answer key, explanation, and results
+      expect(activeBody.data.correctOptionIndex).toBe(1);
+      expect(activeBody.data.explanation).toBe('Binary Search halves the search space each step.');
+      expect(activeBody.data.hasSubmitted).toBe(true);
+      expect(activeBody.data.mySubmission.isCorrect).toBe(true);
+      expect(activeBody.data.results.totalResponses).toBe(1);
+    });
+  });
+
+  describe('6. Next Question & Deck Progression Flow', () => {
+    it('advances to next question, closing previous and activating next', async () => {
+      const q1 = await ClassroomQuestion.create({
+        title: 'Q1',
+        questionPrompt: 'Prompt 1',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        order: 1,
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      const q2 = await ClassroomQuestion.create({
+        title: 'Q2',
+        questionPrompt: 'Prompt 2',
+        type: 'MULTIPLE_CHOICE',
+        options: ['C', 'D'],
+        order: 2,
+        createdBy: professorId,
+        isActive: false,
+        status: 'DRAFT',
+      });
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor',
+        role: UserRole.PROFESSOR,
+      };
+
+      const req = {
+        json: async () => ({ currentQuestionId: q1._id.toString() }),
+      } as any;
+
+      const res = await nextQuestionPOST(req);
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data._id).toBe(q2._id.toString());
+      expect(body.data.isActive).toBe(true);
+      expect(body.data.status).toBe('ACTIVE');
+
+      const refreshedQ1 = await ClassroomQuestion.findById(q1._id);
+      expect(refreshedQ1?.isActive).toBe(false);
+      expect(refreshedQ1?.status).toBe('CLOSED');
+    });
+
+    it('returns null and cleanly deactivates current question when reaching end of question deck', async () => {
+      const q1 = await ClassroomQuestion.create({
+        title: 'Last Question',
+        questionPrompt: 'Prompt',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        order: 1,
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor',
+        role: UserRole.PROFESSOR,
+      };
+
+      const req = {
+        json: async () => ({ currentQuestionId: q1._id.toString() }),
+      } as any;
+
+      const res = await nextQuestionPOST(req);
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data).toBeNull();
+      expect(body.message).toContain('No more questions');
+
+      const refreshedQ1 = await ClassroomQuestion.findById(q1._id);
+      expect(refreshedQ1?.isActive).toBe(false);
+      expect(refreshedQ1?.status).toBe('CLOSED');
+    });
+  });
+
+  describe('7. Realtime Event Bus Dispatch', () => {
+    it('dispatches realtime events to listeners on activate, submit, close, and reveal', async () => {
+      const eventsReceived: ClassroomRealtimeEvent[] = [];
+      const unsubscribe = ClassroomEventService.subscribe((event) => {
+        eventsReceived.push(event);
+      });
+
+      const q = await ClassroomQuestion.create({
+        title: 'Event Test',
+        questionPrompt: 'Prompt',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        correctOptionIndex: 0,
+        createdBy: professorId,
+        isActive: false,
+        status: 'DRAFT',
+      });
+
+      const context = { actingUserId: professorId.toString(), actingUserRole: UserRole.PROFESSOR };
+
+      // 1. Activate
+      await ClassroomAssessmentService.setQuestionStatus(q._id.toString(), 'ACTIVE', context);
+      expect(eventsReceived.some((e) => e.type === 'QUESTION_ACTIVATED')).toBe(true);
+
+      // 2. Submit response
+      await ClassroomAssessmentService.submitResponse(
+        {
+          questionId: q._id.toString(),
+          studentId: studentId.toString(),
+          selectedOption: 0,
+        },
+        { actingUserId: studentId.toString(), actingUserRole: UserRole.STUDENT }
+      );
+      expect(eventsReceived.some((e) => e.type === 'RESPONSE_SUBMITTED')).toBe(true);
+
+      // 3. Close
+      await ClassroomAssessmentService.setQuestionStatus(q._id.toString(), 'CLOSED', context);
+      expect(eventsReceived.some((e) => e.type === 'QUESTION_CLOSED')).toBe(true);
+
+      // 4. Reveal
+      await ClassroomAssessmentService.setQuestionStatus(q._id.toString(), 'REVEALED', context);
+      expect(eventsReceived.some((e) => e.type === 'QUESTION_REVEALED')).toBe(true);
+
+      unsubscribe();
+    });
+  });
+
+  describe('8. Question Deletion', () => {
+    it('allows professor to delete their question and cascades response deletion', async () => {
+      const q = await ClassroomQuestion.create({
+        title: 'To Be Deleted',
+        questionPrompt: 'Prompt',
+        type: 'MULTIPLE_CHOICE',
+        options: ['A', 'B'],
+        createdBy: professorId,
+        isActive: false,
+        status: 'DRAFT',
+      });
+
+      await ClassroomSubmission.create({
+        question: q._id,
+        student: studentId,
+        selectedOption: 0,
+        status: 'SUBMITTED',
+      });
+
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor',
+        role: UserRole.PROFESSOR,
+      };
+
+      const res = await questionDetailDELETE({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+
+      expect(await ClassroomQuestion.findById(q._id)).toBeNull();
+      expect(await ClassroomSubmission.countDocuments({ question: q._id })).toBe(0);
+    });
+  });
+
+  describe('9. Completed Session Dashboard & Response History Persistence', () => {
+    it('persists questions, aggregated results, and response history after session ends', async () => {
+      // 1. Create and activate question
+      const q = await ClassroomQuestion.create({
+        title: 'Completed Session Question',
+        questionPrompt: 'Which sorting algorithm has O(n log n) worst-case time?',
+        type: 'MULTIPLE_CHOICE',
+        options: ['Quicksort', 'Merge Sort', 'Bubble Sort'],
+        correctOptionIndex: 1,
+        explanation: 'Merge sort always divides in half and merges in linear time, guaranteeing O(n log n).',
+        createdBy: professorId,
+        isActive: true,
+        status: 'ACTIVE',
+      });
+
+      // 2. Student 1 submits
+      await ClassroomSubmission.create({
+        question: q._id,
+        student: studentId,
+        selectedOption: 1,
+        isCorrect: true,
+        status: 'SUBMITTED',
+        submittedAt: new Date(),
+      });
+
+      // 3. Student 2 submits
+      await ClassroomSubmission.create({
+        question: q._id,
+        student: otherStudentId,
+        selectedOption: 0,
+        isCorrect: false,
+        status: 'SUBMITTED',
+        submittedAt: new Date(),
+      });
+
+      // 4. Professor ends session (deactivates question)
+      const context = { actingUserId: professorId.toString(), actingUserRole: UserRole.PROFESSOR };
+      await ClassroomAssessmentService.setQuestionStatus(q._id.toString(), 'DRAFT', context);
+
+      const refreshed = await ClassroomQuestion.findById(q._id);
+      expect(refreshed?.isActive).toBe(false);
+
+      // 5. Professor fetches results and response history indefinitely
+      mockSessionUser = {
+        id: professorId.toString(),
+        email: 'prof@iiit.ac.in',
+        name: 'Professor Jawahar',
+        role: UserRole.PROFESSOR,
+      };
+
+      const res = await resultsGET({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.data.totalResponses).toBe(2);
+      expect(body.data.options).toHaveLength(3);
+      expect(body.data.correctOptionIndex).toBe(1);
+      expect(body.data.explanation).toContain('Merge sort');
+      expect(body.data.responseHistory).toHaveLength(2);
+      expect(body.data.responseHistory[0].selectedOption).toBeDefined();
+      expect(body.data.responseHistory[0].studentName).toBeDefined();
+
+      // 6. Verify students cannot access response history of other peers
+      mockSessionUser = {
+        id: studentId.toString(),
+        email: 'student@iiit.ac.in',
+        name: 'Student One',
+        role: UserRole.STUDENT,
+      };
+
+      // Mark revealed for testing student view
+      await ClassroomQuestion.findByIdAndUpdate(q._id, { isRevealed: true, status: 'REVEALED' });
+      const studentRes = await resultsGET({} as any, { params: Promise.resolve({ id: q._id.toString() }) });
+      const studentBody = await studentRes.json();
+      expect(studentRes.status).toBe(200);
+      expect(studentBody.data.responseHistory).toBeUndefined();
     });
   });
 });

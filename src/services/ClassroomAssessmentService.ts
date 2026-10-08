@@ -1,9 +1,8 @@
-import fs from 'fs';
-import path from 'path';
 import mongoose from 'mongoose';
-import ClassroomAssessmentRepository from '../repositories/ClassroomAssessmentRepository';
-import { IClassroomQuestion, IClassroomCriterion } from '../models/ClassroomQuestion';
+import ClassroomAssessmentRepository, { ClassroomAggregatedResults } from '../repositories/ClassroomAssessmentRepository';
+import { IClassroomQuestion, ClassroomQuestionType, ClassroomQuestionStatus } from '../models/ClassroomQuestion';
 import { IClassroomSubmission } from '../models/ClassroomSubmission';
+import ClassroomEventService from './ClassroomEventService';
 import { writeAuditLog } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import classroomEvaluationService, { ValidatedEvaluationOutcome } from './ClassroomEvaluationService';
@@ -17,28 +16,37 @@ export interface ClassroomAuditContext {
 export interface CreateClassroomQuestionInput {
     title: string;
     questionPrompt: string;
-    maxMarks: number;
-    rubricCriteria?: IClassroomCriterion[];
-    sampleSolution?: string;
+    type?: ClassroomQuestionType;
+    options?: string[];
+    correctOptionIndex?: number | null;
+    correctAnswerText?: string | null;
+    explanation?: string;
+    maxMarks?: number;
+    order?: number;
     course?: string;
     isActive?: boolean;
+}
+
+export interface SubmitClassroomResponseInput {
+    questionId: string;
+    studentId: string;
+    selectedOption?: number | null;
+    textResponse?: string | null;
 }
 
 export interface SubmitClassroomAnswerInput {
     questionId: string;
     studentId: string;
-    fileBuffer: Buffer;
-    originalFilename: string;
-    mimeType: string;
+    fileBuffer?: Buffer;
+    originalFilename?: string;
+    mimeType?: string;
+    selectedOption?: number | null;
+    textResponse?: string | null;
 }
 
 export class ClassroomAssessmentService {
-    getStorageRoot(): string {
-        return process.env.CLASSROOM_STORAGE_PATH || path.join(process.cwd(), 'data', 'classroom_submissions');
-    }
-
     /**
-     * Creates a new classroom question. (Professor / Admin only)
+     * Creates a new classroom question (Professor only).
      */
     async createQuestion(
         data: CreateClassroomQuestionInput,
@@ -60,33 +68,33 @@ export class ClassroomAssessmentService {
             throw new HttpError('Question prompt is required', 400);
         }
 
-        if (!data.maxMarks || data.maxMarks <= 0) {
-            throw new HttpError('Maximum marks must be greater than 0', 400);
-        }
+        const maxMarks = typeof data.maxMarks === 'number' && data.maxMarks >= 0 ? data.maxMarks : 1;
+        const qType: ClassroomQuestionType = data.type || 'MULTIPLE_CHOICE';
+        const options: string[] = Array.isArray(data.options) ? data.options.map((o) => o.trim()).filter(Boolean) : [];
 
-        // Validate rubric criteria points if provided
-        const criteria = data.rubricCriteria || [];
-        if (criteria.length > 0) {
-            const criteriaTotal = criteria.reduce((sum, c) => sum + (c.points || 0), 0);
-            if (criteriaTotal > data.maxMarks) {
-                throw new HttpError(
-                    `Sum of rubric criteria points (${criteriaTotal}) exceeds maximum marks (${data.maxMarks})`,
-                    400
-                );
+        // Validate multiple choice options
+        if (qType === 'MULTIPLE_CHOICE' && options.length > 0 && typeof data.correctOptionIndex === 'number') {
+            if (data.correctOptionIndex < 0 || data.correctOptionIndex >= options.length) {
+                throw new HttpError('Correct option index is out of bounds for the provided options', 400);
             }
         }
 
         const questionData: Partial<IClassroomQuestion> = {
             title: data.title.trim(),
             questionPrompt: data.questionPrompt.trim(),
-            maxMarks: data.maxMarks,
-            rubricCriteria: criteria,
-            sampleSolution: data.sampleSolution?.trim(),
+            type: qType,
+            options,
+            correctOptionIndex: typeof data.correctOptionIndex === 'number' ? data.correctOptionIndex : null,
+            correctAnswerText: data.correctAnswerText?.trim() || null,
+            explanation: data.explanation?.trim() || '',
+            maxMarks,
+            order: typeof data.order === 'number' ? data.order : 0,
             course: data.course && mongoose.Types.ObjectId.isValid(data.course)
                 ? new mongoose.Types.ObjectId(data.course)
                 : undefined,
             createdBy: new mongoose.Types.ObjectId(context.actingUserId),
             isActive: !!data.isActive,
+            isRevealed: false,
             status: data.isActive ? 'ACTIVE' : 'DRAFT'
         };
 
@@ -95,6 +103,12 @@ export class ClassroomAssessmentService {
         // If marked active, ensure it is the only active question
         if (data.isActive) {
             await ClassroomAssessmentRepository.setActiveQuestion(newQuestion._id.toString());
+            ClassroomEventService.notifyQuestionActivated(newQuestion._id.toString(), {
+                title: newQuestion.title,
+                questionPrompt: newQuestion.questionPrompt,
+                type: newQuestion.type,
+                options: newQuestion.options
+            });
         }
 
         await writeAuditLog({
@@ -105,7 +119,7 @@ export class ClassroomAssessmentService {
             entityType: 'ClassroomQuestion',
             details: {
                 title: newQuestion.title,
-                maxMarks: newQuestion.maxMarks,
+                type: newQuestion.type,
                 isActive: newQuestion.isActive
             },
             ipAddress: context.ipAddress
@@ -116,9 +130,55 @@ export class ClassroomAssessmentService {
 
     /**
      * Retrieves the currently active classroom question.
+     * Sanitizes correct answers for students unless results are revealed.
      */
-    async getActiveQuestion(): Promise<IClassroomQuestion | null> {
-        return await ClassroomAssessmentRepository.getActiveQuestion();
+    async getActiveQuestion(context?: ClassroomAuditContext): Promise<Record<string, unknown> | null> {
+        const active = await ClassroomAssessmentRepository.getActiveQuestion();
+        if (!active) return null;
+
+        const isStudent = context?.actingUserRole === 'STUDENT';
+        const isRevealed = active.isRevealed || active.status === 'REVEALED';
+
+        let mySubmission: IClassroomSubmission | null = null;
+        if (context?.actingUserId) {
+            mySubmission = await ClassroomAssessmentRepository.getExistingSubmission(
+                active._id.toString(),
+                context.actingUserId
+            );
+        }
+
+        const aggregated = await ClassroomAssessmentRepository.getAggregatedResults(active._id.toString());
+
+        const base = active.toObject();
+
+        if (isStudent) {
+            return {
+                ...base,
+                // Hide answer key from students until professor reveals
+                correctOptionIndex: isRevealed ? base.correctOptionIndex : undefined,
+                correctAnswerText: isRevealed ? base.correctAnswerText : undefined,
+                sampleSolution: isRevealed ? base.sampleSolution : undefined,
+                explanation: isRevealed ? base.explanation : undefined,
+                hasSubmitted: !!mySubmission,
+                mySubmission: mySubmission ? {
+                    selectedOption: mySubmission.selectedOption,
+                    textResponse: mySubmission.textResponse,
+                    isCorrect: isRevealed ? mySubmission.isCorrect : undefined,
+                    score: isRevealed ? mySubmission.score : undefined,
+                    submittedAt: mySubmission.submittedAt
+                } : null,
+                results: isRevealed && aggregated ? {
+                    ...aggregated,
+                    responseHistory: undefined
+                } : null
+            };
+        }
+
+        // Professor / Admin view includes live aggregated results
+        return {
+            ...base,
+            results: aggregated
+        };
     }
 
     /**
@@ -139,8 +199,8 @@ export class ClassroomAssessmentService {
             });
         }
 
-        // Students can only see active questions
-        const active = await this.getActiveQuestion();
+        // Students can only see active question
+        const active = await ClassroomAssessmentRepository.getActiveQuestion();
         return active ? [active] : [];
     }
 
@@ -165,11 +225,26 @@ export class ClassroomAssessmentService {
     }
 
     /**
-     * Activates or deactivates a classroom question. (Professor / Admin only)
+     * Updates question active status or lifecycle state (ACTIVE, CLOSED, REVEALED, DRAFT).
      */
     async setQuestionActiveStatus(
         id: string,
         isActive: boolean,
+        context: ClassroomAuditContext
+    ): Promise<IClassroomQuestion> {
+        return await this.setQuestionStatus(id, isActive ? 'ACTIVE' : 'CLOSED', context);
+    }
+
+    /**
+     * Transitions a question through its lifecycle:
+     * - ACTIVE: Only one question can be active at a time; starts accepting student responses.
+     * - CLOSED: Stops accepting new responses; results remain hidden.
+     * - REVEALED: Reveals aggregated results and correct answer to students.
+     * - DRAFT: Returns question to unpresented state.
+     */
+    async setQuestionStatus(
+        id: string,
+        status: ClassroomQuestionStatus,
         context: ClassroomAuditContext
     ): Promise<IClassroomQuestion> {
         if (!context.actingUserId || !context.actingUserRole) {
@@ -185,16 +260,38 @@ export class ClassroomAssessmentService {
             throw new HttpError('Classroom question not found', 404);
         }
 
-        // Ownership enforcement for professors
-        if (context.actingUserRole === 'PROFESSOR' && question.createdBy.toString() !== context.actingUserId) {
+        if (question.createdBy.toString() !== context.actingUserId) {
             throw new HttpError('Forbidden: You can only modify your own questions', 403);
         }
 
-        let updated: IClassroomQuestion | null;
-        if (isActive) {
+        let updated: IClassroomQuestion | null = null;
+
+        if (status === 'ACTIVE') {
             updated = await ClassroomAssessmentRepository.setActiveQuestion(id);
+            if (updated) {
+                ClassroomEventService.notifyQuestionActivated(id, {
+                    title: updated.title,
+                    questionPrompt: updated.questionPrompt,
+                    type: updated.type,
+                    options: updated.options
+                });
+            }
+        } else if (status === 'CLOSED') {
+            updated = await ClassroomAssessmentRepository.closeQuestion(id);
+            if (updated) {
+                ClassroomEventService.notifyQuestionClosed(id);
+            }
+        } else if (status === 'REVEALED') {
+            updated = await ClassroomAssessmentRepository.revealQuestion(id);
+            if (updated) {
+                const results = await ClassroomAssessmentRepository.getAggregatedResults(id);
+                ClassroomEventService.notifyQuestionRevealed(id, results as unknown as Record<string, unknown>);
+            }
         } else {
             updated = await ClassroomAssessmentRepository.deactivateQuestion(id);
+            if (updated) {
+                ClassroomEventService.notifyQuestionDeactivated(id);
+            }
         }
 
         if (!updated) {
@@ -203,13 +300,13 @@ export class ClassroomAssessmentService {
 
         await writeAuditLog({
             user: context.actingUserId,
-            action: isActive ? 'CLASSROOM_QUESTION_ACTIVATED' : 'CLASSROOM_QUESTION_DEACTIVATED',
+            action: `CLASSROOM_QUESTION_STATUS_${status}`,
             outcome: 'SUCCESS',
             entityId: new mongoose.Types.ObjectId(id),
             entityType: 'ClassroomQuestion',
             details: {
                 questionId: id,
-                isActive
+                status
             },
             ipAddress: context.ipAddress
         });
@@ -218,50 +315,190 @@ export class ClassroomAssessmentService {
     }
 
     /**
-     * Handles student submission of a handwritten answer image,
-     * stores the image, evaluates the submission using the evaluation pipeline,
-     * and returns the evaluation outcome.
+     * Advances to the next question in the professor's question deck,
+     * closing the current question and activating the next one.
      */
-    async submitAnswer(
-        input: SubmitClassroomAnswerInput,
+    async nextQuestion(
+        currentQuestionId: string,
+        context: ClassroomAuditContext
+    ): Promise<IClassroomQuestion | null> {
+        if (!context.actingUserId || !context.actingUserRole) {
+            throw new HttpError('Unauthorized', 401);
+        }
+
+        if (context.actingUserRole !== 'PROFESSOR') {
+            throw new HttpError('Forbidden: Only professors can advance questions', 403);
+        }
+
+        const current = await ClassroomAssessmentRepository.getQuestionById(currentQuestionId);
+        if (!current) {
+            throw new HttpError('Current classroom question not found', 404);
+        }
+
+        if (current.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You can only advance your own questions', 403);
+        }
+
+        // Close current question
+        await ClassroomAssessmentRepository.closeQuestion(currentQuestionId);
+
+        // Find next question
+        const next = await ClassroomAssessmentRepository.getNextQuestion(currentQuestionId, context.actingUserId);
+        if (!next) {
+            await ClassroomAssessmentRepository.deactivateQuestion(currentQuestionId);
+            ClassroomEventService.notifyQuestionDeactivated(currentQuestionId);
+            return null;
+        }
+
+        // Activate next question
+        const activatedNext = await ClassroomAssessmentRepository.setActiveQuestion(next._id.toString());
+        if (activatedNext) {
+            ClassroomEventService.notifyQuestionActivated(activatedNext._id.toString(), {
+                title: activatedNext.title,
+                questionPrompt: activatedNext.questionPrompt,
+                type: activatedNext.type,
+                options: activatedNext.options
+            });
+        }
+
+        return activatedNext;
+    }
+
+    /**
+     * Submits a student response (Multiple Choice or Short Answer).
+     */
+    async submitResponse(
+        input: SubmitClassroomResponseInput,
         context: ClassroomAuditContext
     ): Promise<IClassroomSubmission> {
         if (!context.actingUserId || !context.actingUserRole) {
             throw new HttpError('Unauthorized', 401);
         }
 
-        // Verify that the acting user is the student submitting
         if (context.actingUserId !== input.studentId && context.actingUserRole !== 'ADMIN') {
             throw new HttpError('Forbidden: Submitting on behalf of another student is not permitted', 403);
         }
 
-        // 1. Verify that the question exists and is ACTIVE
+        // 1. Verify question exists and is actively accepting responses
         const question = await ClassroomAssessmentRepository.getQuestionById(input.questionId);
         if (!question || !question.isActive || question.status !== 'ACTIVE') {
             throw new HttpError('No active classroom assessment question found for submission', 400);
         }
 
-        // 2. Prevent accidental duplicate submissions
+        // 2. Prevent duplicate responses per question
+        const existing = await ClassroomAssessmentRepository.getExistingSubmission(input.questionId, input.studentId);
+        if (existing) {
+            throw new HttpError('You have already submitted an answer for this assessment question.', 409);
+        }
+
+        // 3. Validate response according to question type
+        let isCorrect: boolean | null = null;
+        let score = 0;
+
+        if (question.type === 'MULTIPLE_CHOICE') {
+            if (typeof input.selectedOption !== 'number' || input.selectedOption < 0 || input.selectedOption >= (question.options?.length || 0)) {
+                throw new HttpError('Invalid option selected for this multiple-choice question', 400);
+            }
+            if (typeof question.correctOptionIndex === 'number') {
+                isCorrect = input.selectedOption === question.correctOptionIndex;
+                score = isCorrect ? (question.maxMarks || 1) : 0;
+            }
+        } else if (question.type === 'SHORT_ANSWER') {
+            if (!input.textResponse || !input.textResponse.trim()) {
+                throw new HttpError('Text response cannot be empty', 400);
+            }
+            if (question.correctAnswerText) {
+                isCorrect = input.textResponse.trim().toLowerCase() === question.correctAnswerText.trim().toLowerCase();
+                score = isCorrect ? (question.maxMarks || 1) : 0;
+            }
+        }
+
+        // 4. Create and persist submission
+        const submission = await ClassroomAssessmentRepository.createSubmission({
+            question: new mongoose.Types.ObjectId(input.questionId),
+            student: new mongoose.Types.ObjectId(input.studentId),
+            selectedOption: typeof input.selectedOption === 'number' ? input.selectedOption : null,
+            textResponse: input.textResponse?.trim() || null,
+            isCorrect,
+            score,
+            maxMarks: question.maxMarks || 1,
+            status: 'SUBMITTED',
+            submittedAt: new Date()
+        });
+
+        // 5. Notify real-time listeners of new response count and distribution
+        const stats = await ClassroomAssessmentRepository.getAggregatedResults(input.questionId);
+        if (stats) {
+            ClassroomEventService.notifyResponseSubmitted(input.questionId, stats as unknown as Record<string, unknown>);
+        }
+
+        await writeAuditLog({
+            user: input.studentId,
+            action: 'CLASSROOM_RESPONSE_SUBMITTED',
+            outcome: 'SUCCESS',
+            entityId: submission._id as mongoose.Types.ObjectId,
+            entityType: 'ClassroomSubmission',
+            details: {
+                questionId: input.questionId,
+                studentId: input.studentId,
+                selectedOption: submission.selectedOption,
+                isCorrect: submission.isCorrect
+            },
+            ipAddress: context.ipAddress
+        });
+
+        return submission;
+    }
+
+    /**
+     * Unified submitAnswer supporting both simple interactive responses
+     * and fallback image evaluation.
+     */
+    async submitAnswer(
+        input: SubmitClassroomAnswerInput,
+        context: ClassroomAuditContext
+    ): Promise<IClassroomSubmission> {
+        // If interactive simple response (selectedOption or textResponse provided)
+        if (typeof input.selectedOption === 'number' || (input.textResponse && !input.fileBuffer)) {
+            return await this.submitResponse(
+                {
+                    questionId: input.questionId,
+                    studentId: input.studentId,
+                    selectedOption: input.selectedOption,
+                    textResponse: input.textResponse
+                },
+                context
+            );
+        }
+
+        // Legacy / Handwritten answer evaluation fallback
+        if (!context.actingUserId || !context.actingUserRole) {
+            throw new HttpError('Unauthorized', 401);
+        }
+
+        if (context.actingUserId !== input.studentId && context.actingUserRole !== 'ADMIN') {
+            throw new HttpError('Forbidden: Submitting on behalf of another student is not permitted', 403);
+        }
+
+        const question = await ClassroomAssessmentRepository.getQuestionById(input.questionId);
+        if (!question || !question.isActive || question.status !== 'ACTIVE') {
+            throw new HttpError('No active classroom assessment question found for submission', 400);
+        }
+
         const existingSubmission = await ClassroomAssessmentRepository.getExistingSubmission(
             input.questionId,
             input.studentId
         );
-        if (existingSubmission && existingSubmission.status === 'EVALUATED') {
+        if (existingSubmission && (existingSubmission.status === 'EVALUATED' || existingSubmission.status === 'SUBMITTED')) {
             throw new HttpError('You have already submitted an answer for this assessment question.', 409);
         }
 
-        // 3. Validate uploaded file
         if (!input.fileBuffer || input.fileBuffer.length === 0) {
             throw new HttpError('Invalid upload: File buffer is empty', 400);
         }
 
-        const maxSizeBytes = 10 * 1024 * 1024; // 10MB
-        if (input.fileBuffer.length > maxSizeBytes) {
-            throw new HttpError('Invalid upload: File size exceeds the maximum allowed limit of 10MB', 400);
-        }
-
         const validMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
-        const normalizedMime = input.mimeType?.toLowerCase();
+        const normalizedMime = input.mimeType?.toLowerCase() || '';
         if (!validMimeTypes.includes(normalizedMime)) {
             throw new HttpError(
                 `Invalid upload: Unsupported file format "${input.mimeType}". Please upload a JPEG, PNG, or WebP image.`,
@@ -269,66 +506,26 @@ export class ClassroomAssessmentService {
             );
         }
 
-        // Determine file extension
-        const ext = normalizedMime.includes('png') ? 'png' : normalizedMime.includes('webp') ? 'webp' : 'jpg';
+        const submission = await ClassroomAssessmentRepository.createSubmission({
+            question: new mongoose.Types.ObjectId(input.questionId),
+            student: new mongoose.Types.ObjectId(input.studentId),
+            originalFilename: input.originalFilename || 'answer.png',
+            fileSize: input.fileBuffer.length,
+            mimeType: input.mimeType,
+            status: 'EVALUATING',
+            score: 0,
+            maxMarks: question.maxMarks,
+            submittedAt: new Date()
+        });
 
-        // 4. Store image to disk in classroom storage
-        const storageRoot = this.getStorageRoot();
-        const questionDir = path.join(storageRoot, input.questionId);
-        await fs.promises.mkdir(questionDir, { recursive: true });
-
-        const filename = `${input.studentId}_${Date.now()}.${ext}`;
-        const filePath = path.join(questionDir, filename);
-        await fs.promises.writeFile(filePath, input.fileBuffer);
-
-        const relativeStoragePath = `classroom_submissions/${input.questionId}/${filename}`;
-
-        // 5. Create submission record in EVALUATING state
-        let submission: IClassroomSubmission;
-        if (existingSubmission) {
-            // Update existing in-flight / failed submission
-            existingSubmission.imagePath = relativeStoragePath;
-            existingSubmission.originalFilename = input.originalFilename;
-            existingSubmission.fileSize = input.fileBuffer.length;
-            existingSubmission.mimeType = input.mimeType;
-            existingSubmission.status = 'EVALUATING';
-            existingSubmission.submittedAt = new Date();
-            submission = await existingSubmission.save();
-        } else {
-            submission = await ClassroomAssessmentRepository.createSubmission({
-                question: new mongoose.Types.ObjectId(input.questionId),
-                student: new mongoose.Types.ObjectId(input.studentId),
-                imagePath: relativeStoragePath,
-                originalFilename: input.originalFilename,
-                fileSize: input.fileBuffer.length,
-                mimeType: input.mimeType,
-                status: 'EVALUATING',
-                score: 0,
-                maxMarks: question.maxMarks,
-                feedback: '',
-                criterionScores: [],
-                submittedAt: new Date()
-            });
-        }
-
-        // 6. Execute Evaluation Pipeline
         try {
             const evaluationResult = await this.evaluateHandwrittenAnswer({
                 question,
                 imageBuffer: input.fileBuffer,
                 mimeType: input.mimeType,
-                filename: input.originalFilename,
+                filename: input.originalFilename || 'answer.png',
                 fileSize: input.fileBuffer.length
             });
-
-            // Debug: log the parsed evaluation outcome (no image data)
-            console.log('[ClassroomAssessment] Parsed evaluation outcome:', JSON.stringify({
-                score: evaluationResult.score,
-                maxMarks: evaluationResult.maxMarks,
-                feedback: evaluationResult.feedback,
-                confidence: evaluationResult.confidence,
-                criterionScores: evaluationResult.criterionScores
-            }));
 
             submission.status = 'EVALUATED';
             submission.score = evaluationResult.score;
@@ -336,57 +533,16 @@ export class ClassroomAssessmentService {
             submission.criterionScores = evaluationResult.criterionScores;
             submission.confidence = evaluationResult.confidence;
             submission.evaluatedAt = new Date();
-            // Use the return value of .save() — it is the authoritative persisted
-            // document after all Mongoose schema transforms (trim, defaults, etc.).
-            // Discarding it caused the caller to receive a stale in-memory object
-            // where score / feedback / criterionScores were not reflected correctly.
-            submission = await submission.save();
-
-            await writeAuditLog({
-                user: input.studentId,
-                action: 'CLASSROOM_SUBMISSION_EVALUATED',
-                outcome: 'SUCCESS',
-                entityId: submission._id as mongoose.Types.ObjectId,
-                entityType: 'ClassroomSubmission',
-                details: {
-                    questionId: input.questionId,
-                    studentId: input.studentId,
-                    scoreAwarded: submission.score,
-                    maxMarks: submission.maxMarks,
-                    confidence: submission.confidence
-                },
-                ipAddress: context.ipAddress
-            });
-
-            return submission;
+            const saved = await submission.save();
+            return saved;
         } catch (evalError) {
             submission.status = 'FAILED';
             submission.errorMessage = evalError instanceof Error ? evalError.message : 'Evaluation error';
             await submission.save();
-
-            await writeAuditLog({
-                user: input.studentId,
-                action: 'CLASSROOM_SUBMISSION_EVALUATED',
-                outcome: 'FAILURE',
-                entityId: submission._id as mongoose.Types.ObjectId,
-                entityType: 'ClassroomSubmission',
-                details: {
-                    questionId: input.questionId,
-                    studentId: input.studentId,
-                    error: submission.errorMessage
-                },
-                ipAddress: context.ipAddress
-            });
-
             throw new HttpError(`Evaluation failed: ${submission.errorMessage}`, 500);
         }
     }
 
-    /**
-     * Core evaluation pipeline: Analyzes the handwritten response image against
-     * the question rubric and criteria, computing precise scores and constructive feedback
-     * using the multimodal Gemini evaluator.
-     */
     async evaluateHandwrittenAnswer(options: {
         question: IClassroomQuestion;
         imageBuffer: Buffer;
@@ -404,9 +560,60 @@ export class ClassroomAssessmentService {
         });
     }
 
-    /**
-     * Retrieves all student submissions for a specific question (Professor / Admin).
-     */
+    async getQuestionResults(questionId: string, context: ClassroomAuditContext): Promise<ClassroomAggregatedResults> {
+        if (!context.actingUserId || !context.actingUserRole) {
+            throw new HttpError('Unauthorized', 401);
+        }
+
+        const question = await ClassroomAssessmentRepository.getQuestionById(questionId);
+        if (!question) {
+            throw new HttpError('Classroom question not found', 404);
+        }
+
+        if (context.actingUserRole === 'PROFESSOR' && question.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You can only view results for your own questions', 403);
+        }
+
+        if (context.actingUserRole === 'STUDENT' && !question.isRevealed && question.status !== 'REVEALED') {
+            throw new HttpError('Results are not yet revealed for this question', 403);
+        }
+
+        const results = await ClassroomAssessmentRepository.getAggregatedResults(questionId);
+        if (!results) {
+            throw new HttpError('Failed to generate results', 500);
+        }
+
+        if (context.actingUserRole === 'STUDENT') {
+            return {
+                ...results,
+                responseHistory: undefined
+            };
+        }
+
+        return results;
+    }
+
+    async deleteQuestion(id: string, context: ClassroomAuditContext): Promise<boolean> {
+        if (!context.actingUserId || !context.actingUserRole) {
+            throw new HttpError('Unauthorized', 401);
+        }
+
+        if (context.actingUserRole !== 'PROFESSOR') {
+            throw new HttpError('Forbidden: Only professors can delete questions', 403);
+        }
+
+        const question = await ClassroomAssessmentRepository.getQuestionById(id);
+        if (!question) {
+            throw new HttpError('Classroom question not found', 404);
+        }
+
+        if (question.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You can only delete your own questions', 403);
+        }
+
+        return await ClassroomAssessmentRepository.deleteQuestion(id);
+    }
+
     async getQuestionSubmissions(
         questionId: string,
         context: ClassroomAuditContext
@@ -422,9 +629,6 @@ export class ClassroomAssessmentService {
         return await ClassroomAssessmentRepository.getSubmissionsByQuestion(questionId);
     }
 
-    /**
-     * Retrieves all submissions for the logged-in student.
-     */
     async getStudentSubmissions(
         studentId: string,
         questionId?: string,
@@ -437,9 +641,6 @@ export class ClassroomAssessmentService {
         return await ClassroomAssessmentRepository.getSubmissionsByStudent(studentId, questionId);
     }
 
-    /**
-     * Retrieves a single submission by ID.
-     */
     async getSubmissionById(
         submissionId: string,
         context: ClassroomAuditContext
@@ -453,17 +654,11 @@ export class ClassroomAssessmentService {
             throw new HttpError('Submission not found', 404);
         }
 
-        // Role-based visibility
         if (context.actingUserRole === 'STUDENT') {
             let studentId: string | null = null;
             if (submission.student) {
                 const s = submission.student as unknown as { _id?: mongoose.Types.ObjectId };
                 studentId = s._id ? s._id.toString() : submission.student.toString();
-            } else {
-                const doc = (submission as unknown as { _doc?: { student?: mongoose.Types.ObjectId } })._doc;
-                if (doc?.student) {
-                    studentId = doc.student.toString();
-                }
             }
 
             if (studentId !== context.actingUserId) {

@@ -1,10 +1,13 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import ClassroomAssessmentService from '@/services/ClassroomAssessmentService';
 import { requireAuth } from '@/lib/apiAuth';
 import { HttpError } from '@/lib/errors';
 
-export async function GET() {
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const auth = await requireAuth();
   if (!auth.authorized) {
     return auth.response;
@@ -20,17 +23,18 @@ export async function GET() {
 
   try {
     await connectDB();
+    const resolvedParams = await params;
     const context = {
       actingUserId: auth.user.id,
       actingUserRole: auth.user.role
     };
 
-    const activeQuestion = await ClassroomAssessmentService.getActiveQuestion(context);
+    const results = await ClassroomAssessmentService.getQuestionResults(resolvedParams.id, context);
 
     return NextResponse.json({
       success: true,
-      message: activeQuestion ? 'Active classroom question retrieved' : 'No active question currently',
-      data: activeQuestion
+      message: 'Classroom results retrieved successfully',
+      data: results
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';

@@ -6,16 +6,29 @@ export interface IClassroomCriterion {
     description?: string;
 }
 
+export type ClassroomQuestionType = 'MULTIPLE_CHOICE' | 'SHORT_ANSWER' | 'POLL';
+export type ClassroomQuestionStatus = 'ACTIVE' | 'CLOSED' | 'REVEALED' | 'DRAFT';
+
 export interface IClassroomQuestion extends Document {
     title: string;
     questionPrompt: string;
+    type: ClassroomQuestionType;
+    options: string[];
+    correctOptionIndex?: number | null;
+    correctAnswerText?: string | null;
+    explanation?: string;
+    order: number;
     maxMarks: number;
-    rubricCriteria: IClassroomCriterion[];
+    rubricCriteria?: IClassroomCriterion[];
     sampleSolution?: string;
     course?: mongoose.Types.ObjectId;
     createdBy: mongoose.Types.ObjectId;
     isActive: boolean;
-    status: 'ACTIVE' | 'CLOSED' | 'DRAFT';
+    isRevealed: boolean;
+    status: ClassroomQuestionStatus;
+    activatedAt?: Date;
+    closedAt?: Date;
+    revealedAt?: Date;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -52,9 +65,36 @@ const ClassroomQuestionSchema = new Schema<IClassroomQuestion>(
             required: true,
             trim: true
         },
+        type: {
+            type: String,
+            enum: ['MULTIPLE_CHOICE', 'SHORT_ANSWER', 'POLL'],
+            default: 'MULTIPLE_CHOICE'
+        },
+        options: {
+            type: [String],
+            default: []
+        },
+        correctOptionIndex: {
+            type: Number,
+            default: null
+        },
+        correctAnswerText: {
+            type: String,
+            trim: true,
+            default: null
+        },
+        explanation: {
+            type: String,
+            trim: true,
+            default: ''
+        },
+        order: {
+            type: Number,
+            default: 0
+        },
         maxMarks: {
             type: Number,
-            required: true,
+            default: 1,
             min: 0
         },
         rubricCriteria: {
@@ -81,10 +121,26 @@ const ClassroomQuestionSchema = new Schema<IClassroomQuestion>(
             default: false,
             index: true
         },
+        isRevealed: {
+            type: Boolean,
+            default: false
+        },
         status: {
             type: String,
-            enum: ['ACTIVE', 'CLOSED', 'DRAFT'],
+            enum: ['ACTIVE', 'CLOSED', 'REVEALED', 'DRAFT'],
             default: 'ACTIVE'
+        },
+        activatedAt: {
+            type: Date,
+            default: null
+        },
+        closedAt: {
+            type: Date,
+            default: null
+        },
+        revealedAt: {
+            type: Date,
+            default: null
         }
     },
     {

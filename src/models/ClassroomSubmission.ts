@@ -8,18 +8,23 @@ export interface IClassroomCriterionScore {
     evidence?: string;
 }
 
+export type ClassroomSubmissionStatus = 'SUBMITTED' | 'EVALUATING' | 'EVALUATED' | 'FAILED';
+
 export interface IClassroomSubmission extends Document {
     question: mongoose.Types.ObjectId;
     student: mongoose.Types.ObjectId;
-    imagePath: string;
-    originalFilename: string;
-    fileSize: number;
-    mimeType: string;
-    status: 'PENDING' | 'EVALUATING' | 'EVALUATED' | 'FAILED';
+    selectedOption?: number | null;
+    textResponse?: string | null;
+    isCorrect?: boolean | null;
     score: number;
     maxMarks: number;
-    feedback: string;
-    criterionScores: IClassroomCriterionScore[];
+    status: ClassroomSubmissionStatus;
+    feedback?: string;
+    imagePath?: string;
+    originalFilename?: string;
+    fileSize?: number;
+    mimeType?: string;
+    criterionScores?: IClassroomCriterionScore[];
     confidence?: number;
     submittedAt: Date;
     evaluatedAt?: Date;
@@ -71,28 +76,18 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
             required: true,
             index: true
         },
-        imagePath: {
-            type: String,
-            required: true,
-            trim: true
-        },
-        originalFilename: {
-            type: String,
-            required: true
-        },
-        fileSize: {
+        selectedOption: {
             type: Number,
-            required: true
+            default: null
         },
-        mimeType: {
+        textResponse: {
             type: String,
-            required: true
+            trim: true,
+            default: null
         },
-        status: {
-            type: String,
-            enum: ['PENDING', 'EVALUATING', 'EVALUATED', 'FAILED'],
-            default: 'PENDING',
-            index: true
+        isCorrect: {
+            type: Boolean,
+            default: null
         },
         score: {
             type: Number,
@@ -101,13 +96,36 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
         },
         maxMarks: {
             type: Number,
-            required: true,
+            default: 1,
             min: 0
+        },
+        status: {
+            type: String,
+            enum: ['SUBMITTED', 'EVALUATING', 'EVALUATED', 'FAILED'],
+            default: 'SUBMITTED',
+            index: true
         },
         feedback: {
             type: String,
             default: '',
             trim: true
+        },
+        imagePath: {
+            type: String,
+            trim: true,
+            default: null
+        },
+        originalFilename: {
+            type: String,
+            default: null
+        },
+        fileSize: {
+            type: Number,
+            default: null
+        },
+        mimeType: {
+            type: String,
+            default: null
         },
         criterionScores: {
             type: [ClassroomCriterionScoreSchema],
@@ -137,8 +155,8 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
     }
 );
 
-// Compound index to quickly query or prevent accidental duplicate submissions
-ClassroomSubmissionSchema.index({ question: 1, student: 1 });
+// Compound index to quickly query or prevent accidental duplicate submissions per student per question
+ClassroomSubmissionSchema.index({ question: 1, student: 1 }, { unique: true });
 
 const ClassroomSubmission: Model<IClassroomSubmission> =
     mongoose.models.ClassroomSubmission ||
