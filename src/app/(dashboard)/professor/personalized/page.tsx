@@ -18,7 +18,6 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { ProfessorSelfPacedSessionsView } from '@/components/personalized/ProfessorSelfPacedSessionsView';
 import { ProfessorTaxonomyInspector } from '@/components/personalized/ProfessorTaxonomyInspector';
 
 interface CourseOption {
@@ -93,7 +92,7 @@ interface StudentProgressItem {
     completionPercentage: number;
 }
 
-type TabType = 'TAXONOMY' | 'SELF_PACED_SESSIONS' | 'SYLLABUS' | 'QUESTION_BANK' | 'SCHEDULES';
+type TabType = 'TAXONOMY' | 'SYLLABUS' | 'QUESTION_BANK' | 'SCHEDULES';
 
 export default function ProfessorPersonalizedAssessmentPage() {
     const [loading, setLoading] = useState(true);
@@ -525,17 +524,6 @@ export default function ProfessorPersonalizedAssessmentPage() {
                     )}
                 </button>
                 <button
-                    onClick={() => setActiveTab('SELF_PACED_SESSIONS')}
-                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
-                        activeTab === 'SELF_PACED_SESSIONS'
-                            ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
-                            : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
-                >
-                    <Layers className="h-4 w-4" />
-                    <span>Student Sessions</span>
-                </button>
-                <button
                     onClick={() => setActiveTab('SYLLABUS')}
                     className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
                         activeTab === 'SYLLABUS'
@@ -584,11 +572,6 @@ export default function ProfessorPersonalizedAssessmentPage() {
                     courseName={currentCourse?.courseName}
                     onOpenGenerateModal={() => setShowGenerateModal(true)}
                 />
-            )}
-
-            {/* TAB: SELF PACED SESSIONS */}
-            {activeTab === 'SELF_PACED_SESSIONS' && (
-                <ProfessorSelfPacedSessionsView courseId={selectedCourseId} />
             )}
 
             {/* TAB 1: SEMESTER SYLLABUS */}
