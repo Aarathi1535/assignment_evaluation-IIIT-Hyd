@@ -54,7 +54,7 @@ describe('DerivedStorageService on Cloud Run', () => {
         const service = new DerivedStorageService();
         const buffer = Buffer.from('page-bytes');
         const key = 'batches/batch-1/derived/file-1/2/page.png';
-        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
 
         const stored = await service.storeDerivedPage({
             batchId: 'batch-1',
@@ -74,7 +74,7 @@ describe('DerivedStorageService on Cloud Run', () => {
             resumable: false,
             metadata: { contentType: 'image/png' }
         });
-        expect(infoSpy).toHaveBeenCalledWith(
+        expect(debugSpy).toHaveBeenCalledWith(
             '[DerivedStorageService] Writing derived page to GCS',
             {
                 bucket: 'configured-test-bucket',
@@ -83,7 +83,7 @@ describe('DerivedStorageService on Cloud Run', () => {
                 status: 'started',
             }
         );
-        expect(infoSpy).toHaveBeenCalledWith(
+        expect(debugSpy).toHaveBeenCalledWith(
             '[DerivedStorageService] Wrote derived page to GCS',
             {
                 bucket: 'configured-test-bucket',

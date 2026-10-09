@@ -6,7 +6,6 @@ import Batch, { BatchStatus } from '../models/Batch';
 import Grade from '../models/Grade';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import { DerivedPageRepairService } from '../services/DerivedPageRepairService';
-import type { StoredDerivedPageResult } from '../services/DerivedStorageService';
 import { PageIngestionService } from '../services/PageIngestionService';
 import type { IPageRenderer } from '../services/PageRenderer';
 import type { IDerivedStorageService } from '../services/DerivedStorageService';
@@ -81,12 +80,14 @@ function makeRepairService(overrides?: {
 }) {
     const exists = vi.fn().mockResolvedValue(overrides?.exists ?? false);
     const readOriginal = vi.fn(async () => Buffer.from('original-pdf'));
-    const regenerate = vi.fn(async (): Promise<StoredDerivedPageResult> => {
+    const regenerate = vi.fn(async () => {
         if (overrides?.regenerateError) throw overrides.regenerateError;
         return {
             storageKey: overrides?.storedKey || derivedStorageKey,
             storagePath: `gs://repair-bucket/${derivedStorageKey}`,
-            size: 32
+            size: 32,
+            width: 800,
+            height: 1100
         };
     });
     const service = new DerivedPageRepairService(
@@ -147,7 +148,13 @@ describe('DerivedPageRepairService', () => {
             originalStorageKey,
             fileBuffer: Buffer.from('original-pdf')
         }));
-        expect((await IngestionPage.findById(page._id))?.storageKey).toBe(derivedStorageKey);
+        const repairedPage = await IngestionPage.findById(page._id);
+        expect(repairedPage?.storageKey).toBe(derivedStorageKey);
+        expect(repairedPage?.width).toBe(800);
+        expect(repairedPage?.height).toBe(1100);
+        expect(repairedPage?.metadata?.width).toBe(800);
+        expect(repairedPage?.metadata?.height).toBe(1100);
+        expect(repairedPage?.metadata?.derivedStorageKey).toBe(derivedStorageKey);
         expect((await AnswerScript.findById(script._id))?.toObject()).toEqual(scriptBefore);
         expect((await Allocation.findById(allocation._id))?.toObject()).toEqual(allocationBefore);
         expect((await Grade.findById(grade._id))?.toObject()).toEqual(gradeBefore);
@@ -217,7 +224,8 @@ describe('DerivedPageRepairService', () => {
             fileId: 'file-1',
             pageNumber: 1,
             buffer: rendered,
-            format: 'png'
+            format: 'png',
+            ifGenerationMatch: 0
         });
     });
 

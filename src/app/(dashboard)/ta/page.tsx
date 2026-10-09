@@ -125,18 +125,6 @@ export default function TaDashboardPage() {
     if (controller.signal.aborted || sequence !== requestSequence.current) return;
 
     if (allocationsResult.status === 'fulfilled') {
-      console.info('[TA DASHBOARD DEBUG]', JSON.stringify({
-        requestedPage: pageToFetch,
-        returnedCount: allocationsResult.value.allocations?.length ?? 0,
-        pagination: allocationsResult.value.pagination ?? null,
-        stats: allocationsResult.value.stats ?? null,
-        allocations: (allocationsResult.value.allocations || []).map(allocation => ({
-          allocationId: allocation._id,
-          exam: allocation.exam,
-          answerScriptId: allocation.answerScript?._id ?? null,
-          status: allocation.status
-        }))
-      }));
       setAllocations(allocationsResult.value.allocations || []);
       setPagination(allocationsResult.value.pagination || null);
       setAllocationStats(allocationsResult.value.stats || null);

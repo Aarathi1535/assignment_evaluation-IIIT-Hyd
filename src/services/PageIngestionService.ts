@@ -48,6 +48,12 @@ export interface PageProcessResult {
     pageRecord?: IIngestionPage;
 }
 
+export interface RegenerateDerivedPageResult extends StoredDerivedPageResult {
+    width?: number;
+    height?: number;
+    enhancementParams?: Record<string, number> | null;
+}
+
 export class PageIngestionService {
     static readonly LUMINANCE_THRESHOLD = 240;
     static readonly NON_WHITE_PERCENT_THRESHOLD = 0.5;
@@ -96,7 +102,7 @@ export class PageIngestionService {
         fileType: string;
         originalStorageKey: string;
         fileBuffer: Buffer;
-    }): Promise<StoredDerivedPageResult> {
+    }): Promise<RegenerateDerivedPageResult> {
         const isImage =
             input.fileType === 'image' ||
             input.fileType === 'jpg' ||
@@ -124,22 +130,48 @@ export class PageIngestionService {
         }
 
         let pageBuffer = renderResult.image.buffer;
+        let pageWidth = renderResult.image.width;
+        let pageHeight = renderResult.image.height;
+        let enhancementParams: Record<string, number> | undefined = undefined;
+
         try {
             const enhancement = await this.imageEnhancer.enhancePage(pageBuffer, 'png');
             if (enhancement.applied) {
                 pageBuffer = enhancement.buffer;
+                enhancementParams = {
+                    deskewAngle: enhancement.deskewAngle,
+                    orientation: enhancement.orientation
+                };
+                if (enhancement.brightness !== undefined) {
+                    enhancementParams.brightness = enhancement.brightness;
+                }
+                if (enhancement.contrast !== undefined) {
+                    enhancementParams.contrast = enhancement.contrast;
+                }
+                if (enhancement.orientation === 90 || enhancement.orientation === 270) {
+                    pageWidth = renderResult.image.height;
+                    pageHeight = renderResult.image.width;
+                }
             }
         } catch (error) {
             console.error(`Enhancement failed while repairing page ${input.pageNumber}:`, error);
         }
 
-        return this.derivedStorage.storeDerivedPage({
+        const stored = await this.derivedStorage.storeDerivedPage({
             batchId: input.batchId,
             fileId: input.fileId,
             pageNumber: input.pageNumber,
             buffer: pageBuffer,
-            format: 'png'
+            format: 'png',
+            ifGenerationMatch: 0
         });
+
+        return {
+            ...stored,
+            width: pageWidth,
+            height: pageHeight,
+            enhancementParams: enhancementParams ?? null
+        };
     }
 
     setImageRenderer(imageRenderer: IPageRenderer): void {

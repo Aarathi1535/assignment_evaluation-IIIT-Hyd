@@ -7,7 +7,6 @@ import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
 import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
-import DerivedPageRepairService from '../../../../../../../services/DerivedPageRepairService';
 import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
 
 function isMissingDerivedPageError(error: unknown): boolean {
@@ -194,26 +193,10 @@ export async function GET(
         opened = await DerivedStorageService.openDerivedPage(page.storageKey);
       } catch (error) {
         if (!isMissingDerivedPageError(error)) throw error;
-        try {
-          await DerivedPageRepairService.repairPage(pageId);
-          const refreshedPage = await IngestionPage.findById(pageId);
-          if (!refreshedPage?.storageKey) throw new Error('Regenerated page has no storage key.');
-          page.storageKey = refreshedPage.storageKey;
-        } catch (repairError) {
-          if (repairError && typeof repairError === 'object') {
-            const storageError = repairError as { code?: number | string; statusCode?: number };
-            if ((storageError.code !== undefined || storageError.statusCode !== undefined) &&
-              !isMissingDerivedPageError(repairError)) {
-              throw repairError;
-            }
-          }
-          console.error(`Failed to regenerate missing page image for page ${pageId}:`, repairError);
-          return NextResponse.json(
-            { success: false, message: 'Page image file not found in derived storage', data: null },
-            { status: 404 }
-          );
-        }
-        opened = await DerivedStorageService.openDerivedPage(page.storageKey);
+        return NextResponse.json(
+          { success: false, message: 'Page image file not found in derived storage', data: null },
+          { status: 404 }
+        );
       }
       const { stream, size } = opened;
       logGraderTiming('page-object-opened', storageOpenStartedAt, { sizeBytes: size });
