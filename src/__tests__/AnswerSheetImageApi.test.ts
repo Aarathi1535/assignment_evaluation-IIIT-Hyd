@@ -960,4 +960,224 @@ describe('AE-123: GET /api/ingest/[id]/pages/[pageId]/image (Answer Sheet Image 
     expect(res.status).toBe(200);
     expect(res.headers.get('Content-Type')).toBe('image/png');
   });
+
+  it('18. returns 304 Not Modified when If-None-Match matches the hashed updatedAt ETag (AE-176)', async () => {
+    mockSessionUser = {
+      id: profUser._id.toString(),
+      email: profUser.email,
+      name: profUser.name,
+      role: UserRole.PROFESSOR,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const expectedETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': expectedETag }
+      }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(304);
+    expect(res.headers.get('ETag')).toBe(expectedETag);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('19. does not return 304 if authorization fails, even with matching ETag (AE-176)', async () => {
+    // Student is unauthorized for this route
+    mockSessionUser = {
+      id: studentUser._id.toString(),
+      email: studentUser.email,
+      name: studentUser.name,
+      role: UserRole.STUDENT,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const expectedETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': expectedETag }
+      }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    // Should return 403 Forbidden instead of 304 Not Modified
+    expect(res.status).toBe(403);
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('20. thumbnail route returns 304 Not Modified when If-None-Match matches the hashed updatedAt ETag (AE-176)', async () => {
+    mockSessionUser = {
+      id: profUser._id.toString(),
+      email: profUser.email,
+      name: profUser.name,
+      role: UserRole.PROFESSOR,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const expectedETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
+
+    const { GET: thumbnailGET } = await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route');
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/thumbnail`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': expectedETag }
+      }
+    );
+    const res = await thumbnailGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(304);
+    expect(res.headers.get('ETag')).toBe(expectedETag);
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('21. allows authenticated TA WITH a valid allocation to retrieve the thumbnail (AE-176)', async () => {
+    mockSessionUser = {
+      id: taUser._id.toString(),
+      email: taUser.email,
+      name: taUser.name,
+      role: UserRole.TA,
+    };
+
+    const mockBuffer = Buffer.from('mock-ta-thumbnail-bytes');
+    vi.spyOn(DerivedStorageService, 'readDerivedPage').mockResolvedValue(mockBuffer);
+
+    const { GET: thumbnailGET } = await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route');
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/thumbnail`,
+      { method: 'GET' }
+    );
+    const res = await thumbnailGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/jpeg');
+    expect(res.headers.get('Content-Length')).toBe(mockBuffer.length.toString());
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(res.headers.get('ETag')).toBeDefined();
+
+    const returnedData = await res.arrayBuffer();
+    expect(Buffer.from(returnedData).toString()).toBe('mock-ta-thumbnail-bytes');
+  });
+
+  it('22. returns 404 (never 304) when unallocated TA sends matching If-None-Match ETag to full-image endpoint (AE-176)', async () => {
+    mockSessionUser = {
+      id: unallocatedTaUser._id.toString(),
+      email: unallocatedTaUser.email,
+      name: unallocatedTaUser.name,
+      role: UserRole.TA,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'openDerivedPage');
+    const crypto = await import('crypto');
+    const matchingETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
+
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': matchingETag },
+      }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('Page not found');
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('23. returns 404 (never 304) when unallocated TA sends matching If-None-Match ETag to thumbnail endpoint (AE-176)', async () => {
+    mockSessionUser = {
+      id: unallocatedTaUser._id.toString(),
+      email: unallocatedTaUser.email,
+      name: unallocatedTaUser.name,
+      role: UserRole.TA,
+    };
+
+    const spyRead = vi.spyOn(DerivedStorageService, 'readDerivedPage');
+    const crypto = await import('crypto');
+    const matchingETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
+
+    const { GET: thumbnailGET } = await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route');
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/thumbnail`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': matchingETag },
+      }
+    );
+    const res = await thumbnailGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('Page not found');
+    expect(spyRead).not.toHaveBeenCalled();
+  });
+
+  it('24. invalidates ETag and returns fresh 200 response when page.updatedAt changes (AE-176)', async () => {
+    mockSessionUser = {
+      id: profUser._id.toString(),
+      email: profUser.email,
+      name: profUser.name,
+      role: UserRole.PROFESSOR,
+    };
+
+    const crypto = await import('crypto');
+    const oldETag = `"${crypto.createHash('md5').update(pagePng.updatedAt.toISOString()).digest('hex')}"`;
+
+    // Simulate an image update / re-ingest timestamp change
+    const newDate = new Date(pagePng.updatedAt.getTime() + 10000);
+    await IngestionPage.collection.updateOne(
+      { _id: pagePng._id },
+      { $set: { updatedAt: newDate } }
+    );
+    const expectedNewETag = `"${crypto.createHash('md5').update(newDate.toISOString()).digest('hex')}"`;
+
+    const mockBuffer = Buffer.from('mock-updated-image-bytes');
+    mockOpenDerivedPage(mockBuffer);
+
+    // Client sends the old ETag
+    const req = new NextRequest(
+      `http://localhost:3000/api/ingest/${testBatch.batchId}/pages/${pagePng._id}/image`,
+      {
+        method: 'GET',
+        headers: { 'If-None-Match': oldETag },
+      }
+    );
+    const res = await imageGET(req, {
+      params: Promise.resolve({ id: testBatch.batchId, pageId: pagePng._id.toString() }),
+    });
+
+    // Should return 200 (not 304) with the new ETag
+    expect(res.status).toBe(200);
+    expect(res.headers.get('ETag')).toBe(expectedNewETag);
+    expect(res.headers.get('ETag')).not.toBe(oldETag);
+    const data = await res.arrayBuffer();
+    expect(Buffer.from(data).toString()).toBe('mock-updated-image-bytes');
+  });
 });

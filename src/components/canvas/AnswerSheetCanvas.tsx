@@ -1596,6 +1596,12 @@ export function AnswerSheetCanvas({
     enableCrashRecovery,
   ]);
 
+  // Adjacent page prefetch (AE-176) removed
+  // Because the image route intentionally retains Cache-Control: private, no-store
+  // (to avoid leaking protected assets to intermediate proxies), prefetching adjacent
+  // pages into the browser cache is ineffective and actually causes duplicate downloads
+  // when the user navigates. The N±1 prefetch has been removed.
+
   const canUndoActive = useMemo(() => {
     return enableUndoRedo && canUndo(currentPageHistory);
   }, [enableUndoRedo, currentPageHistory]);
@@ -2470,6 +2476,7 @@ export function AnswerSheetCanvas({
         <PageImageLayer
           key={imageRetryCount}
           src={effectiveSrc}
+          thumbnailUrl={currentPage?.thumbnailUrl || undefined}
           alt={effectivePageLabel}
           fitMode={fitMode}
           transform={effectiveTransform}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
@@ -184,6 +185,19 @@ export const GET = withServerTiming(async (
       );
     }
 
+    const etag = `"${crypto.createHash('md5').update(page.updatedAt.toISOString()).digest('hex')}"`;
+    const ifNoneMatch = req.headers.get('if-none-match');
+
+    if (ifNoneMatch && ifNoneMatch.includes(etag)) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          'ETag': etag,
+          'Cache-Control': 'private, no-store',
+        },
+      });
+    }
+
     // 5. Open the stored page image after checking metadata so missing assets can
     // still be returned as a controlled API error before the response starts.
     try {
@@ -216,6 +230,7 @@ export const GET = withServerTiming(async (
         headers: {
           'Content-Type': contentType,
           'Content-Length': size.toString(),
+          'ETag': etag,
           'Cache-Control': 'private, no-store',
           'X-Content-Type-Options': 'nosniff',
         },
