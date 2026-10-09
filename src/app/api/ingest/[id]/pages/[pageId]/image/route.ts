@@ -185,7 +185,7 @@ export const GET = withServerTiming(async (
       );
     }
 
-    let etag = `"${crypto.createHash('md5').update(page.updatedAt.toISOString()).digest('hex')}"`;
+    const etag = `"${crypto.createHash('md5').update(page.updatedAt.toISOString()).digest('hex')}"`;
     const ifNoneMatch = req.headers.get('if-none-match');
 
     if (ifNoneMatch && ifNoneMatch.includes(etag)) {
