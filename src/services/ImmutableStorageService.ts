@@ -7,6 +7,12 @@ import { writeAuditLog } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { getConfiguredStorageBucket } from '../lib/cloudStorage';
 
+function isMissingGcsObject(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const gcsError = error as { code?: number | string; statusCode?: number };
+    return gcsError.code === 404 || gcsError.code === '404' || gcsError.statusCode === 404;
+}
+
 export interface AuditContext {
     actingUserId?: string;
     actingUserRole?: string;
@@ -217,8 +223,27 @@ export class ImmutableStorageService {
     async readOriginalContent(storageKey: string): Promise<Buffer> {
         const bucket = getConfiguredStorageBucket();
         if (bucket) {
-            const [buffer] = await bucket.file(storageKey).download();
-            return buffer;
+            const primaryKey = storageKey.startsWith('originals/')
+                ? storageKey.replace(/^originals\//, 'batches/')
+                : storageKey.startsWith('batches/')
+                    ? storageKey
+                    : `batches/${storageKey}`;
+            const legacyKey = storageKey.startsWith('batches/')
+                ? storageKey.replace(/^batches\//, 'originals/')
+                : storageKey.startsWith('originals/')
+                    ? storageKey
+                    : `originals/${storageKey}`;
+
+            try {
+                const [buffer] = await bucket.file(primaryKey).download();
+                return buffer;
+            } catch (error) {
+                if (isMissingGcsObject(error) && legacyKey !== primaryKey) {
+                    const [fallbackBuffer] = await bucket.file(legacyKey).download();
+                    return fallbackBuffer;
+                }
+                throw error;
+            }
         }
 
         const filePath = path.join(this.getStorageRoot(), storageKey.replace(/^batches\//, ''));

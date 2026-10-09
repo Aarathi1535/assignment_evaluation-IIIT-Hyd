@@ -82,4 +82,20 @@ describe('ImmutableStorageService on Cloud Run', () => {
         expect(await service.readOriginalContent(stored.storageKey)).toEqual(buffer);
         expect(storageMock.objects.get(key)).toEqual(buffer);
     });
+
+    it('falls back to legacy originals/<batch>/<file> key if batches/<batch>/<file> does not exist in GCS', async () => {
+        const service = new ImmutableStorageService();
+        const buffer = Buffer.from('%PDF-1.7 legacy original');
+        const batchId = 'batch-legacy';
+        const fileId = 'file-legacy';
+        const currentKey = `batches/${batchId}/${fileId}.pdf`;
+        const legacyKey = `originals/${batchId}/${fileId}.pdf`;
+
+        storageMock.objects.set(legacyKey, buffer);
+
+        const content = await service.readOriginalContent(currentKey);
+        expect(content).toEqual(buffer);
+        expect(storageMock.file).toHaveBeenCalledWith(currentKey);
+        expect(storageMock.file).toHaveBeenCalledWith(legacyKey);
+    });
 });

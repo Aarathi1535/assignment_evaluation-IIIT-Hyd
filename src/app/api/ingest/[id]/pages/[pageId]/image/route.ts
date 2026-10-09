@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
+import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
@@ -8,7 +9,6 @@ import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
 import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
-import DerivedPageRepairService from '../../../../../../../services/DerivedPageRepairService';
 import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
 
 function isMissingDerivedPageError(error: unknown): boolean {
@@ -47,11 +47,10 @@ function toWebReadableStream(
  * Serves the full-resolution derived/scanned page image for an ingestion page
  * to be rendered within the answer-sheet canvas.
  */
-export async function GET(
+export const GET = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
-) {
-  const requestStartedAt = performance.now();
+) => {
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -208,31 +207,13 @@ export async function GET(
         opened = await DerivedStorageService.openDerivedPage(page.storageKey);
       } catch (error) {
         if (!isMissingDerivedPageError(error)) throw error;
-        try {
-          await DerivedPageRepairService.repairPage(pageId);
-          const refreshedPage = await IngestionPage.findById(pageId);
-          if (!refreshedPage?.storageKey) throw new Error('Regenerated page has no storage key.');
-          page.storageKey = refreshedPage.storageKey;
-          etag = `"${crypto.createHash('md5').update(refreshedPage.updatedAt.toISOString()).digest('hex')}"`;
-        } catch (repairError) {
-          if (repairError && typeof repairError === 'object') {
-            const storageError = repairError as { code?: number | string; statusCode?: number };
-            if ((storageError.code !== undefined || storageError.statusCode !== undefined) &&
-              !isMissingDerivedPageError(repairError)) {
-              throw repairError;
-            }
-          }
-          console.error(`Failed to regenerate missing page image for page ${pageId}:`, repairError);
-          return NextResponse.json(
-            { success: false, message: 'Page image file not found in derived storage', data: null },
-            { status: 404 }
-          );
-        }
-        opened = await DerivedStorageService.openDerivedPage(page.storageKey);
+        return NextResponse.json(
+          { success: false, message: 'Page image file not found in derived storage', data: null },
+          { status: 404 }
+        );
       }
       const { stream, size } = opened;
       logGraderTiming('page-object-opened', storageOpenStartedAt, { sizeBytes: size });
-      logGraderTiming('page-image-api-ready', requestStartedAt, { status: 200 });
 
       // Determine proper Content-Type
       let contentType = 'image/png';
@@ -286,4 +267,4 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});

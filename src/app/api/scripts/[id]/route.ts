@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../lib/apiAuth';
@@ -11,7 +12,6 @@ import ExamRepository from '../../../../repositories/ExamRepository';
 import AllocationService from '../../../../services/AllocationService';
 import { Anonymizer } from '../../../../lib/anonymizer';
 import { HttpError } from '../../../../lib/errors';
-import { logGraderTiming } from '../../../../lib/graderPerformance';
 
 /**
  * GET /api/scripts/[id]
@@ -21,11 +21,10 @@ import { logGraderTiming } from '../../../../lib/graderPerformance';
  * - Professors/Admins: Verified access to the script's parent Exam.
  * - TAs: Verified allocation to the AnswerScript via AllocationService.verifyTaAllocation.
  */
-export async function GET(
+export const GET = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
-  const requestStartedAt = performance.now();
+) => {
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -135,7 +134,10 @@ export async function GET(
 
     const ingestionPages = await IngestionPage.find({
       answerScript: script._id,
-    }).sort({ fileIndex: 1, pageNumber: 1 });
+    })
+      .select('_id pageNumber fileIndex batchId thumbnailKey width height nearBlank isDuplicate isCoverPage')
+      .sort({ fileIndex: 1, pageNumber: 1 })
+      .lean();
 
     if (ingestionPages.length > 0) {
       formattedPages = ingestionPages.map((p) => ({
@@ -158,7 +160,10 @@ export async function GET(
       const standardPages = await Page.find({
         answerScript: script._id,
         isActive: true,
-      }).sort({ pageNumber: 1 });
+      })
+        .select('_id pageNumber imagePath')
+        .sort({ pageNumber: 1 })
+        .lean();
 
       formattedPages = standardPages.map((p) => ({
         _id: p._id.toString(),
@@ -179,11 +184,6 @@ export async function GET(
       exam: script.exam.toString(),
       isActive: script.isActive,
     };
-
-    logGraderTiming('script-api-ready', requestStartedAt, {
-      status: 200,
-      pageCount: formattedPages.length,
-    });
     return NextResponse.json(
       {
         success: true,
@@ -211,4 +211,4 @@ export async function GET(
       { status }
     );
   }
-}
+});

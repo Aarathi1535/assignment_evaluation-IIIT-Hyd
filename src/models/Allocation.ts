@@ -91,6 +91,9 @@ const AllocationSchema = new Schema<IAllocation>(
 // Ensure a script is not allocated to the same TA multiple times for the same question/whole-script
 AllocationSchema.index({ ta: 1, answerScript: 1, question: 1 }, { unique: true });
 
+// Optimize AllocationService.getNextAllocation with _id tie-breaker
+AllocationSchema.index({ ta: 1, exam: 1, status: 1, createdAt: 1, _id: 1 });
+
 // Prevent mixed-mode allocations: an answer script cannot simultaneously participate in whole-script allocation and question-wise allocation
 AllocationSchema.pre('save', async function () {
     const AllocationModel = this.constructor as mongoose.Model<IAllocation>;
