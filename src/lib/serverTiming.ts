@@ -14,7 +14,30 @@ export const timingContext = new AsyncLocalStorage<TimingStore>();
 const monitoredClients = new WeakSet<object>();
 
 interface CommandMonitoringEmitter {
-  on(event: string, listener: (event: { duration: number }) => void): void;
+  on(event: string, listener: (event: unknown) => void): void;
+}
+
+interface CommandMonitoringEvent {
+  requestId?: number;
+  connectionId?: number | string;
+  address?: string;
+  duration?: number;
+}
+
+const MAX_COMMAND_TTL_MS = 60_000;
+const MAX_TRACKED_COMMANDS = 1_000;
+
+function getCommandKey(rawEvent: unknown): string | number | null {
+  const event = rawEvent as CommandMonitoringEvent;
+  if (!event || typeof event.requestId !== 'number') {
+    return null;
+  }
+  const connId = event.connectionId !== undefined && event.connectionId !== null ? String(event.connectionId) : '';
+  const address = typeof event.address === 'string' ? event.address : '';
+  if (connId || address) {
+    return `${address}#${connId}#${event.requestId}`;
+  }
+  return event.requestId;
 }
 
 /**
@@ -41,17 +64,67 @@ export function attachCommandMonitoring(client?: unknown) {
     return;
   }
 
-  const recordDbTime = (event: { duration: number }) => {
+  // Track in-flight command start times for high-resolution timing measurement on this client
+  const commandStartTimes = new Map<string | number, number>();
+
+  const pruneStaleCommands = (now: number) => {
+    // 1. Prune expired entries (FIFO order in Map)
+    for (const [key, startTime] of commandStartTimes.entries()) {
+      if (now - startTime > MAX_COMMAND_TTL_MS) {
+        commandStartTimes.delete(key);
+      } else {
+        break; // Remaining entries are more recent
+      }
+    }
+    // 2. Enforce hard capacity bound
+    while (commandStartTimes.size > MAX_TRACKED_COMMANDS) {
+      const oldestKey = commandStartTimes.keys().next().value;
+      if (oldestKey !== undefined) {
+        commandStartTimes.delete(oldestKey);
+      } else {
+        break;
+      }
+    }
+  };
+
+  const onCommandStarted = (rawEvent: unknown) => {
+    const key = getCommandKey(rawEvent);
+    if (key !== null) {
+      const now = performance.now();
+      if (commandStartTimes.size > 100) {
+        pruneStaleCommands(now);
+      }
+      commandStartTimes.set(key, now);
+    }
+  };
+
+  const onCommandFinished = (rawEvent: unknown) => {
+    const event = rawEvent as CommandMonitoringEvent;
+    let measuredDuration = typeof event?.duration === 'number' ? event.duration : 0;
+
+    const key = getCommandKey(rawEvent);
+    if (key !== null) {
+      const startTime = commandStartTimes.get(key);
+      if (startTime !== undefined) {
+        commandStartTimes.delete(key);
+        const elapsed = performance.now() - startTime;
+        if (elapsed > 0) {
+          measuredDuration = elapsed;
+        }
+      }
+    }
+
     const store = timingContext.getStore();
     if (store) {
       store.dbRoundTrips += 1;
-      store.dbTimeMs += event.duration;
+      store.dbTimeMs += measuredDuration;
     }
   };
 
   // Attach command monitoring listeners directly to the actual MongoClient driver instance
-  targetClient.on('commandSucceeded', recordDbTime);
-  targetClient.on('commandFailed', recordDbTime);
+  targetClient.on('commandStarted', onCommandStarted);
+  targetClient.on('commandSucceeded', onCommandFinished);
+  targetClient.on('commandFailed', onCommandFinished);
   monitoredClients.add(targetClient);
 }
 
