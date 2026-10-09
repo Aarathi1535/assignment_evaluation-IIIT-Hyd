@@ -1,4 +1,6 @@
-﻿# AE-175 Draw Latency Review
+# AE-175 Draw Latency Review
+
+Closes #223
 
 ## Browser measurement
 
@@ -26,6 +28,6 @@ AE-175's dedicated Konva layer limits pointermove redraws to the active stroke. 
 
 ## Persistence changes
 
-Pending drafts remain immediately readable in memory and coalesce by user/script/page. Local serialization and persistence now run through `requestIdleCallback` with a 250 ms timeout when available, with a 250 ms `setTimeout` fallback. A newer draft cancels/replaces the scheduled write, and pagehide or hidden visibilitychange forces pending drafts to persist immediately. `memoryStorage` is used only when localStorage is unavailable or a localStorage write fails.
+Pending drafts remain immediately readable in memory and coalesce by user/script/page. Local serialization and persistence now run through `requestIdleCallback` with a 250 ms timeout when available, with a 250 ms `setTimeout` fallback. A newer draft cancels/replaces the scheduled write, and page navigation (via `flushPendingSave`), pagehide, or hidden visibilitychange forces pending drafts to persist immediately. `memoryStorage` is used only when localStorage is unavailable or a localStorage write fails.
 
 The GitHub PR description is external to the repository. The connected GitHub integration rejected the requested PR #235 body update with HTTP 403, so its `Closes #224` text could not be changed here; no repository file was added to represent the PR body.
