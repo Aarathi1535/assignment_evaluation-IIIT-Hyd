@@ -65,9 +65,9 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
       { id: '2', pageNumber: 2, imageUrl: '/api/img2', thumbnailUrl: '/api/thumb2' },
       { id: '3', pageNumber: 3, imageUrl: '/api/img3', thumbnailUrl: '/api/thumb3' },
     ];
-    
+
     render(<AnswerSheetCanvas pages={pages} currentPageIndex={1} width={800} height={600} />);
-    
+
     // trigger onImageLoad on the mock PageImageLayer
     act(() => {
       if ((window as any).triggerPageImageLoad) {
@@ -78,7 +78,7 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
     // Prefetch should NOT happen
     const prefetchedImg1 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img1');
     const prefetchedImg3 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img3');
-    
+
     expect(prefetchedImg1).toBeUndefined();
     expect(prefetchedImg3).toBeUndefined();
   });
@@ -88,9 +88,9 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
       { id: '1', pageNumber: 1, imageUrl: '/api/img1', thumbnailUrl: '/api/thumb1' },
       { id: '2', pageNumber: 2, imageUrl: '/api/img2', thumbnailUrl: '/api/thumb2' },
     ];
-    
+
     render(<AnswerSheetCanvas pages={pages} currentPageIndex={1} width={800} height={600} />);
-    
+
     act(() => {
       if ((window as any).triggerPageImageLoad) {
         (window as any).triggerPageImageLoad();
@@ -99,7 +99,7 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
 
     const prefetchedImg1 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img1');
     const prefetchedImg3 = ImageMock.mock.calls.find((call: any) => call[0].src === '/api/img3');
-    
+
     expect(prefetchedImg1).toBeUndefined();
     expect(prefetchedImg3).toBeUndefined();
   });
@@ -108,13 +108,13 @@ describe('AE-176 Canvas Prefetch & Thumbnail Tests', () => {
     const pages = [
       { id: '1', pageNumber: 1, imageUrl: '/api/img1', thumbnailUrl: '/api/thumb1' },
     ];
-    
+
     render(<AnswerSheetCanvas pages={pages} currentPageIndex={0} width={800} height={600} />);
-    
+
     // Check if thumbnail is passed to PageImageLayer
     const layer = screen.getByTestId('mock-page-image-layer');
     expect(layer.getAttribute('data-thumbnail')).toBe('/api/thumb1');
-    
+
     // We can verify that the main image loading state is still active
     expect(screen.getAllByTestId('canvas-loading-overlay').length).toBeGreaterThan(0);
   });

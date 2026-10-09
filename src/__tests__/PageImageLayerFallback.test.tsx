@@ -71,31 +71,31 @@ describe('AE-176 PageImageLayer Thumbnail Fallback', () => {
 
   it('falls back to full-resolution image when thumbnail fails and avoids infinite loops', () => {
     render(
-      <PageImageLayer 
-        src="/api/high-res.jpg" 
-        thumbnailUrl="/api/thumb.jpg" 
+      <PageImageLayer
+        src="/api/high-res.jpg"
+        thumbnailUrl="/api/thumb.jpg"
       />
     );
 
     // Two images should be instantiated: one for thumbnail, one for high-res
     expect(imageInstances.length).toBe(2);
-    
+
     const thumbImg = imageInstances.find(img => img.src.includes('thumb.jpg'));
     const highResImg = imageInstances.find(img => img.src.includes('high-res.jpg'));
 
     expect(thumbImg).toBeDefined();
     expect(highResImg).toBeDefined();
-    
+
     // Simulate thumbnail failure
     expect(thumbImg.onerror).toBeInstanceOf(Function);
-    
+
     act(() => {
       thumbImg.onerror(new Event('error'));
     });
-    
+
     // The high-res image should still be able to load successfully
     expect(highResImg.onload).toBeInstanceOf(Function);
-    
+
     let loaded = false;
     const mockOnLoad = vi.fn();
     const originalOnload = highResImg.onload;
