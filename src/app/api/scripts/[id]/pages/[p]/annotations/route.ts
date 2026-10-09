@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../../lib/errors';
@@ -64,10 +65,10 @@ export async function GET(
  *
  * Saves and deterministically replaces vector annotations for a specific answer script page.
  */
-export async function PUT(
+export const PUT = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string; p: string }> }
-) {
+) => {
   // 1. Authenticate and enforce grading / exam permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -175,4 +176,4 @@ export async function PUT(
       { status }
     );
   }
-}
+});

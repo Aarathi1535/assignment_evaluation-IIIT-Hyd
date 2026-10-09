@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../../lib/errors';
@@ -9,10 +10,10 @@ import gradingService, { SavedGradeWithNext } from '../../../../../../../service
  *
  * Persists or updates a question-level grade for a specific question (AE-145).
  */
-export async function POST(
+export const POST = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string; questionNumber: string }> }
-) {
+) => {
   // 1. Authenticate and enforce grading / annotation permissions
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
@@ -73,11 +74,6 @@ export async function POST(
       { status }
     );
   }
-}
+});
 
-export async function PUT(
-  req: NextRequest,
-  context: { params: Promise<{ id: string; questionNumber: string }> }
-) {
-  return POST(req, context);
-}
+export const PUT = POST;

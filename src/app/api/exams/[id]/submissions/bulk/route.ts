@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../../lib/errors';
@@ -14,10 +15,10 @@ import gradingService from '../../../../../../services/GradingService';
  * - optional allocationIds subset.
  * - batch cap / limit control.
  */
-export async function POST(
+export const POST = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -30,7 +31,7 @@ export async function POST(
     await connectDB();
 
     const body = await req.json().catch(() => ({}));
-    const { allocationIds, preview, confirmed, limit } = body || {};
+    const { allocationIds, preview, confirmed, limit, timeoutMs } = body || {};
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
     const result = await gradingService.bulkSubmit({
@@ -41,6 +42,7 @@ export async function POST(
       preview: Boolean(preview),
       confirmed: Boolean(confirmed),
       limit: typeof limit === 'number' ? limit : undefined,
+      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
       ipAddress,
     });
 
@@ -66,4 +68,4 @@ export async function POST(
       { status }
     );
   }
-}
+});

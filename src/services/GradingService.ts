@@ -15,6 +15,7 @@ import { writeAuditLog } from '../lib/audit';
 export const DEFAULT_SCORE_STEP = 0.5;
 export const DEFAULT_BULK_LIMIT = 50;
 export const MAX_BULK_LIMIT = 100;
+export const DEFAULT_BULK_TIMEOUT_MS = 15000;
 
 /**
  * Precision-safe helper to verify if a score falls on a configured step size.
@@ -70,6 +71,7 @@ export interface BulkSubmitOptions {
     preview?: boolean;
     confirmed?: boolean;
     limit?: number;
+    timeoutMs?: number;
     ipAddress?: string;
 }
 
@@ -83,6 +85,7 @@ export interface BulkSubmitItemDetail {
     flagId?: string;
     flagReason?: string;
     error?: string;
+    reason?: string;
 }
 
 export interface BulkSubmitResult {
@@ -93,11 +96,14 @@ export interface BulkSubmitResult {
     incompleteCount: number;
     openFlagCount: number;
     failedCount: number;
+    unattemptedCount: number;
+    timedOut: boolean;
     submitted: BulkSubmitItemDetail[];
     alreadySubmitted: BulkSubmitItemDetail[];
     incompleteSkipped: BulkSubmitItemDetail[];
     openFlagSkipped: BulkSubmitItemDetail[];
     failed: BulkSubmitItemDetail[];
+    unattempted: BulkSubmitItemDetail[];
     preview: boolean;
 }
 
@@ -831,19 +837,24 @@ export class GradingService {
         const submissionResult = await AllocationService.runInTransaction(async (session) => {
             const finalizedQuestions: number[] = [];
             let totalScore = 0;
+            const gradesToFinalizeIds: mongoose.Types.ObjectId[] = [];
 
             for (const gradeDoc of existingGrades) {
                 if (!gradeDoc.isFinal) {
-                    await Grade.updateOne(
-                        { _id: gradeDoc._id },
-                        { $set: { isFinal: true } },
-                        { session }
-                    );
+                    gradesToFinalizeIds.push(gradeDoc._id as mongoose.Types.ObjectId);
                 }
                 if (typeof gradeDoc.question === 'number') {
                     finalizedQuestions.push(gradeDoc.question);
                 }
                 totalScore += gradeDoc.totalScore || 0;
+            }
+
+            if (gradesToFinalizeIds.length > 0) {
+                await Grade.updateMany(
+                    { _id: { $in: gradesToFinalizeIds } },
+                    { $set: { isFinal: true } },
+                    { session }
+                );
             }
 
             const submittedAt = new Date();
@@ -944,7 +955,7 @@ export class GradingService {
      * - Live SSE progress updates emitted post-execution.
      */
     async bulkSubmit(options: BulkSubmitOptions): Promise<BulkSubmitResult> {
-        const { examId, userId, userRole, allocationIds, preview = false, confirmed = false, limit, ipAddress } = options;
+        const { examId, userId, userRole, allocationIds, preview = false, confirmed = false, limit, timeoutMs, ipAddress } = options;
 
         if (!examId || !mongoose.Types.ObjectId.isValid(examId.toString())) {
             throw new HttpError('Invalid Exam ID format.', 400);
@@ -1099,6 +1110,8 @@ export class GradingService {
                 incompleteCount: incompleteSkipped.length,
                 openFlagCount: openFlagSkipped.length,
                 failedCount: 0,
+                unattemptedCount: 0,
+                timedOut: false,
                 submitted: eligible.map((e) => ({
                     allocationId: e.allocation._id.toString(),
                     answerScriptId: e.answerScriptId,
@@ -1108,6 +1121,7 @@ export class GradingService {
                 incompleteSkipped,
                 openFlagSkipped,
                 failed: [],
+                unattempted: [],
                 preview: true,
             };
         }
@@ -1121,8 +1135,30 @@ export class GradingService {
         const batchToSubmit = eligible.slice(0, effectiveLimit);
         const submitted: BulkSubmitItemDetail[] = [];
         const failed: BulkSubmitItemDetail[] = [];
+        const unattempted: BulkSubmitItemDetail[] = [];
+        const bulkTimeoutMs = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_BULK_TIMEOUT_MS;
+        const bulkStartTime = Date.now();
+        let isTimedOut = false;
 
+        // Transaction-safe timeout processing:
+        // Timeout budget is checked at cooperative item boundaries before initiating a submission.
+        // In-flight submissions and database transactions run to completion to prevent corrupted state.
+        // Any remaining items after the timeout budget is reached are recorded in `unattempted` (distinguished from actual execution failures).
         for (const item of batchToSubmit) {
+            if (!isTimedOut && Date.now() - bulkStartTime >= bulkTimeoutMs) {
+                isTimedOut = true;
+            }
+
+            if (isTimedOut) {
+                unattempted.push({
+                    allocationId: item.allocation._id.toString(),
+                    answerScriptId: item.answerScriptId,
+                    question: item.question,
+                    reason: `Unattempted: bulk processing timeout (${bulkTimeoutMs}ms) exceeded`,
+                });
+                continue;
+            }
+
             try {
                 const subResult = await this.submitScript({
                     scriptId: item.answerScriptId,
@@ -1154,7 +1190,7 @@ export class GradingService {
         await writeAuditLog({
             user: userId.toString(),
             action: 'BULK_SCRIPTS_SUBMITTED',
-            outcome: 'SUCCESS',
+            outcome: failed.length > 0 ? 'FAILURE' : 'SUCCESS',
             entityId: examObjectId,
             entityType: 'Exam',
             details: {
@@ -1164,6 +1200,8 @@ export class GradingService {
                 incompleteCount: incompleteSkipped.length,
                 openFlagCount: openFlagSkipped.length,
                 failedCount: failed.length,
+                unattemptedCount: unattempted.length,
+                timedOut: isTimedOut,
                 totalProcessed: allocations.length,
             },
             ipAddress,
@@ -1184,11 +1222,14 @@ export class GradingService {
             incompleteCount: incompleteSkipped.length,
             openFlagCount: openFlagSkipped.length,
             failedCount: failed.length,
+            unattemptedCount: unattempted.length,
+            timedOut: isTimedOut,
             submitted,
             alreadySubmitted,
             incompleteSkipped,
             openFlagSkipped,
             failed,
+            unattempted,
             preview: false,
         };
     }

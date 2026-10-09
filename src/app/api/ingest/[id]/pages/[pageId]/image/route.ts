@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
@@ -45,11 +46,10 @@ function toWebReadableStream(
  * Serves the full-resolution derived/scanned page image for an ingestion page
  * to be rendered within the answer-sheet canvas.
  */
-export async function GET(
+export const GET = withServerTiming(async (
   req: NextRequest,
   context: { params: Promise<{ id: string; pageId: string }> }
-) {
-  const requestStartedAt = performance.now();
+) => {
   const auth = await requireGradingOrAnnotationAccess();
   if (!auth.authorized) {
     return auth.response;
@@ -200,7 +200,6 @@ export async function GET(
       }
       const { stream, size } = opened;
       logGraderTiming('page-object-opened', storageOpenStartedAt, { sizeBytes: size });
-      logGraderTiming('page-image-api-ready', requestStartedAt, { status: 200 });
 
       // Determine proper Content-Type
       let contentType = 'image/png';
@@ -253,4 +252,4 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});
