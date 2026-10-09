@@ -27,6 +27,88 @@ export const ANNOTATION_DRAFT_PREFIX = 'ae_draft_annotations:';
 // In-memory fallback map if localStorage is unavailable (e.g., SSR, private browsing restrictions, quota exceeded)
 const memoryStorage = new Map<string, string>();
 
+const pendingDrafts = new Map<string, LocalAnnotationDraft>();
+type DeferredWrite =
+  | { kind: 'idle'; handle: number; token: symbol }
+  | { kind: 'timeout'; handle: ReturnType<typeof setTimeout>; token: symbol };
+type IdleCallbackWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options: { timeout: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+const deferredWrites = new Map<string, DeferredWrite>();
+
+function cancelDeferredWrite(key: string): void {
+  const scheduled = deferredWrites.get(key);
+  if (!scheduled) return;
+
+  if (scheduled.kind === 'idle') {
+    const idleWindow = typeof window !== 'undefined' ? window as IdleCallbackWindow : null;
+    idleWindow?.cancelIdleCallback?.(scheduled.handle);
+  } else {
+    clearTimeout(scheduled.handle);
+  }
+  deferredWrites.delete(key);
+}
+
+function persistDraft(key: string, draft: LocalAnnotationDraft): void {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(draft);
+  } catch {
+    return;
+  }
+
+  if (isLocalStorageAvailable()) {
+    try {
+      window.localStorage.setItem(key, serialized);
+      memoryStorage.delete(key);
+      return;
+    } catch {}
+  }
+
+  // Keep memoryStorage as a fallback when localStorage is unavailable or fails.
+  memoryStorage.set(key, serialized);
+}
+
+function scheduleDeferredWrite(key: string): void {
+  cancelDeferredWrite(key);
+  const token = Symbol(key);
+  const run = () => {
+    if (deferredWrites.get(key)?.token !== token) return;
+    deferredWrites.delete(key);
+    const draft = pendingDrafts.get(key);
+    if (!draft) return;
+    persistDraft(key, draft);
+    pendingDrafts.delete(key);
+  };
+
+  const idleWindow = typeof window !== 'undefined' ? window as IdleCallbackWindow : null;
+  if (idleWindow?.requestIdleCallback) {
+    const handle = idleWindow.requestIdleCallback(run, { timeout: 250 });
+    deferredWrites.set(key, { kind: 'idle', handle, token });
+  } else {
+    const handle = setTimeout(run, 250);
+    deferredWrites.set(key, { kind: 'timeout', handle, token });
+  }
+}
+
+export function flushPendingWrites(): void {
+  deferredWrites.forEach((_, key) => cancelDeferredWrite(key));
+  pendingDrafts.forEach((draft, key) => {
+    persistDraft(key, draft);
+  });
+  pendingDrafts.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushPendingWrites);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushPendingWrites();
+    }
+  });
+}
+
 let currentDraftUserId = 'default';
 
 /**
@@ -43,19 +125,24 @@ export function getCurrentDraftUser(): string {
   return currentDraftUserId;
 }
 
+let _isLocalStorageAvailable: boolean | null = null;
+
 /**
  * Checks whether localStorage is available and writable in the current runtime environment.
  */
 export function isLocalStorageAvailable(): boolean {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return false;
+  }
+  if (_isLocalStorageAvailable !== null) return _isLocalStorageAvailable;
   try {
-    if (typeof window === 'undefined' || !window.localStorage) {
-      return false;
-    }
     const testKey = '__ae_offline_draft_test__';
     window.localStorage.setItem(testKey, '1');
     window.localStorage.removeItem(testKey);
+    _isLocalStorageAvailable = true;
     return true;
   } catch {
+    _isLocalStorageAvailable = false;
     return false;
   }
 }
@@ -132,17 +219,10 @@ export function saveLocalAnnotationDraft(
   };
 
   const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
-  const serialized = JSON.stringify(draft);
 
-  if (isLocalStorageAvailable()) {
-    try {
-      window.localStorage.setItem(key, serialized);
-    } catch {
-      memoryStorage.set(key, serialized);
-    }
-  } else {
-    memoryStorage.set(key, serialized);
-  }
+  pendingDrafts.set(key, draft);
+
+  scheduleDeferredWrite(key);
 
   if (isDevProfiling) {
     markCanvasProfile('save-draft-end');
@@ -166,6 +246,11 @@ export function getLocalAnnotationDraft(
 
   const effectiveUserId = userId || currentDraftUserId;
   const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
+
+  if (pendingDrafts.has(key)) {
+    return pendingDrafts.get(key)!;
+  }
+
   let raw: string | null = null;
 
   if (isLocalStorageAvailable()) {
@@ -426,22 +511,25 @@ export function getConflictDrafts(
       ? `${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:`
       : ANNOTATION_DRAFT_PREFIX;
 
+  const processDraft = (key: string, parsed: LocalAnnotationDraft | null) => {
+    if (!parsed) return;
+    if (
+      typeof parsed.scriptId === 'string' &&
+      typeof parsed.pageNumber === 'number' &&
+      parsed.hasConflict
+    ) {
+      if (!scriptId || parsed.scriptId === scriptId) {
+        if (!effectiveUserId || parsed.userId === effectiveUserId) {
+          draftsMap.set(key, parsed);
+        }
+      }
+    }
+  };
+
   const processRaw = (key: string, raw: string | null) => {
     if (!raw) return;
     try {
-      const parsed = JSON.parse(raw) as LocalAnnotationDraft;
-      if (
-        parsed &&
-        typeof parsed.scriptId === 'string' &&
-        typeof parsed.pageNumber === 'number' &&
-        parsed.hasConflict
-      ) {
-        if (!scriptId || parsed.scriptId === scriptId) {
-          if (!effectiveUserId || parsed.userId === effectiveUserId) {
-            draftsMap.set(key, parsed);
-          }
-        }
-      }
+      processDraft(key, JSON.parse(raw) as LocalAnnotationDraft);
     } catch {}
   };
 
@@ -459,6 +547,12 @@ export function getConflictDrafts(
   memoryStorage.forEach((v, k) => {
     if (k.startsWith(expectedPrefix)) {
       processRaw(k, v);
+    }
+  });
+
+  pendingDrafts.forEach((v, k) => {
+    if (k.startsWith(expectedPrefix)) {
+      processDraft(k, v);
     }
   });
 
@@ -571,6 +665,10 @@ export function clearLocalAnnotationDraft(
 ): void {
   const effectiveUserId = userId || currentDraftUserId;
   const key = getAnnotationDraftKey(effectiveUserId, scriptId, pageNumber);
+
+  cancelDeferredWrite(key);
+  pendingDrafts.delete(key);
+
   if (isLocalStorageAvailable()) {
     try {
       window.localStorage.removeItem(key);
@@ -632,7 +730,16 @@ export function clearAllScriptDrafts(scriptId: string, userId?: string): void {
       memKeysToRemove.push(k);
     }
   });
-  memKeysToRemove.forEach((k) => memoryStorage.delete(k));
+  pendingDrafts.forEach((_, k) => {
+    if (matches(k) && !memKeysToRemove.includes(k)) {
+      memKeysToRemove.push(k);
+    }
+  });
+  memKeysToRemove.forEach((k) => {
+    memoryStorage.delete(k);
+    pendingDrafts.delete(k);
+    cancelDeferredWrite(k);
+  });
 }
 
 /**
@@ -663,7 +770,16 @@ export function clearUserDrafts(userId?: string): void {
       memKeysToRemove.push(k);
     }
   });
-  memKeysToRemove.forEach((k) => memoryStorage.delete(k));
+  pendingDrafts.forEach((_, k) => {
+    if (k.startsWith(annotUserPrefix) && !memKeysToRemove.includes(k)) {
+      memKeysToRemove.push(k);
+    }
+  });
+  memKeysToRemove.forEach((k) => {
+    memoryStorage.delete(k);
+    pendingDrafts.delete(k);
+    cancelDeferredWrite(k);
+  });
 }
 
 /**
@@ -681,24 +797,27 @@ export function getPendingAnnotationDrafts(
       ? `${ANNOTATION_DRAFT_PREFIX}${effectiveUserId}:`
       : ANNOTATION_DRAFT_PREFIX;
 
+  const processDraft = (key: string, parsed: LocalAnnotationDraft | null) => {
+    if (!parsed) return;
+    if (
+      typeof parsed.scriptId === 'string' &&
+      typeof parsed.pageNumber === 'number' &&
+      !parsed.synced &&
+      !parsed.superseded &&
+      !parsed.hasConflict
+    ) {
+      if (!scriptId || parsed.scriptId === scriptId) {
+        if (!effectiveUserId || parsed.userId === effectiveUserId) {
+          draftsMap.set(key, parsed);
+        }
+      }
+    }
+  };
+
   const processRaw = (key: string, raw: string | null) => {
     if (!raw) return;
     try {
-      const parsed = JSON.parse(raw) as LocalAnnotationDraft;
-      if (
-        parsed &&
-        typeof parsed.scriptId === 'string' &&
-        typeof parsed.pageNumber === 'number' &&
-        !parsed.synced &&
-        !parsed.superseded &&
-        !parsed.hasConflict
-      ) {
-        if (!scriptId || parsed.scriptId === scriptId) {
-          if (!effectiveUserId || parsed.userId === effectiveUserId) {
-            draftsMap.set(key, parsed);
-          }
-        }
-      }
+      processDraft(key, JSON.parse(raw) as LocalAnnotationDraft);
     } catch {}
   };
 
@@ -716,6 +835,15 @@ export function getPendingAnnotationDrafts(
   memoryStorage.forEach((v, k) => {
     if (k.startsWith(expectedPrefix)) {
       processRaw(k, v);
+    }
+  });
+
+  pendingDrafts.forEach((v, k) => {
+    if (k.startsWith(expectedPrefix)) {
+      // A pending in-memory version supersedes any stale persisted version,
+      // including when the pending version is already synced or superseded.
+      draftsMap.delete(k);
+      processDraft(k, v);
     }
   });
 
@@ -786,4 +914,6 @@ export function isServerDataNewer(
  */
 export function clearAllMemoryDrafts(): void {
   memoryStorage.clear();
+  pendingDrafts.clear();
+  deferredWrites.forEach((_, key) => cancelDeferredWrite(key));
 }

@@ -1,0 +1,192 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  saveLocalAnnotationDraft,
+  getLocalAnnotationDraft,
+  getPendingAnnotationDrafts,
+  clearAllMemoryDrafts,
+  setCurrentDraftUser
+} from '@/lib/offlineDrafts';
+import type { SerializedPageAnnotations } from '@/lib/annotationSerialization';
+
+type IdleTestWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options: { timeout: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+describe('Offline Drafts Debounce AE-175', () => {
+  const MOCK_SCRIPT_ID = 'debounce-test-script';
+  const MOCK_PAGE_NUM = 1;
+  const MOCK_PAGE_KEY = `${MOCK_SCRIPT_ID}_${MOCK_PAGE_NUM}`;
+  const MOCK_DATA: SerializedPageAnnotations = {
+    annotations: [],
+    strokes: [
+      { id: '1', points: [0, 0, 10, 10], color: 'red', strokeWidth: 2, pageKey: MOCK_PAGE_KEY, createdAt: 123456789 }
+    ],
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.localStorage.clear();
+    clearAllMemoryDrafts();
+    setCurrentDraftUser('test-user');
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    clearAllMemoryDrafts();
+    Reflect.deleteProperty(window, 'requestIdleCallback');
+    Reflect.deleteProperty(window, 'cancelIdleCallback');
+  });
+
+  it('A. Immediate read: saveLocalAnnotationDraft immediately updates in-memory representation', () => {
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, MOCK_DATA);
+
+    // Read immediately without advancing timers
+    const draft = getLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM);
+    expect(draft).not.toBeNull();
+    expect(draft?.data.strokes.length).toBe(1);
+
+    // Verify localStorage has not yet received the write
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    const rawLs = window.localStorage.getItem(key);
+    expect(rawLs).toBeNull();
+  });
+
+  it('B. Timer flush: advances timers and verifies persistence', () => {
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, MOCK_DATA);
+
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    // Advance by debounce interval
+    vi.advanceTimersByTime(250);
+
+    const rawLs = window.localStorage.getItem(key);
+    expect(rawLs).not.toBeNull();
+    const parsed = JSON.parse(rawLs!);
+    expect(parsed.data.strokes.length).toBe(1);
+  });
+
+  it('C. Coalescing: multiple saves collapse into the latest draft before timer fires', () => {
+    const dataA = { ...MOCK_DATA, strokes: [{ ...MOCK_DATA.strokes[0], id: 'A' }] };
+    const dataB = { ...MOCK_DATA, strokes: [{ ...MOCK_DATA.strokes[0], id: 'B' }] };
+    const dataC = { ...MOCK_DATA, strokes: [{ ...MOCK_DATA.strokes[0], id: 'C' }] };
+
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, dataA);
+    vi.advanceTimersByTime(50);
+    
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, dataB);
+    vi.advanceTimersByTime(50);
+
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, dataC);
+
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    vi.advanceTimersByTime(250); // Flush the final timer
+
+    const rawLs = window.localStorage.getItem(key);
+    expect(rawLs).not.toBeNull();
+    const parsed = JSON.parse(rawLs!);
+    expect(parsed.data.strokes[0].id).toBe('C');
+  });
+
+  it('D. Idle scheduling: uses requestIdleCallback with a 250ms timeout and replaces older callbacks', () => {
+    const idleWindow = window as IdleTestWindow;
+    const callbacks = new Map<number, () => void>();
+    let nextHandle = 1;
+    idleWindow.requestIdleCallback = vi.fn((callback, options) => {
+      expect(options).toEqual({ timeout: 250 });
+      const handle = nextHandle++;
+      callbacks.set(handle, callback);
+      return handle;
+    });
+    idleWindow.cancelIdleCallback = vi.fn((handle) => callbacks.delete(handle));
+
+    const dataA = { ...MOCK_DATA, strokes: [{ ...MOCK_DATA.strokes[0], id: 'A' }] };
+    const dataB = { ...MOCK_DATA, strokes: [{ ...MOCK_DATA.strokes[0], id: 'B' }] };
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, dataA);
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, dataB);
+
+    expect(idleWindow.requestIdleCallback).toHaveBeenNthCalledWith(1, expect.any(Function), { timeout: 250 });
+    expect(idleWindow.cancelIdleCallback).toHaveBeenCalledWith(1);
+    expect(callbacks.size).toBe(1);
+    callbacks.get(2)?.();
+
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    expect(JSON.parse(window.localStorage.getItem(key)!).data.strokes[0].id).toBe('B');
+  });
+
+  it('E. Lifecycle flush: pagehide event flushes pending writes immediately', () => {
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, MOCK_DATA);
+
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    window.dispatchEvent(new Event('pagehide'));
+
+    const rawLs = window.localStorage.getItem(key);
+    expect(rawLs).not.toBeNull();
+  });
+
+  it('F. Lifecycle flush: hidden visibilitychange event flushes pending writes immediately', () => {
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, MOCK_DATA);
+
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    expect(window.localStorage.getItem(key)).toBeNull();
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(window.localStorage.getItem(key)).not.toBeNull();
+  });
+
+  it('G. Pending synced draft supersedes a stale unsynced localStorage copy', () => {
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    window.localStorage.setItem(key, JSON.stringify({
+      userId: 'test-user',
+      scriptId: MOCK_SCRIPT_ID,
+      pageNumber: MOCK_PAGE_NUM,
+      pageKey: MOCK_PAGE_KEY,
+      data: MOCK_DATA,
+      savedAt: 1,
+      synced: false,
+    }));
+
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, { annotations: [], strokes: [] }, { synced: true });
+
+    expect(getPendingAnnotationDrafts(MOCK_SCRIPT_ID, 'test-user')).toEqual([]);
+  });
+
+  it('H. localStorage is the primary store rather than a mirrored memory copy', () => {
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, MOCK_DATA);
+    const key = `ae_draft_annotations:test-user:${MOCK_SCRIPT_ID}:${MOCK_PAGE_NUM}`;
+    window.dispatchEvent(new Event('pagehide'));
+    expect(window.localStorage.getItem(key)).not.toBeNull();
+
+    window.localStorage.removeItem(key);
+    expect(getLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM)).toBeNull();
+  });
+
+  it('I. User isolation: pending draft for user A is not returned for user B', () => {
+    setCurrentDraftUser('user-a');
+    saveLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM, MOCK_PAGE_KEY, MOCK_DATA);
+
+    setCurrentDraftUser('user-b');
+    // Should be null for user B
+    const draftB = getLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM);
+    expect(draftB).toBeNull();
+
+    // Verify User A can still get it
+    setCurrentDraftUser('user-a');
+    const draftA = getLocalAnnotationDraft(MOCK_SCRIPT_ID, MOCK_PAGE_NUM);
+    expect(draftA).not.toBeNull();
+    
+    // Clean up
+    vi.advanceTimersByTime(250);
+  });
+});

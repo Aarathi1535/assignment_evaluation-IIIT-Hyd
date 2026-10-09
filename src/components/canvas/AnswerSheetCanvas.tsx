@@ -128,6 +128,7 @@ import {
   isServerDataNewer,
   getCurrentDraftUser,
   setCurrentDraftUser,
+  flushPendingWrites,
 } from '@/lib/offlineDrafts';
 import { PenStyleSelector } from './PenStyleSelector';
 
@@ -902,6 +903,7 @@ export function AnswerSheetCanvas({
       pendingSaveRef.current = null;
       executeSave(toSave);
     }
+    flushPendingWrites();
   }, [executeSave]);
 
   // Online / Offline Network Listeners & Automatic Sync (AE-170)
