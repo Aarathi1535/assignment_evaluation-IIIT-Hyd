@@ -17,6 +17,11 @@ import {
 } from '@/lib/panZoom';
 import type { PageImageLayerProps } from './types';
 import { logGraderTiming } from '@/lib/graderPerformance';
+import {
+  isCanvasProfilingEnabled,
+  markCanvasProfile,
+  measureCanvasProfile,
+} from '@/lib/canvasProfiling';
 
 export function PageImageLayer({
   src,
@@ -245,6 +250,12 @@ export function PageImageLayer({
 
     img.onload = () => {
       if (isCancelled) return;
+
+      if (isCanvasProfilingEnabled()) {
+        markCanvasProfile('image-loaded');
+        measureCanvasProfile('page-switch->image-loaded', 'page-switch', 'image-loaded');
+      }
+
       loadedImageRef.current = img;
 
       const stageW = stage?.width() || dimensionsRef.current.width;

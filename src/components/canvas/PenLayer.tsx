@@ -20,6 +20,11 @@ import {
   type SmoothingOptions,
 } from '@/lib/strokeSmoothing';
 import type { PanZoomTransform } from '@/lib/panZoom';
+import {
+  isCanvasProfilingEnabled,
+  measureCanvasProfileBetweenTimes,
+  measureCanvasProfileFromTimestamp,
+} from '@/lib/canvasProfiling';
 
 import type { RenderedImageBounds } from '@/lib/annotations';
 
@@ -359,6 +364,9 @@ export function PenLayer({
     };
 
     const handlePointerMove = (e: PointerEvent) => {
+      const pointerEventTime = e.timeStamp;
+      const isDevProfiling = isCanvasProfilingEnabled();
+
       const rect = container.getBoundingClientRect();
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
@@ -408,8 +416,16 @@ export function PenLayer({
 
         // Update live Konva Line node
         if (activeLineNodeRef.current && layerRef.current) {
+          const batchDrawStartedAt = isDevProfiling ? performance.now() : 0;
           activeLineNodeRef.current.points(updated.points);
           layerRef.current.batchDraw();
+
+          if (isDevProfiling) {
+            measureCanvasProfileBetweenTimes('konva-batchDraw-call', batchDrawStartedAt, performance.now());
+            requestAnimationFrame(() => {
+              measureCanvasProfileFromTimestamp('pointermove->next-raf', pointerEventTime);
+            });
+          }
         }
       }
     };

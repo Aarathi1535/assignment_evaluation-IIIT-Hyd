@@ -39,6 +39,12 @@ import { ShortcutHelpOverlay } from './ShortcutHelpOverlay';
 import type { AnswerSheetCanvasProps, CanvasTool, SaveStatus } from './types';
 import type { RenderedImageBounds } from '@/lib/annotations';
 import {
+  installCanvasProfileControls,
+  isCanvasProfilingEnabled,
+  markCanvasProfile,
+  measureCanvasProfile,
+} from '@/lib/canvasProfiling';
+import {
   findMatchingShortcut,
   isTypingTarget,
   SHORTCUT_MAP,
@@ -259,6 +265,8 @@ export function AnswerSheetCanvas({
   onShortcutHelpOpenChange,
 }: AnswerSheetCanvasProps) {
   const effectiveUserId = userId || getCurrentDraftUser();
+
+  React.useEffect(() => installCanvasProfileControls(), []);
 
   useEffect(() => {
     if (userId && userId !== getCurrentDraftUser()) {
@@ -1596,16 +1604,40 @@ export function AnswerSheetCanvas({
 
   const handleStrokeComplete = useCallback(
     (newStroke: FreehandStroke) => {
+      const isDevProfiling = isCanvasProfilingEnabled();
+      if (isDevProfiling) {
+        markCanvasProfile('stroke-end-start');
+        markCanvasProfile('react-commit-start');
+      }
+
       const updated = [...allStrokes, newStroke];
       const newHistory = recordAddStroke(currentPageHistory, newStroke);
 
       setPageHistoryMap((prev) => ({ ...prev, [currentPageKey]: newHistory }));
       setInternalStrokes(updated);
       onStrokesChange?.(updated);
+
+      if (isDevProfiling) markCanvasProfile('schedule-autosave-called');
       scheduleAutosave(updated, allAnnotations);
+      if (isDevProfiling) {
+        measureCanvasProfile('stroke-end->scheduleAutosave', 'stroke-end-start', 'schedule-autosave-called');
+      }
     },
     [allStrokes, allAnnotations, currentPageHistory, currentPageKey, onStrokesChange, scheduleAutosave]
   );
+
+  React.useLayoutEffect(() => {
+    if (isCanvasProfilingEnabled()) {
+      markCanvasProfile('react-commit-end');
+      measureCanvasProfile('react-commit-per-stroke', 'react-commit-start', 'react-commit-end');
+    }
+  });
+
+  React.useEffect(() => {
+    if (isCanvasProfilingEnabled()) {
+      markCanvasProfile('page-switch');
+    }
+  }, [activePageIndex]);
 
   const handleAnnotationComplete = useCallback(
     (newAnnotation: MarkAnnotation) => {
