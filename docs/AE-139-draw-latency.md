@@ -7,7 +7,7 @@
   - **Per-Point Active Drawing Latency ($p95$)**: **0.013ms – 0.111ms** (Target: < 200ms)
   - **Gesture Finalization & Smoothing Latency ($p95$)**: **0.141ms – 0.311ms** (Target: < 200ms)
   - **High-Density Stress Test (500 points, 2.0x zoom, $p95$)**: **1.449ms** (Target: < 200ms)
-- **Compliance Status**: **PASS — 100% compliant with PRD NFR-5.2** (measured drawing latency is more than 100× faster than the 200ms threshold).
+- **Compliance Status**: **Unit benchmark only — does not evaluate end-to-end browser presentation latency** (in-memory execution is < 200ms, but excludes DOM/React reconciliation, Konva layer rasterisation, and browser compositing; see `docs/AE-174-canvas-profile.md` for in-browser profiling).
 - **Production Code Changes Required**: **No**. The existing Week-7 canvas architecture in `PenLayer.tsx` already meets all performance criteria through direct Konva ref mutation and gesture-end state batching.
 
 ---

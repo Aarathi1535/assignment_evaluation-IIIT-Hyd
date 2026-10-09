@@ -4,43 +4,79 @@ Closes #222
 
 ## Environment and workload
 
-- **Browser:** Headless Chrome 154.0.8037.93 (Windows 64-bit; Chrome DevTools Protocol reported `HeadlessChrome/154.0.0.0`).
+- **Browser:** Headless Chrome 154.0.8037.98 (Windows 64-bit; Chrome DevTools Protocol reported `HeadlessChrome/154.0.0.0`).
 - **Application:** Next.js 16.2.12 development server using Turbopack.
 - **CPU throttling:** Chrome DevTools Protocol `Emulation.setCPUThrottlingRate` at `rate: 4` (4× CPU slowdown). No network throttling.
 - **Viewport:** 1440 × 1000 CSS pixels, device scale factor 1.
 - **Harness:** `/ae174-profile`, using the real `AnswerSheetCanvas`, its sample SVG page, and 0, 50, or 200 preloaded strokes. Each case used the canvas's 100% or 400% zoom control.
-- **Input:** One synthetic browser PointerEvent gesture per case: 120 pointer moves requested, paced one animation frame apart, followed by pointer-up. The report shows the pointer-move measurements actually recorded (117–119); this is browser input simulation, not physical stylus or display-present latency.
-- **Long tasks:** The observer ran from `window.__AE174CanvasProfile.start()` through the gesture and a 1.2 second settle period. Counts are per single scenario run, not a 30-second aggregate.
-- **Statistics:** Pointer p50/p95/max are across the recorded move samples in that single run. Other hotspots were one-shot measurements unless otherwise shown. Percent of frame is `duration ÷ 16.67 ms × 100`; it is a budget comparison, not CPU utilization. The pointer-to-rAF measure includes scheduling and waiting for the next frame.
+- **Input:** Synthetic browser PointerEvent gestures: 120 pointer moves requested per gesture, paced one animation frame apart, followed by pointer-up. The report shows the pointer-move measurements actually recorded (117–119); this is browser input simulation, not physical stylus digitizer or display presentation latency.
+- **Independent runs:** Each benchmark scenario was executed for **3 independent runs** (18 gesture runs total, plus 3 independent runs of page switching). Raw measures and run-by-run reports are preserved in `docs/ae174-raw-benchmark-results.json`.
+- **Long tasks:** The observer ran from `window.__AE174CanvasProfile.start()` through the gesture and a 1.2 second settle period. Counts are per gesture run, not a 30-second aggregate.
+- **Statistics:** Values in the summary table represent the aggregate statistics across the 3 independent runs. Pointer p50/p95/max are calculated across recorded move samples per run. Percent of frame is `duration ÷ 16.67 ms × 100` (frame-budget share, not CPU utilization). The pointer-to-rAF measure includes event queue scheduling and waiting for the next animation frame.
 
 ## Measured baseline
 
-All times are milliseconds. `p95 (% frame)` shows the measured p95 and its share of a 16.67 ms frame. Pointer cells show `p50 / p95 / max` and the p95 frame share. The `n` count is the number of pointer-to-rAF samples recorded.
+All times are milliseconds. `p95 (% frame)` shows the measured p95 and its share of a 16.67 ms frame. Pointer cells show `p50 / p95 / max` and the p95 frame share. The `n` count is the average number of pointer-to-rAF samples recorded per run.
 
 | Existing strokes × zoom | Pointer to next rAF: p50 / p95 / max; p95 frame share (n) | Konva `batchDraw` call p95 (% frame) | React commit p95 (% frame) | Local draft write p95 (% frame) | Stroke end to autosave scheduling p95 (% frame) | Long tasks |
 |---|---:|---:|---:|---:|---:|---:|
-| 0 × 1× | 16.1 / 27.4 / 58.0; 164.4% (119) | 0.5 (3.0%) | 25.3 (151.8%) | 0.2 (1.2%) | 0.3 (1.8%) | 1 |
-| 0 × 4× | 16.4 / 22.8 / 40.5; 136.8% (117) | 0.5 (3.0%) | 56.3 (337.7%) | 1.5 (9.0%) | 0.5 (3.0%) | 1 |
-| 50 × 1× | 22.3 / 35.2 / 112.0; 211.2% (119) | 0.5 (3.0%) | 43.4 (260.3%) | 0.4 (2.4%) | 0.7 (4.2%) | 4 |
-| 50 × 4× | 19.9 / 45.1 / 75.8; 270.5% (117) | 0.5 (3.0%) | 26.4 (158.4%) | 1.5 (9.0%) | 0.9 (5.4%) | 5 |
-| 200 × 1× | 64.7 / 127.8 / 210.5; 766.6% (119) | 0.5 (3.0%) | 49.6 (297.5%) | 0.5 (3.0%) | 0.2 (1.2%) | 111 |
-| 200 × 4× | 42.7 / 57.8 / 96.4; 346.7% (117) | 0.5 (3.0%) | 23.9 (143.4%) | 1.8 (10.8%) | 0.3 (1.8%) | 17 |
+| 0 × 1× | 16.6 / 21.9 / 39.0; 131.4% (119) | 1.0 (6.2%) | 128.9 (773.2%) | 1.2 (7.0%) | 1.2 (7.4%) | 1 |
+| 0 × 4× | 16.4 / 38.1 / 81.3; 228.8% (117) | 1.1 (6.6%) | 52.5 (314.7%) | 0.5 (3.2%) | 0.7 (4.0%) | 7 |
+| 50 × 1× | 19.6 / 25.3 / 32.6; 152.0% (119) | 1.0 (6.0%) | 51.4 (308.3%) | 1.8 (10.6%) | 0.2 (1.0%) | 1 |
+| 50 × 4× | 17.2 / 34.4 / 137.3; 206.2% (117) | 0.8 (4.8%) | 50.0 (300.1%) | 1.1 (6.4%) | 0.5 (2.8%) | 6 |
+| 200 × 1× | 41.2 / 51.0 / 59.6; 306.1% (119) | 0.3 (1.8%) | 49.7 (298.1%) | 2.0 (12.0%) | 1.9 (11.4%) | 7 |
+| 200 × 4× | 27.7 / 47.8 / 99.1; 286.5% (117) | 0.4 (2.6%) | 55.7 (333.9%) | 2.2 (13.0%) | 0.4 (2.6%) | 6 |
 
-The page-switch measure was captured separately by switching to page 2 and back once: 35.1 ms and 96.1 ms (`n=2`; p50 35.1 ms, max 96.1 ms). The corresponding frame-budget ratios are 210.6% and 576.6%. That run observed 2 long tasks.
+### Page-switch baseline
 
-These numbers are a reproducible development-browser baseline, not a production build or physical tablet result. The 200-stroke runs and the React commit / pointer-to-rAF values exceed one 16.67 ms frame under this setup. No claim is made here that every input modality or hardware configuration meets a production latency target.
+Page switching was measured across 3 independent runs switching between page 1 and page 2 (6 total page transitions):
+- **Durations:** 11.4 ms, 19.2 ms, 23.9 ms, 53.5 ms, 56.5 ms, 58.7 ms.
+- **p50 / median:** 38.7 ms (232.2% frame share).
+- **Max:** 58.7 ms (352.1% frame share).
+- **Long tasks:** 3–4 per run.
+
+These numbers establish a reproducible development-browser baseline under 4× CPU throttling. The 200-stroke runs, React commit cycles, and page switches consistently exceed a 16.67 ms frame budget. No claim is made that every input modality or hardware configuration meets a production latency target.
+
+## Analysis of `Konva batchDraw` and timer resolution
+
+In earlier runs, `konva-batchDraw-call` reported approximately `0.5 ms` across scenarios; in the repeated 3-run benchmark, it measured between `0.3 ms` and `1.1 ms` ($p95$). Investigation of the Konva internals and browser instrumentation revealed:
+
+1. **Asynchronous scheduling:** In Konva (`konva.js` L9258), `layer.batchDraw()` does not execute canvas drawing synchronously. Instead, it sets an internal boolean flag (`_waitingForDraw = true`) and schedules a redraw on the animation loop:
+   ```javascript
+   batchDraw() {
+     if (!this._waitingForDraw) {
+       this._waitingForDraw = true;
+       Util.requestAnimFrame(() => {
+         this.draw();
+         this._waitingForDraw = false;
+       });
+     }
+     return this;
+   }
+   ```
+2. **Measurement scope:** The `konva-batchDraw-call` metric measures the synchronous invocation time of `batchDraw()`. Because `batchDraw()` only enqueues an animation frame, its synchronous JS execution time is sub-millisecond (~0.1–1.0 ms) regardless of stroke count.
+3. **Timer resolution:** Under headless Chrome with 4× CPU slowdown, timer resolution and task scheduling quantize very short operations into discrete sub-millisecond intervals.
+4. **Where the actual draw workload lands:** The actual rasterization of the $N$ splines occurs asynchronously within the animation frame callback (`this.draw()`). This workload is captured in the `pointermove->next-raf` metric (which increases from 21.9 ms at 0 strokes to 51.0 ms at 200 strokes) and in the long tasks observer.
 
 ## Reproduce the profile
 
-Start the isolated local harness without starting the app's database connection or ingestion worker. In PowerShell:
+### Option A: Automated benchmark script (recommended)
 
-```powershell
-$env:AE174_PROFILE_ONLY = 'true'
-$env:NEXT_PUBLIC_ENABLE_CANVAS_PROFILING = 'true'
-npm run dev -- --hostname 127.0.0.1
-```
+1. Start the isolated local harness server in PowerShell:
+   ```powershell
+   $env:AE174_PROFILE_ONLY = 'true'
+   $env:NEXT_PUBLIC_ENABLE_CANVAS_PROFILING = 'true'
+   npm run dev -- --hostname 127.0.0.1 --port 3000
+   ```
+2. In a separate terminal, run the automated measurement script:
+   ```powershell
+   npx tsx src/scripts/profileCanvasAE174.ts
+   ```
+   The script automatically spawns Headless Chrome with 4× CPU throttling, runs each scenario 3 independent times, logs progress, outputs the summary table, and saves the complete raw JSON data to `docs/ae174-raw-benchmark-results.json`.
 
-Open `http://127.0.0.1:3000/ae174-profile` in Chrome 154 or later. In DevTools **Performance**, set CPU to **4x slowdown** and keep network throttling disabled. For each table row, select the stroke-count and zoom buttons first and verify the canvas readout is `100%` or `400%`. Then run this in the Console. It starts a fresh observation, dispatches one paced 120-move pointer gesture to the actual Konva canvas surface, and waits 1.2 seconds for draft-save work to settle:
+### Option B: Interactive DevTools procedure
+
+Open `http://127.0.0.1:3000/ae174-profile` in Chrome 154 or later. In DevTools **Performance**, set CPU to **4x slowdown** and keep network throttling disabled. For each table row, select the stroke-count and zoom buttons first and verify the canvas readout is `100%` or `400%`. Then run this in the Console:
 
 ```js
 async function runAE174Gesture() {
@@ -84,7 +120,7 @@ const report = await runAE174Gesture();
 console.log(report);
 ```
 
-`dump()` logs and returns the `performance.getEntriesByType('measure')` results for AE-174, disconnects the long-task observer, and clears AE-174 marks and measures. The harness controls are dev-only and use sample data; the route returns not found in production.
+`dump()` logs and returns the `performance.getEntriesByType('measure')` results for AE-174, disconnects the long-task observer, and clears AE-174 marks and measures.
 
 ## Instrumented hotspots
 
