@@ -10,36 +10,91 @@ interface TimingStore {
 
 export const timingContext = new AsyncLocalStorage<TimingStore>();
 
-let isMonitoringInitialized = false;
+// Track monitored MongoClient instances to avoid duplicate listeners across reconnects
+const monitoredClients = new WeakSet<object>();
 
-function initMongooseMonitoring() {
-  if (isMonitoringInitialized) return;
-  
-  // Enable command monitoring for the underlying MongoDB driver
-  try {
-      (mongoose.set as (key: string, val: unknown) => typeof mongoose)('monitorCommands', true);
-  } catch (e: unknown) {
-      const err = e as Error;
-      if (err.name !== 'SetOptionError') throw e;
+interface CommandMonitoringEmitter {
+  on(event: string, listener: (event: { duration: number }) => void): void;
+}
+
+/**
+ * Attaches command monitoring listeners to the actual MongoDB driver's MongoClient.
+ * Safely handles connection instances and prevents duplicate listeners across reconnects.
+ */
+export function attachCommandMonitoring(client?: unknown) {
+  let targetClient: CommandMonitoringEmitter | null = null;
+  if (client && typeof (client as CommandMonitoringEmitter).on === 'function') {
+    targetClient = client as CommandMonitoringEmitter;
+  } else if (mongoose.connection && mongoose.connection.readyState !== 0) {
+    try {
+      targetClient = mongoose.connection.getClient() as unknown as CommandMonitoringEmitter;
+    } catch {
+      // Driver client not initialized yet
+    }
   }
-  
-  mongoose.connection.on('commandSucceeded', (event) => {
+
+  if (!targetClient || typeof targetClient.on !== 'function') {
+    return;
+  }
+
+  if (monitoredClients.has(targetClient)) {
+    return;
+  }
+
+  const recordDbTime = (event: { duration: number }) => {
     const store = timingContext.getStore();
     if (store) {
       store.dbRoundTrips += 1;
       store.dbTimeMs += event.duration;
     }
+  };
+
+  // Attach command monitoring listeners directly to the actual MongoClient driver instance
+  targetClient.on('commandSucceeded', recordDbTime);
+  targetClient.on('commandFailed', recordDbTime);
+  monitoredClients.add(targetClient);
+}
+
+// Automatically attach listeners when Mongoose establishes or reconnects a connection
+if (typeof mongoose !== 'undefined' && mongoose.connection) {
+  mongoose.connection.on('open', () => {
+    try {
+      const client = mongoose.connection.getClient();
+      if (client) {
+        attachCommandMonitoring(client);
+      }
+    } catch {
+      // Driver client not ready yet
+    }
   });
-  
-  isMonitoringInitialized = true;
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const client = mongoose.connection.getClient();
+      if (client) {
+        attachCommandMonitoring(client);
+      }
+    } catch {
+      // Driver client not ready yet
+    }
+  }
 }
 
 export function withServerTiming<T extends unknown[]>(
   handler: (req: NextRequest, ...args: T) => Promise<NextResponse | Response>
 ) {
-  initMongooseMonitoring();
-
   return async (req: NextRequest, ...args: T) => {
+    // Ensure monitoring is attached to the active MongoClient before request database operations execute
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      try {
+        const client = mongoose.connection.getClient();
+        if (client) {
+          attachCommandMonitoring(client);
+        }
+      } catch {
+        // Driver client not ready yet
+      }
+    }
     const start = performance.now();
     const store: TimingStore = { dbRoundTrips: 0, dbTimeMs: 0 };
     

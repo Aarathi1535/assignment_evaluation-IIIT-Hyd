@@ -2263,7 +2263,7 @@ export class AllocationService {
         }
 
         const candidate = await Allocation.findOne(query)
-            .sort({ createdAt: 1 })
+            .sort({ createdAt: 1, _id: 1 })
             .session(session || null)
             .lean();
 

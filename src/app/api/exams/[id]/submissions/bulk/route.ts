@@ -31,7 +31,7 @@ export const POST = withServerTiming(async (
     await connectDB();
 
     const body = await req.json().catch(() => ({}));
-    const { allocationIds, preview, confirmed, limit } = body || {};
+    const { allocationIds, preview, confirmed, limit, timeoutMs } = body || {};
     const ipAddress = req.headers.get('x-forwarded-for') || undefined;
 
     const result = await gradingService.bulkSubmit({
@@ -42,6 +42,7 @@ export const POST = withServerTiming(async (
       preview: Boolean(preview),
       confirmed: Boolean(confirmed),
       limit: typeof limit === 'number' ? limit : undefined,
+      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
       ipAddress,
     });
 

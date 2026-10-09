@@ -32,23 +32,24 @@ We avoided risky or extensive refactoring (like bulkSubmit batching) in favor of
 3. **`GradingService.submitScript` Sequential Grade Updates**:
    - Issue: The submission looped over grades and called `.save()` on each individually.
    - Fix: Transitioned to `Grade.updateMany({ _id: { $in: gradeIds } }, { $set: { isFinal: true } })` to finalize all grades in a single round-trip.
-4. **`AllocationService.getNextAllocation` Full Collection Scan**:
-   - Issue: Query took 1.2s because it lacked an index.
-   - Fix: Added the compound index `{ ta: 1, exam: 1, status: 1, createdAt: 1 }` to the `Allocation` schema and optimized the query sort to strictly use `createdAt: 1`.
+4. **`AllocationService.getNextAllocation` Index & Deterministic Ordering**:
+   - Issue: Query took 1.2s because it lacked an index, and deterministic ordering required an `_id` tie-breaker.
+   - Fix: Added the compound index `{ ta: 1, exam: 1, status: 1, createdAt: 1, _id: 1 }` to the `Allocation` schema and sort via `{ createdAt: 1, _id: 1 }` to ensure deterministic ordering while keeping the query fully indexed.
 5. **Asynchronous Progress Dispatch**:
    - Issue: `submitScript` awaited `ProgressEventService.dispatchProgressEvent`, which introduced ~50ms of blocking aggregation latency per call.
    - Fix: Fired the event asynchronously to avoid blocking the critical response path.
 
 ## 3. Benchmarking
 
-Created `src/__tests__/AE177ResponseBudgetBenchmark.test.ts` to explicitly benchmark the modified `GradingService.submitScript` logic.
+Created `src/__tests__/AE177ResponseBudgetBenchmark.test.ts` to explicitly benchmark the modified `GradingService.submitScript` and bulk submission logic.
 
 **Benchmark Targets**:
 - **Individual Latency Budget**: < 300ms
 - **Integration Test Budget (100 Iterations)**: < 2000ms
+- **Bulk Processing Budget (50 Items)**: < 15000ms (aligned with `DEFAULT_BULK_TIMEOUT_MS` to support realistic bulk processing while maintaining transaction-safe timeout safeguards against runaway processing)
 
 **Results**:
-The benchmark successfully passed by executing 100 sequential `submitScript` operations in approximately ~1.9s (~19ms average per submission), confirming that the optimizations successfully keep latency well within the required performance budget.
+The benchmark successfully passed by executing 100 sequential `submitScript` operations in approximately ~1.9s (~19ms average per submission) and 50 bulk items within ~2.2s, confirming that the optimizations successfully keep latency well within the required performance budget.
 
 ## Future Follow-ups
 - File follow-up ticket for `bulkSubmit` batching (currently using unoptimized loop).

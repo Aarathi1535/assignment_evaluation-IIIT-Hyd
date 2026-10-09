@@ -27,6 +27,7 @@ export async function connectDB() {
   if (!mongooseCache.promise) {
     const opts = {
       bufferCommands: false,
+      monitorCommands: true,
     };
 
     const MONGODB_URI = process.env.MONGODB_URI;
@@ -41,6 +42,18 @@ export async function connectDB() {
 
   try {
     mongooseCache.conn = await mongooseCache.promise;
+
+    // Safely attach command monitoring to the underlying MongoClient
+    try {
+      const client = mongooseCache.conn.connection.getClient();
+      if (client) {
+        const { attachCommandMonitoring } = await import('./serverTiming');
+        attachCommandMonitoring(client);
+      }
+    } catch {
+      // Ignore if client is not available
+    }
+
     // Validate topology before accepting traffic. Throws in production
     // if connected to a standalone MongoDB that cannot support transactions.
     validateMongoTopology(mongooseCache.conn.connection);
