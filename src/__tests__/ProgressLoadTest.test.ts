@@ -65,7 +65,7 @@ describe('AE-118: Concurrency-Correctness Progress Updates (20 TAs)', () => {
     ProgressEventService.clearListeners();
     mockSessionUser = null;
 
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});
     await Exam.deleteMany({});

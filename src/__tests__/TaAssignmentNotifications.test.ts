@@ -75,7 +75,7 @@ describe('AE-111: TA Assignment Notifications', () => {
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});
     await User.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
     await Notification.deleteMany({});
 

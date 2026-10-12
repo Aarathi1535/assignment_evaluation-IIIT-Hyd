@@ -66,7 +66,7 @@ describe('AE-102: Cross-Instance Live Progress Updates', () => {
         ProgressEventService.clearListeners();
         mockSessionUser = null;
 
-        await AuditLog.deleteMany({});
+        await AuditLog.collection.deleteMany({});
         await Allocation.deleteMany({});
         await AnswerScript.deleteMany({});
         await Exam.deleteMany({});

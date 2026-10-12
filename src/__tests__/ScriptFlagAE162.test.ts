@@ -65,7 +65,7 @@ describe('AE-162: ScriptFlag Model, Service, and API Tests', () => {
     await Course.deleteMany({});
     await User.deleteMany({});
     await Allocation.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Notification.deleteMany({});
     await Grade.deleteMany({});
 

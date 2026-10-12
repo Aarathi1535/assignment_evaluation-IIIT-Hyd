@@ -40,7 +40,7 @@ describe('Allocation Completion Transition Tests (AE-099)', () => {
     });
 
     beforeEach(async () => {
-        await AuditLog.deleteMany({});
+        await AuditLog.collection.deleteMany({});
         await Allocation.deleteMany({});
         await AnswerScript.deleteMany({});
         await Exam.deleteMany({});

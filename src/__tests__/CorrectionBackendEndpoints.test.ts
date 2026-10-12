@@ -75,7 +75,7 @@ describe('AE-064 Manual Correction Backend Endpoints', () => {
         await IngestionPage.deleteMany({});
         await Batch.deleteMany({});
         await IngestionJob.deleteMany({});
-        await AuditLog.deleteMany({});
+        await AuditLog.collection.deleteMany({});
         await User.deleteMany({});
         await StudentMapping.deleteMany({});
     });
