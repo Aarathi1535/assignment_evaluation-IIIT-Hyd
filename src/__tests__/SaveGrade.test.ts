@@ -137,7 +137,7 @@ describe('AE-145: Save Grade (Service & API)', () => {
     await Allocation.deleteMany({});
     await Grade.deleteMany({});
     await CommentTag.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     mockSessionUser = null;
   });
 

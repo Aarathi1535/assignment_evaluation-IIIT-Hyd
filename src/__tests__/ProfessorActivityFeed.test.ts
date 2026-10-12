@@ -60,7 +60,7 @@ describe('AE-116: Activity Feed on Professor Dashboard', () => {
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});
     await User.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
 
     // Create Users

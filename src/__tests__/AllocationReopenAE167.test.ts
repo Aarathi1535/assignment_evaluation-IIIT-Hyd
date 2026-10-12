@@ -76,7 +76,7 @@ describe('AE-167: Allocation-Level Reopen (Service & API)', () => {
 
     await Notification.deleteMany({});
     await ScriptFlag.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
     await Allocation.deleteMany({});
     await Page.deleteMany({});

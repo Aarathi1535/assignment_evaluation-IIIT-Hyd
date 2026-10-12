@@ -1396,6 +1396,7 @@ export class AllocationService {
                     gradesUnfinalized: gradeUpdateResult.modifiedCount,
                 },
                 ipAddress,
+                session: session || undefined,
             });
 
             // 5. Notify affected TA
@@ -1962,9 +1963,15 @@ export class AllocationService {
     ): Promise<ActivityFeedResult> {
         const limit = Math.min(100, Math.max(1, options?.limit || 10));
 
+        const isTa = viewer?.role?.toUpperCase() === UserRole.TA;
+        // TAs must NOT receive grading audit rows through this feed
+        const allowedActions = isTa
+            ? GRADING_ACTIVITY_ACTIONS.filter(a => !GRADING_AUDIT_ACTIONS.includes(a))
+            : GRADING_ACTIVITY_ACTIONS;
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const filter: Record<string, any> = {
-            action: { $in: GRADING_ACTIVITY_ACTIONS },
+            action: { $in: allowedActions },
             outcome: { $ne: 'FAILURE' }
         };
 
@@ -2158,10 +2165,12 @@ export class AllocationService {
                 ? String(details.targetScriptId)
                 : details.newScriptId
                 ? String(details.newScriptId)
+                : details.scriptId
+                ? String(details.scriptId)
                 : details.sourceScriptId
                 ? String(details.sourceScriptId)
                 : '';
-            if (!resolvedScriptId && log.entityId && (log.entityType === 'AnswerScript' || ['ANSWERSCRIPT_IDENTIFIED', 'SCRIPT_REMAP', 'SCRIPT_MERGE'].includes(log.action))) {
+            if (!resolvedScriptId && log.entityId && (log.entityType === 'AnswerScript' || ['ANSWERSCRIPT_IDENTIFIED', 'SCRIPT_REMAP', 'SCRIPT_MERGE', 'SCRIPT_SUBMITTED'].includes(log.action))) {
                 resolvedScriptId = log.entityId.toString();
             }
             const scriptInfo = resolvedScriptId
@@ -2170,6 +2179,13 @@ export class AllocationService {
 
             const question = details.question !== undefined ? details.question : null;
             const description = buildActivityDescription(log.action, details, userMap);
+
+            // Clean details: do NOT include ipAddress
+            const itemDetails: Record<string, unknown> = { ...details };
+            delete itemDetails.ipAddress;
+            if (previousTa) itemDetails.previousTa = previousTa;
+            if (newTa) itemDetails.newTa = newTa;
+            if (ta) itemDetails.ta = ta;
 
             return {
                 _id: log._id.toString(),
@@ -2187,12 +2203,7 @@ export class AllocationService {
                     scriptReference: scriptInfo.scriptReference
                 } : null,
                 actingUser,
-                details: {
-                    ...(previousTa ? { previousTa } : {}),
-                    ...(newTa ? { newTa } : {}),
-                    ...(ta ? { ta } : {}),
-                    ...(details.isBlindGrading !== undefined ? { isBlindGrading: details.isBlindGrading } : {})
-                }
+                details: itemDetails
             };
         });
 
@@ -2301,6 +2312,14 @@ export interface NextAllocationResult {
     targetUrl: string;
 }
 
+export const GRADING_AUDIT_ACTIONS = [
+    'GRADE_SAVED',
+    'GRADE_UPDATED',
+    'GRADE_FINALIZED',
+    'SCRIPT_SUBMITTED',
+    'ALLOCATION_REOPENED'
+];
+
 export const GRADING_ACTIVITY_ACTIONS = [
     'ALLOCATION_REASSIGN',
     'ALLOCATION_CLAIM',
@@ -2312,7 +2331,8 @@ export const GRADING_ACTIVITY_ACTIONS = [
     'GRADE_PUBLISHED',
     'EXAM_BLIND_GRADING_TOGGLED',
     'INGESTION_APPROVED',
-    'INGESTION_APPROVAL_REVOKED'
+    'INGESTION_APPROVAL_REVOKED',
+    ...GRADING_AUDIT_ACTIONS
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2357,6 +2377,21 @@ function buildActivityDescription(action: string, details: Record<string, any>, 
         }
         case 'GRADE_PUBLISHED': {
             return 'Grades published';
+        }
+        case 'GRADE_SAVED': {
+            return `Saved grade for ${questionText}`;
+        }
+        case 'GRADE_UPDATED': {
+            return `Updated grade for ${questionText}`;
+        }
+        case 'GRADE_FINALIZED': {
+            return `Finalized grade for ${questionText}`;
+        }
+        case 'SCRIPT_SUBMITTED': {
+            return 'Answer script submitted';
+        }
+        case 'ALLOCATION_REOPENED': {
+            return `Reopened allocation for ${questionText}`;
         }
         default:
             return action.replace(/_/g, ' ').toLowerCase();

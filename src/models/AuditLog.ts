@@ -9,7 +9,7 @@ export interface IAuditLog extends Document {
     details?: Record<string, unknown>;
     ipAddress?: string;
     createdAt: Date;
-    updatedAt: Date;
+    updatedAt?: Date;
 }
 
 const AuditLogSchema = new Schema<IAuditLog>(
@@ -48,12 +48,35 @@ const AuditLogSchema = new Schema<IAuditLog>(
         }
     },
     {
-        timestamps: true
+        timestamps: { createdAt: true, updatedAt: false }
     }
 );
 
 // Index for query sorting logs chronologically
 AuditLogSchema.index({ createdAt: -1 });
+
+// Safeguards: Reject application-level updates and deletes (AE-179)
+AuditLogSchema.pre(['updateOne', 'updateMany', 'replaceOne', 'findOneAndUpdate'], function () {
+    throw new Error('AuditLog records are immutable and cannot be updated.');
+});
+
+AuditLogSchema.pre('deleteOne', { document: true, query: true }, function () {
+    throw new Error('AuditLog records are append-only and cannot be deleted.');
+});
+
+AuditLogSchema.pre('findOneAndDelete', function () {
+    throw new Error('AuditLog records are append-only and cannot be deleted.');
+});
+
+AuditLogSchema.pre('save', function () {
+    if (!this.isNew) {
+        throw new Error('AuditLog records are immutable and cannot be updated.');
+    }
+});
+
+AuditLogSchema.pre('deleteMany', function () {
+    throw new Error('AuditLog records are append-only and cannot be deleted.');
+});
 
 const AuditLog: Model<IAuditLog> = mongoose.models.AuditLog || mongoose.model<IAuditLog>('AuditLog', AuditLogSchema);
 
