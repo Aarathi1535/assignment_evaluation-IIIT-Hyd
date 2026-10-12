@@ -125,6 +125,16 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
             />
           </svg>
           <span>Pending sync (Saved locally)</span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="ml-1 px-1.5 py-0.5 rounded bg-sky-100 hover:bg-sky-200 text-sky-800 font-semibold focus:outline-none focus:ring-1 focus:ring-sky-400 transition-colors"
+              aria-label="Retry syncing annotations"
+            >
+              Retry
+            </button>
+          )}
         </>
       )}
 

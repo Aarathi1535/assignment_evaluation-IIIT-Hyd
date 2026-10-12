@@ -204,7 +204,15 @@ export function GradingWorkspace({
     try {
       const requestStartedAt = performance.now();
       const baseUrl = `/api/scripts/${encodeURIComponent(scriptId)}`;
-      const url = allocatedQuestionNumber ? `${baseUrl}?question=${allocatedQuestionNumber}` : baseUrl;
+      const params = new URLSearchParams();
+      if (allocatedQuestionNumber) {
+        params.set('question', String(allocatedQuestionNumber));
+      }
+      if (allocationId) {
+        params.set('allocationId', allocationId);
+      }
+      const queryString = params.toString();
+      const url = queryString ? `${baseUrl}?${queryString}` : baseUrl;
       logGraderTiming('script-metadata-request-start', requestStartedAt);
       const res = await fetch(url, {
         method: 'GET',
@@ -264,7 +272,7 @@ export function GradingWorkspace({
       setError(message);
       setLoading(false);
     }
-  }, [scriptId, isReviewMode, flagId, allocatedQuestionNumber]);
+  }, [scriptId, isReviewMode, flagId, allocatedQuestionNumber, allocationId]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
