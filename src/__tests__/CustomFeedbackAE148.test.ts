@@ -162,7 +162,7 @@ describe('AE-148: Question-Level Custom Feedback', () => {
     await AnswerScript.deleteMany({});
     await Allocation.deleteMany({});
     await Grade.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     mockSessionUser = null;
   });
 
@@ -609,7 +609,7 @@ describe('AE-8A (Isolated Saved-Grade Loading Capability)', () => {
     await AnswerScript.deleteMany({});
     await Allocation.deleteMany({});
     await Grade.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     mockSessionUser = null;
   });
 

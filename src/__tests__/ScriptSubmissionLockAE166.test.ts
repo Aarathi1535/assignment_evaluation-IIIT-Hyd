@@ -57,7 +57,7 @@ describe('AE-166: Submit and Lock Graded Script for Teaching Assistants', () => 
     await Allocation.deleteMany({});
     await Grade.deleteMany({});
     await Rubric.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
 
     professorId = new mongoose.Types.ObjectId('000000000000000000000101');
     taId = new mongoose.Types.ObjectId('000000000000000000000102');

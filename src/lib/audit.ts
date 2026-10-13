@@ -10,6 +10,7 @@ export interface AuditLogParams {
     entityType?: string;
     details?: Record<string, unknown>;
     ipAddress?: string;
+    session?: mongoose.ClientSession;
 }
 
 function parseUserObjectId(user: string | mongoose.Types.ObjectId): mongoose.Types.ObjectId | undefined {
@@ -26,9 +27,73 @@ function parseUserObjectId(user: string | mongoose.Types.ObjectId): mongoose.Typ
 }
 
 /**
+ * Retains only the first IP address from an x-forwarded-for chain.
+ */
+function sanitizeIpAddress(ip?: string): string | undefined {
+    if (!ip || typeof ip !== 'string') {
+        return undefined;
+    }
+    const trimmed = ip.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+    const firstIp = trimmed.split(',')[0].trim();
+    return firstIp || undefined;
+}
+
+/**
+ * Truncates feedback strings in audit metadata to max 2,000 characters
+ * and adds an explicit [TRUNCATED] indicator, safely avoiding circular references
+ * while preserving repeated objects across sibling snapshot branches.
+ */
+export function sanitizeAuditFeedback(value: unknown, activePath = new Set<object>(), depth = 0): unknown {
+    if (typeof value === 'string') {
+        if (value.length > 2000) {
+            return value.slice(0, 1985) + '... [TRUNCATED]';
+        }
+        return value;
+    }
+    if (depth > 6) {
+        return value;
+    }
+    if (value && typeof value === 'object') {
+        if (value instanceof mongoose.Types.ObjectId || value instanceof Date || value instanceof RegExp) {
+            return value;
+        }
+        if (activePath.has(value)) {
+            return undefined;
+        }
+        activePath.add(value);
+        try {
+            if (Array.isArray(value)) {
+                return value.map((item) => sanitizeAuditFeedback(item, activePath, depth + 1));
+            }
+
+            const rawObj = typeof (value as { toObject?: () => unknown }).toObject === 'function'
+                ? (value as { toObject: () => unknown }).toObject()
+                : value;
+
+            if (!rawObj || typeof rawObj !== 'object') {
+                return rawObj;
+            }
+
+            const result: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(rawObj as Record<string, unknown>)) {
+                if (k.startsWith('$') || k === '_doc') continue;
+                result[k] = sanitizeAuditFeedback(v, activePath, depth + 1);
+            }
+            return result;
+        } finally {
+            activePath.delete(value);
+        }
+    }
+    return value;
+}
+
+/**
  * Writes an audit log entry.
- * Ensures that if writing the audit log fails, it is caught and logged,
- * preventing any interruption to the main operation.
+ * When session is provided, operations are scoped to that transaction and errors are re-thrown.
+ * When session is absent, best-effort logging is preserved and errors are swallowed.
  */
 export async function writeAuditLog(params: AuditLogParams): Promise<void> {
     try {
@@ -42,28 +107,36 @@ export async function writeAuditLog(params: AuditLogParams): Promise<void> {
         let sanitizedDetails = params.details;
         if (sanitizedDetails && typeof sanitizedDetails === 'object') {
             const detailsObj = { ...sanitizedDetails };
-            let modified = false;
             for (const key of Object.keys(detailsObj)) {
                 if (isDuplicateKeyError(detailsObj[key])) {
                     detailsObj[key] = 'Conflict: Duplicate key error';
-                    modified = true;
                 }
             }
-            if (modified) {
-                sanitizedDetails = detailsObj;
-            }
+            sanitizedDetails = sanitizeAuditFeedback(detailsObj) as Record<string, unknown>;
         }
 
-        await AuditLog.create({
+        const sanitizedIp = sanitizeIpAddress(params.ipAddress);
+
+        const auditDoc = {
             user: userId,
             action: params.action,
             outcome: params.outcome,
             entityId: params.entityId,
             entityType: params.entityType,
             details: sanitizedDetails,
-            ipAddress: params.ipAddress
-        });
+            ipAddress: sanitizedIp
+        };
+
+        if (params.session) {
+            const entry = new AuditLog(auditDoc);
+            await entry.save({ session: params.session });
+        } else {
+            await AuditLog.create(auditDoc);
+        }
     } catch (error) {
+        if (params.session) {
+            throw error;
+        }
         console.error('Failed to write audit log:', error);
     }
 }

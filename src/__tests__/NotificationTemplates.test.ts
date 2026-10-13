@@ -69,7 +69,7 @@ describe('AE-117: Notification Templates', () => {
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});
     await User.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
     await Notification.deleteMany({});
 

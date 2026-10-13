@@ -62,7 +62,7 @@ describe('AE-113: Reassignment History API & Service', () => {
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});
     await User.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
 
     // Create Users

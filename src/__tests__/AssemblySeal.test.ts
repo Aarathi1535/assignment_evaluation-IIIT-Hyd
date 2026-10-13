@@ -78,7 +78,7 @@ describe('AE-075 Ingestion Assembly Seal', () => {
         await IngestionJob.deleteMany({});
         await IngestionPage.deleteMany({});
         await AnswerScript.deleteMany({});
-        await AuditLog.deleteMany({});
+        await AuditLog.collection.deleteMany({});
         await User.deleteMany({});
         await Course.deleteMany({});
     });

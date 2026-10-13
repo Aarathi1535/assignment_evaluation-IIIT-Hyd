@@ -76,7 +76,7 @@ describe('AE-168: Progress Propagation on Allocation Reopen', () => {
     mockSessionUser = null;
 
     await Notification.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});

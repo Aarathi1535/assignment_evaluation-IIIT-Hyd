@@ -422,7 +422,7 @@ describe('TA Allocation Claim and Release API Tests (AE-096)', () => {
     });
 
     it('should create an audit log on successful claim transition', async () => {
-      await AuditLog.deleteMany({});
+      await AuditLog.collection.deleteMany({});
 
       const res = await claimPOST(new Request('http://localhost'), {
         params: Promise.resolve({ id: allocPendingWhole._id.toString() })
@@ -445,7 +445,7 @@ describe('TA Allocation Claim and Release API Tests (AE-096)', () => {
     });
 
     it('should create an audit log on successful TA self-release transition', async () => {
-      await AuditLog.deleteMany({});
+      await AuditLog.collection.deleteMany({});
 
       const res = await releasePOST(new Request('http://localhost'), {
         params: Promise.resolve({ id: allocInProgress._id.toString() })
@@ -475,7 +475,7 @@ describe('TA Allocation Claim and Release API Tests (AE-096)', () => {
         role: UserRole.PROFESSOR
       };
 
-      await AuditLog.deleteMany({});
+      await AuditLog.collection.deleteMany({});
 
       const res = await releasePOST(new Request('http://localhost'), {
         params: Promise.resolve({ id: allocInProgress._id.toString() })
@@ -497,7 +497,7 @@ describe('TA Allocation Claim and Release API Tests (AE-096)', () => {
     });
 
     it('should not create an audit log when claim fails', async () => {
-      await AuditLog.deleteMany({});
+      await AuditLog.collection.deleteMany({});
 
       const res = await claimPOST(new Request('http://localhost'), {
         params: Promise.resolve({ id: allocInProgress._id.toString() })
@@ -509,7 +509,7 @@ describe('TA Allocation Claim and Release API Tests (AE-096)', () => {
     });
 
     it('should not create an audit log when release fails', async () => {
-      await AuditLog.deleteMany({});
+      await AuditLog.collection.deleteMany({});
 
       const res = await releasePOST(new Request('http://localhost'), {
         params: Promise.resolve({ id: allocCompleted._id.toString() })

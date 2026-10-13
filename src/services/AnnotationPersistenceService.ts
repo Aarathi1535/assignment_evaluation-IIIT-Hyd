@@ -91,6 +91,14 @@ export interface GetPageAnnotationsResult {
 }
 
 export class AnnotationPersistenceService {
+  private static lastAuditLogTimestamps = new Map<string, number>();
+
+  /**
+   * Resets the autosave audit throttle map. Helpful for unit testing.
+   */
+  public static resetAuditThrottle(): void {
+    AnnotationPersistenceService.lastAuditLogTimestamps.clear();
+  }
   /**
    * Retrieves vector annotations for a specific answer script page directly from Page.annotations (single source of truth).
    */
@@ -328,14 +336,14 @@ export class AnnotationPersistenceService {
     // 6. Resolve target Page and verify it belongs to this AnswerScript
     let targetPageId: mongoose.Types.ObjectId;
     let targetPageNumber: number;
-    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date } | null = null;
-    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date } | null = null;
+    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date; annotations?: SerializedPageAnnotations | null } | null = null;
+    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date; metadata?: Record<string, unknown> } | null = null;
 
     if (isObjectId) {
       const pageIdObj = new mongoose.Types.ObjectId(pageIdentifier);
 
       const foundPage = await Page.findOne({ _id: pageIdObj, isActive: true })
-        .select('_id answerScript pageNumber updatedAt')
+        .select('_id answerScript pageNumber updatedAt annotations')
         .lean();
 
       if (foundPage) {
@@ -347,7 +355,7 @@ export class AnnotationPersistenceService {
         targetPageNumber = foundPage.pageNumber;
       } else {
         const foundIngestion = await IngestionPage.findById(pageIdObj)
-          .select('_id answerScript pageNumber updatedAt')
+          .select('_id answerScript pageNumber updatedAt metadata')
           .lean();
 
         if (foundIngestion) {
@@ -372,7 +380,7 @@ export class AnnotationPersistenceService {
         pageNumber: pageNum,
         isActive: true,
       })
-        .select('_id answerScript pageNumber updatedAt')
+        .select('_id answerScript pageNumber updatedAt annotations')
         .lean();
 
       if (foundPage) {
@@ -384,7 +392,7 @@ export class AnnotationPersistenceService {
           answerScript: script._id,
           pageNumber: pageNum,
         })
-          .select('_id answerScript pageNumber updatedAt')
+          .select('_id answerScript pageNumber updatedAt metadata')
           .lean();
 
         if (foundIngestion) {
@@ -396,6 +404,13 @@ export class AnnotationPersistenceService {
         }
       }
     }
+
+    // Capture snapshot of previous annotation state before any mutation or persistence (AE-179)
+    const prevRawAnnotations = pageDoc?.annotations || (ingestionDoc?.metadata as { annotations?: SerializedPageAnnotations })?.annotations;
+    const previousAnnotationsSnapshot: SerializedPageAnnotations = {
+      annotations: (prevRawAnnotations?.annotations || []).map(cloneMarkAnnotation),
+      strokes: (prevRawAnnotations?.strokes || []).map(cloneFreehandStroke),
+    };
 
     // 7. Validate and normalize the vector annotation payload
     const normalizedPageData = this.validateAndNormalizePayload(
@@ -486,21 +501,52 @@ export class AnnotationPersistenceService {
       );
     }
 
-    // 10. Record audit log
-    await writeAuditLog({
-      user: userId,
-      action: 'PAGE_ANNOTATIONS_SAVED',
-      outcome: 'SUCCESS',
-      entityId: targetPageId,
-      entityType: pageDoc ? 'Page' : 'IngestionPage',
-      details: {
-        scriptId: script._id.toString(),
-        pageNumber: targetPageNumber,
-        totalAnnotations: normalizedPageData.annotations.length,
-        totalStrokes: normalizedPageData.strokes.length,
-      },
-      ipAddress,
-    });
+    // 10. Record audit log with 60-second window throttling per actor and page (AE-179)
+    const throttleKey = `${userId}:${targetPageId.toString()}`;
+    const now = Date.now();
+    const lastAudit = AnnotationPersistenceService.lastAuditLogTimestamps.get(throttleKey);
+    const shouldAudit = !lastAudit || now - lastAudit >= 60000;
+
+    if (shouldAudit) {
+      AnnotationPersistenceService.lastAuditLogTimestamps.set(throttleKey, now);
+
+      // Preserve meaningful information about annotations added and removed using pre-mutation snapshot:
+      const prevAnnList = previousAnnotationsSnapshot.annotations;
+      const newAnnList = normalizedPageData.annotations;
+
+      const prevAnnSet = new Set(prevAnnList.map((a: { id?: string }) => a.id).filter((id: string | undefined): id is string => Boolean(id)));
+      const newAnnSet = new Set(newAnnList.map((a: { id?: string }) => a.id).filter((id: string | undefined): id is string => Boolean(id)));
+
+      let annotationsAdded = 0;
+      let annotationsRemoved = 0;
+      if (prevAnnSet.size > 0 || newAnnSet.size > 0) {
+        annotationsAdded = newAnnList.filter((a: { id?: string }) => a.id && !prevAnnSet.has(a.id)).length;
+        annotationsRemoved = prevAnnList.filter((a: { id?: string }) => a.id && !newAnnSet.has(a.id)).length;
+      } else {
+        const diff = newAnnList.length - prevAnnList.length;
+        if (diff > 0) annotationsAdded = diff;
+        else annotationsRemoved = -diff;
+      }
+
+      await writeAuditLog({
+        user: userId,
+        action: 'PAGE_ANNOTATIONS_SAVED',
+        outcome: 'SUCCESS',
+        entityId: targetPageId,
+        entityType: pageDoc ? 'Page' : 'IngestionPage',
+        details: {
+          scriptId: script._id.toString(),
+          pageNumber: targetPageNumber,
+          totalAnnotations: normalizedPageData.annotations.length,
+          totalStrokes: normalizedPageData.strokes.length,
+          annotationsAdded,
+          annotationsRemoved,
+          previousAnnotationsCount: prevAnnList.length,
+          previousStrokesCount: previousAnnotationsSnapshot.strokes.length,
+        },
+        ipAddress,
+      });
+    }
 
     return {
       scriptId: script._id.toString(),

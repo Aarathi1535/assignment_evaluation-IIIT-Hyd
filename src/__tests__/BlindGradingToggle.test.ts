@@ -37,7 +37,7 @@ describe('AE-091: Per-Exam Blind-Grading Toggle Tests', () => {
 
     beforeEach(async () => {
         // Clear collections
-        await AuditLog.deleteMany({});
+        await AuditLog.collection.deleteMany({});
         await Allocation.deleteMany({});
         await Grade.deleteMany({});
         await AnswerScript.deleteMany({});

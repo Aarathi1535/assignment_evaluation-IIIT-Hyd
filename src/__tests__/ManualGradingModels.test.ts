@@ -251,7 +251,7 @@ describe('Manual Grading Domain Models Tests', () => {
             expect(saved.createdAt).toBeDefined();
 
             // Cleanup
-            await AuditLog.findByIdAndDelete(saved._id);
+            await AuditLog.collection.deleteOne({ _id: saved._id });
         });
     });
 });

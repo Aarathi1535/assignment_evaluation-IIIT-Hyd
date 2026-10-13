@@ -1,11 +1,11 @@
 import mongoose from 'mongoose';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createCanvas } from '@napi-rs/canvas';
 import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import batchService from '../services/BatchService';
-import { IngestionWorker } from '../services/IngestionWorker';
+import defaultIngestionWorker, { IngestionWorker } from '../services/IngestionWorker';
 import { DefaultImageRenderer } from '../services/PageRenderer';
 import { defaultImageEnhancer } from '../services/ImageEnhancer';
 
@@ -51,7 +51,15 @@ describe('AE-048 — Mixed Inputs (Image-Only, Multi-PDF, Mixed Batches)', () =>
         ipAddress: '127.0.0.1'
     };
 
+    beforeEach(async () => {
+        defaultIngestionWorker.stop();
+        await IngestionJob.collection.deleteMany({});
+        await Batch.collection.deleteMany({});
+        await IngestionPage.collection.deleteMany({});
+    });
+
     afterEach(async () => {
+        defaultIngestionWorker.stop();
         vi.restoreAllMocks();
     });
 

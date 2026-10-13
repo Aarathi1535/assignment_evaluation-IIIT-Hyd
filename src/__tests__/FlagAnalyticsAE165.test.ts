@@ -71,7 +71,7 @@ describe('AE-165: Flag Analytics / Counts Tests', () => {
     await Course.deleteMany({});
     await User.deleteMany({});
     await Allocation.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Notification.deleteMany({});
     await Grade.deleteMany({});
 

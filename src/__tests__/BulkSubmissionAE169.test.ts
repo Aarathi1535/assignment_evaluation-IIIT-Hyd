@@ -81,7 +81,7 @@ describe('AE-169: Bulk Script Submission (Service & API)', () => {
 
     await ScriptFlag.deleteMany({});
     await Notification.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     await Grade.deleteMany({});
     await Allocation.deleteMany({});
     await AnswerScript.deleteMany({});

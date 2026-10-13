@@ -72,7 +72,7 @@ describe('AE-076 Review Dashboard Summary & Counts', () => {
         await AnswerScript.deleteMany({});
         await User.deleteMany({});
         await Course.deleteMany({});
-        await AuditLog.deleteMany({});
+        await AuditLog.collection.deleteMany({});
     });
 
     // ─── Helpers ────────────────────────────────────────────────────────────────

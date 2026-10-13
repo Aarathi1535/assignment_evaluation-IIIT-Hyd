@@ -119,7 +119,7 @@ describe('AE-146: Preset Comment Tags (Service & API)', () => {
     await Course.deleteMany({});
     await Exam.deleteMany({});
     await CommentTag.deleteMany({});
-    await AuditLog.deleteMany({});
+    await AuditLog.collection.deleteMany({});
     mockSessionUser = null;
   });
 

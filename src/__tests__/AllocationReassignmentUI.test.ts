@@ -124,7 +124,7 @@ describe('AE-110: Reassignment UI Helpers & End-to-End Reassignment Flow', () =>
       await Allocation.deleteMany({});
       await AnswerScript.deleteMany({});
       await User.deleteMany({});
-      await AuditLog.deleteMany({});
+      await AuditLog.collection.deleteMany({});
       await Grade.deleteMany({});
 
       // Create Users

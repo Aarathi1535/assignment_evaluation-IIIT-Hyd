@@ -1,8 +1,11 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import Grade, { IGrade, ICriterionGrade } from '../models/Grade';
 import Rubric, { IRubric, IQuestion } from '../models/Rubric';
 import AnswerScript from '../models/AnswerScript';
 import CommentTag, { TagScope } from '../models/CommentTag';
+import Page from '../models/Page';
+import IngestionPage from '../models/IngestionPage';
 import ExamRepository from '../repositories/ExamRepository';
 import AllocationService, { NextAllocationResult } from './AllocationService';
 import ProgressEventService from './ProgressEventService';
@@ -11,6 +14,133 @@ import ScriptFlag, { FlagStatus } from '../models/ScriptFlag';
 import { UserRole } from '../constants/permissions';
 import { HttpError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
+
+interface GradingValues {
+    marksAwarded: ICriterionGrade[];
+    totalScore: number;
+    feedback: string;
+    tagIds: string[];
+}
+
+function areMarksAwardedEqual(prev: ICriterionGrade[], next: ICriterionGrade[]): boolean {
+    if (!prev && !next) return true;
+    if (!prev || !next) return false;
+    if (prev.length !== next.length) return false;
+    const prevMap = new Map<string, { score: number; feedback?: string }>();
+    for (const p of prev) {
+        prevMap.set(p.criterionName, { score: Number(p.score), feedback: (p.feedback || '').trim() });
+    }
+    for (const n of next) {
+        const p = prevMap.get(n.criterionName);
+        if (!p) return false;
+        if (p.score !== Number(n.score)) return false;
+        if (p.feedback !== (n.feedback || '').trim()) return false;
+    }
+    return true;
+}
+
+function areTagIdsEqual(prev: string[], next: string[]): boolean {
+    if (prev.length !== next.length) return false;
+    const sortedPrev = [...prev].sort();
+    const sortedNext = [...next].sort();
+    return sortedPrev.every((val, idx) => val === sortedNext[idx]);
+}
+
+interface GradingDiffResult {
+    hasChanges: boolean;
+    changedFields: string[];
+    changes: Record<string, { previous: unknown; new: unknown }>;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+}
+
+function computeGradingDiff(
+    prev: GradingValues | null,
+    next: {
+        marksAwarded: ICriterionGrade[];
+        totalScore: number;
+        feedback?: string;
+        tagIds?: mongoose.Types.ObjectId[];
+    }
+): GradingDiffResult {
+    if (!prev) {
+        const nextTagStrings = (next.tagIds || []).map(t => t.toString());
+        return {
+            hasChanges: true,
+            changedFields: ['marksAwarded', 'totalScore', 'feedback', 'tagIds'],
+            changes: {
+                marksAwarded: { previous: [], new: next.marksAwarded },
+                totalScore: { previous: 0, new: next.totalScore },
+                feedback: { previous: '', new: next.feedback || '' },
+                tagIds: { previous: [], new: nextTagStrings },
+            },
+            before: {
+                marksAwarded: [],
+                totalScore: 0,
+                feedback: '',
+                tagIds: [],
+            },
+            after: {
+                marksAwarded: next.marksAwarded,
+                totalScore: next.totalScore,
+                feedback: next.feedback || '',
+                tagIds: nextTagStrings,
+            },
+        };
+    }
+
+    const changedFields: string[] = [];
+    const changes: Record<string, { previous: unknown; new: unknown }> = {};
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+
+    // 1. marksAwarded
+    if (!areMarksAwardedEqual(prev.marksAwarded, next.marksAwarded)) {
+        changedFields.push('marksAwarded');
+        changes.marksAwarded = { previous: prev.marksAwarded, new: next.marksAwarded };
+        before.marksAwarded = prev.marksAwarded;
+        after.marksAwarded = next.marksAwarded;
+    }
+
+    // 2. totalScore
+    if (Number(prev.totalScore) !== Number(next.totalScore)) {
+        changedFields.push('totalScore');
+        changes.totalScore = { previous: prev.totalScore, new: next.totalScore };
+        before.totalScore = prev.totalScore;
+        after.totalScore = next.totalScore;
+    }
+
+    // 3. feedback
+    if (next.feedback !== undefined) {
+        const prevFeedback = prev.feedback || '';
+        const newFeedback = next.feedback || '';
+        if (prevFeedback !== newFeedback) {
+            changedFields.push('feedback');
+            changes.feedback = { previous: prevFeedback, new: newFeedback };
+            before.feedback = prevFeedback;
+            after.feedback = newFeedback;
+        }
+    }
+
+    // 4. tagIds
+    if (next.tagIds !== undefined) {
+        const nextTagStrings = next.tagIds.map(t => t.toString());
+        if (!areTagIdsEqual(prev.tagIds, nextTagStrings)) {
+            changedFields.push('tagIds');
+            changes.tagIds = { previous: prev.tagIds, new: nextTagStrings };
+            before.tagIds = prev.tagIds;
+            after.tagIds = nextTagStrings;
+        }
+    }
+
+    return {
+        hasChanges: changedFields.length > 0,
+        changedFields,
+        changes,
+        before,
+        after,
+    };
+}
 
 export const DEFAULT_SCORE_STEP = 0.5;
 export const DEFAULT_BULK_LIMIT = 50;
@@ -412,6 +542,21 @@ export class GradingService {
                     );
                 }
 
+                // Capture snapshot of previous values before mutation (AE-179)
+                const prevValues: GradingValues | null = gradeDoc ? {
+                    marksAwarded: gradeDoc.marksAwarded ? gradeDoc.marksAwarded.map(m => ({ criterionName: m.criterionName, score: m.score, feedback: m.feedback })) : [],
+                    totalScore: gradeDoc.totalScore || 0,
+                    feedback: gradeDoc.feedback || '',
+                    tagIds: gradeDoc.tagIds ? gradeDoc.tagIds.map(t => t.toString()) : []
+                } : null;
+
+                const diff = computeGradingDiff(prevValues, {
+                    marksAwarded,
+                    totalScore: computed.totalScore,
+                    feedback: processedFeedback,
+                    tagIds: processedTagIds,
+                });
+
                 if (allocationDoc) {
                     const freshAlloc = await Allocation.findById(allocationDoc._id).session(session || null);
                     if (!freshAlloc) {
@@ -513,22 +658,51 @@ export class GradingService {
                     throw err;
                 }
 
+                const finalizeDetails: Record<string, unknown> = {
+                    examId: script.exam.toString(),
+                    answerScriptId: script._id.toString(),
+                    question,
+                    totalScore: computed.totalScore,
+                    marksAwardedCount: marksAwarded.length,
+                    rubricId: rubric._id.toString(),
+                    isFinal: true,
+                };
+                if (diff.changedFields.length > 0) {
+                    finalizeDetails.changedFields = diff.changedFields;
+                    finalizeDetails.changes = diff.changes;
+                    finalizeDetails.before = diff.before;
+                    finalizeDetails.after = diff.after;
+                    finalizeDetails.previousValues = diff.before;
+                    finalizeDetails.newValues = diff.after;
+                    if (diff.before.totalScore !== undefined) {
+                        finalizeDetails.previousTotalScore = diff.before.totalScore;
+                        finalizeDetails.newTotalScore = diff.after.totalScore;
+                        finalizeDetails.previousScore = diff.before.totalScore;
+                        finalizeDetails.newScore = diff.after.totalScore;
+                    }
+                    if (diff.before.feedback !== undefined) {
+                        finalizeDetails.previousFeedback = diff.before.feedback;
+                        finalizeDetails.newFeedback = diff.after.feedback;
+                    }
+                    if (diff.before.marksAwarded !== undefined) {
+                        finalizeDetails.previousMarksAwarded = diff.before.marksAwarded;
+                        finalizeDetails.newMarksAwarded = diff.after.marksAwarded;
+                    }
+                    if (diff.before.tagIds !== undefined) {
+                        finalizeDetails.previousTagIds = diff.before.tagIds;
+                        finalizeDetails.newTagIds = diff.after.tagIds;
+                    }
+                }
+
                 await writeAuditLog({
                     user: userId,
                     action: 'GRADE_FINALIZED',
                     outcome: 'SUCCESS',
                     entityId: savedGrade._id as mongoose.Types.ObjectId,
                     entityType: 'Grade',
-                    details: {
-                        examId: script.exam.toString(),
-                        answerScriptId: script._id.toString(),
-                        question,
-                        totalScore: computed.totalScore,
-                        marksAwardedCount: marksAwarded.length,
-                        rubricId: rubric._id.toString(),
-                        isFinal: true,
-                    },
+                    details: finalizeDetails,
                     ipAddress,
+                    session: session || undefined,
                 });
 
                 return savedGrade;
@@ -549,6 +723,21 @@ export class GradingService {
                 409
             );
         }
+
+        // Capture snapshot of previous values before mutation (AE-179)
+        const prevValues: GradingValues | null = gradeDoc ? {
+            marksAwarded: gradeDoc.marksAwarded ? gradeDoc.marksAwarded.map(m => ({ criterionName: m.criterionName, score: m.score, feedback: m.feedback })) : [],
+            totalScore: gradeDoc.totalScore || 0,
+            feedback: gradeDoc.feedback || '',
+            tagIds: gradeDoc.tagIds ? gradeDoc.tagIds.map(t => t.toString()) : []
+        } : null;
+
+        const diff = computeGradingDiff(prevValues, {
+            marksAwarded,
+            totalScore: computed.totalScore,
+            feedback: processedFeedback,
+            tagIds: processedTagIds,
+        });
 
         let savedGrade: IGrade;
 
@@ -611,13 +800,9 @@ export class GradingService {
             }
         }
 
-        await writeAuditLog({
-            user: userId,
-            action: isExisting ? 'GRADE_UPDATED' : 'GRADE_SAVED',
-            outcome: 'SUCCESS',
-            entityId: savedGrade._id as mongoose.Types.ObjectId,
-            entityType: 'Grade',
-            details: {
+        // Only write audit log if this is a new grade or if values actually changed (AE-179)
+        if (!isExisting || diff.hasChanges) {
+            const auditDetails: Record<string, unknown> = {
                 examId: script.exam.toString(),
                 answerScriptId: script._id.toString(),
                 question,
@@ -625,9 +810,44 @@ export class GradingService {
                 marksAwardedCount: marksAwarded.length,
                 rubricId: rubric._id.toString(),
                 isFinal: false,
-            },
-            ipAddress,
-        });
+            };
+            if (isExisting && diff.changedFields.length > 0) {
+                auditDetails.changedFields = diff.changedFields;
+                auditDetails.changes = diff.changes;
+                auditDetails.before = diff.before;
+                auditDetails.after = diff.after;
+                auditDetails.previousValues = diff.before;
+                auditDetails.newValues = diff.after;
+                if (diff.before.totalScore !== undefined) {
+                    auditDetails.previousTotalScore = diff.before.totalScore;
+                    auditDetails.newTotalScore = diff.after.totalScore;
+                    auditDetails.previousScore = diff.before.totalScore;
+                    auditDetails.newScore = diff.after.totalScore;
+                }
+                if (diff.before.feedback !== undefined) {
+                    auditDetails.previousFeedback = diff.before.feedback;
+                    auditDetails.newFeedback = diff.after.feedback;
+                }
+                if (diff.before.marksAwarded !== undefined) {
+                    auditDetails.previousMarksAwarded = diff.before.marksAwarded;
+                    auditDetails.newMarksAwarded = diff.after.marksAwarded;
+                }
+                if (diff.before.tagIds !== undefined) {
+                    auditDetails.previousTagIds = diff.before.tagIds;
+                    auditDetails.newTagIds = diff.after.tagIds;
+                }
+            }
+
+            await writeAuditLog({
+                user: userId,
+                action: isExisting ? 'GRADE_UPDATED' : 'GRADE_SAVED',
+                outcome: 'SUCCESS',
+                entityId: savedGrade._id as mongoose.Types.ObjectId,
+                entityType: 'Grade',
+                details: auditDetails,
+                ipAddress,
+            });
+        }
 
         (savedGrade as SavedGradeWithNext).allocationCompleted = false;
         (savedGrade as SavedGradeWithNext).nextAllocation = null;
@@ -927,6 +1147,52 @@ export class GradingService {
 
                     const roundedTotalScore = Math.round(totalScore * 100) / 100;
 
+                    // Retrieve pages to compute per-page annotation counts and hashes (AE-179)
+                    const standardPages = await Page.find({ answerScript: script._id, isActive: true })
+                        .select('pageNumber annotations')
+                        .sort({ pageNumber: 1 })
+                        .session(session || null)
+                        .lean();
+
+                    let pageAnnotations: Array<{ pageNumber: number; annotationCount: number; hash: string }> = [];
+
+                    if (standardPages.length > 0) {
+                        pageAnnotations = standardPages.map((p) => {
+                            const annList = p.annotations?.annotations || [];
+                            const strokeList = p.annotations?.strokes || [];
+                            const count = annList.length + strokeList.length;
+                            const hash = crypto.createHash('sha256')
+                                .update(JSON.stringify(p.annotations || {}))
+                                .digest('hex');
+                            return {
+                                pageNumber: p.pageNumber,
+                                annotationCount: count,
+                                hash,
+                            };
+                        });
+                    } else {
+                        const ingestionPages = await IngestionPage.find({ answerScript: script._id })
+                            .select('pageNumber metadata.annotations')
+                            .sort({ pageNumber: 1 })
+                            .session(session || null)
+                            .lean();
+
+                        pageAnnotations = ingestionPages.map((p) => {
+                            const metaAnnotations = (p.metadata as { annotations?: { annotations?: unknown[]; strokes?: unknown[] } })?.annotations;
+                            const annList = metaAnnotations?.annotations || [];
+                            const strokeList = metaAnnotations?.strokes || [];
+                            const count = annList.length + strokeList.length;
+                            const hash = crypto.createHash('sha256')
+                                .update(JSON.stringify(metaAnnotations || {}))
+                                .digest('hex');
+                            return {
+                                pageNumber: p.pageNumber,
+                                annotationCount: count,
+                                hash,
+                            };
+                        });
+                    }
+
                     await writeAuditLog({
                         user: userId.toString(),
                         action: 'SCRIPT_SUBMITTED',
@@ -941,8 +1207,11 @@ export class GradingService {
                             totalScore: roundedTotalScore,
                             finalizedQuestions,
                             allocationCount: matchingAllocations.length,
+                            pageAnnotations,
+                            perPageAnnotations: pageAnnotations,
                         },
                         ipAddress,
+                        session: session || undefined,
                     });
 
                     return {
