@@ -833,93 +833,149 @@ export class GradingService {
 
         const examIdStr = script.exam.toString();
 
-        // Execute submission in a transaction
-        const submissionResult = await AllocationService.runInTransaction(async (session) => {
-            const finalizedQuestions: number[] = [];
-            let totalScore = 0;
-            const gradesToFinalizeIds: mongoose.Types.ObjectId[] = [];
+        let submissionResult!: SubmitScriptResult;
+        let attempts = 0;
+        const maxAttempts = 3;
 
-            for (const gradeDoc of existingGrades) {
-                if (!gradeDoc.isFinal) {
-                    gradesToFinalizeIds.push(gradeDoc._id as mongoose.Types.ObjectId);
-                }
-                if (typeof gradeDoc.question === 'number') {
-                    finalizedQuestions.push(gradeDoc.question);
-                }
-                totalScore += gradeDoc.totalScore || 0;
-            }
-
-            if (gradesToFinalizeIds.length > 0) {
-                await Grade.updateMany(
-                    { _id: { $in: gradesToFinalizeIds } },
-                    { $set: { isFinal: true } },
-                    { session }
-                );
-            }
-
-            const submittedAt = new Date();
-            let nextAllocation: NextAllocationResult | null = null;
-
-            if (matchingAllocations.length > 0) {
-                for (const alloc of matchingAllocations) {
-                    const freshAlloc = await Allocation.findById(alloc._id).session(session || null);
-                    if (freshAlloc) {
-                        if (freshAlloc.status === AllocationStatus.PENDING) {
-                            try {
-                                await AllocationService.claimAllocation(freshAlloc._id.toString(), userId.toString(), { session });
-                            } catch {
-                                // Ignore concurrent claim
-                            }
-                        }
-                        if (freshAlloc.status !== AllocationStatus.COMPLETED) {
-                            await AllocationService.markCompleted(
-                                freshAlloc._id.toString(),
-                                { id: userId.toString(), role: userRole },
-                                { session }
-                            );
-                        }
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                if (attempts > 1 && matchingAllocations.length > 0) {
+                    const refreshedAllocations = await Allocation.find({
+                        _id: { $in: matchingAllocations.map((a) => a._id) },
+                    });
+                    if (
+                        refreshedAllocations.length > 0 &&
+                        refreshedAllocations.every((a) => a.status === AllocationStatus.COMPLETED)
+                    ) {
+                        throw new HttpError(
+                            'Cannot submit script: This script allocation has already been submitted and completed.',
+                            409
+                        );
                     }
                 }
 
-                nextAllocation = await AllocationService.getNextAllocation(
-                    userId.toString(),
-                    script.exam,
-                    matchingAllocations[0]._id,
-                    session || undefined
-                );
+                submissionResult = await AllocationService.runInTransaction(async (session) => {
+                    if (matchingAllocations.length > 0) {
+                        const freshAllocations = await Promise.all(
+                            matchingAllocations.map((a) => Allocation.findById(a._id).session(session || null))
+                        );
+                        if (
+                            freshAllocations.length > 0 &&
+                            freshAllocations.every((a) => a && a.status === AllocationStatus.COMPLETED)
+                        ) {
+                            throw new HttpError(
+                                'Cannot submit script: This script allocation has already been submitted and completed.',
+                                409
+                            );
+                        }
+                    }
+
+                    const finalizedQuestions: number[] = [];
+                    let totalScore = 0;
+                    const gradesToFinalizeIds: mongoose.Types.ObjectId[] = [];
+
+                    for (const gradeDoc of existingGrades) {
+                        if (!gradeDoc.isFinal) {
+                            gradesToFinalizeIds.push(gradeDoc._id as mongoose.Types.ObjectId);
+                        }
+                        if (typeof gradeDoc.question === 'number') {
+                            finalizedQuestions.push(gradeDoc.question);
+                        }
+                        totalScore += gradeDoc.totalScore || 0;
+                    }
+
+                    if (gradesToFinalizeIds.length > 0) {
+                        await Grade.updateMany(
+                            { _id: { $in: gradesToFinalizeIds } },
+                            { $set: { isFinal: true } },
+                            { session }
+                        );
+                    }
+
+                    const submittedAt = new Date();
+                    let nextAllocation: NextAllocationResult | null = null;
+
+                    if (matchingAllocations.length > 0) {
+                        for (const alloc of matchingAllocations) {
+                            const freshAlloc = await Allocation.findById(alloc._id).session(session || null);
+                            if (freshAlloc) {
+                                if (freshAlloc.status === AllocationStatus.PENDING) {
+                                    try {
+                                        await AllocationService.claimAllocation(freshAlloc._id.toString(), userId.toString(), { session });
+                                    } catch {
+                                        // Ignore concurrent claim
+                                    }
+                                }
+                                if (freshAlloc.status !== AllocationStatus.COMPLETED) {
+                                    await AllocationService.markCompleted(
+                                        freshAlloc._id.toString(),
+                                        { id: userId.toString(), role: userRole },
+                                        { session }
+                                    );
+                                }
+                            }
+                        }
+
+                        nextAllocation = await AllocationService.getNextAllocation(
+                            userId.toString(),
+                            script.exam,
+                            matchingAllocations[0]._id,
+                            session || undefined
+                        );
+                    }
+
+                    const roundedTotalScore = Math.round(totalScore * 100) / 100;
+
+                    await writeAuditLog({
+                        user: userId.toString(),
+                        action: 'SCRIPT_SUBMITTED',
+                        outcome: 'SUCCESS',
+                        entityId: script._id as mongoose.Types.ObjectId,
+                        entityType: 'AnswerScript',
+                        details: {
+                            examId: examIdStr,
+                            scriptId: script._id.toString(),
+                            submittedBy: userId.toString(),
+                            role: userRole,
+                            totalScore: roundedTotalScore,
+                            finalizedQuestions,
+                            allocationCount: matchingAllocations.length,
+                        },
+                        ipAddress,
+                    });
+
+                    return {
+                        scriptId: script._id.toString(),
+                        isSubmitted: true,
+                        submittedAt,
+                        submittedBy: userId.toString(),
+                        totalScore: roundedTotalScore,
+                        finalizedQuestions,
+                        allocationCompleted: matchingAllocations.length > 0,
+                        nextAllocation,
+                    };
+                });
+                break;
+            } catch (txError: unknown) {
+                const err = txError as {
+                    code?: number;
+                    errorLabels?: string[];
+                    message?: string;
+                    hasErrorLabel?: (label: string) => boolean;
+                };
+                const isWriteConflict =
+                    err?.code === 112 ||
+                    (typeof err?.hasErrorLabel === 'function' && err.hasErrorLabel('TransientTransactionError')) ||
+                    (typeof err?.message === 'string' && err.message.includes('Write conflict'));
+
+                if (isWriteConflict && attempts < maxAttempts) {
+                    await new Promise((resolve) => setTimeout(resolve, 50 * attempts));
+                    continue;
+                }
+                throw txError;
             }
-
-            const roundedTotalScore = Math.round(totalScore * 100) / 100;
-
-            await writeAuditLog({
-                user: userId.toString(),
-                action: 'SCRIPT_SUBMITTED',
-                outcome: 'SUCCESS',
-                entityId: script._id as mongoose.Types.ObjectId,
-                entityType: 'AnswerScript',
-                details: {
-                    examId: examIdStr,
-                    scriptId: script._id.toString(),
-                    submittedBy: userId.toString(),
-                    role: userRole,
-                    totalScore: roundedTotalScore,
-                    finalizedQuestions,
-                    allocationCount: matchingAllocations.length,
-                },
-                ipAddress,
-            });
-
-            return {
-                scriptId: script._id.toString(),
-                isSubmitted: true,
-                submittedAt,
-                submittedBy: userId.toString(),
-                totalScore: roundedTotalScore,
-                finalizedQuestions,
-                allocationCompleted: matchingAllocations.length > 0,
-                nextAllocation,
-            };
-        });
+        }
 
         // Emit post-commit progress event so SSE subscribers and dashboard receive accurate aggregated state
         if (matchingAllocations.length > 0) {
