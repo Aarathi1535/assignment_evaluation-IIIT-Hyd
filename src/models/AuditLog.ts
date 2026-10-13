@@ -56,7 +56,7 @@ const AuditLogSchema = new Schema<IAuditLog>(
 AuditLogSchema.index({ createdAt: -1 });
 
 // Safeguards: Reject application-level updates and deletes (AE-179)
-AuditLogSchema.pre(['updateOne', 'updateMany', 'replaceOne', 'findOneAndUpdate'], function () {
+AuditLogSchema.pre(['updateOne', 'updateMany', 'replaceOne', 'findOneAndUpdate', 'findOneAndReplace'], function () {
     throw new Error('AuditLog records are immutable and cannot be updated.');
 });
 
@@ -76,6 +76,20 @@ AuditLogSchema.pre('save', function () {
 
 AuditLogSchema.pre('deleteMany', function () {
     throw new Error('AuditLog records are append-only and cannot be deleted.');
+});
+
+AuditLogSchema.pre('bulkWrite', function (...args: unknown[]) {
+    const operations = Array.isArray(args[0]) ? args[0] : [];
+    for (const op of operations) {
+        if (op && typeof op === 'object') {
+            if ('updateOne' in op || 'updateMany' in op || 'replaceOne' in op) {
+                throw new Error('AuditLog records are immutable and cannot be updated.');
+            }
+            if ('deleteOne' in op || 'deleteMany' in op) {
+                throw new Error('AuditLog records are append-only and cannot be deleted.');
+            }
+        }
+    }
 });
 
 const AuditLog: Model<IAuditLog> = mongoose.models.AuditLog || mongoose.model<IAuditLog>('AuditLog', AuditLogSchema);

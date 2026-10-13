@@ -43,9 +43,10 @@ function sanitizeIpAddress(ip?: string): string | undefined {
 
 /**
  * Truncates feedback strings in audit metadata to max 2,000 characters
- * and adds an explicit [TRUNCATED] indicator, safely avoiding circular references.
+ * and adds an explicit [TRUNCATED] indicator, safely avoiding circular references
+ * while preserving repeated objects across sibling snapshot branches.
  */
-function sanitizeAuditFeedback(value: unknown, visited = new WeakSet<object>(), depth = 0): unknown {
+export function sanitizeAuditFeedback(value: unknown, activePath = new Set<object>(), depth = 0): unknown {
     if (typeof value === 'string') {
         if (value.length > 2000) {
             return value.slice(0, 1985) + '... [TRUNCATED]';
@@ -59,25 +60,32 @@ function sanitizeAuditFeedback(value: unknown, visited = new WeakSet<object>(), 
         if (value instanceof mongoose.Types.ObjectId || value instanceof Date || value instanceof RegExp) {
             return value;
         }
-        if (visited.has(value)) {
+        if (activePath.has(value)) {
             return undefined;
         }
-        visited.add(value);
+        activePath.add(value);
+        try {
+            if (Array.isArray(value)) {
+                return value.map((item) => sanitizeAuditFeedback(item, activePath, depth + 1));
+            }
 
-        if (Array.isArray(value)) {
-            return value.map((item) => sanitizeAuditFeedback(item, visited, depth + 1));
+            const rawObj = typeof (value as { toObject?: () => unknown }).toObject === 'function'
+                ? (value as { toObject: () => unknown }).toObject()
+                : value;
+
+            if (!rawObj || typeof rawObj !== 'object') {
+                return rawObj;
+            }
+
+            const result: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(rawObj as Record<string, unknown>)) {
+                if (k.startsWith('$') || k === '_doc') continue;
+                result[k] = sanitizeAuditFeedback(v, activePath, depth + 1);
+            }
+            return result;
+        } finally {
+            activePath.delete(value);
         }
-
-        const rawObj = typeof (value as { toObject?: () => unknown }).toObject === 'function'
-            ? (value as { toObject: () => Record<string, unknown> }).toObject()
-            : value;
-
-        const result: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(rawObj)) {
-            if (k.startsWith('$') || k === '_doc') continue;
-            result[k] = sanitizeAuditFeedback(v, visited, depth + 1);
-        }
-        return result;
     }
     return value;
 }

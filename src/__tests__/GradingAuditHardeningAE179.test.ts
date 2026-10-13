@@ -9,13 +9,14 @@ import AnswerScript from '../models/AnswerScript';
 import Allocation, { AllocationStatus, AllocationRule } from '../models/Allocation';
 import Page from '../models/Page';
 import Grade from '../models/Grade';
-import AuditLog from '../models/AuditLog';
+import AuditLog, { IAuditLog } from '../models/AuditLog';
 import Notification from '../models/Notification';
+import CommentTag, { TagScope } from '../models/CommentTag';
 import gradingService from '../services/GradingService';
 import AllocationService from '../services/AllocationService';
 import { AnnotationPersistenceService, annotationPersistenceService } from '../services/AnnotationPersistenceService';
 import { HttpError } from '../lib/errors';
-import { writeAuditLog } from '../lib/audit';
+import { writeAuditLog, sanitizeAuditFeedback } from '../lib/audit';
 
 describe('AE-179: Audit-log every grading action hardening tests', () => {
     let replSet: MongoMemoryReplSet;
@@ -67,6 +68,7 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         await Allocation.deleteMany({});
         await Page.deleteMany({});
         await Notification.deleteMany({});
+        await CommentTag.deleteMany({});
 
         AnnotationPersistenceService.resetAuditThrottle();
 
@@ -191,13 +193,27 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
 
     // 1. Changing a grade from 2 to 3 creates exactly one GRADE_UPDATED row with before/after values.
     it('1. changing a grade from 2 to 3 creates exactly one GRADE_UPDATED row with before/after values', async () => {
-        // Initial draft save: 2 marks
+        const tag1Doc = await CommentTag.create({
+            label: 'Tag 1',
+            scope: TagScope.GLOBAL,
+            createdBy: new mongoose.Types.ObjectId(taId),
+        });
+        const tag2Doc = await CommentTag.create({
+            label: 'Tag 2',
+            scope: TagScope.GLOBAL,
+            createdBy: new mongoose.Types.ObjectId(taId),
+        });
+        const tag1 = tag1Doc._id as mongoose.Types.ObjectId;
+        const tag2 = tag2Doc._id as mongoose.Types.ObjectId;
+
+        // Initial draft save: 2 marks with tags
         await gradingService.saveGrade({
             scriptId: testScriptId,
             question: 1,
             marksAwarded: [
-                { criterionName: 'Correctness', score: 2 },
+                { criterionName: 'Correctness', score: 2, feedback: 'Initial note' },
             ],
+            tagIds: [tag1],
             feedback: 'Initial evaluation',
             userId: taId,
             userRole: UserRole.TA,
@@ -208,13 +224,14 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         expect(initialLogs).toHaveLength(1);
         expect(initialLogs[0].action).toBe('GRADE_SAVED');
 
-        // Update mark from 2 to 3
+        // Update mark from 2 to 3 and change tags
         await gradingService.saveGrade({
             scriptId: testScriptId,
             question: 1,
             marksAwarded: [
-                { criterionName: 'Correctness', score: 3 },
+                { criterionName: 'Correctness', score: 3, feedback: 'Updated note' },
             ],
+            tagIds: [tag2],
             feedback: 'Initial evaluation',
             userId: taId,
             userRole: UserRole.TA,
@@ -231,11 +248,163 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         expect(details.previousTotalScore).toBe(2);
         expect(details.newTotalScore).toBe(3);
 
+        // Verify changes behavior remains intact
         expect(changes?.marksAwarded).toBeDefined();
         const prevMarks = changes.marksAwarded.previous as Array<{ score: number }>;
         const newMarks = changes.marksAwarded.new as Array<{ score: number }>;
         expect(prevMarks[0].score).toBe(2);
         expect(newMarks[0].score).toBe(3);
+
+        expect(changes?.tagIds).toBeDefined();
+        expect(changes.tagIds.previous).toEqual([tag1.toString()]);
+        expect(changes.tagIds.new).toEqual([tag2.toString()]);
+
+        // Explicitly verify before and after snapshots (AE-179 mentor review)
+        const before = details.before as Record<string, unknown>;
+        const after = details.after as Record<string, unknown>;
+        expect(before).toBeDefined();
+        expect(after).toBeDefined();
+
+        // 1. before.marksAwarded and after.marksAwarded retain correct types, values, and arrays
+        expect(Array.isArray(before.marksAwarded)).toBe(true);
+        expect(Array.isArray(after.marksAwarded)).toBe(true);
+        expect(before.marksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 2, feedback: 'Initial note' },
+        ]);
+        expect(after.marksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 3, feedback: 'Updated note' },
+        ]);
+
+        // 2. before.tagIds and after.tagIds retain correct types, values, and arrays
+        expect(Array.isArray(before.tagIds)).toBe(true);
+        expect(Array.isArray(after.tagIds)).toBe(true);
+        expect(before.tagIds).toEqual([tag1.toString()]);
+        expect(after.tagIds).toEqual([tag2.toString()]);
+    });
+
+    // 1b. GRADE_FINALIZED snapshot preserves before and after marksAwarded and tagIds
+    it('1b. GRADE_FINALIZED snapshot retains before/after marksAwarded and tagIds with correct types and values', async () => {
+        const tagAlphaDoc = await CommentTag.create({
+            label: 'Tag Alpha',
+            scope: TagScope.GLOBAL,
+            createdBy: new mongoose.Types.ObjectId(taId),
+        });
+        const tagBetaDoc = await CommentTag.create({
+            label: 'Tag Beta',
+            scope: TagScope.GLOBAL,
+            createdBy: new mongoose.Types.ObjectId(taId),
+        });
+        const tagAlpha = tagAlphaDoc._id as mongoose.Types.ObjectId;
+        const tagBeta = tagBetaDoc._id as mongoose.Types.ObjectId;
+
+        // Save initial draft
+        await gradingService.saveGrade({
+            scriptId: testScriptId,
+            question: 1,
+            marksAwarded: [
+                { criterionName: 'Correctness', score: 2, feedback: 'Draft evaluation' },
+            ],
+            tagIds: [tagAlpha],
+            feedback: 'Working on solution',
+            userId: taId,
+            userRole: UserRole.TA,
+            isFinal: false,
+        });
+
+        // Finalize the grade with updated marks and tags
+        await gradingService.saveGrade({
+            scriptId: testScriptId,
+            question: 1,
+            marksAwarded: [
+                { criterionName: 'Correctness', score: 4.5, feedback: 'Final approved evaluation' },
+            ],
+            tagIds: [tagBeta],
+            feedback: 'Final remarks',
+            userId: taId,
+            userRole: UserRole.TA,
+            isFinal: true,
+        });
+
+        const finalizedLogs = await AuditLog.find({ action: 'GRADE_FINALIZED' });
+        expect(finalizedLogs).toHaveLength(1);
+        const details = (finalizedLogs[0].details || {}) as Record<string, unknown>;
+
+        // Verify snapshots are preserved in GRADE_FINALIZED
+        const before = details.before as Record<string, unknown>;
+        const after = details.after as Record<string, unknown>;
+        expect(before).toBeDefined();
+        expect(after).toBeDefined();
+
+        // Check before.marksAwarded and after.marksAwarded
+        expect(Array.isArray(before.marksAwarded)).toBe(true);
+        expect(Array.isArray(after.marksAwarded)).toBe(true);
+        expect(before.marksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 2, feedback: 'Draft evaluation' },
+        ]);
+        expect(after.marksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 4.5, feedback: 'Final approved evaluation' },
+        ]);
+
+        // Check before.tagIds and after.tagIds
+        expect(Array.isArray(before.tagIds)).toBe(true);
+        expect(Array.isArray(after.tagIds)).toBe(true);
+        expect(before.tagIds).toEqual([tagAlpha.toString()]);
+        expect(after.tagIds).toEqual([tagBeta.toString()]);
+
+        // Changes object also intact
+        const changes = details.changes as Record<string, { previous: unknown; new: unknown }>;
+        expect(changes.marksAwarded).toBeDefined();
+        expect(changes.tagIds).toBeDefined();
+    });
+
+    // 1c. sanitizeAuditFeedback preserves repeated objects across sibling branches while safely breaking cycles
+    it('1c. sanitizeAuditFeedback preserves repeated objects across sibling snapshot branches while safely breaking cycles', () => {
+        const sharedCriterion = { criterionName: 'Correctness', score: 5, feedback: 'Great' };
+        const sharedMarksAwarded = [sharedCriterion];
+        const sharedTagIds = ['tag-1', 'tag-2'];
+
+        const auditPayload = {
+            changes: {
+                marksAwarded: { previous: sharedMarksAwarded, new: [{ ...sharedCriterion, score: 7 }] },
+                tagIds: { previous: sharedTagIds, new: ['tag-3'] },
+            },
+            before: {
+                marksAwarded: sharedMarksAwarded,
+                tagIds: sharedTagIds,
+            },
+            after: {
+                marksAwarded: [{ ...sharedCriterion, score: 7 }],
+                tagIds: ['tag-3'],
+            },
+            previousMarksAwarded: sharedMarksAwarded,
+            previousTagIds: sharedTagIds,
+        };
+
+        const sanitized = sanitizeAuditFeedback(auditPayload) as typeof auditPayload;
+        expect(sanitized.before.marksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 5, feedback: 'Great' },
+        ]);
+        expect(sanitized.before.tagIds).toEqual(['tag-1', 'tag-2']);
+        expect(sanitized.after.marksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 7, feedback: 'Great' },
+        ]);
+        expect(sanitized.after.tagIds).toEqual(['tag-3']);
+        expect(sanitized.previousMarksAwarded).toEqual([
+            { criterionName: 'Correctness', score: 5, feedback: 'Great' },
+        ]);
+
+        // Verify circular reference handling
+        const cyclicObj: Record<string, unknown> = { name: 'Root', nested: {} };
+        (cyclicObj.nested as Record<string, unknown>).parent = cyclicObj;
+        const sanitizedCyclic = sanitizeAuditFeedback(cyclicObj) as Record<string, unknown>;
+        expect(sanitizedCyclic.name).toBe('Root');
+        expect((sanitizedCyclic.nested as Record<string, unknown>).parent).toBeUndefined();
+
+        // Verify string truncation
+        const longText = 'A'.repeat(2500);
+        const sanitizedLong = sanitizeAuditFeedback({ comment: longText }) as { comment: string };
+        expect(sanitizedLong.comment.length).toBeLessThanOrEqual(2000);
+        expect(sanitizedLong.comment).toContain('... [TRUNCATED]');
     });
 
     // 2. Changing only feedback creates one row with before/after feedback.
@@ -401,6 +570,33 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
 
         const logs = await AuditLog.find({ action: 'GRADE_FINALIZED' });
         expect(logs).toHaveLength(0);
+
+        // D. Successful submitScript preserves session transaction, generates sha256 page hashes, and writes SCRIPT_SUBMITTED audit row
+        const submitResult = await gradingService.submitScript({
+            scriptId: testScriptId,
+            userId: taId,
+            userRole: UserRole.TA,
+        });
+
+        expect(submitResult.isSubmitted).toBe(true);
+        expect(submitResult.finalizedQuestions).toEqual([1, 2]);
+
+        const submitLog = await AuditLog.findOne({ action: 'SCRIPT_SUBMITTED', entityId: testScriptId });
+        expect(submitLog).not.toBeNull();
+        const submitDetails = (submitLog?.details || {}) as Record<string, unknown>;
+        expect(submitDetails.finalizedQuestions).toEqual([1, 2]);
+
+        // Verify page hashes and perPageAnnotations
+        const pageAnnotations = submitDetails.pageAnnotations as Array<{ pageNumber: number; annotationCount: number; hash: string }>;
+        expect(Array.isArray(pageAnnotations)).toBe(true);
+        expect(pageAnnotations.length).toBeGreaterThan(0);
+        for (const pAnn of pageAnnotations) {
+            expect(pAnn.pageNumber).toBe(1);
+            expect(pAnn.annotationCount).toBeGreaterThanOrEqual(1);
+            expect(typeof pAnn.hash).toBe('string');
+            expect(pAnn.hash).toHaveLength(64); // SHA-256 hex string
+        }
+        expect(submitDetails.perPageAnnotations).toEqual(pageAnnotations);
     });
 
     // 5. If reopening notification creation fails and the transaction aborts, no ALLOCATION_REOPENED success row remains.
@@ -508,6 +704,49 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         await expect(
             AuditLog.deleteMany({ action: 'TEST_IMMUTABILITY' })
         ).rejects.toThrow(/AuditLog records are append-only and cannot be deleted/);
+
+        // 6. AuditLog.findOneAndReplace rejects mutation
+        await expect(
+            AuditLog.findOneAndReplace({ _id: log._id }, { user: new mongoose.Types.ObjectId(taId), action: 'REPLACED' } as unknown as IAuditLog)
+        ).rejects.toThrow(/AuditLog records are immutable and cannot be updated/);
+
+        // 7. AuditLog.bulkWrite rejects updates, replaces, and deletes
+        await expect(
+            AuditLog.bulkWrite([{ updateOne: { filter: { _id: log._id }, update: { $set: { action: 'BULK_UPDATE' } } } }])
+        ).rejects.toThrow(/AuditLog records are immutable and cannot be updated/);
+
+        await expect(
+            AuditLog.bulkWrite([{ updateMany: { filter: {}, update: { $set: { action: 'BULK_UPDATE_MANY' } } } }])
+        ).rejects.toThrow(/AuditLog records are immutable and cannot be updated/);
+
+        await expect(
+            AuditLog.bulkWrite([{ replaceOne: { filter: { _id: log._id }, replacement: { user: new mongoose.Types.ObjectId(taId), action: 'BULK_REPLACE' } as unknown as IAuditLog } }])
+        ).rejects.toThrow(/AuditLog records are immutable and cannot be updated/);
+
+        await expect(
+            AuditLog.bulkWrite([{ deleteOne: { filter: { _id: log._id } } }])
+        ).rejects.toThrow(/AuditLog records are append-only and cannot be deleted/);
+
+        await expect(
+            AuditLog.bulkWrite([{ deleteMany: { filter: {} } }])
+        ).rejects.toThrow(/AuditLog records are append-only and cannot be deleted/);
+
+        // 8. Legitimate bulkWrite insertOne is permitted
+        const bulkInsertRes = await AuditLog.bulkWrite([
+            {
+                insertOne: {
+                    document: {
+                        user: new mongoose.Types.ObjectId(taId),
+                        action: 'BULK_INSERTED',
+                        outcome: 'SUCCESS',
+                        details: { batch: 1 },
+                    },
+                },
+            },
+        ]);
+        expect(bulkInsertRes.insertedCount).toBe(1);
+        const insertedLog = await AuditLog.findOne({ action: 'BULK_INSERTED' });
+        expect(insertedLog).not.toBeNull();
     });
 
     // 8. Fifty autosaves for the same actor and page within one minute produce no more than two audit rows.
