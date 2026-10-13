@@ -35,6 +35,7 @@ export const GET = withServerTiming(async (
   const { searchParams } = new URL(req.url);
   const questionParam = searchParams.get('question');
   const targetQuestion = questionParam ? parseInt(questionParam, 10) : undefined;
+  const allocationIdParam = searchParams.get('allocationId');
 
   const { id } = await context.params;
 
@@ -89,14 +90,34 @@ export const GET = withServerTiming(async (
           { status: 403 }
         );
       }
-      const query: { answerScript: mongoose.Types.ObjectId; question?: number } = { answerScript: script._id };
-      if (targetQuestion !== undefined && !isNaN(targetQuestion)) {
-        query.question = targetQuestion;
-      }
-      const existingAlloc = await Allocation.findOne(query).select('_id status');
-      if (existingAlloc) {
-        scriptAllocationId = existingAlloc._id.toString();
-        allocationStatus = existingAlloc.status || null;
+      if (allocationIdParam && mongoose.Types.ObjectId.isValid(allocationIdParam)) {
+        const targetAlloc = await Allocation.findOne({
+          _id: new mongoose.Types.ObjectId(allocationIdParam),
+          answerScript: script._id,
+        }).select('_id status');
+        if (targetAlloc) {
+          scriptAllocationId = targetAlloc._id.toString();
+          allocationStatus = targetAlloc.status || null;
+        }
+      } else if (targetQuestion !== undefined && !isNaN(targetQuestion)) {
+        const existingAlloc = await Allocation.findOne({
+          answerScript: script._id,
+          question: targetQuestion,
+        }).select('_id status');
+        if (existingAlloc) {
+          scriptAllocationId = existingAlloc._id.toString();
+          allocationStatus = existingAlloc.status || null;
+        }
+      } else {
+        // Whole-script view: specifically query for whole-script allocation (question is null or not set)
+        const wholeScriptAlloc = await Allocation.findOne({
+          answerScript: script._id,
+          $or: [{ question: null }, { question: { $exists: false } }],
+        }).select('_id status');
+        if (wholeScriptAlloc) {
+          scriptAllocationId = wholeScriptAlloc._id.toString();
+          allocationStatus = wholeScriptAlloc.status || null;
+        }
       }
     } else {
       const allocation = await AllocationService.verifyTaAllocation(

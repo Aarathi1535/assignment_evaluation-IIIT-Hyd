@@ -586,7 +586,12 @@ export function AnswerSheetCanvas({
   }
 
   // Autosave state & references (AE-137)
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>(() => {
+    if (scriptId && hasPendingSync(scriptId, undefined, effectiveUserId)) {
+      return 'pending_sync';
+    }
+    return 'idle';
+  });
   const [saveErrorMessage, setSaveErrorMessage] = useState<string>('');
   const pendingSaveRef = useRef<{
     pageKey: string;
@@ -858,12 +863,21 @@ export function AnswerSheetCanvas({
         pendingData.annotations,
         pendingData.strokes
       );
+      const existingDraft = getLocalAnnotationDraft(scriptId, targetPageNumber, effectiveUserId);
+      const baseUpdatedAt =
+        existingDraft?.baseServerUpdatedAt ||
+        serverDataCacheRef.current[currentPageKey]?.updatedAt;
+
       saveLocalAnnotationDraft(
         scriptId,
         targetPageNumber,
         currentPageKey,
         serialized,
-        { synced: false },
+        {
+          synced: false,
+          baseServerUpdatedAt: baseUpdatedAt,
+          serverUpdatedAt: existingDraft?.serverUpdatedAt,
+        },
         effectiveUserId
       );
 
@@ -906,133 +920,214 @@ export function AnswerSheetCanvas({
     flushPendingWrites();
   }, [executeSave]);
 
-  // Online / Offline Network Listeners & Automatic Sync (AE-170)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
+  const isSyncingRef = useRef(false);
 
-    const handleOnline = async () => {
-      if (!scriptId) return;
+  const syncPendingDrafts = useCallback(async () => {
+    if (!scriptId || isSyncingRef.current) return;
+    const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+    if (!isOnline) return;
 
-      const pendingDrafts = getPendingAnnotationDrafts(scriptId, effectiveUserId);
-      if (pendingDrafts.length > 0 || pendingSaveRef.current) {
-        setSaveStatus('syncing');
-        onSaveStatusChangeRef.current?.('syncing');
+    flushPendingWrites();
 
-        if (pendingSaveRef.current) {
-          flushPendingSave();
-        }
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (pendingSaveRef.current) {
+      pendingSaveRef.current = null;
+    }
 
-        for (const draft of pendingDrafts) {
-          try {
-            if (saveAnnotations) {
-              const res = await saveAnnotations({
-                scriptId: draft.scriptId,
-                pageNumber: draft.pageNumber,
-                data: draft.data,
-                baseUpdatedAt: draft.baseServerUpdatedAt,
-              });
-              if (res.conflict) {
-                if (res.isLocked) {
-                  setIsLocked(true);
-                  setSaveStatus('locked');
-                  setSaveErrorMessage(res.error || 'Script allocation has already been submitted and locked.');
-                  onSaveStatusChangeRef.current?.('locked');
-                  setTool('none');
-                } else {
-                  markLocalAnnotationDraftConflict(
-                    draft.scriptId,
-                    draft.pageNumber,
-                    res.serverData,
-                    res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
-                    effectiveUserId
-                  );
-                  setSaveStatus('conflict');
-                  setSaveErrorMessage(res.error || 'Conflict detected: Server has newer changes');
-                  onSaveStatusChangeRef.current?.('conflict');
-                  onConflictRef.current?.({
-                    scriptId: draft.scriptId,
-                    pageNumber: draft.pageNumber,
-                    localData: draft.data,
-                    serverData: res.serverData,
-                    serverUpdatedAt: res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
-                    isLocked: false,
-                  });
-                }
-              } else if (res.success) {
-                markLocalAnnotationDraftSynced(
+    const pendingDrafts = getPendingAnnotationDrafts(scriptId, effectiveUserId);
+    if (pendingDrafts.length === 0) return;
+
+    isSyncingRef.current = true;
+    setSaveStatus('syncing');
+    onSaveStatusChangeRef.current?.('syncing');
+    setSaveErrorMessage('');
+
+    let wasLocked = false;
+    let syncError: Error | null = null;
+
+    try {
+      for (const draft of pendingDrafts) {
+        try {
+          let baseUpdatedAt =
+            draft.baseServerUpdatedAt ||
+            draft.serverUpdatedAt ||
+            serverDataCacheRef.current[draft.pageKey]?.updatedAt ||
+            null;
+
+          if (saveAnnotations) {
+            const res = await saveAnnotations({
+              scriptId: draft.scriptId,
+              pageNumber: draft.pageNumber,
+              data: draft.data,
+              baseUpdatedAt: baseUpdatedAt || new Date().toISOString(),
+            });
+            if (res.conflict) {
+              if (res.isLocked) {
+                wasLocked = true;
+                setIsLocked(true);
+                setSaveStatus('locked');
+                setSaveErrorMessage(res.error || 'Script allocation has already been submitted and locked.');
+                onSaveStatusChangeRef.current?.('locked');
+                setTool('none');
+                break;
+              } else {
+                markLocalAnnotationDraftConflict(
                   draft.scriptId,
                   draft.pageNumber,
+                  res.serverData,
                   res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
                   effectiveUserId
                 );
+                setSaveStatus('conflict');
+                setSaveErrorMessage(res.error || 'Conflict detected: Server has newer changes');
+                onSaveStatusChangeRef.current?.('conflict');
+                onConflictRef.current?.({
+                  scriptId: draft.scriptId,
+                  pageNumber: draft.pageNumber,
+                  localData: draft.data,
+                  serverData: res.serverData,
+                  serverUpdatedAt: res.serverUpdatedAt ? String(res.serverUpdatedAt) : null,
+                  isLocked: false,
+                });
               }
+            } else if (res.success) {
+              const newUpdatedAt = res.serverUpdatedAt ? String(res.serverUpdatedAt) : new Date().toISOString();
+              markLocalAnnotationDraftSynced(
+                draft.scriptId,
+                draft.pageNumber,
+                newUpdatedAt,
+                effectiveUserId
+              );
+              if (serverDataCacheRef.current[draft.pageKey]) {
+                serverDataCacheRef.current[draft.pageKey].updatedAt = newUpdatedAt;
+              }
+              onSaveSuccessRef.current?.(draft.pageNumber);
             } else {
-              const url = saveAnnotationsUrl
-                ? saveAnnotationsUrl(draft.scriptId, draft.pageNumber)
-                : `/api/scripts/${encodeURIComponent(draft.scriptId)}/pages/${encodeURIComponent(String(draft.pageNumber))}/annotations`;
-
-              const res = await fetch(url, {
-                method: 'PUT',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json',
-                },
-                body: JSON.stringify({
-                  ...draft.data,
-                  baseUpdatedAt: draft.baseServerUpdatedAt,
-                }),
-              });
-
-              if (res.status === 409) {
-                const conflictJson = await res.json().catch(() => null);
-                const isLockConflict = Boolean(
-                  conflictJson?.isLocked ||
-                  conflictJson?.locked ||
-                  conflictJson?.message?.toLowerCase().includes('locked') ||
-                  conflictJson?.message?.toLowerCase().includes('completed')
-                );
-
-                if (isLockConflict) {
-                  setIsLocked(true);
-                  setSaveStatus('locked');
-                  setSaveErrorMessage(conflictJson?.message || 'Script allocation has already been submitted and locked.');
-                  onSaveStatusChangeRef.current?.('locked');
-                  setTool('none');
-                } else {
-                  markLocalAnnotationDraftConflict(
-                    draft.scriptId,
-                    draft.pageNumber,
-                    conflictJson?.data || null,
-                    conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
-                    effectiveUserId
-                  );
-                  setSaveStatus('conflict');
-                  setSaveErrorMessage(conflictJson?.message || 'Conflict detected: Server has newer changes');
-                  onSaveStatusChangeRef.current?.('conflict');
-                  onConflictRef.current?.({
-                    scriptId: draft.scriptId,
-                    pageNumber: draft.pageNumber,
-                    localData: draft.data,
-                    serverData: conflictJson?.data || null,
-                    serverUpdatedAt: conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
-                    isLocked: false,
-                  });
+              const error = new Error(res.error || 'Failed to sync annotations');
+              syncError = error;
+              onSaveErrorRef.current?.(draft.pageNumber, error);
+            }
+          } else {
+            if (!baseUpdatedAt) {
+              try {
+                const checkUrl = loadAnnotationsUrl
+                  ? loadAnnotationsUrl(draft.scriptId, draft.pageNumber)
+                  : `/api/scripts/${encodeURIComponent(draft.scriptId)}/pages/${encodeURIComponent(String(draft.pageNumber))}/annotations`;
+                const checkRes = await fetch(checkUrl, { headers: { Accept: 'application/json' } });
+                if (checkRes.ok) {
+                  const checkJson = await checkRes.json();
+                  baseUpdatedAt = checkJson?.updatedAt || checkJson?.data?.updatedAt || null;
                 }
-              } else if (res.ok) {
-                const okJson = await res.json().catch(() => null);
-                markLocalAnnotationDraftSynced(
+              } catch {}
+            }
+
+            const url = saveAnnotationsUrl
+              ? saveAnnotationsUrl(draft.scriptId, draft.pageNumber)
+              : `/api/scripts/${encodeURIComponent(draft.scriptId)}/pages/${encodeURIComponent(String(draft.pageNumber))}/annotations`;
+
+            const res = await fetch(url, {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+              },
+              body: JSON.stringify({
+                ...draft.data,
+                baseUpdatedAt: baseUpdatedAt || new Date().toISOString(),
+              }),
+            });
+
+            if (res.status === 409) {
+              const conflictJson = await res.json().catch(() => null);
+              const isLockConflict = Boolean(
+                conflictJson?.isLocked ||
+                conflictJson?.locked ||
+                conflictJson?.message?.toLowerCase().includes('locked') ||
+                conflictJson?.message?.toLowerCase().includes('completed')
+              );
+
+              if (isLockConflict) {
+                wasLocked = true;
+                setIsLocked(true);
+                setSaveStatus('locked');
+                setSaveErrorMessage(conflictJson?.message || 'Script allocation has already been submitted and locked.');
+                onSaveStatusChangeRef.current?.('locked');
+                setTool('none');
+                break;
+              } else {
+                markLocalAnnotationDraftConflict(
                   draft.scriptId,
                   draft.pageNumber,
-                  okJson?.data?.updatedAt || okJson?.updatedAt || null,
+                  conflictJson?.data || null,
+                  conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
                   effectiveUserId
                 );
+                setSaveStatus('conflict');
+                setSaveErrorMessage(conflictJson?.message || 'Conflict detected: Server has newer changes');
+                onSaveStatusChangeRef.current?.('conflict');
+                onConflictRef.current?.({
+                  scriptId: draft.scriptId,
+                  pageNumber: draft.pageNumber,
+                  localData: draft.data,
+                  serverData: conflictJson?.data || null,
+                  serverUpdatedAt: conflictJson?.serverUpdatedAt ? String(conflictJson.serverUpdatedAt) : null,
+                  isLocked: false,
+                });
               }
-            }
-          } catch (syncErr) {
-            console.warn('Failed to sync offline draft on reconnect:', syncErr);
-          }
-        }
+            } else if (res.ok) {
+              const okJson = await res.json().catch(() => null);
+              const newUpdatedAt = okJson?.data?.updatedAt || okJson?.updatedAt || new Date().toISOString();
+              markLocalAnnotationDraftSynced(
+                draft.scriptId,
+                draft.pageNumber,
+                newUpdatedAt,
+                effectiveUserId
+              );
+              if (serverDataCacheRef.current[draft.pageKey]) {
+                serverDataCacheRef.current[draft.pageKey].updatedAt = newUpdatedAt;
+              }
+              onSaveSuccessRef.current?.(draft.pageNumber);
+            } else {
+              const errJson = await res.json().catch(() => null);
+              const isLockConflict = Boolean(
+                errJson?.isLocked ||
+                errJson?.locked ||
+                errJson?.message?.toLowerCase().includes('locked') ||
+                errJson?.message?.toLowerCase().includes('completed')
+              );
 
+              if (isLockConflict) {
+                wasLocked = true;
+                setIsLocked(true);
+                setSaveStatus('locked');
+                setSaveErrorMessage(errJson?.message || 'Script allocation has already been submitted and locked.');
+                onSaveStatusChangeRef.current?.('locked');
+                setTool('none');
+                break;
+              }
+
+              const msg =
+                errJson?.message ||
+                errJson?.error ||
+                `Failed to sync annotations (${res.status})`;
+              const error = new Error(msg);
+              syncError = error;
+              onSaveErrorRef.current?.(draft.pageNumber, error);
+            }
+          }
+        } catch (syncErr) {
+          console.warn('Failed to sync offline draft on reconnect:', syncErr);
+          const errorObj = syncErr instanceof Error ? syncErr : new Error(String(syncErr));
+          syncError = errorObj;
+          onSaveErrorRef.current?.(draft.pageNumber, errorObj);
+        }
+      }
+    } finally {
+      isSyncingRef.current = false;
+      if (!wasLocked) {
         const remainingDrafts = getPendingAnnotationDrafts(scriptId, effectiveUserId);
         const hasAnyConflict = hasConflict(scriptId, undefined, effectiveUserId);
         if (hasAnyConflict) {
@@ -1040,12 +1135,33 @@ export function AnswerSheetCanvas({
           onSaveStatusChangeRef.current?.('conflict');
         } else if (remainingDrafts.length === 0) {
           setSaveStatus('saved');
+          setSaveErrorMessage('');
           onSaveStatusChangeRef.current?.('saved');
+        } else if (syncError) {
+          const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+          if (isOffline) {
+            setSaveStatus('pending_sync');
+            setSaveErrorMessage('Offline - changes saved locally');
+            onSaveStatusChangeRef.current?.('pending_sync');
+          } else {
+            setSaveStatus('error');
+            setSaveErrorMessage(syncError.message || 'Failed to sync offline annotations');
+            onSaveStatusChangeRef.current?.('error');
+          }
         } else {
           setSaveStatus('pending_sync');
           onSaveStatusChangeRef.current?.('pending_sync');
         }
       }
+    }
+  }, [scriptId, effectiveUserId, saveAnnotations, saveAnnotationsUrl, loadAnnotationsUrl, setTool]);
+
+  // Online / Offline Network Listeners & Automatic Sync (AE-170)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleOnline = () => {
+      syncPendingDrafts();
     };
 
     const handleOffline = () => {
@@ -1058,13 +1174,25 @@ export function AnswerSheetCanvas({
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
+    const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+    if (isOnline && scriptId && hasPendingSync(scriptId, undefined, effectiveUserId)) {
+      Promise.resolve().then(() => {
+        syncPendingDrafts();
+      });
+    }
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [scriptId, effectiveUserId, saveAnnotations, saveAnnotationsUrl, flushPendingSave, setTool]);
+  }, [scriptId, effectiveUserId, syncPendingDrafts]);
 
   const handleRetrySave = useCallback(() => {
+    if (scriptId && hasPendingSync(scriptId, undefined, effectiveUserId)) {
+      syncPendingDrafts();
+      return;
+    }
+
     const targetPageNumber =
       typeof currentPage?.pageNumber === 'number'
         ? currentPage.pageNumber
@@ -1084,6 +1212,9 @@ export function AnswerSheetCanvas({
     };
     executeSave(retryData);
   }, [
+    scriptId,
+    effectiveUserId,
+    syncPendingDrafts,
     currentPage,
     activePageIndex,
     allStrokes,

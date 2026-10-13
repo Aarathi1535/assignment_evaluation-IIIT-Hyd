@@ -62,6 +62,7 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
       data-status={lockedActive ? 'locked' : status}
       role={isAlertRole ? 'alert' : 'status'}
       aria-live={isAlertRole ? 'assertive' : 'polite'}
+      title={status === 'error' && errorMessage ? errorMessage : undefined}
     >
       {(status === 'saving' || status === 'syncing') && (
         <>
@@ -125,6 +126,16 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
             />
           </svg>
           <span>Pending sync (Saved locally)</span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="ml-1 px-1.5 py-0.5 rounded bg-sky-100 hover:bg-sky-200 text-sky-800 font-semibold focus:outline-none focus:ring-1 focus:ring-sky-400 transition-colors"
+              aria-label="Retry syncing annotations"
+            >
+              Retry
+            </button>
+          )}
         </>
       )}
 
@@ -276,7 +287,16 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
               clipRule="evenodd"
             />
           </svg>
-          <span>Save failed</span>
+          <span title={errorMessage}>Save failed</span>
+          {errorMessage && errorMessage !== 'Failed to save annotations' && (
+            <span
+              className="max-w-[200px] truncate text-[11px] font-normal text-rose-700/90"
+              title={errorMessage}
+              data-testid="save-status-error-detail"
+            >
+              ({errorMessage})
+            </span>
+          )}
           {onRetry && (
             <button
               type="button"
