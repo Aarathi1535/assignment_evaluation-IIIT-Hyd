@@ -326,4 +326,318 @@ describe('AE-180: Bug 2 Offline Drafts Stuck Pending Sync Reproduction Tests', (
     // Unsynced work preserved
     expect(draft?.data.annotations).toHaveLength(1);
   });
+
+  describe('AE-180: Production Fetch-Based Offline Draft Sync Regression Tests', () => {
+    it('fetch-based sync error handling: HTTP 400 Bad Request transitions UI to error and preserves draft', async () => {
+      saveLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, PAGE_KEY, sampleData, {
+        synced: false,
+        baseServerUpdatedAt: '2026-10-12T10:00:00.000Z',
+        userId: USER_ID,
+      });
+
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(true);
+
+      const onSaveStatusChange = vi.fn();
+      const onSaveError = vi.fn();
+
+      const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({
+              success: false,
+              message: 'Invalid annotation payload format (400)',
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ annotations: [], strokes: [], updatedAt: '2026-10-12T10:00:00.000Z' }),
+        };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      Object.defineProperty(navigator, 'onLine', { value: true, writable: true });
+
+      await act(async () => {
+        render(
+          <AnswerSheetCanvas
+            scriptId={SCRIPT_ID}
+            pages={mockPages}
+            userId={USER_ID}
+            onSaveStatusChange={onSaveStatusChange}
+            onSaveError={onSaveError}
+            enableAutosave={true}
+            enableAnnotationLoading={false}
+          />
+        );
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(onSaveStatusChange).toHaveBeenCalledWith('error');
+      expect(onSaveError).toHaveBeenCalled();
+
+      // UI state: SaveStatusIndicator shows error badge with alert role and actionable text
+      const indicator = screen.getByTestId('save-status-indicator');
+      expect(indicator.getAttribute('data-status')).toBe('error');
+      expect(indicator.getAttribute('role')).toBe('alert');
+      expect(screen.getByTestId('save-status-error-detail').textContent).toContain('Invalid annotation payload format (400)');
+
+      // Retry button is available for the user
+      const retryBtn = screen.getByRole('button', { name: /retry/i });
+      expect(retryBtn).toBeDefined();
+
+      // Draft preservation: Draft is strictly NOT discarded or lost
+      const draft = getLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, USER_ID);
+      expect(draft).not.toBeNull();
+      expect(draft?.data.annotations).toHaveLength(1);
+      expect(draft?.data.strokes).toHaveLength(1);
+      expect(draft?.synced).toBe(false);
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(true);
+    });
+
+    it('fetch-based sync error handling: HTTP 403 Forbidden transitions UI to error and preserves draft', async () => {
+      saveLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, PAGE_KEY, sampleData, {
+        synced: false,
+        baseServerUpdatedAt: '2026-10-12T10:00:00.000Z',
+        userId: USER_ID,
+      });
+
+      const onSaveStatusChange = vi.fn();
+      const onSaveError = vi.fn();
+
+      const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          return {
+            ok: false,
+            status: 403,
+            json: async () => ({
+              success: false,
+              message: 'Grading permission denied: allocation unassigned (403)',
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+        };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      Object.defineProperty(navigator, 'onLine', { value: true, writable: true });
+
+      await act(async () => {
+        render(
+          <AnswerSheetCanvas
+            scriptId={SCRIPT_ID}
+            pages={mockPages}
+            userId={USER_ID}
+            onSaveStatusChange={onSaveStatusChange}
+            onSaveError={onSaveError}
+            enableAutosave={true}
+            enableAnnotationLoading={false}
+          />
+        );
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(onSaveStatusChange).toHaveBeenCalledWith('error');
+
+      const indicator = screen.getByTestId('save-status-indicator');
+      expect(indicator.getAttribute('data-status')).toBe('error');
+      expect(screen.getByTestId('save-status-error-detail').textContent).toContain('Grading permission denied: allocation unassigned (403)');
+
+      // Draft must be preserved
+      const draft = getLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, USER_ID);
+      expect(draft?.synced).toBe(false);
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(true);
+    });
+
+    it('fetch-based sync error handling: HTTP 5xx Server Error transitions UI to error and preserves draft', async () => {
+      saveLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, PAGE_KEY, sampleData, {
+        synced: false,
+        baseServerUpdatedAt: '2026-10-12T10:00:00.000Z',
+        userId: USER_ID,
+      });
+
+      const onSaveStatusChange = vi.fn();
+
+      const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          return {
+            ok: false,
+            status: 500,
+            json: async () => ({
+              success: false,
+              message: 'Internal Server Error (500)',
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+        };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      Object.defineProperty(navigator, 'onLine', { value: true, writable: true });
+
+      await act(async () => {
+        render(
+          <AnswerSheetCanvas
+            scriptId={SCRIPT_ID}
+            pages={mockPages}
+            userId={USER_ID}
+            onSaveStatusChange={onSaveStatusChange}
+            enableAutosave={true}
+            enableAnnotationLoading={false}
+          />
+        );
+      });
+
+      expect(onSaveStatusChange).toHaveBeenCalledWith('error');
+
+      const indicator = screen.getByTestId('save-status-indicator');
+      expect(indicator.getAttribute('data-status')).toBe('error');
+      expect(screen.getByTestId('save-status-error-detail').textContent).toContain('Internal Server Error (500)');
+
+      const draft = getLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, USER_ID);
+      expect(draft?.synced).toBe(false);
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(true);
+    });
+
+    it('fetch-based sync error handling: network failure / rejected request transitions UI to error and preserves draft', async () => {
+      saveLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, PAGE_KEY, sampleData, {
+        synced: false,
+        baseServerUpdatedAt: '2026-10-12T10:00:00.000Z',
+        userId: USER_ID,
+      });
+
+      const onSaveStatusChange = vi.fn();
+
+      const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          throw new TypeError('Failed to fetch');
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+        };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      Object.defineProperty(navigator, 'onLine', { value: true, writable: true });
+
+      await act(async () => {
+        render(
+          <AnswerSheetCanvas
+            scriptId={SCRIPT_ID}
+            pages={mockPages}
+            userId={USER_ID}
+            onSaveStatusChange={onSaveStatusChange}
+            enableAutosave={true}
+            enableAnnotationLoading={false}
+          />
+        );
+      });
+
+      expect(onSaveStatusChange).toHaveBeenCalledWith('error');
+
+      const indicator = screen.getByTestId('save-status-indicator');
+      expect(indicator.getAttribute('data-status')).toBe('error');
+      expect(screen.getByText('Save failed')).toBeDefined();
+
+      const draft = getLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, USER_ID);
+      expect(draft?.synced).toBe(false);
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(true);
+    });
+
+    it('successful retry after failed fetch sync synchronizes pending draft and transitions UI to saved', async () => {
+      saveLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, PAGE_KEY, sampleData, {
+        synced: false,
+        baseServerUpdatedAt: '2026-10-12T10:00:00.000Z',
+        userId: USER_ID,
+      });
+
+      let shouldFail = true;
+      const onSaveStatusChange = vi.fn();
+
+      const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          if (shouldFail) {
+            return {
+              ok: false,
+              status: 500,
+              json: async () => ({
+                success: false,
+                message: 'Internal Server Error (500)',
+              }),
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: { updatedAt: '2026-10-13T12:00:00.000Z' },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+        };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      Object.defineProperty(navigator, 'onLine', { value: true, writable: true });
+
+      await act(async () => {
+        render(
+          <AnswerSheetCanvas
+            scriptId={SCRIPT_ID}
+            pages={mockPages}
+            userId={USER_ID}
+            onSaveStatusChange={onSaveStatusChange}
+            enableAutosave={true}
+            enableAnnotationLoading={false}
+          />
+        );
+      });
+
+      // Initial sync failed: status is error, draft preserved
+      expect(onSaveStatusChange).toHaveBeenCalledWith('error');
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(true);
+
+      const retryBtn = screen.getByRole('button', { name: /retry/i });
+      expect(retryBtn).toBeDefined();
+
+      // Now server recovers
+      shouldFail = false;
+
+      await act(async () => {
+        retryBtn.click();
+      });
+
+      // Retried sync succeeds: status transitions to syncing and then saved
+      expect(onSaveStatusChange).toHaveBeenCalledWith('syncing');
+      expect(onSaveStatusChange).toHaveBeenCalledWith('saved');
+
+      const indicator = screen.getByTestId('save-status-indicator');
+      expect(indicator.getAttribute('data-status')).toBe('saved');
+      expect(screen.getByText('Saved')).toBeDefined();
+
+      // Draft is marked synced and pending state is resolved
+      expect(hasPendingSync(SCRIPT_ID, PAGE_NUMBER, USER_ID)).toBe(false);
+      expect(getPendingAnnotationDrafts(SCRIPT_ID, USER_ID)).toHaveLength(0);
+      const syncedDraft = getLocalAnnotationDraft(SCRIPT_ID, PAGE_NUMBER, USER_ID);
+      expect(syncedDraft?.synced).toBe(true);
+    });
+  });
 });
