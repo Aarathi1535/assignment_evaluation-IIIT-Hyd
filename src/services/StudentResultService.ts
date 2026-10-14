@@ -23,6 +23,43 @@ export interface StudentResultItemDto {
     maxMarks?: number;
 }
 
+export interface ReleasedStudentResultDto {
+    examId: string;
+    examTitle: string;
+    courseCode: string;
+    examDate: Date | string;
+    status: 'RELEASED';
+    scriptId: string;
+    total: number;
+    maxMarks: number;
+}
+
+export interface CriterionResultDto {
+    name: string;
+    score: number;
+    points: number;
+    feedback?: string;
+}
+
+export interface QuestionResultDto {
+    questionNumber: number | null;
+    maxMarks: number;
+    awarded: number;
+    feedback?: string;
+    criteria: CriterionResultDto[];
+}
+
+export interface ItemizedResultDto {
+    exam: {
+        title: string;
+        totalMarks: number;
+    };
+    mode: 'QUESTION' | 'WHOLE';
+    questions: QuestionResultDto[];
+    total: number;
+    maxTotal: number;
+}
+
 export class StudentResultService {
     /**
      * Validates that the request is made by an authenticated, active student
@@ -390,6 +427,168 @@ export class StudentResultService {
         }
 
         return { student, script, exam };
+    }
+
+    /**
+     * Retrieves itemized scores and per-question/criterion feedback for an answer script (AE-184).
+     * Enforces student ownership and release conditions via verifyStudentScriptAccess.
+     * Obtains maxMarks and criterion points from the rubric version referenced by each persisted grade.
+     * Computes the response total on the server from persisted Grade.totalScore.
+     * Strictly excludes sensitive and internal grading metadata.
+     */
+    async getItemizedStudentResult(
+        scriptId: string,
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<ItemizedResultDto> {
+        const { script, exam } = await this.verifyStudentScriptAccess(
+            scriptId,
+            actingUserId,
+            actingUserRole
+        );
+
+        const grades = await Grade.find({ answerScript: script._id }).lean();
+        if (!grades || grades.length === 0) {
+            throw new HttpError('Not found', 404);
+        }
+
+        // Return 404 if any relevant grade has isFinal: false
+        if (grades.some(g => g.isFinal !== true)) {
+            throw new HttpError('Not found', 404);
+        }
+
+        // Determine mode: QUESTION or WHOLE. Never mix the two modes.
+        const isAllQuestionWise = grades.every(g => typeof g.question === 'number');
+        const isAllWholeScript = grades.every(g => g.question === null || g.question === undefined);
+
+        if (!isAllQuestionWise && !isAllWholeScript) {
+            // Mixed modes not permitted
+            throw new HttpError('Not found', 404);
+        }
+
+        const mode: 'QUESTION' | 'WHOLE' = isAllQuestionWise ? 'QUESTION' : 'WHOLE';
+
+        if (mode === 'WHOLE' && grades.length !== 1) {
+            throw new HttpError('Not found', 404);
+        }
+
+        const rubricCache = new Map<string, IRubric>();
+        const getRubric = async (rubricId: mongoose.Types.ObjectId | string): Promise<IRubric> => {
+            const idStr = rubricId.toString();
+            const cached = rubricCache.get(idStr);
+            if (cached) {
+                return cached;
+            }
+            const r = await Rubric.findById(rubricId).lean();
+            if (!r) {
+                throw new HttpError('Not found', 404);
+            }
+            rubricCache.set(idStr, r as unknown as IRubric);
+            return r as unknown as IRubric;
+        };
+
+        const questions: QuestionResultDto[] = [];
+
+        if (mode === 'QUESTION') {
+            const sortedGrades = [...grades].sort(
+                (a, b) => (Number(a.question) || 0) - (Number(b.question) || 0)
+            );
+
+            for (const grade of sortedGrades) {
+                if (!grade.rubric) {
+                    throw new HttpError('Not found', 404);
+                }
+                const rubric = await getRubric(grade.rubric);
+                const rubricQuestion = rubric.questions?.find(
+                    q => q.questionNumber === grade.question
+                );
+                if (!rubricQuestion) {
+                    throw new HttpError('Not found', 404);
+                }
+
+                const criteria: CriterionResultDto[] = (grade.marksAwarded || []).map(m => {
+                    const rubricCriterion = rubricQuestion.criteria?.find(
+                        c => c.criterionName === m.criterionName
+                    );
+                    const critObj: CriterionResultDto = {
+                        name: m.criterionName,
+                        score: m.score,
+                        points: rubricCriterion ? rubricCriterion.points : m.score,
+                    };
+                    if (m.feedback && m.feedback.trim()) {
+                        critObj.feedback = m.feedback.trim();
+                    }
+                    return critObj;
+                });
+
+                const qDto: QuestionResultDto = {
+                    questionNumber: grade.question as number,
+                    maxMarks: rubricQuestion.maxMarks,
+                    awarded: grade.totalScore,
+                    criteria,
+                };
+                if (grade.feedback && grade.feedback.trim()) {
+                    qDto.feedback = grade.feedback.trim();
+                }
+
+                questions.push(qDto);
+            }
+        } else {
+            // Whole script mode
+            const grade = grades[0];
+            if (!grade.rubric) {
+                throw new HttpError('Not found', 404);
+            }
+            const rubric = await getRubric(grade.rubric);
+            const allRubricCriteria = (rubric.questions || []).flatMap(q => q.criteria || []);
+            const totalRubricMarks = (rubric.questions || []).reduce(
+                (sum, q) => sum + (q.maxMarks || 0),
+                0
+            );
+
+            const criteria: CriterionResultDto[] = (grade.marksAwarded || []).map(m => {
+                const rubricCriterion = allRubricCriteria.find(
+                    c => c.criterionName === m.criterionName
+                );
+                const critObj: CriterionResultDto = {
+                    name: m.criterionName,
+                    score: m.score,
+                    points: rubricCriterion ? rubricCriterion.points : m.score,
+                };
+                if (m.feedback && m.feedback.trim()) {
+                    critObj.feedback = m.feedback.trim();
+                }
+                return critObj;
+            });
+
+            const qDto: QuestionResultDto = {
+                questionNumber: null,
+                maxMarks: exam.totalMarks || totalRubricMarks,
+                awarded: grade.totalScore,
+                criteria,
+            };
+            if (grade.feedback && grade.feedback.trim()) {
+                qDto.feedback = grade.feedback.trim();
+            }
+
+            questions.push(qDto);
+        }
+
+        const total = Math.round(
+            grades.reduce((sum, g) => sum + (Number(g.totalScore) || 0), 0) * 100
+        ) / 100;
+        const maxTotal = exam.totalMarks || questions.reduce((sum, q) => sum + q.maxMarks, 0);
+
+        return {
+            exam: {
+                title: exam.title,
+                totalMarks: exam.totalMarks,
+            },
+            mode,
+            questions,
+            total,
+            maxTotal,
+        };
     }
 }
 
