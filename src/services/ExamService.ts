@@ -1,4 +1,4 @@
-import ExamRepository from '../repositories/ExamRepository';
+import ExamRepository, { shapeExamForStudent } from '../repositories/ExamRepository';
 import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose from 'mongoose';
 import { writeAuditLog } from '../lib/audit';
@@ -118,7 +118,11 @@ class ExamService {
 
             filter.course = { $in: assignedCourseIds };
         }
-        return await ExamRepository.getAllExams(filter);
+        const exams = await ExamRepository.getAllExams(filter);
+        if (actingUserRole === 'STUDENT') {
+            return exams.map(shapeExamForStudent) as unknown as IExam[];
+        }
+        return exams;
     }
 
     async getExamById(id: string, actingUserId?: string, actingUserRole?: string): Promise<IExam | null> {
@@ -162,6 +166,8 @@ class ExamService {
                     return null;
                 }
             }
+
+            return shapeExamForStudent(exam) as unknown as IExam;
         }
 
         return exam;

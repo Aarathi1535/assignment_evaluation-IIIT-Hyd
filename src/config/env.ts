@@ -7,8 +7,13 @@ const envSchema = z.object({
     ORIGINAL_STORAGE_HMAC_SECRET: z.string().min(1, 'ORIGINAL_STORAGE_HMAC_SECRET is required'),
     ORIGINAL_STORAGE_KEY_ID: z.string().default('v1'),
     ORIGINAL_STORAGE_PATH: z.string().optional(),
-    DERIVED_PAGE_STORAGE_BUCKET: z.string().trim().min(1).optional()
+    DERIVED_PAGE_STORAGE_BUCKET: z.string().trim().min(1).optional(),
+    STUDENT_RESULTS_ENABLED: z.string().optional().default('false')
 });
+
+export function isStudentResultsEnabled(): boolean {
+    return process.env.STUDENT_RESULTS_ENABLED === 'true';
+}
 
 export function validateEnv() {
     const parsed = envSchema.safeParse(process.env);

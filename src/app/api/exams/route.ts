@@ -6,6 +6,8 @@ import { requirePermission } from '../../../lib/apiAuth';
 import { Permission } from '../../../constants/permissions';
 import { HttpError } from '../../../lib/errors';
 
+import { shapeExamForStudent } from '../../../repositories/ExamRepository';
+
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
@@ -17,10 +19,13 @@ export async function GET() {
   try {
     await connectDB();
     const exams = await ExamService.getAllExams(auth.user.id, auth.user.role);
+    const data = auth.user.role === 'STUDENT'
+      ? exams.map(shapeExamForStudent)
+      : exams;
     return NextResponse.json({
       success: true,
       message: 'Exams retrieved successfully',
-      data: exams
+      data
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';

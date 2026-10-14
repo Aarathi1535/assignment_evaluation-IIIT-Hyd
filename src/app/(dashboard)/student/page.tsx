@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { BookOpen, FileCheck, Award, HelpCircle, Eye, RefreshCw, GraduationCap } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
@@ -124,10 +125,12 @@ export default function StudentDashboardPage() {
 
   const quickActions = (
     <>
-      <Button variant="primary" size="md">
-        <Eye className="h-4 w-4" />
-        <span>View Grades</span>
-      </Button>
+      <Link href="/student/results">
+        <Button variant="primary" size="md">
+          <Eye className="h-4 w-4" />
+          <span>View Grades</span>
+        </Button>
+      </Link>
       <Button variant="secondary" size="md">
         <RefreshCw className="h-4 w-4" />
         <span>Request Regrade</span>
