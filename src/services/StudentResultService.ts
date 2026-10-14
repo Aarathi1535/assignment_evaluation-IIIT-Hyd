@@ -338,7 +338,61 @@ export class StudentResultService {
 
         return results;
     }
+
+    /**
+     * Verifies student ownership and release conditions for a specific answer script (AE-183).
+     * Returns student, script, and exam documents if authorized and released.
+     * Throws generic 404 HttpError on any failure or missing resource to prevent information leakage.
+     */
+    async verifyStudentScriptAccess(
+        scriptId: string,
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<{ student: IUser; script: IAnswerScript; exam: IExam }> {
+        const student = await this.validateStudentAccess(actingUserId, actingUserRole);
+
+        if (!scriptId || !mongoose.Types.ObjectId.isValid(scriptId)) {
+            throw new HttpError('Not found', 404);
+        }
+
+        const script = await AnswerScript.findOne({
+            _id: new mongoose.Types.ObjectId(scriptId),
+            isActive: true
+        });
+
+        if (!script) {
+            throw new HttpError('Not found', 404);
+        }
+
+        // Script must belong to the authenticated student
+        if (!script.student || script.student.toString() !== student._id.toString()) {
+            throw new HttpError('Not found', 404);
+        }
+
+        const exam = await Exam.findOne({
+            _id: script.exam,
+            isActive: true,
+            status: ExamStatus.PUBLISHED
+        });
+
+        if (!exam) {
+            throw new HttpError('Not found', 404);
+        }
+
+        const { isReleased } = await this.evaluateReleaseConditions(
+            student._id as mongoose.Types.ObjectId,
+            exam,
+            script
+        );
+
+        if (!isReleased) {
+            throw new HttpError('Not found', 404);
+        }
+
+        return { student, script, exam };
+    }
 }
 
 const studentResultService = new StudentResultService();
 export default studentResultService;
+
