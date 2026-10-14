@@ -287,6 +287,8 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         let record = body.data.find((r: any) => r.examId === publishedExam._id.toString());
         expect(record.status).toBe('NOT_AVAILABLE');
         expect(record.total).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
 
         // Case B: hasIdentificationConflict
         await AnswerScript.findByIdAndUpdate(scriptUnidentified._id, {
@@ -299,6 +301,8 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         record = body.data.find((r: any) => r.examId === publishedExam._id.toString());
         expect(record.status).toBe('NOT_AVAILABLE');
         expect(record.total).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
 
         // Case C: needsManualId
         await AnswerScript.findByIdAndUpdate(scriptUnidentified._id, {
@@ -311,6 +315,8 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         record = body.data.find((r: any) => r.examId === publishedExam._id.toString());
         expect(record.status).toBe('NOT_AVAILABLE');
         expect(record.total).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
     });
 
     // 5. A grade with isFinal: false makes the result unavailable and exposes no total
@@ -493,5 +499,515 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         expect(detailBody.data.totalMarks).toBe(100);
         expect(detailBody.data.numberOfQuestions).toBe(5);
         expect(detailBody.data.status).toBe(ExamStatus.PUBLISHED);
+    });
+
+    // 10. Partial question-wise grades and missing required grades never expose totals or script IDs
+    it('10. prevents releasing partial question-wise results when some rubric questions are missing grades', async () => {
+        // Create an exam with a 2-question rubric (Q1: 50 marks, Q2: 50 marks)
+        const multiQExam = await Exam.create({
+            title: 'Calculus Final MultiQ',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-11-05'),
+            totalMarks: 100,
+            numberOfQuestions: 2,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            enrolledStudents: [studentA._id]
+        });
+
+        const multiQRubric = await Rubric.create({
+            exam: multiQExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            questions: [
+                { questionNumber: 1, maxMarks: 50, criteria: [{ criterionName: 'Derivatives', points: 50 }] },
+                { questionNumber: 2, maxMarks: 50, criteria: [{ criterionName: 'Integrals', points: 50 }] }
+            ],
+            isActive: true
+        });
+        await Exam.findByIdAndUpdate(multiQExam._id, { rubric: multiQRubric._id });
+
+        const scriptMultiQ = await AnswerScript.create({
+            exam: multiQExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        // Only Question 1 is graded and finalized; Question 2 is missing completely!
+        await Grade.create({
+            answerScript: scriptMultiQ._id,
+            rubric: multiQRubric._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Derivatives', score: 45 }],
+            totalScore: 45,
+            isFinal: true
+        });
+
+        await Allocation.create({
+            exam: multiQExam._id,
+            ta: ta._id,
+            answerScript: scriptMultiQ._id,
+            question: 1,
+            allocatedBy: prof._id,
+            status: AllocationStatus.COMPLETED
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === multiQExam._id.toString());
+
+        expect(record).toBeDefined();
+        // Must NOT be released because Q2 is missing
+        expect(record.status).toBe('NOT_AVAILABLE');
+        expect(record.total).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+    });
+
+    // 11. Unfinished allocations prevent release even if all question grades are finalized
+    it('11. prevents release when any allocation remains PENDING or IN_PROGRESS', async () => {
+        const multiQExam = await Exam.create({
+            title: 'Physics MultiQ',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-11-10'),
+            totalMarks: 100,
+            numberOfQuestions: 2,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            enrolledStudents: [studentA._id]
+        });
+
+        const multiQRubric = await Rubric.create({
+            exam: multiQExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            questions: [
+                { questionNumber: 1, maxMarks: 50, criteria: [{ criterionName: 'Mechanics', points: 50 }] },
+                { questionNumber: 2, maxMarks: 50, criteria: [{ criterionName: 'Optics', points: 50 }] }
+            ],
+            isActive: true
+        });
+        await Exam.findByIdAndUpdate(multiQExam._id, { rubric: multiQRubric._id });
+
+        const scriptMultiQ = await AnswerScript.create({
+            exam: multiQExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        // Both Q1 and Q2 are final
+        await Grade.create({
+            answerScript: scriptMultiQ._id,
+            rubric: multiQRubric._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Mechanics', score: 40 }],
+            totalScore: 40,
+            isFinal: true
+        });
+        await Grade.create({
+            answerScript: scriptMultiQ._id,
+            rubric: multiQRubric._id,
+            gradedBy: ta._id,
+            question: 2,
+            marksAwarded: [{ criterionName: 'Optics', score: 45 }],
+            totalScore: 45,
+            isFinal: true
+        });
+
+        // Allocation 1 is COMPLETED, but Allocation 2 remains IN_PROGRESS
+        await Allocation.create({
+            exam: multiQExam._id,
+            ta: ta._id,
+            answerScript: scriptMultiQ._id,
+            question: 1,
+            allocatedBy: prof._id,
+            status: AllocationStatus.COMPLETED
+        });
+        await Allocation.create({
+            exam: multiQExam._id,
+            ta: ta._id,
+            answerScript: scriptMultiQ._id,
+            question: 2,
+            allocatedBy: prof._id,
+            status: AllocationStatus.IN_PROGRESS
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === multiQExam._id.toString());
+
+        expect(record).toBeDefined();
+        expect(record.status).toBe('NOT_AVAILABLE');
+        expect(record.total).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
+    });
+
+    // 12. Full question-wise grading releases with sum of scores when all questions and allocations are completed
+    it('12. releases result with sum of scores when all questions and allocations are COMPLETED', async () => {
+        const multiQExam = await Exam.create({
+            title: 'Chemistry MultiQ Complete',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-11-15'),
+            totalMarks: 100,
+            numberOfQuestions: 2,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            enrolledStudents: [studentA._id]
+        });
+
+        const multiQRubric = await Rubric.create({
+            exam: multiQExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            questions: [
+                { questionNumber: 1, maxMarks: 50, criteria: [{ criterionName: 'Organic', points: 50 }] },
+                { questionNumber: 2, maxMarks: 50, criteria: [{ criterionName: 'Inorganic', points: 50 }] }
+            ],
+            isActive: true
+        });
+        await Exam.findByIdAndUpdate(multiQExam._id, { rubric: multiQRubric._id });
+
+        const scriptMultiQ = await AnswerScript.create({
+            exam: multiQExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        await Grade.create({
+            answerScript: scriptMultiQ._id,
+            rubric: multiQRubric._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Organic', score: 42 }],
+            totalScore: 42,
+            isFinal: true
+        });
+        await Grade.create({
+            answerScript: scriptMultiQ._id,
+            rubric: multiQRubric._id,
+            gradedBy: ta._id,
+            question: 2,
+            marksAwarded: [{ criterionName: 'Inorganic', score: 48 }],
+            totalScore: 48,
+            isFinal: true
+        });
+
+        await Allocation.create({
+            exam: multiQExam._id,
+            ta: ta._id,
+            answerScript: scriptMultiQ._id,
+            question: 1,
+            allocatedBy: prof._id,
+            status: AllocationStatus.COMPLETED
+        });
+        await Allocation.create({
+            exam: multiQExam._id,
+            ta: ta._id,
+            answerScript: scriptMultiQ._id,
+            question: 2,
+            allocatedBy: prof._id,
+            status: AllocationStatus.COMPLETED
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === multiQExam._id.toString());
+
+        expect(record).toBeDefined();
+        expect(record.status).toBe('RELEASED');
+        expect(record.total).toBe(90); // 42 + 48
+        expect(record.maxMarks).toBe(100);
+        expect(record.scriptId).toBe(scriptMultiQ._id.toString());
+    });
+
+    // 13. Inactive script is never released
+    it('13. does not release result or expose totals when answerScript.isActive is false', async () => {
+        const inactiveScript = await AnswerScript.create({
+            exam: publishedExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: false, // Inactive script
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        await Grade.create({
+            answerScript: inactiveScript._id,
+            rubric: rubric._id,
+            gradedBy: ta._id,
+            marksAwarded: [{ criterionName: 'Correctness', score: 99 }],
+            totalScore: 99,
+            isFinal: true
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === publishedExam._id.toString());
+
+        expect(record).toBeDefined();
+        expect(record.status).toBe('NOT_AVAILABLE');
+        expect(record.total).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
+    });
+
+    // 14. Inactive exam is not exposed in results list
+    it('14. does not include inactive exams in the student results list', async () => {
+        // Create an inactive exam (even if status is PUBLISHED)
+        const inactiveExam = await Exam.create({
+            title: 'Decommissioned Exam',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-09-01'),
+            totalMarks: 100,
+            numberOfQuestions: 5,
+            status: ExamStatus.PUBLISHED,
+            isActive: false, // Inactive exam
+            enrolledStudents: [studentA._id]
+        });
+
+        const script = await AnswerScript.create({
+            exam: inactiveExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        await Grade.create({
+            answerScript: script._id,
+            rubric: rubric._id,
+            gradedBy: ta._id,
+            marksAwarded: [{ criterionName: 'Correctness', score: 95 }],
+            totalScore: 95,
+            isFinal: true
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === inactiveExam._id.toString());
+        expect(record).toBeUndefined();
+    });
+
+    // 15. Unfinalized whole-script grade is never released
+    it('15. does not release result or expose totals when a whole-script grade has isFinal === false', async () => {
+        const wholeExam = await Exam.create({
+            title: 'Draft Whole-Script Exam',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-11-20'),
+            totalMarks: 50,
+            numberOfQuestions: 1,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            enrolledStudents: [studentA._id]
+        });
+
+        const wholeRubric = await Rubric.create({
+            exam: wholeExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            questions: [{ questionNumber: 1, maxMarks: 50, criteria: [{ criterionName: 'Essay', points: 50 }] }],
+            isActive: true
+        });
+
+        const script = await AnswerScript.create({
+            exam: wholeExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        // Unfinalized whole-script grade (question is undefined, isFinal is false)
+        await Grade.create({
+            answerScript: script._id,
+            rubric: wholeRubric._id,
+            gradedBy: ta._id,
+            marksAwarded: [{ criterionName: 'Essay', score: 40 }],
+            totalScore: 40,
+            isFinal: false
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === wholeExam._id.toString());
+
+        expect(record).toBeDefined();
+        expect(record.status).toBe('NOT_AVAILABLE');
+        expect(record.total).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
+    });
+
+    // 16. Inconsistent rubric versions across grades prevent release
+    it('16. prevents release when grades reference inconsistent rubric versions', async () => {
+        const rubricExam = await Exam.create({
+            title: 'Rubric Version Test Exam',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-11-25'),
+            totalMarks: 100,
+            numberOfQuestions: 2,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            enrolledStudents: [studentA._id]
+        });
+
+        const rubricV1 = await Rubric.create({
+            exam: rubricExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            version: 1,
+            questions: [
+                { questionNumber: 1, maxMarks: 50, criteria: [{ criterionName: 'Q1', points: 50 }] },
+                { questionNumber: 2, maxMarks: 50, criteria: [{ criterionName: 'Q2', points: 50 }] }
+            ],
+            isActive: false
+        });
+
+        const rubricV2 = await Rubric.create({
+            exam: rubricExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            version: 2,
+            questions: [
+                { questionNumber: 1, maxMarks: 50, criteria: [{ criterionName: 'Q1_v2', points: 50 }] },
+                { questionNumber: 2, maxMarks: 50, criteria: [{ criterionName: 'Q2_v2', points: 50 }] }
+            ],
+            isActive: true
+        });
+
+        const script = await AnswerScript.create({
+            exam: rubricExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        // Q1 graded against rubricV1, Q2 graded against rubricV2
+        await Grade.create({
+            answerScript: script._id,
+            rubric: rubricV1._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Q1', score: 45 }],
+            totalScore: 45,
+            isFinal: true
+        });
+        await Grade.create({
+            answerScript: script._id,
+            rubric: rubricV2._id,
+            gradedBy: ta._id,
+            question: 2,
+            marksAwarded: [{ criterionName: 'Q2_v2', score: 45 }],
+            totalScore: 45,
+            isFinal: true
+        });
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === rubricExam._id.toString());
+
+        expect(record).toBeDefined();
+        expect(record.status).toBe('NOT_AVAILABLE');
+        expect(record.total).toBeUndefined();
+        expect(record.maxMarks).toBeUndefined();
+        expect(record.scriptId).toBeUndefined();
+    });
+
+    // 17. Question-wise grading without allocations (direct faculty grading) releases when complete
+    it('17. releases question-wise result when graded directly without allocations (empty allocation list)', async () => {
+        const facultyExam = await Exam.create({
+            title: 'Faculty Graded Exam',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-11-28'),
+            totalMarks: 60,
+            numberOfQuestions: 2,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            enrolledStudents: [studentA._id]
+        });
+
+        const facultyRubric = await Rubric.create({
+            exam: facultyExam._id,
+            createdBy: prof._id,
+            scoreStep: 1,
+            questions: [
+                { questionNumber: 1, maxMarks: 30, criteria: [{ criterionName: 'Part1', points: 30 }] },
+                { questionNumber: 2, maxMarks: 30, criteria: [{ criterionName: 'Part2', points: 30 }] }
+            ],
+            isActive: true
+        });
+
+        const script = await AnswerScript.create({
+            exam: facultyExam._id,
+            student: studentA._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+
+        // Faculty grades directly without creating allocations
+        await Grade.create({
+            answerScript: script._id,
+            rubric: facultyRubric._id,
+            gradedBy: prof._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Part1', score: 28 }],
+            totalScore: 28,
+            isFinal: true
+        });
+        await Grade.create({
+            answerScript: script._id,
+            rubric: facultyRubric._id,
+            gradedBy: prof._id,
+            question: 2,
+            marksAwarded: [{ criterionName: 'Part2', score: 27 }],
+            totalScore: 27,
+            isFinal: true
+        });
+
+        // Verify zero allocations exist
+        const allocCount = await Allocation.countDocuments({ answerScript: script._id });
+        expect(allocCount).toBe(0);
+
+        const res = await resultsGET();
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const record = body.data.find((r: any) => r.examId === facultyExam._id.toString());
+
+        expect(record).toBeDefined();
+        expect(record.status).toBe('RELEASED');
+        expect(record.total).toBe(55); // 28 + 27
+        expect(record.maxMarks).toBe(60);
+        expect(record.scriptId).toBe(script._id.toString());
     });
 });

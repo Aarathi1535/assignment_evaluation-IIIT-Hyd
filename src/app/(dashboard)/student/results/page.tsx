@@ -260,7 +260,7 @@ export default function StudentResultsPage() {
                         <div className="text-right">
                           <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 border border-amber-200/60">
                             <Clock className="h-3 w-3 text-amber-600" />
-                            Evaluation in Progress
+                            Result Not Yet Available
                           </span>
                           <p className="mt-0.5 text-[11px] text-slate-400">
                             Scores not yet available

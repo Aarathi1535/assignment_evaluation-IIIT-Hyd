@@ -8,6 +8,7 @@ import AnswerScript, { IAnswerScript, IdentificationStatus } from '../models/Ans
 import Grade, { IGrade } from '../models/Grade';
 import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
 import StudentMapping from '../models/StudentMapping';
+import Rubric, { IRubric } from '../models/Rubric';
 
 export type ResultReleaseStatus = 'RELEASED' | 'NOT_AVAILABLE';
 
@@ -80,12 +81,13 @@ export class StudentResultService {
      * - Script belongs to the authenticated student
      * - Script is active, IDENTIFIED, no conflict, needsManualId === false
      * - Exam is active and PUBLISHED
-     * - All grades belonging to the script have isFinal === true (at least one grade exists)
+     * - All required grading work is complete (handles whole-script and question-wise grading)
+     * - Every required grade has isFinal === true
      * - No associated allocation remains PENDING or IN_PROGRESS
      */
     private async evaluateReleaseConditions(
         studentId: mongoose.Types.ObjectId,
-        exam: { isActive: boolean; status: ExamStatus },
+        exam: { _id?: mongoose.Types.ObjectId | string; isActive: boolean; status: ExamStatus; rubric?: mongoose.Types.ObjectId | null },
         script: IAnswerScript | null
     ): Promise<{ isReleased: boolean; total?: number; scriptId?: string }> {
         if (!script) {
@@ -116,7 +118,15 @@ export class StudentResultService {
             return { isReleased: false };
         }
 
-        // Condition 7: Every Grade is final and no Allocation remains PENDING or IN_PROGRESS
+        // Condition 7: Check allocations and grades completeness
+        const allocations: IAllocation[] = await Allocation.find({ answerScript: script._id });
+        const hasUnfinishedAllocations = allocations.some(
+            a => a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
+        );
+        if (hasUnfinishedAllocations) {
+            return { isReleased: false };
+        }
+
         const grades: IGrade[] = await Grade.find({ answerScript: script._id });
         if (grades.length === 0) {
             return { isReleased: false };
@@ -127,15 +137,101 @@ export class StudentResultService {
             return { isReleased: false };
         }
 
-        const allocations: IAllocation[] = await Allocation.find({ answerScript: script._id });
-        const hasUnfinishedAllocations = allocations.some(
-            a => a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
-        );
-        if (hasUnfinishedAllocations) {
+        // Check for whole-script grade (question == null or undefined)
+        const wholeScriptGrade = grades.find(g => g.question === null || g.question === undefined);
+
+        if (wholeScriptGrade) {
+            // Whole-script finality: explicitly verify isFinal === true before releasing
+            if (wholeScriptGrade.isFinal !== true) {
+                return { isReleased: false };
+            }
+
+            // In whole-script grade mode, only a single whole-script grade may exist
+            if (grades.length !== 1) {
+                return { isReleased: false };
+            }
+
+            // If allocations exist, ensure there are no conflicting question-wise allocations
+            if (allocations.some(a => a.question !== null && a.question !== undefined)) {
+                return { isReleased: false };
+            }
+
+            // If allocations exist, at least one whole-script allocation must be COMPLETED
+            if (allocations.length > 0 && !allocations.some(a => a.status === AllocationStatus.COMPLETED)) {
+                return { isReleased: false };
+            }
+
+            return {
+                isReleased: true,
+                total: Math.round(Number(wholeScriptGrade.totalScore) * 100) / 100,
+                scriptId: script._id.toString()
+            };
+        }
+
+        // Question-wise grading mode:
+        // 1. Rubric version integrity: Use the persisted Grade.rubric references as the source of truth.
+        // Ensure all grades reference a rubric and share a consistent rubric/version.
+        const rubricIdStrings = Array.from(new Set(grades.map(g => g.rubric?.toString()).filter(Boolean)));
+        if (rubricIdStrings.length !== 1) {
+            // Missing rubric references or inconsistent/mixed rubric versions across grades
             return { isReleased: false };
         }
 
-        // Compute total score from final grades
+        const persistedRubricId = rubricIdStrings[0];
+        const rubric: IRubric | null = await Rubric.findById(persistedRubricId);
+        if (!rubric || !rubric.questions || rubric.questions.length === 0) {
+            return { isReleased: false };
+        }
+
+        // Ensure the persisted rubric belongs to this exam
+        const examIdStr = exam._id ? exam._id.toString() : script.exam.toString();
+        if (rubric.exam.toString() !== examIdStr) {
+            return { isReleased: false };
+        }
+
+        const requiredRubricQuestions = rubric.questions.map(q => q.questionNumber);
+        const finalGradedQuestionSet = new Set(
+            grades
+                .filter(g => g.isFinal && typeof g.question === 'number')
+                .map(g => g.question as number)
+        );
+
+        // Every required question from the rubric version must be graded and finalized
+        const hasMissingRubricQuestions = requiredRubricQuestions.some(qNum => !finalGradedQuestionSet.has(qNum));
+        if (hasMissingRubricQuestions) {
+            return { isReleased: false };
+        }
+
+        // 2. Allocation policy for question-wise grading:
+        // In the Assignment Evaluator grading workflow (GradingService.ts lines 405-420, 965-1000),
+        // professors and administrators possess authoritative grading privileges (UserRole.PROFESSOR,
+        // UserRole.ADMIN) and evaluate scripts directly without requiring TA allocations. Allocations
+        // are only created when an instructor delegates grading to Teaching Assistants (/api/exams/[id]/allocate).
+        // Therefore:
+        // - When allocations exist for the answer script, they are mandatory: any PENDING or IN_PROGRESS
+        //   allocation blocks release, and every required question must have a COMPLETED allocation.
+        // - When no allocations exist for the answer script (e.g. direct faculty evaluation),
+        //   grading completeness is determined strictly by the finalized grades against the rubric version.
+        const questionWiseAllocations = allocations.filter(a => a.question !== null && a.question !== undefined);
+        if (questionWiseAllocations.length > 0) {
+            const completedAllocQuestionSet = new Set(
+                questionWiseAllocations
+                    .filter(a => a.status === AllocationStatus.COMPLETED && typeof a.question === 'number')
+                    .map(a => a.question as number)
+            );
+            const hasMissingAllocation = requiredRubricQuestions.some(qNum => !completedAllocQuestionSet.has(qNum));
+            if (hasMissingAllocation) {
+                return { isReleased: false };
+            }
+        } else if (allocations.length > 0) {
+            // Whole-script allocation for question-wise grading must be COMPLETED
+            const hasCompletedWholeAlloc = allocations.some(a => a.question == null && a.status === AllocationStatus.COMPLETED);
+            if (!hasCompletedWholeAlloc) {
+                return { isReleased: false };
+            }
+        }
+
+        // Compute total score across all finalized question grades
         const total = grades.reduce((sum, g) => sum + (Number(g.totalScore) || 0), 0);
         const roundedTotal = Math.round(total * 100) / 100;
 
