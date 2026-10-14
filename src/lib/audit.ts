@@ -54,7 +54,7 @@ export function sanitizeAuditFeedback(value: unknown, activePath = new Set<objec
         return value;
     }
     if (depth > 6) {
-        return value;
+        return '[DEPTH_LIMIT_EXCEEDED]';
     }
     if (value && typeof value === 'object') {
         if (value instanceof mongoose.Types.ObjectId || value instanceof Date || value instanceof RegExp) {

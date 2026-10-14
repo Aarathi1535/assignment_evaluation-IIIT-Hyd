@@ -99,6 +99,25 @@ export class AnnotationPersistenceService {
   public static resetAuditThrottle(): void {
     AnnotationPersistenceService.lastAuditLogTimestamps.clear();
   }
+
+  /**
+   * Safely prunes stale throttle keys older than the 60-second window.
+   */
+  public static pruneStaleThrottleKeys(now: number = Date.now()): void {
+    const cutoff = now - 60000;
+    for (const [key, timestamp] of AnnotationPersistenceService.lastAuditLogTimestamps.entries()) {
+      if (timestamp <= cutoff) {
+        AnnotationPersistenceService.lastAuditLogTimestamps.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Returns the count of throttle entries currently tracked. Helpful for unit testing.
+   */
+  public static getThrottleKeyCount(): number {
+    return AnnotationPersistenceService.lastAuditLogTimestamps.size;
+  }
   /**
    * Retrieves vector annotations for a specific answer script page directly from Page.annotations (single source of truth).
    */
@@ -172,7 +191,9 @@ export class AnnotationPersistenceService {
         annotatedBy = pageDoc.annotatedBy?.toString() || null;
         updatedAt = pageDoc.updatedAt?.toISOString();
       } else {
-        const ingestionDoc = await IngestionPage.findById(pageIdObj);
+        const ingestionDoc = await IngestionPage.findById(pageIdObj)
+          .select('_id answerScript pageNumber updatedAt metadata.annotations metadata.annotatedBy')
+          .lean();
         if (ingestionDoc) {
           if (
             !ingestionDoc.answerScript ||
@@ -208,7 +229,9 @@ export class AnnotationPersistenceService {
         const ingestionDoc = await IngestionPage.findOne({
           answerScript: script._id,
           pageNumber: pageNum,
-        });
+        })
+          .select('_id answerScript pageNumber updatedAt metadata.annotations metadata.annotatedBy')
+          .lean();
 
         if (ingestionDoc) {
           targetPageId = ingestionDoc._id;
@@ -336,14 +359,14 @@ export class AnnotationPersistenceService {
     // 6. Resolve target Page and verify it belongs to this AnswerScript
     let targetPageId: mongoose.Types.ObjectId;
     let targetPageNumber: number;
-    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date; annotations?: SerializedPageAnnotations | null } | null = null;
-    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date; metadata?: Record<string, unknown> } | null = null;
+    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date } | null = null;
+    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date } | null = null;
 
     if (isObjectId) {
       const pageIdObj = new mongoose.Types.ObjectId(pageIdentifier);
 
       const foundPage = await Page.findOne({ _id: pageIdObj, isActive: true })
-        .select('_id answerScript pageNumber updatedAt annotations')
+        .select('_id answerScript pageNumber updatedAt')
         .lean();
 
       if (foundPage) {
@@ -355,7 +378,7 @@ export class AnnotationPersistenceService {
         targetPageNumber = foundPage.pageNumber;
       } else {
         const foundIngestion = await IngestionPage.findById(pageIdObj)
-          .select('_id answerScript pageNumber updatedAt metadata')
+          .select('_id answerScript pageNumber updatedAt')
           .lean();
 
         if (foundIngestion) {
@@ -380,7 +403,7 @@ export class AnnotationPersistenceService {
         pageNumber: pageNum,
         isActive: true,
       })
-        .select('_id answerScript pageNumber updatedAt annotations')
+        .select('_id answerScript pageNumber updatedAt')
         .lean();
 
       if (foundPage) {
@@ -392,7 +415,7 @@ export class AnnotationPersistenceService {
           answerScript: script._id,
           pageNumber: pageNum,
         })
-          .select('_id answerScript pageNumber updatedAt metadata')
+          .select('_id answerScript pageNumber updatedAt')
           .lean();
 
         if (foundIngestion) {
@@ -404,13 +427,6 @@ export class AnnotationPersistenceService {
         }
       }
     }
-
-    // Capture snapshot of previous annotation state before any mutation or persistence (AE-179)
-    const prevRawAnnotations = pageDoc?.annotations || (ingestionDoc?.metadata as { annotations?: SerializedPageAnnotations })?.annotations;
-    const previousAnnotationsSnapshot: SerializedPageAnnotations = {
-      annotations: (prevRawAnnotations?.annotations || []).map(cloneMarkAnnotation),
-      strokes: (prevRawAnnotations?.strokes || []).map(cloneFreehandStroke),
-    };
 
     // 7. Validate and normalize the vector annotation payload
     const normalizedPageData = this.validateAndNormalizePayload(
@@ -434,7 +450,30 @@ export class AnnotationPersistenceService {
       );
     }
 
-    // 9. Atomic findOneAndUpdate
+    // 9. Throttle check and read previous annotations only when write will occur (AE-248)
+    const throttleKey = `${userId}:${targetPageId.toString()}`;
+    const now = Date.now();
+    AnnotationPersistenceService.pruneStaleThrottleKeys(now);
+    const lastAudit = AnnotationPersistenceService.lastAuditLogTimestamps.get(throttleKey);
+    const shouldAudit = !lastAudit || now - lastAudit >= 60000;
+
+    let previousAnnotationsSnapshot: SerializedPageAnnotations = { annotations: [], strokes: [] };
+    if (shouldAudit) {
+      let prevRawAnnotations: SerializedPageAnnotations | null | undefined = null;
+      if (pageDoc) {
+        const prevDoc = await Page.findById(targetPageId).select('annotations').lean();
+        prevRawAnnotations = prevDoc?.annotations;
+      } else if (ingestionDoc) {
+        const prevDoc = await IngestionPage.findById(targetPageId).select('metadata.annotations').lean();
+        prevRawAnnotations = (prevDoc?.metadata as { annotations?: SerializedPageAnnotations })?.annotations;
+      }
+      previousAnnotationsSnapshot = {
+        annotations: (prevRawAnnotations?.annotations || []).map(cloneMarkAnnotation),
+        strokes: (prevRawAnnotations?.strokes || []).map(cloneFreehandStroke),
+      };
+    }
+
+    // 10. Atomic findOneAndUpdate
     let matchedCount = 0;
     let updatedDocTimestamp = new Date();
 
@@ -501,15 +540,8 @@ export class AnnotationPersistenceService {
       );
     }
 
-    // 10. Record audit log with 60-second window throttling per actor and page (AE-179)
-    const throttleKey = `${userId}:${targetPageId.toString()}`;
-    const now = Date.now();
-    const lastAudit = AnnotationPersistenceService.lastAuditLogTimestamps.get(throttleKey);
-    const shouldAudit = !lastAudit || now - lastAudit >= 60000;
-
+    // 11. Record audit log with 60-second window throttling per actor and page (AE-179/AE-248)
     if (shouldAudit) {
-      AnnotationPersistenceService.lastAuditLogTimestamps.set(throttleKey, now);
-
       // Preserve meaningful information about annotations added and removed using pre-mutation snapshot:
       const prevAnnList = previousAnnotationsSnapshot.annotations;
       const newAnnList = normalizedPageData.annotations;
@@ -546,6 +578,9 @@ export class AnnotationPersistenceService {
         },
         ipAddress,
       });
+
+      // Advance throttle timestamp only after writeAuditLog succeeds (AE-248)
+      AnnotationPersistenceService.lastAuditLogTimestamps.set(throttleKey, now);
     }
 
     return {
