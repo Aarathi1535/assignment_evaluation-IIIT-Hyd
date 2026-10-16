@@ -175,13 +175,12 @@ export async function requireGradingOrAnnotationAccess(): Promise<AuthResult> {
  */
 export function requireFeature(flag: FeatureFlag): { authorized: boolean; response: NextResponse | null } {
   if (!isFeatureEnabled(flag)) {
-    const featureName = flag === 'LEARNING_MODULE' ? 'Learning module' : flag;
     return {
       authorized: false,
       response: NextResponse.json(
         {
           success: false,
-          message: `${featureName} is disabled`,
+          message: 'Not Found',
           data: null,
         },
         { status: 404 }

@@ -87,14 +87,17 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
       expect(isLearningModuleEnabled()).toBe(true);
     });
 
-    it('enables flag via LEARNING_MODULE alias', () => {
-      process.env.LEARNING_MODULE = 'true';
-      expect(isFeatureEnabled('LEARNING_MODULE')).toBe(true);
-    });
+    it('prevents conflicting public flag from unexpectedly enabling server when FEATURE_LEARNING_MODULE is false', () => {
+      // Authoritative server gate is explicitly false, but client flag is true
+      process.env.FEATURE_LEARNING_MODULE = 'false';
+      process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = 'true';
 
-    it('enables flag via NEXT_PUBLIC_LEARNING_MODULE alias', () => {
-      process.env.NEXT_PUBLIC_LEARNING_MODULE = 'true';
-      expect(isFeatureEnabled('LEARNING_MODULE')).toBe(true);
+      expect(isFeatureEnabled('LEARNING_MODULE')).toBe(false);
+      expect(isLearningModuleEnabled()).toBe(false);
+
+      const guard = requireFeature('LEARNING_MODULE');
+      expect(guard.authorized).toBe(false);
+      expect(guard.response!.status).toBe(404);
     });
 
     it('correctly normalizes values in parseBooleanFlag', () => {
@@ -114,8 +117,8 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
     });
   });
 
-  describe('2. Route Guard requireFeature()', () => {
-    it('returns status 404 with descriptive message when flag is disabled (unset)', async () => {
+  describe('2. Route Guard requireFeature() & Security', () => {
+    it('returns generic status 404 without revealing feature details or flag config when disabled', async () => {
       delete process.env.FEATURE_LEARNING_MODULE;
 
       const guard = requireFeature('LEARNING_MODULE');
@@ -125,16 +128,28 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
 
       const body = await guard.response!.json();
       expect(body.success).toBe(false);
-      expect(body.message).toContain('disabled');
+      expect(body.message).toBe('Not Found');
       expect(body.data).toBeNull();
+
+      // Verify no information disclosure about feature or flag configuration
+      const serialized = JSON.stringify(body).toLowerCase();
+      expect(serialized).not.toContain('learning');
+      expect(serialized).not.toContain('module');
+      expect(serialized).not.toContain('flag');
+      expect(serialized).not.toContain('disabled');
     });
 
-    it('returns status 404 when flag is explicitly set to false', async () => {
+    it('returns generic status 404 without feature disclosure when flag is explicitly set to false', async () => {
       process.env.FEATURE_LEARNING_MODULE = 'false';
 
       const guard = requireFeature('LEARNING_MODULE');
       expect(guard.authorized).toBe(false);
       expect(guard.response!.status).toBe(404);
+
+      const body = await guard.response!.json();
+      expect(body.message).toBe('Not Found');
+      const serialized = JSON.stringify(body).toLowerCase();
+      expect(serialized).not.toContain('learning');
     });
 
     it('allows route to proceed when flag is enabled', () => {
@@ -145,12 +160,51 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
       expect(guard.response).toBeNull();
     });
 
-    it('allows route to proceed when NEXT_PUBLIC_FEATURE_LEARNING_MODULE is enabled', () => {
+    it('allows route to proceed when NEXT_PUBLIC_FEATURE_LEARNING_MODULE is enabled and server flag unset', () => {
       process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = 'true';
 
       const guard = requireFeature('LEARNING_MODULE');
       expect(guard.authorized).toBe(true);
       expect(guard.response).toBeNull();
+    });
+
+    it('denies access before protected handler logic runs when disabled', async () => {
+      process.env.FEATURE_LEARNING_MODULE = 'false';
+
+      const protectedHandler = vi.fn().mockResolvedValue('handler result');
+
+      // Simulate a route handler
+      const handleRequest = async () => {
+        const featureGuard = requireFeature('LEARNING_MODULE');
+        if (!featureGuard.authorized) {
+          return featureGuard.response;
+        }
+        return protectedHandler();
+      };
+
+      const response = await handleRequest();
+      expect(protectedHandler).not.toHaveBeenCalled();
+      expect(response.status).toBe(404);
+      const body = await response.json();
+      expect(body.message).toBe('Not Found');
+    });
+
+    it('permits normal authorization and handler logic to run when enabled', async () => {
+      process.env.FEATURE_LEARNING_MODULE = 'true';
+
+      const protectedHandler = vi.fn().mockResolvedValue('handler result');
+
+      const handleRequest = async () => {
+        const featureGuard = requireFeature('LEARNING_MODULE');
+        if (!featureGuard.authorized) {
+          return featureGuard.response;
+        }
+        return protectedHandler();
+      };
+
+      const result = await handleRequest();
+      expect(protectedHandler).toHaveBeenCalledTimes(1);
+      expect(result).toBe('handler result');
     });
   });
 
