@@ -1,5 +1,11 @@
+/**
+ * @vitest-environment jsdom
+ */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import React from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import Konva from 'konva';
 import fs from 'fs';
 import path from 'path';
 import Course from '../models/Course';
@@ -11,7 +17,11 @@ import Grade from '../models/Grade';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import Rubric from '../models/Rubric';
 import DerivedStorageService from '../services/DerivedStorageService';
-import { calculateImageFitBounds } from '../lib/annotations';
+import type { RenderedImageBounds } from '../lib/annotations';
+import type { PanZoomTransform } from '../lib/panZoom';
+import type { MarkAnnotation } from '../lib/stampTool';
+import { ReadOnlyScriptViewer } from '../components/student/ReadOnlyScriptViewer';
+import { MarkLayer } from '../components/canvas/MarkLayer';
 import { NextRequest } from 'next/server';
 import mongoose from 'mongoose';
 
@@ -27,6 +37,28 @@ vi.mock('next-auth', async (importOriginal) => {
         }),
     };
 });
+
+vi.mock('../components/canvas/CanvasStage', () => ({
+    CanvasStage: ({ children }: any) => React.createElement('div', { 'data-testid': 'mock-canvas-stage' }, children),
+    useCanvasStage: () => ({
+        stage: null,
+        dimensions: { width: 800, height: 600 },
+        isReady: true,
+    }),
+}));
+
+vi.mock('../components/canvas/PageImageLayer', () => ({
+    PageImageLayer: ({ onImageLoad }: any) => {
+        React.useEffect(() => {
+            onImageLoad?.({} as HTMLImageElement, { x: 175, y: 0, width: 450, height: 600, scale: 0.375 });
+        }, [onImageLoad]);
+        return React.createElement('div', { 'data-testid': 'mock-page-image-layer' });
+    },
+}));
+
+vi.mock('../components/canvas/PenLayer', () => ({
+    PenLayer: () => React.createElement('div', { 'data-testid': 'mock-pen-layer' }),
+}));
 
 describe('AE-183: Student Read-Only Graded Script Viewer', () => {
     let pagesGET: any;
@@ -47,6 +79,37 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
     let pageB1: any;
 
     beforeAll(async () => {
+        if (typeof window !== 'undefined' && window.HTMLCanvasElement) {
+            window.HTMLCanvasElement.prototype.getContext = function () {
+                return {
+                    fillRect: vi.fn(),
+                    clearRect: vi.fn(),
+                    getImageData: vi.fn(() => ({ data: [] })),
+                    putImageData: vi.fn(),
+                    createImageData: vi.fn(() => []),
+                    setTransform: vi.fn(),
+                    drawImage: vi.fn(),
+                    save: vi.fn(),
+                    fillText: vi.fn(),
+                    restore: vi.fn(),
+                    beginPath: vi.fn(),
+                    moveTo: vi.fn(),
+                    lineTo: vi.fn(),
+                    closePath: vi.fn(),
+                    stroke: vi.fn(),
+                    translate: vi.fn(),
+                    scale: vi.fn(),
+                    rotate: vi.fn(),
+                    arc: vi.fn(),
+                    fill: vi.fn(),
+                    measureText: vi.fn(() => ({ width: 0 })),
+                    transform: vi.fn(),
+                    rect: vi.fn(),
+                    clip: vi.fn(),
+                } as any;
+            };
+        }
+
         pagesGET = (await import('../app/api/student/results/[scriptId]/pages/route')).GET;
         imageGET = (await import('../app/api/student/results/[scriptId]/pages/[pageId]/image/route')).GET;
         annotationsGET = (await import('../app/api/student/results/[scriptId]/pages/[pageId]/annotations/route')).GET;
@@ -251,8 +314,8 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
                             id: 'stroke-1',
                             tool: 'pen',
                             color: '#ef4444',
-                            width: 3,
-                            points: [{ x: 10, y: 10 }, { x: 20, y: 25 }],
+                            strokeWidth: 3,
+                            points: [10, 10, 20, 25],
                             annotatedBy: ta._id.toString(),
                         },
                     ],
@@ -409,14 +472,16 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
 
         const body = JSON.parse(rawText);
         expect(body.annotations).toHaveLength(2);
-        expect(body.annotations[0].tool).toBe('check');
+        expect(body.annotations[0].type).toBe('check');
         expect(body.annotations[0].annotatedBy).toBeUndefined();
+        expect(body.annotations[0].tool).toBeUndefined();
         expect(body.annotations[1].text).toBe('Good syntax tree diagram');
         expect(body.annotations[1].annotatedBy).toBeUndefined();
 
         expect(body.strokes).toHaveLength(1);
-        expect(body.strokes[0].tool).toBe('pen');
+        expect(body.strokes[0].points).toHaveLength(4);
         expect(body.strokes[0].annotatedBy).toBeUndefined();
+        expect(body.strokes[0].tool).toBeUndefined();
     });
 
     // 7. Unreleased script returns 404 for pages, image, and annotations
@@ -482,8 +547,470 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         expect(res.status).toBe(403);
     });
 
-    // 9. Static code inspection: ReadOnlyScriptViewer must not import AnswerSheetCanvas, offline drafts, or write APIs
-    it('9. strictly verifies ReadOnlyScriptViewer does not import AnswerSheetCanvas, offline drafts, or mutate data', () => {
+    // 9. QR/OMR identification conflict returns generic 404 on all three routes
+    it('9. returns generic 404 on all three routes when script has QR/OMR identification conflict', async () => {
+        await AnswerScript.findByIdAndUpdate(scriptA._id, { hasIdentificationConflict: true });
+
+        try {
+            // Pages route
+            const pagesReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages`);
+            const pagesRes = await pagesGET(pagesReq, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(pagesRes.status).toBe(404);
+            expect(pagesRes.headers.get('Cache-Control')).toBe('private, no-store');
+            expect(pagesRes.headers.get('X-Content-Type-Options')).toBe('nosniff');
+
+            // Image route
+            const imageReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image`
+            );
+            const imageRes = await imageGET(imageReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            });
+            expect(imageRes.status).toBe(404);
+            expect(imageRes.headers.get('Cache-Control')).toBe('private, no-store');
+            expect(imageRes.headers.get('X-Content-Type-Options')).toBe('nosniff');
+
+            // Annotations route
+            const annReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/annotations`
+            );
+            const annRes = await annotationsGET(annReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            });
+            expect(annRes.status).toBe(404);
+            expect(annRes.headers.get('Cache-Control')).toBe('private, no-store');
+            expect(annRes.headers.get('X-Content-Type-Options')).toBe('nosniff');
+        } finally {
+            await AnswerScript.findByIdAndUpdate(scriptA._id, { hasIdentificationConflict: false });
+        }
+    });
+
+    // 10. STUDENT_RESULTS_ENABLED=false returns generic 404 on all three routes
+    it('10. returns generic 404 on all three routes when STUDENT_RESULTS_ENABLED=false', async () => {
+        process.env.STUDENT_RESULTS_ENABLED = 'false';
+
+        try {
+            const pagesReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages`);
+            const pagesRes = await pagesGET(pagesReq, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(pagesRes.status).toBe(404);
+
+            const imageReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image`
+            );
+            const imageRes = await imageGET(imageReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            });
+            expect(imageRes.status).toBe(404);
+
+            const annReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/annotations`
+            );
+            const annRes = await annotationsGET(annReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            });
+            expect(annRes.status).toBe(404);
+        } finally {
+            process.env.STUDENT_RESULTS_ENABLED = 'true';
+        }
+    });
+
+    // 11. Reopening allocation makes script unavailable (404) on all three routes
+    it('11. returns generic 404 on all three routes after reopening an allocation', async () => {
+        const reopenPOST = (await import('../app/api/allocations/[id]/reopen/route')).POST;
+        const allocA = await Allocation.findOne({ answerScript: scriptA._id });
+
+        mockSessionUser = {
+            id: prof._id.toString(),
+            email: prof.email,
+            name: prof.name,
+            role: UserRole.PROFESSOR,
+        };
+
+        const reopenReq = new NextRequest(`http://localhost:3000/api/allocations/${allocA!._id}/reopen`, {
+            method: 'POST',
+            body: JSON.stringify({ reason: 'Reopened for grading review' }),
+        });
+        const reopenRes = await reopenPOST(reopenReq, {
+            params: Promise.resolve({ id: allocA!._id.toString() }),
+        });
+        expect(reopenRes.status).toBe(200);
+
+        // Switch back to Student A session
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT,
+        };
+
+        const pagesReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages`);
+        const pagesRes = await pagesGET(pagesReq, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+        expect(pagesRes.status).toBe(404);
+
+        const imageReq = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image`
+        );
+        const imageRes = await imageGET(imageReq, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: pageA1._id.toString(),
+            }),
+        });
+        expect(imageRes.status).toBe(404);
+
+        const annReq = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/annotations`
+        );
+        const annRes = await annotationsGET(annReq, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: pageA1._id.toString(),
+            }),
+        });
+        expect(annRes.status).toBe(404);
+
+        // Restore allocation for subsequent tests
+        await Allocation.findByIdAndUpdate(allocA!._id, { status: AllocationStatus.COMPLETED });
+        await Grade.updateMany({ answerScript: scriptA._id }, { isFinal: true });
+    });
+
+    // 12. Response excludes sensitive properties (graderEmail, annotatedBy, internal metadata) outside the explicit allowlist
+    it('12. excludes sensitive properties (graderEmail, annotatedBy, internal metadata) outside the explicit allowlist', async () => {
+        await IngestionPage.findByIdAndUpdate(pageA2._id, {
+            'metadata.annotations': {
+                annotations: [
+                    {
+                        id: 'check-sensitive-1',
+                        type: 'check',
+                        x: 150,
+                        y: 220,
+                        size: 24,
+                        color: '#10b981',
+                        graderEmail: 'ta.secret@iiit.ac.in',
+                        annotatedBy: ta._id.toString(),
+                        internalNotes: 'Internal grading note',
+                        confidenceScore: 0.99,
+                        rubricItemRef: 'criterion-1',
+                        createdAt: 1700000000000,
+                    },
+                    {
+                        id: 'text-sensitive-1',
+                        type: 'text',
+                        x: 200,
+                        y: 350,
+                        text: 'Clear derivation shown',
+                        fontSize: 14,
+                        color: '#000000',
+                        graderEmail: 'ta.secret@iiit.ac.in',
+                        annotatedBy: ta._id.toString(),
+                        auditTrail: ['created_by_ta'],
+                        createdAt: 1700000000000,
+                    },
+                ],
+                strokes: [
+                    {
+                        id: 'stroke-sensitive-1',
+                        color: '#ef4444',
+                        strokeWidth: 3,
+                        points: [100, 100, 150, 150],
+                        graderEmail: 'ta.secret@iiit.ac.in',
+                        annotatedBy: ta._id.toString(),
+                        secretScore: 42,
+                        createdAt: 1700000000000,
+                    },
+                ],
+            },
+        });
+
+        const req = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA2._id}/annotations`
+        );
+        const res = await annotationsGET(req, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: pageA2._id.toString(),
+            }),
+        });
+
+        expect(res.status).toBe(200);
+        const rawText = await res.text();
+
+        // Must not contain sensitive keys or values
+        expect(rawText).not.toContain('ta.secret@iiit.ac.in');
+        expect(rawText).not.toContain('graderEmail');
+        expect(rawText).not.toContain('annotatedBy');
+        expect(rawText).not.toContain('internalNotes');
+        expect(rawText).not.toContain('confidenceScore');
+        expect(rawText).not.toContain('rubricItemRef');
+        expect(rawText).not.toContain('auditTrail');
+        expect(rawText).not.toContain('secretScore');
+
+        const body = JSON.parse(rawText);
+        expect(body.annotations).toHaveLength(2);
+        expect(body.strokes).toHaveLength(1);
+
+        // Strict allowlist key assertions
+        expect(Object.keys(body.annotations[0]).sort()).toEqual(
+            ['color', 'createdAt', 'id', 'pageKey', 'size', 'type', 'x', 'y'].sort()
+        );
+        expect(Object.keys(body.annotations[1]).sort()).toEqual(
+            ['color', 'createdAt', 'fontSize', 'id', 'pageKey', 'text', 'type', 'x', 'y'].sort()
+        );
+        expect(Object.keys(body.strokes[0]).sort()).toEqual(
+            ['color', 'createdAt', 'id', 'pageKey', 'points', 'strokeWidth'].sort()
+        );
+    });
+
+    // 13. RTL component test: ReadOnlyScriptViewer is read-only, handles navigation and states without mutations
+    it('13. renders ReadOnlyScriptViewer with RTL, exercises controls, and asserts zero mutation requests', async () => {
+        const fetchCalls: Array<{ url: string; method: string }> = [];
+        const originalFetch = global.fetch;
+
+        global.fetch = vi.fn().mockImplementation((input: any, init?: any) => {
+            const url = typeof input === 'string' ? input : input?.url || '';
+            const method = init?.method?.toUpperCase() || 'GET';
+            fetchCalls.push({ url, method });
+
+            if (url.includes('/pages') && !url.includes('/annotations') && !url.includes('/image')) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: () =>
+                        Promise.resolve([
+                            { pageId: 'page-1', pageNumber: 1, width: 1200, height: 1600 },
+                            { pageId: 'page-2', pageNumber: 2, width: 1200, height: 1600 },
+                        ]),
+                });
+            }
+
+            if (url.includes('/annotations')) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: () =>
+                        Promise.resolve({
+                            annotations: [
+                                {
+                                    id: 'check-rtl-1',
+                                    type: 'check',
+                                    x: 200,
+                                    y: 300,
+                                    size: 24,
+                                    color: '#10b981',
+                                    createdAt: 1000,
+                                },
+                            ],
+                            strokes: [],
+                        }),
+                });
+            }
+
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({}),
+            });
+        });
+
+        try {
+            // Render the viewer component
+            const { unmount } = render(
+                React.createElement(ReadOnlyScriptViewer, {
+                    scriptId: scriptA._id.toString(),
+                    examTitle: 'Compilers Midterm',
+                })
+            );
+
+            // Initially shows loading state
+            expect(screen.getByText('Loading answer sheet...')).toBeDefined();
+
+            // Wait for pages and annotations to resolve
+            await waitFor(() => {
+                expect(screen.getByText('Compilers Midterm')).toBeDefined();
+            });
+
+            // Read-Only badge and Page 1 of 2 indicator
+            expect(screen.getByText('Read-Only')).toBeDefined();
+            expect(screen.getByText('Page 1 of 2')).toBeDefined();
+
+            const prevButton = screen.getByTitle('Previous Page');
+            const nextButton = screen.getByTitle('Next Page');
+            expect((prevButton as HTMLButtonElement).disabled).toBe(true);
+            expect((nextButton as HTMLButtonElement).disabled).toBe(false);
+
+            // Exercise page navigation forward
+            fireEvent.click(nextButton);
+            expect(screen.getByText('Page 2 of 2')).toBeDefined();
+            expect((nextButton as HTMLButtonElement).disabled).toBe(true);
+            expect((prevButton as HTMLButtonElement).disabled).toBe(false);
+
+            // Exercise page navigation backward
+            fireEvent.click(prevButton);
+            expect(screen.getByText('Page 1 of 2')).toBeDefined();
+            expect((prevButton as HTMLButtonElement).disabled).toBe(true);
+
+            // Exercise zoom controls
+            const zoomInBtn = screen.getByTitle('Zoom In');
+            const zoomOutBtn = screen.getByTitle('Zoom Out');
+            const resetBtn = screen.getByTitle('Reset Fit');
+            fireEvent.click(zoomInBtn);
+            fireEvent.click(zoomOutBtn);
+            fireEvent.click(resetBtn);
+
+            // Exercise annotation visibility toggle
+            const hideBtn = screen.getByTitle('Hide Annotations');
+            fireEvent.click(hideBtn);
+            expect(screen.getByTitle('Show Annotations')).toBeDefined();
+            fireEvent.click(screen.getByTitle('Show Annotations'));
+            expect(screen.getByTitle('Hide Annotations')).toBeDefined();
+
+            // Crucial: Assert that EVERY fetch call is GET and NO mutation request (POST, PUT, PATCH, DELETE) occurred
+            expect(fetchCalls.length).toBeGreaterThan(0);
+            for (const call of fetchCalls) {
+                expect(call.method).toBe('GET');
+                expect(['POST', 'PUT', 'PATCH', 'DELETE']).not.toContain(call.method);
+            }
+
+            unmount();
+
+            // Test error state when pages fail to load
+            global.fetch = vi.fn().mockImplementation(() =>
+                Promise.resolve({
+                    ok: false,
+                    status: 404,
+                })
+            );
+
+            const { unmount: unmountError } = render(
+                React.createElement(ReadOnlyScriptViewer, {
+                    scriptId: 'invalid-script-id',
+                })
+            );
+
+            await waitFor(() => {
+                expect(screen.getByText('Answer Sheet Unavailable')).toBeDefined();
+                expect(
+                    screen.getByText('Unable to load answer sheet. The result may not be available yet.')
+                ).toBeDefined();
+            });
+
+            unmountError();
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    // 14. Coordinate stage alignment: TA canvas and Student viewer place check mark at identical stage position
+    it('14. renders actual MarkLayer for TA and student viewer configurations placing check mark at identical stage position', () => {
+        const fixtureAnnotation: MarkAnnotation = {
+            id: 'shared-check-stage-1',
+            pageKey: 'page-1',
+            type: 'check',
+            x: 300,
+            y: 400,
+            size: 24,
+            color: '#10b981',
+            createdAt: 1000,
+        };
+
+        const baseBounds: RenderedImageBounds = {
+            x: 175,
+            y: 0,
+            width: 450,
+            height: 600,
+            scale: 0.375,
+        };
+
+        const transform: PanZoomTransform = {
+            x: 175,
+            y: 0,
+            zoom: 1.0,
+            rotation: 0,
+        };
+
+        // 1. Render MarkLayer in TA Canvas configuration (interactive, activeTool='select', disabled=false)
+        const taContainer = document.createElement('div');
+        const taStage = new Konva.Stage({ container: taContainer, width: 800, height: 600 });
+        const { unmount: unmountTA } = render(
+            React.createElement(MarkLayer, {
+                stage: taStage,
+                transform,
+                pageKey: 'page-1',
+                activeTool: 'select',
+                annotations: [fixtureAnnotation],
+                selectedAnnotationId: null,
+                visible: true,
+                disabled: false,
+                baseBounds,
+            })
+        );
+
+        // 2. Render MarkLayer in Student Viewer configuration (read-only, activeTool='none', disabled=true)
+        const studentContainer = document.createElement('div');
+        const studentStage = new Konva.Stage({ container: studentContainer, width: 800, height: 600 });
+        const { unmount: unmountStudent } = render(
+            React.createElement(MarkLayer, {
+                stage: studentStage,
+                transform,
+                pageKey: 'page-1',
+                activeTool: 'none',
+                annotations: [fixtureAnnotation],
+                visible: true,
+                disabled: true,
+                baseBounds,
+            })
+        );
+
+        // 3. Find check mark Konva groups on both stages
+        const taGroup = taStage.findOne('#shared-check-stage-1');
+        const studentGroup = studentStage.findOne('#shared-check-stage-1');
+
+        expect(taGroup).toBeDefined();
+        expect(studentGroup).toBeDefined();
+
+        const taStagePos = taGroup!.getAbsolutePosition();
+        const studentStagePos = studentGroup!.getAbsolutePosition();
+
+        // 4. Verify check mark appears at the exact same stage coordinates
+        expect(studentStagePos.x).toBeCloseTo(taStagePos.x, 2);
+        expect(studentStagePos.y).toBeCloseTo(taStagePos.y, 2);
+        expect(studentStagePos.x).toBeGreaterThan(0);
+        expect(studentStagePos.y).toBeGreaterThan(0);
+
+        // Also verify inner check line node aligns identically between TA canvas and student viewer
+        const taLine = taStage.findOne('.check-line');
+        const studentLine = studentStage.findOne('.check-line');
+        expect(taLine).toBeDefined();
+        expect(studentLine).toBeDefined();
+        expect(studentLine!.getAbsolutePosition().x).toBeCloseTo(taLine!.getAbsolutePosition().x, 2);
+        expect(studentLine!.getAbsolutePosition().y).toBeCloseTo(taLine!.getAbsolutePosition().y, 2);
+
+        unmountTA();
+        unmountStudent();
+        taStage.destroy();
+        studentStage.destroy();
+    });
+
+    // 15. Static code inspection: ReadOnlyScriptViewer must not import AnswerSheetCanvas, offline drafts, or write APIs
+    it('15. strictly verifies ReadOnlyScriptViewer does not import AnswerSheetCanvas, offline drafts, or mutate data', () => {
         const viewerPath = path.join(
             process.cwd(),
             'src',
@@ -500,34 +1027,5 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         expect(sourceCode).not.toContain('offlineDrafts');
         expect(sourceCode).not.toContain('/api/scripts');
         expect(sourceCode).not.toMatch(/method:\s*['"](POST|PUT|PATCH|DELETE)['"]/i);
-    });
-
-    // 10. Coordinate alignment fixture: verifies natural coordinates align identically via baseBounds
-    it('10. aligns annotations consistently in invariant image pixels via baseBounds', () => {
-        // Natural image dimensions (e.g. 1200 x 1600 scanned page)
-        const naturalWidth = 1200;
-        const naturalHeight = 1600;
-
-        // Container stage dimensions (e.g. 800 x 600 viewport)
-        const stageWidth = 800;
-        const stageHeight = 600;
-
-        const bounds = calculateImageFitBounds(stageWidth, stageHeight, naturalWidth, naturalHeight, 'contain');
-
-        // Annotation placed at natural coordinates (300, 400)
-        const checkMarkX = 300;
-        const checkMarkY = 400;
-
-        // Position on stage at 1.0x zoom
-        const stageX = bounds.x + checkMarkX * bounds.scale;
-        const stageY = bounds.y + checkMarkY * bounds.scale;
-
-        expect(bounds.scale).toBeCloseTo(600 / 1600, 4); // 0.375
-        expect(bounds.width).toBeCloseTo(1200 * 0.375, 4); // 450
-        expect(bounds.x).toBeCloseTo((800 - 450) / 2, 4); // 175
-        expect(bounds.y).toBe(0);
-
-        expect(stageX).toBeCloseTo(175 + 300 * 0.375, 4);
-        expect(stageY).toBeCloseTo(0 + 400 * 0.375, 4);
     });
 });

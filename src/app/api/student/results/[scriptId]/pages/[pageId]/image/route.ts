@@ -5,10 +5,14 @@ import { requireAuth } from '../../../../../../../../lib/apiAuth';
 import studentResultService from '../../../../../../../../services/StudentResultService';
 import DerivedStorageService from '../../../../../../../../services/DerivedStorageService';
 import IngestionPage from '../../../../../../../../models/IngestionPage';
-import Page from '../../../../../../../../models/Page';
 import { HttpError } from '../../../../../../../../lib/errors';
 
 export const dynamic = 'force-dynamic';
+
+const SECURITY_HEADERS = {
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+} as const;
 
 function toWebReadableStream(
   stream: NodeJS.ReadableStream & AsyncIterable<Uint8Array | string>
@@ -39,13 +43,18 @@ export async function GET(
 ) {
     const auth = await requireAuth();
     if (!auth.authorized) {
+        auth.response.headers.set('Cache-Control', 'private, no-store');
+        auth.response.headers.set('X-Content-Type-Options', 'nosniff');
         return auth.response;
     }
 
     const { scriptId, pageId } = await context.params;
 
     if (!pageId || !mongoose.Types.ObjectId.isValid(pageId)) {
-        return NextResponse.json({ success: false, message: 'Not found' }, { status: 404 });
+        return NextResponse.json(
+            { success: false, message: 'Not found' },
+            { status: 404, headers: SECURITY_HEADERS }
+        );
     }
 
     try {
@@ -56,39 +65,32 @@ export async function GET(
             auth.user.role
         );
 
-        // Find page belonging strictly to this answer script
+        // Find page belonging strictly to this answer script and skip duplicates
         const pageIdObj = new mongoose.Types.ObjectId(pageId);
-        let storageKey: string | undefined;
-
         const ingestionPage = await IngestionPage.findOne({
             _id: pageIdObj,
             answerScript: script._id,
+            isDuplicate: { $ne: true },
         }).select('storageKey');
 
-        if (ingestionPage && ingestionPage.storageKey) {
-            storageKey = ingestionPage.storageKey;
-        } else {
-            const standardPage = await Page.findOne({
-                _id: pageIdObj,
-                answerScript: script._id,
-                isActive: true,
-            }).select('imagePath');
-
-            if (standardPage && standardPage.imagePath) {
-                storageKey = standardPage.imagePath;
-            }
+        if (!ingestionPage || !ingestionPage.storageKey) {
+            return NextResponse.json(
+                { success: false, message: 'Not found' },
+                { status: 404, headers: SECURITY_HEADERS }
+            );
         }
 
-        if (!storageKey) {
-            return NextResponse.json({ success: false, message: 'Not found' }, { status: 404 });
-        }
+        const storageKey = ingestionPage.storageKey;
 
         // Open derived page image stream safely without signed URLs or redirects
         let opened: { stream: NodeJS.ReadableStream & AsyncIterable<Uint8Array | string>; size: number };
         try {
             opened = await DerivedStorageService.openDerivedPage(storageKey);
         } catch {
-            return NextResponse.json({ success: false, message: 'Not found' }, { status: 404 });
+            return NextResponse.json(
+                { success: false, message: 'Not found' },
+                { status: 404, headers: SECURITY_HEADERS }
+            );
         }
 
         const { stream, size } = opened;
@@ -119,10 +121,7 @@ export async function GET(
             { success: false, message: status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : 'Not found' },
             {
                 status,
-                headers: {
-                    'Cache-Control': 'private, no-store',
-                    'X-Content-Type-Options': 'nosniff',
-                },
+                headers: SECURITY_HEADERS,
             }
         );
     }
