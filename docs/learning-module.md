@@ -66,7 +66,7 @@ Based on preliminary research results and the parent plan in [Issue #244](https:
 | **Result Visibility** | **Aggregate results revealed after activity closes (`ON_REVEAL`).** Real-time individual submissions are hidden from peers. The professor explicitly triggers `REVEALED` state. | Agreed default for initial pilot; other visibility modes (`LIVE`, `AFTER_CLOSE`, `NEVER`) remain supported in schema. |
 | **AI Tagging Behavior** | **Advisory suggestions only.** AI tags populate `TagSuggestion` models and are never silently written over human-curated topic fields. | Invariant; human professor or TA must accept or reject suggestions. |
 | **AI Question Status** | **Default `DRAFT`.** AI-generated questions can never enter active question pools without explicit professor review and approval. | Invariant; prevents unverified AI content from reaching students. |
-| **Topic Prerequisites** | **Advisory guidance pending professor confirmation.** Suggested prerequisite edges require human review before locking topic graphs. | Invariant; approved edges must enforce a strict DAG. |
+| **Topic Prerequisites** | **Advisory guidance pending professor confirmation.** Suggested prerequisite edges (`status = 'PROPOSED'`) require human review before locking topic graphs. | Invariant; approved edges must enforce a strict DAG. |
 | **Live Poll Modalities** | **Structured items only.** The initial live-poll pilot supports structured types (MCQ, predict output, numerical, short answer, word cloud, rating). Handwritten photo evaluation and sandboxed code execution are deferred. | Explicitly excluded from first pilot; reduces network latency and device friction. |
 | **Parked Research** | **Direction 3 (Answer segmentation) and Direction 4 (Handwriting consistency) remain parked.** | Inactive; team focus is strictly on Directions 1 and 2 unification. |
 
@@ -77,7 +77,7 @@ Based on preliminary research results and the parent plan in [Issue #244](https:
 
 ## C. Target Data Models (Proposed Target Architecture)
 
-The data architecture is divided into three logical domains: Question Bank & Taxonomy, Live Classroom, and Practice. All models are scoped to a specific `courseId` to enforce strict multi-course isolation. All models documented in this section represent the **proposed target architecture** to be implemented under subsequent tickets.
+The data architecture is divided into three logical domains: Question Bank & Taxonomy, Live Classroom, and Practice. All models are scoped to a specific `course` to enforce strict multi-course isolation. All models documented in this section represent the **proposed target architecture** to be implemented under subsequent tickets.
 
 ### 1. Question Bank & Taxonomy Models
 
@@ -85,7 +85,7 @@ The data architecture is divided into three logical domains: Question Bank & Tax
 classDiagram
     class Topic {
         +ObjectId _id
-        +ObjectId courseId
+        +ObjectId course
         +string name
         +string description
         +number unitNumber
@@ -97,18 +97,19 @@ classDiagram
 
     class TopicEdge {
         +ObjectId _id
-        +ObjectId courseId
-        +ObjectId fromTopicId
-        +ObjectId toTopicId
+        +ObjectId course
+        +ObjectId from
+        +ObjectId to
         +string relationship
-        +string provenance
+        +string source
         +string status
+        +string rationale
         +Date createdAt
     }
 
     class BankQuestion {
         +ObjectId _id
-        +ObjectId courseId
+        +ObjectId course
         +ObjectId topicId
         +string type
         +string prompt
@@ -118,7 +119,7 @@ classDiagram
         +string difficulty
         +string status
         +string origin
-        +string tagProvenance
+        +TagProvenance tagProvenance
         +ApprovalMetadata approvalMetadata
         +string contentHash
         +EmbeddingMetadata embedding
@@ -128,10 +129,11 @@ classDiagram
 
     class TagSuggestion {
         +ObjectId _id
-        +ObjectId questionId
+        +ObjectId question
         +SuggestedTopic[] suggestedTopics
+        +string source
         +number confidence
-        +string reviewerStatus
+        +string status
         +ObjectId reviewedBy
         +Date reviewedAt
     }
@@ -146,41 +148,45 @@ classDiagram
 | Model Name | Field | Type | Description / Invariants |
 |---|---|---|---|
 | **`Topic`** | `_id` | `ObjectId` | Unique topic identifier. |
-| | `courseId` | `ObjectId` | Foreign key to `Course`. Indexed. |
+| | `course` | `ObjectId` | Foreign key to `Course`. Indexed. (Can be named `course` or `courseId`). |
 | | `name` | `string` | Topic title (e.g., "Convolutional Layers & Kernels"). |
 | | `description` | `string` | Pedagogical description and scope. |
 | | `unitNumber` | `number` | Syllabus unit or module number. |
 | | `learningObjectives`| `string[]` | Specific Bloom's-aligned learning objectives. |
 | | `status` | `string` | Enum: `'DRAFT'` \| `'APPROVED'`. Defaults to `'DRAFT'`. |
 | **`TopicEdge`** | `_id` | `ObjectId` | Unique edge identifier. |
-| | `courseId` | `ObjectId` | Foreign key to `Course`. Indexed. |
-| | `fromTopicId` | `ObjectId` | Prerequisite topic ID. |
-| | `toTopicId` | `ObjectId` | Dependent topic ID. |
+| | `course` | `ObjectId` | Foreign key to `Course`. Indexed. |
+| | `from` | `ObjectId` | Prerequisite topic ID. |
+| | `to` | `ObjectId` | Dependent topic ID. |
 | | `relationship` | `string` | Enum: `'PREREQUISITE'`. |
-| | `provenance` | `string` | Enum: `'HUMAN'` \| `'AI_SUGGESTED'`. Tracks whether the edge was human-curated or AI-suggested. |
-| | `status` | `string` | Enum: `'SUGGESTED'` \| `'APPROVED'`. Defaults to `'SUGGESTED'`. |
-| | *Invariant* | *Rule* | **Approved prerequisite edges must form a Directed Acyclic Graph (DAG).** Cycles reject on edge creation or approval. |
+| | `source` | `string` | Enum: `'HUMAN'` \| `'AI'`. Preserves whether the edge was curated by a human or suggested by AI. |
+| | `status` | `string` | Enum: `'PROPOSED'` \| `'APPROVED'` \| `'REJECTED'`. Defaults to `'PROPOSED'`. |
+| | `rationale` | `string` | Optional text explaining why this prerequisite relationship exists (especially for AI suggestions). |
+| | *Invariant* | *Rule* | **Approved prerequisite edges (`status === 'APPROVED'`) must form a Directed Acyclic Graph (DAG).** Cycles reject on edge creation or status change. |
 | **`BankQuestion`**| `_id` | `ObjectId` | Unique bank question identifier. |
-| | `courseId` | `ObjectId` | Foreign key to `Course`. Indexed. |
+| | `course` | `ObjectId` | Foreign key to `Course`. Indexed. |
 | | `topicId` | `ObjectId` | Foreign key to `Topic`. Indexed. |
 | | `type` | `string` | Question type enum (see supported list below). |
 | | `prompt` | `string` | The markdown-rendered question text. |
 | | `options` | `string[]` | Array of choices (required for `MCQ`). |
-| | `answerKey` | `any` | Authoritative answer key (value, option index, or range). |
+| | `answerKey` | `any` | Authoritative answer key (value, option index, or numeric range). Strictly mandatory for approval. |
 | | `rubricCriteria` | `RubricCriterion[]`| Structured scoring criteria for subjective or open-ended assessment. |
 | | `difficulty` | `string` | Enum: `'EASY'` \| `'MEDIUM'` \| `'HARD'`. |
 | | `status` | `string` | Enum: `'DRAFT'` \| `'IN_REVIEW'` \| `'APPROVED'` \| `'RETIRED'`. Defaults to `'DRAFT'`. |
-| | `origin` | `string` | Enum: `'HUMAN'` \| `'AI_GENERATED'` \| `'AI_VARIANT'`. |
-| | `tagProvenance` | `string` | Enum: `'HUMAN'` \| `'AI_SUGGESTED'`. Indicates whether active topic tags were human-assigned or AI-derived. |
+| | `origin` | `string` | Enum: `'HUMAN'` \| `'AI_GENERATED'` \| `'AI_VARIANT'`. Preserves question author provenance. |
+| | `tagProvenance` | `object` | Per-field metadata tracking topic tag derivation: `{ source: 'HUMAN' \| 'AI' \| 'HEURISTIC', confidence?: number, model?: string, reviewedBy?: ObjectId, reviewedAt?: Date }`. |
 | | `approvalMetadata`| `object` | `{ approvedBy: ObjectId, approvedAt: Date, notes?: string }`. |
 | | `contentHash` | `string` | SHA-256 hash of normalized prompt + options for quick collision check. |
 | | `embedding` | `object` | `{ vector: number[], model: string, generatedAt: Date }`. |
-| | *Invariant* | *Rule* | **An approved bank question strictly requires an authoritative answer key.** Rubrics supplement grading criteria for open questions but do not substitute for a required answer key. |
+| | *Invariant* | *Rule* | **An approved bank question (`status === 'APPROVED'`) strictly requires an authoritative answer key.** Rubrics supplement grading criteria for open questions but do not substitute for a required answer key. |
 | **`TagSuggestion`**| `_id` | `ObjectId` | Unique suggestion identifier. |
-| | `questionId` | `ObjectId` | Foreign key to `BankQuestion`. Indexed. |
+| | `question` | `ObjectId` | Foreign key to `BankQuestion`. Indexed. |
 | | `suggestedTopics` | `object[]` | Array of `{ topicId: ObjectId, score: number }`. |
-| | `confidence` | `number` | Float [0.0 - 1.0] indicating AI confidence. |
-| | `reviewerStatus` | `string` | Enum: `'PENDING'` \| `'ACCEPTED'` \| `'REJECTED'`. Defaults to `'PENDING'`. |
+| | `source` | `string` | Enum: `'AI'` \| `'HEURISTIC'`. Indicates origin of suggested tag. |
+| | `confidence` | `number` | Float [0.0 - 1.0] indicating classification confidence. |
+| | `status` | `string` | Enum: `'PENDING'` \| `'ACCEPTED'` \| `'EDITED'` \| `'REJECTED'`. Defaults to `'PENDING'`. |
+| | `reviewedBy` | `ObjectId` | Optional reviewer identifier. |
+| | `reviewedAt` | `Date` | Optional review timestamp. |
 
 #### Supported Question Types
 The unified bank supports eleven question types across practice and live classroom modalities:
@@ -206,7 +212,7 @@ The unified bank supports eleven question types across practice and live classro
 classDiagram
     class LiveSession {
         +ObjectId _id
-        +ObjectId courseId
+        +ObjectId course
         +string title
         +ObjectId hostUserId
         +string status
@@ -219,8 +225,8 @@ classDiagram
 
     class LiveActivity {
         +ObjectId _id
-        +ObjectId sessionId
-        +ObjectId questionId
+        +ObjectId session
+        +ObjectId question
         +string status
         +number sequenceOrder
         +string resultsVisibility
@@ -230,7 +236,7 @@ classDiagram
 
     class LiveParticipant {
         +ObjectId _id
-        +ObjectId sessionId
+        +ObjectId session
         +ObjectId userId
         +string guestToken
         +string participantKey
@@ -239,15 +245,16 @@ classDiagram
 
     class LiveResponse {
         +ObjectId _id
-        +ObjectId activityId
+        +ObjectId activity
+        +ObjectId session
         +string participantKey
-        +any responseValue
-        +Date submittedAt
+        +any value
+        +Date createdAt
     }
 
     class LiveTally {
         +ObjectId _id
-        +ObjectId activityId
+        +ObjectId activity
         +Record optionCounts
         +number totalResponses
         +Date updatedAt
@@ -264,7 +271,7 @@ classDiagram
 | Model Name | Field | Type | Description / Invariants |
 |---|---|---|---|
 | **`LiveSession`** | `_id` | `ObjectId` | Unique live session identifier. |
-| | `courseId` | `ObjectId` | Foreign key to `Course`. Indexed. |
+| | `course` | `ObjectId` | Foreign key to `Course`. Indexed. |
 | | `title` | `string` | Session title (e.g., "Lecture 14: Attention Mechanisms"). |
 | | `hostUserId` | `ObjectId` | Professor or TA hosting the session. |
 | | `status` | `string` | Enum: `'DRAFT'` \| `'ACTIVE'` \| `'CONCLUDED'`. Indexed. |
@@ -272,27 +279,30 @@ classDiagram
 | | `anonymousMode` | `string` | Enum: `'ANONYMOUS'` \| `'ANONYMOUS_TO_CLASS'` \| `'NAMED'`. |
 | | `currentActivityId`| `ObjectId` | Reference to currently running `LiveActivity`. Nullable. |
 | **`LiveActivity`** | `_id` | `ObjectId` | Unique activity identifier. |
-| | `sessionId` | `ObjectId` | Foreign key to `LiveSession`. Indexed. |
-| | `questionId` | `ObjectId` | Foreign key to `BankQuestion`. |
+| | `session` | `ObjectId` | Foreign key to `LiveSession`. Indexed. |
+| | `question` | `ObjectId` | Foreign key to `BankQuestion`. |
 | | `status` | `string` | Enum: `'PENDING'` \| `'ACTIVE'` \| `'REVEALED'` \| `'CLOSED'`. |
 | | `sequenceOrder` | `number` | Order of activity within session (1, 2, 3...). |
 | | `resultsVisibility`| `string` | Enum: `'LIVE'` \| `'AFTER_CLOSE'` \| `'ON_REVEAL'` \| `'NEVER'`. Defaults to `'ON_REVEAL'`. Controls when aggregate tallies are broadcast to students. |
 | **`LiveParticipant`**| `_id` | `ObjectId` | Participant join record. |
-| | `sessionId` | `ObjectId` | Foreign key to `LiveSession`. Indexed. |
+| | `session` | `ObjectId` | Foreign key to `LiveSession`. Indexed. |
 | | `userId` | `ObjectId` | Optional link to authenticated `User`. Nullable for unauthenticated guests. |
 | | `guestToken` | `string` | Ephemeral guest token for unauthenticated participants. Nullable for authenticated users. |
-| | `participantKey` | `string` | Pseudonymous HMAC token: `HMAC(secret, sessionId + (userId \| guestToken))`. Unique per `[sessionId, participantKey]`. |
+| | `participantKey` | `string` | Pseudonymous HMAC token: `HMAC(secret, sessionId + (userId \| guestToken))`. Unique per `[session, participantKey]`. |
 | | `joinedAt` | `Date` | Timestamp of joining. |
 | **`LiveResponse`** | `_id` | `ObjectId` | Response document. |
-| | `activityId` | `ObjectId` | Foreign key to `LiveActivity`. Indexed. |
+| | `activity` | `ObjectId` | Foreign key to `LiveActivity`. Indexed. |
+| | `session` | `ObjectId` | Foreign key to `LiveSession`. Indexed. |
 | | `participantKey` | `string` | Pseudonymous identifier of respondent. |
-| | `responseValue` | `any` | Selected option, numerical value, or text. |
-| | `submittedAt` | `Date` | Submission timestamp. |
-| | *Invariant* | *Rule* | **Compound Unique Index on `[activityId, participantKey]`. Exactly one response per activity per participant.** |
+| | `value` | `any` | Selected option, numerical value, or text response. |
+| | `createdAt` | `Date` | Submission timestamp. |
+| | *Invariant* | *Rule* | **Compound Unique Index on `(activity, participantKey)`. Exactly one response per activity per participant.** |
 | **`LiveTally`** | `_id` | `ObjectId` | Cached real-time tally document. |
-| | `activityId` | `ObjectId` | Foreign key to `LiveActivity`. Unique 1-to-1. |
+| | `activity` | `ObjectId` | Foreign key to `LiveActivity`. Unique 1-to-1. |
 | | `optionCounts` | `Map<string, number>`| Map of choice keys to submission count. Updated atomically via `$inc`. |
 | | `totalResponses` | `number` | Total responses received. Updated atomically via `$inc`. |
+
+*Implementation Normalization Note:* In Mongoose document definitions, reference fields may be modeled as `activity`/`session`/`course` or with explicit `Id` suffixes (`activityId`, `sessionId`, `courseId`) without altering the canonical relationship architecture.
 
 ---
 
@@ -407,8 +417,8 @@ flowchart TD
 To decouple student identity from responses while supporting both authenticated users and unauthenticated guests:
 * The `participantKey` is derived using HMAC:
   $$\text{participantKey} = \text{HMAC}(\text{secret}, \text{sessionId} + (\text{userId} \mid \text{guestToken}))$$
-* This construction preserves anonymity across responses while permitting one-response-per-activity enforcement via the unique compound constraint on `[activityId, participantKey]`.
-* In `ANONYMOUS` mode, individual responses in `LiveResponse` store only `activityId`, `participantKey`, and `responseValue`, preventing direct correlation with student profiles.
+* This construction preserves anonymity across responses while permitting one-response-per-activity enforcement via the unique compound constraint on `(activity, participantKey)`.
+* In `ANONYMOUS` mode, individual responses in `LiveResponse` store only `activity`, `session`, `participantKey`, and `value`, preventing direct correlation with student profiles.
 * In `ANONYMOUS_TO_CLASS` mode, `LiveParticipant` records presence/participation for administrative review by the instructor, but aggregate responses displayed to peers remain anonymous.
 
 ### 3. Payload and AI Privacy Guards
@@ -434,7 +444,7 @@ sequenceDiagram
     Note over Stud: Answer key NOT included!
 
     Stud->>Svr: POST Respond
-    Svr->>DB: updateOne({ activityId }, { $inc: { optionCounts.B: 1, totalResponses: 1 } })
+    Svr->>DB: updateOne({ activity }, { $inc: { optionCounts.B: 1, totalResponses: 1 } })
     Svr-->>Prof: SSE Event: TALLY_UPDATE (totalResponses, optionCounts)
 
     Prof->>Svr: POST Reveal Activity
@@ -444,12 +454,12 @@ sequenceDiagram
 
 ### 1. Incremental Tally Architecture
 To prevent high-concurrency database locks during live classroom spikes (e.g., 200 students responding simultaneously within a 30-second window):
-* Responses are written to `LiveResponse` with a compound unique index constraint on `[activityId, participantKey]`.
+* Responses are written to `LiveResponse` with a compound unique index constraint on `(activity, participantKey)`.
 * Aggregated tallies are maintained incrementally using MongoDB's atomic `$inc` operator:
   ```typescript
   // Target incremental tally update
   await LiveTally.updateOne(
-    { activityId },
+    { activity: activityId },
     {
       $inc: {
         [`optionCounts.${sanitizedChoice}`]: 1,
@@ -606,14 +616,14 @@ AI-generated questions must pass six mandatory automated validation gates before
 
 ### 3. Operational Gates, Billed Keys, and Data Privacy
 * **Advisory AI Tags:** AI-generated topic tags populate `TagSuggestion` models with confidence scores. They are never written directly over human-assigned topic metadata.
-* **Advisory AI Prerequisites:** AI-proposed prerequisite edges between topics remain `SUGGESTED` until confirmed by an instructor.
+* **Advisory AI Prerequisites:** AI-proposed prerequisite edges between topics remain `status = 'PROPOSED'` until confirmed and approved by an instructor.
 * **Background Job Budgets:** Generation tasks run as queued background jobs with per-course rate limits and progress reporting.
 * **Paid-Tier Verification & `isRealStudentData` Gate:**
   * When executing AI calls involving real student content (such as student-submitted answers or handwritten notes), the application must supply `isRealStudentData: true`.
   * The system **strictly requires supervisor confirmation that the intended Gemini key is actually billed** (`GEMINI_PAID_TIER=true`) before real student data is sent to the model.
   * Under Google AI Studio's free tier, user prompts may be logged for model training. Real student submissions must **never** be transmitted over the free tier.
   * If `isRealStudentData === true` and `GEMINI_PAID_TIER !== 'true'`, the service immediately halts execution with HTTP 403 Forbidden.
-  * *Status Note:* Billing setup and financial budgets are currently unapproved open decisions awaiting supervisor confirmation (see Questions 11 & 12).
+  * *Status Note:* Billing setup and financial budgets are currently unapproved open decisions awaiting supervisor confirmation (see Question 10).
 
 ---
 
@@ -631,7 +641,7 @@ When the feature flag is enabled, every API route must execute full defense-in-d
 1. **Feature Guard:** Verify `requireFeature('LEARNING_MODULE')`.
 2. **Session Authentication:** Verify valid JWT session via `requireAuth(req)`.
 3. **Role & Permission Check:** Enforce RBAC via `requireRole(['PROFESSOR', 'ADMIN'])` for administrative and bank authoring endpoints.
-4. **Course Enrollment Isolation:** Verify that the authenticated student is actively enrolled in the `courseId` specified in the request.
+4. **Course Enrollment Isolation:** Verify that the authenticated student is actively enrolled in the `course` specified in the request.
 
 ```mermaid
 flowchart LR
@@ -656,8 +666,8 @@ Before exposing student-facing learning functionality (live participation or pra
 
 The following 14 questions are carried forward from Section B5 of the parent plan ([Issue #244](https://github.com/Aarathi1535/assignment_evaluation-IIIT-Hyd/issues/244)). Every question represents an unresolved pedagogical or architectural decision and is recorded as **OPEN — awaiting supervisor confirmation**.
 
-### 1. Course, Content, and Question Bank Ownership
-1. **Question 1 (Course Scope & Question Sharing):**
+### 1. Course Scope & Content
+1. **Question 1 (Course Scope & Question Bank Ownership):**
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* Is the question bank strictly isolated per course (e.g., each course code owns its independent taxonomy and questions), or should approved questions and topics be shareable across multiple courses or professors within the institute (e.g., shared across CS101 and CS102)?
 2. **Question 2 (Initial Seeding):**
@@ -667,48 +677,48 @@ The following 14 questions are carried forward from Section B5 of the parent pla
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* Should graduate Teaching Assistants (TAs) have the authorization to review, edit, and approve AI-generated draft questions and prerequisite edges, or is approval strictly restricted to the primary course professor?
 
-### 2. Result Visibility, Moderation, Identity, and Joining
-4. **Question 4 (Live Joining & Authentication Friction):**
+### 2. Live Classroom Interaction & Policy
+4. **Question 4 (Live Joining & Identity):**
    *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* For live classroom polling, should students be required to log in with their institutional student accounts, or should they be permitted to join rapidly on mobile browsers via a 6-character session PIN/QR code without authenticating?
-5. **Question 5 (Real-Time Result Reveal Policy):**
+   *Description:* For live classroom polling, should students be permitted to join rapidly on mobile browsers via a 6-character session PIN/QR code without authenticating (as guests), or must they be required to log in with their institutional student accounts?
+5. **Question 5 (Result Visibility & Moderation Policy):**
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* Should real-time submission distributions and tallies remain strictly hidden until the instructor explicitly clicks "Reveal", or would the instructor prefer a live-updating bar chart on the podium display during polling?
-
-### 3. Grading Policy, Handwritten Submissions, and Code Execution
-6. **Question 6 (Formative vs. Evaluative Grading):**
+6. **Question 6 (Participation vs. Evaluative Grading):**
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* Should live classroom participation and student practice remain strictly formative (ungraded engagement tracking), or should verified participation scores and practice streaks contribute a weighted percentage to the student's final semester grade?
 7. **Question 7 (Handwritten-Photo Pilot Inclusion):**
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* Does Prof. Jawahar want the multimodal handwritten photo capture and Gemini VLM evaluation (developed in Research Direction 1) included in the first live classroom pilot, or should the pilot strictly use rapid structured types (MCQ, predict output, numerical) to minimize classroom latency?
-8. **Question 8 (Interactive Code Sandbox Execution):**
+8. **Question 8 (Interactive Code Execution):**
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* For programming questions (`FIX_THE_CODE`, `PREDICT_OUTPUT`), should the platform incorporate a real-time sandboxed execution engine (e.g., isolated Docker/WebAssembly runner) to run student code, or should evaluation rely on static text/AST analysis and AI judging?
 
-### 4. Practice Adaptation and TA Escalation
+### 3. Practice & Progression
 9. **Question 9 (Adaptive Difficulty vs. Student Choice):**
    *Status:* `OPEN — awaiting supervisor confirmation`
    *Description:* When a student demonstrates consistent mastery in practice, should the system automatically advance them to harder questions via an adaptive algorithm (e.g., Elo or Item Response Theory), or should students retain complete manual control over topic and difficulty selection?
-10. **Question 10 (TA Escalation & Doubt Clearing):**
-    *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* When a student repeatedly struggles with a concept in practice (e.g., 3 consecutive failed attempts) or flags an AI explanation as confusing, should an automated alert be dispatched to the course TA dashboard for intervention?
 
-### 5. Paid Gemini Tier, Budget, and Student Data Privacy
-11. **Question 11 (Institutional Paid API Billing Account):**
+### 4. AI Controls, Privacy & Budget
+10. **Question 10 (Billed Gemini Key, Budget, and Student Data Privacy):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* Given that Google AI Studio's free tier permits prompt data logging (violating student data privacy requirements for production student submissions), what institutional Google Cloud billing account or Vertex AI enterprise project will be provisioned for paid Gemini API calls?
-12. **Question 12 (Monthly AI Cost & Quota Budgets):**
-    *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* What is the monthly financial and token quota budget allocated per course for AI question generation, embedding duplicate detection, and automated student feedback?
+    *Description:* Given that Google AI Studio's free tier permits prompt data logging (violating student data privacy requirements for production student submissions), what institutional Google Cloud billing account will be provisioned for paid Gemini API calls? What is the monthly financial and token quota budget allocated per course for AI question generation, embedding duplicate detection, and automated feedback? Confirmation is required that the intended key is billed before real student content is sent to Google.
 
-### 6. Prerequisite Enforcement, Scale, and Pilot Timeline
-13. **Question 13 (Strict vs. Advisory Prerequisite Locking):**
+### 5. Taxonomy & Scale
+11. **Question 11 (Prerequisite Granularity and Enforcement):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* Should prerequisite edges in the topic DAG strictly lock dependent practice topics until the student demonstrates proficiency in prerequisites, or should edges serve purely as advisory learning path recommendations?
-14. **Question 14 (Target Course, Scale, and Pilot Milestone):**
+    *Description:* Should prerequisite edges in the topic DAG strictly lock dependent practice topics until the student demonstrates proficiency in prerequisites, or should edges serve purely as advisory learning path recommendations? What level of topic granularity is expected for syllabus mapping?
+12. **Question 12 (Class Size and Deployment Scale):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* What specific course, expected class cohort size (e.g., 60 vs. 250 students), and target calendar week in the upcoming academic term are designated for the first in-classroom live trial?
+    *Description:* What specific course, expected class cohort size (e.g., 60 vs. 250 concurrent students), and lecture room infrastructure are designated for the first in-classroom live trial?
+
+### 6. Research Metrics & Milestones
+13. **Question 13 (Research Output and Evaluation Metrics):**
+    *Status:* `OPEN — awaiting supervisor confirmation`
+    *Description:* What specific research hypotheses, pedagogical metrics, and learning outcome measurements should be tracked during the pilot to evaluate effectiveness for academic research papers and publications?
+14. **Question 14 (Pilot Timeline and Milestones):**
+    *Status:* `OPEN — awaiting supervisor confirmation`
+    *Description:* What is the target calendar timeline, academic term, and scheduled week for commencing the live classroom pilot?
 
 ---
 
