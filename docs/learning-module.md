@@ -63,7 +63,7 @@ Based on preliminary research results and the parent plan in [Issue #244](https:
 | Architectural Area | Agreed Default Specification | Status / Boundaries |
 |---|---|---|
 | **Live Session Grading** | **Participation-only, not graded.** Live classroom activities track student engagement and presence, not evaluative marks or letter grades. | Default baseline; any future grading integration requires supervisor approval. |
-| **Result Visibility** | **Aggregate results revealed after activity closes.** Real-time individual submissions are hidden from peers. The professor explicitly triggers `REVEALED` state. | Default baseline; prevents peer anchor bias during active polls. |
+| **Result Visibility** | **Aggregate results revealed after activity closes (`ON_REVEAL`).** Real-time individual submissions are hidden from peers. The professor explicitly triggers `REVEALED` state. | Agreed default for initial pilot; other visibility modes (`LIVE`, `AFTER_CLOSE`, `NEVER`) remain supported in schema. |
 | **AI Tagging Behavior** | **Advisory suggestions only.** AI tags populate `TagSuggestion` models and are never silently written over human-curated topic fields. | Invariant; human professor or TA must accept or reject suggestions. |
 | **AI Question Status** | **Default `DRAFT`.** AI-generated questions can never enter active question pools without explicit professor review and approval. | Invariant; prevents unverified AI content from reaching students. |
 | **Topic Prerequisites** | **Advisory guidance pending professor confirmation.** Suggested prerequisite edges require human review before locking topic graphs. | Invariant; approved edges must enforce a strict DAG. |
@@ -75,9 +75,9 @@ Based on preliminary research results and the parent plan in [Issue #244](https:
 
 ---
 
-## C. Target Data Models
+## C. Target Data Models (Proposed Target Architecture)
 
-The data architecture is divided into three logical domains: Question Bank & Taxonomy, Live Classroom, and Practice. All models are scoped to a specific `courseId` to enforce strict multi-course isolation.
+The data architecture is divided into three logical domains: Question Bank & Taxonomy, Live Classroom, and Practice. All models are scoped to a specific `courseId` to enforce strict multi-course isolation. All models documented in this section represent the **proposed target architecture** to be implemented under subsequent tickets.
 
 ### 1. Question Bank & Taxonomy Models
 
@@ -101,6 +101,7 @@ classDiagram
         +ObjectId fromTopicId
         +ObjectId toTopicId
         +string relationship
+        +string provenance
         +string status
         +Date createdAt
     }
@@ -116,7 +117,8 @@ classDiagram
         +RubricCriterion[] rubricCriteria
         +string difficulty
         +string status
-        +string provenance
+        +string origin
+        +string tagProvenance
         +ApprovalMetadata approvalMetadata
         +string contentHash
         +EmbeddingMetadata embedding
@@ -155,28 +157,30 @@ classDiagram
 | | `fromTopicId` | `ObjectId` | Prerequisite topic ID. |
 | | `toTopicId` | `ObjectId` | Dependent topic ID. |
 | | `relationship` | `string` | Enum: `'PREREQUISITE'`. |
-| | `status` | `string` | Enum: `'SUGGESTED'` \| `'APPROVED'`. |
-| | *Invariant* | *Rule* | **Approved edges must form a Directed Acyclic Graph (DAG).** Cycles reject on creation. |
+| | `provenance` | `string` | Enum: `'HUMAN'` \| `'AI_SUGGESTED'`. Tracks whether the edge was human-curated or AI-suggested. |
+| | `status` | `string` | Enum: `'SUGGESTED'` \| `'APPROVED'`. Defaults to `'SUGGESTED'`. |
+| | *Invariant* | *Rule* | **Approved prerequisite edges must form a Directed Acyclic Graph (DAG).** Cycles reject on edge creation or approval. |
 | **`BankQuestion`**| `_id` | `ObjectId` | Unique bank question identifier. |
 | | `courseId` | `ObjectId` | Foreign key to `Course`. Indexed. |
 | | `topicId` | `ObjectId` | Foreign key to `Topic`. Indexed. |
 | | `type` | `string` | Question type enum (see supported list below). |
 | | `prompt` | `string` | The markdown-rendered question text. |
 | | `options` | `string[]` | Array of choices (required for `MCQ`). |
-| | `answerKey` | `any` | Authoritative answer (value, choice index, or range). |
-| | `rubricCriteria` | `RubricCriterion[]`| Structured grading rubric (required for open/theory types). |
+| | `answerKey` | `any` | Authoritative answer key (value, option index, or range). |
+| | `rubricCriteria` | `RubricCriterion[]`| Structured scoring criteria for subjective or open-ended assessment. |
 | | `difficulty` | `string` | Enum: `'EASY'` \| `'MEDIUM'` \| `'HARD'`. |
-| | `status` | `string` | Enum: `'DRAFT'` \| `'APPROVED'` \| `'ARCHIVED'`. Defaults to `'DRAFT'`. |
-| | `provenance` | `string` | Enum: `'HUMAN'` \| `'AI_GENERATED'`. |
+| | `status` | `string` | Enum: `'DRAFT'` \| `'IN_REVIEW'` \| `'APPROVED'` \| `'RETIRED'`. Defaults to `'DRAFT'`. |
+| | `origin` | `string` | Enum: `'HUMAN'` \| `'AI_GENERATED'` \| `'AI_VARIANT'`. |
+| | `tagProvenance` | `string` | Enum: `'HUMAN'` \| `'AI_SUGGESTED'`. Indicates whether active topic tags were human-assigned or AI-derived. |
 | | `approvalMetadata`| `object` | `{ approvedBy: ObjectId, approvedAt: Date, notes?: string }`. |
 | | `contentHash` | `string` | SHA-256 hash of normalized prompt + options for quick collision check. |
 | | `embedding` | `object` | `{ vector: number[], model: string, generatedAt: Date }`. |
-| | *Invariant* | *Rule* | **An approved bank question strictly requires a valid answer key or rubric.** |
+| | *Invariant* | *Rule* | **An approved bank question strictly requires an authoritative answer key.** Rubrics supplement grading criteria for open questions but do not substitute for a required answer key. |
 | **`TagSuggestion`**| `_id` | `ObjectId` | Unique suggestion identifier. |
 | | `questionId` | `ObjectId` | Foreign key to `BankQuestion`. Indexed. |
 | | `suggestedTopics` | `object[]` | Array of `{ topicId: ObjectId, score: number }`. |
 | | `confidence` | `number` | Float [0.0 - 1.0] indicating AI confidence. |
-| | `reviewerStatus` | `string` | Enum: `'PENDING'` \| `'ACCEPTED'` \| `'REJECTED'`. |
+| | `reviewerStatus` | `string` | Enum: `'PENDING'` \| `'ACCEPTED'` \| `'REJECTED'`. Defaults to `'PENDING'`. |
 
 #### Supported Question Types
 The unified bank supports eleven question types across practice and live classroom modalities:
@@ -187,8 +191,8 @@ The unified bank supports eleven question types across practice and live classro
   4. `FIX_THE_CODE`: Code snippet containing a bug; student specifies corrected lines.
   5. `DEBUGGING`: Identification of root-cause logic, algorithmic, or syntactic defect.
   6. `COUNTEREXAMPLE`: Student submits an edge case or counterexample disproving a premise.
-  7. `SHORT_ANSWER`: 1–2 sentence conceptual response evaluated against semantic rubric keywords.
-  8. `THEORY`: Deep conceptual proof or essay response graded against structured rubric criteria.
+  7. `SHORT_ANSWER`: 1–2 sentence conceptual response evaluated against semantic criteria.
+  8. `THEORY`: Conceptual proof or essay response graded against structured rubric criteria.
 * **Live-Only Survey & Poll Types:**
   9. `WORD_CLOUD`: Open single-token or phrase responses aggregated into frequency distributions.
   10. `RATING`: 1-to-5 Likert scale for subjective comprehension checks or pacing sentiment.
@@ -219,7 +223,7 @@ classDiagram
         +ObjectId questionId
         +string status
         +number sequenceOrder
-        +boolean revealTallies
+        +string resultsVisibility
         +Date openedAt
         +Date closedAt
     }
@@ -228,6 +232,7 @@ classDiagram
         +ObjectId _id
         +ObjectId sessionId
         +ObjectId userId
+        +string guestToken
         +string participantKey
         +Date joinedAt
     }
@@ -271,18 +276,19 @@ classDiagram
 | | `questionId` | `ObjectId` | Foreign key to `BankQuestion`. |
 | | `status` | `string` | Enum: `'PENDING'` \| `'ACTIVE'` \| `'REVEALED'` \| `'CLOSED'`. |
 | | `sequenceOrder` | `number` | Order of activity within session (1, 2, 3...). |
-| | `revealTallies` | `boolean` | Flag controlling whether aggregate counts are sent to students. |
+| | `resultsVisibility`| `string` | Enum: `'LIVE'` \| `'AFTER_CLOSE'` \| `'ON_REVEAL'` \| `'NEVER'`. Defaults to `'ON_REVEAL'`. Controls when aggregate tallies are broadcast to students. |
 | **`LiveParticipant`**| `_id` | `ObjectId` | Participant join record. |
 | | `sessionId` | `ObjectId` | Foreign key to `LiveSession`. Indexed. |
-| | `userId` | `ObjectId` | Optional link to authenticated `User`. Nullable in full anonymous. |
-| | `participantKey` | `string` | Pseudonymous HMAC token (see Section D). Unique per `[sessionId, participantKey]`. |
+| | `userId` | `ObjectId` | Optional link to authenticated `User`. Nullable for unauthenticated guests. |
+| | `guestToken` | `string` | Ephemeral guest token for unauthenticated participants. Nullable for authenticated users. |
+| | `participantKey` | `string` | Pseudonymous HMAC token: `HMAC(secret, sessionId + (userId \| guestToken))`. Unique per `[sessionId, participantKey]`. |
 | | `joinedAt` | `Date` | Timestamp of joining. |
 | **`LiveResponse`** | `_id` | `ObjectId` | Response document. |
 | | `activityId` | `ObjectId` | Foreign key to `LiveActivity`. Indexed. |
 | | `participantKey` | `string` | Pseudonymous identifier of respondent. |
 | | `responseValue` | `any` | Selected option, numerical value, or text. |
 | | `submittedAt` | `Date` | Submission timestamp. |
-| | *Invariant* | *Rule* | **Compound Unique Index on `[activityId, participantKey]`. Exactly one response per activity.** |
+| | *Invariant* | *Rule* | **Compound Unique Index on `[activityId, participantKey]`. Exactly one response per activity per participant.** |
 | **`LiveTally`** | `_id` | `ObjectId` | Cached real-time tally document. |
 | | `activityId` | `ObjectId` | Foreign key to `LiveActivity`. Unique 1-to-1. |
 | | `optionCounts` | `Map<string, number>`| Map of choice keys to submission count. Updated atomically via `$inc`. |
@@ -292,10 +298,10 @@ classDiagram
 
 ### 3. Practice & Progression Models
 
-The practice subsystem replaces the legacy deterministic fixed-rotation model (`PersonalizedAssessmentSchedule` in jawahar-2) with an on-demand, student-chosen practice architecture.
+The practice subsystem replaces the legacy deterministic fixed-rotation model from Research Direction 2 with an on-demand, student-chosen practice architecture.
 
 > [!NOTE]
-> The historical 16-week deterministic permutation matrix that cycled 50 students through 100 fixed questions is being formally retired. A clean data migration and deprecation path is tracked separately under **LRN-20**.
+> The old deterministic fixed-rotation approach from Research Direction 2 is being formally retired. A clean question migration and deprecation path is tracked separately under **LRN-20**.
 
 ```mermaid
 classDiagram
@@ -398,11 +404,12 @@ flowchart TD
    * **Use Case:** Small graduate seminars, active discussion groups, or team presentations.
 
 ### 2. Pseudonymous `participantKey` Derivation
-To ensure responses cannot be joined with user identity tables in database queries when anonymity is required:
-* A `participantKey` is generated using a keyed hash:
-  $$\text{participantKey} = \text{HMAC-SHA256}(\text{SessionSecretKey}, \text{sessionId} + \text{salt} + \text{userId})$$
-* In `ANONYMOUS` mode, the `LiveResponse` table contains only `activityId`, `participantKey`, and `responseValue`. The session secret key is held in memory and discarded upon session conclusion, mathematically preventing retrospective de-anonymization.
-* In `ANONYMOUS_TO_CLASS` mode, a separate `LiveParticipant` record stores `{ sessionId, userId, participantKey, joinedAt }` strictly for attendance reconciliation. Database foreign-key joins between `LiveParticipant.userId` and `LiveResponse.responseValue` are strictly disallowed in public API responses.
+To decouple student identity from responses while supporting both authenticated users and unauthenticated guests:
+* The `participantKey` is derived using HMAC:
+  $$\text{participantKey} = \text{HMAC}(\text{secret}, \text{sessionId} + (\text{userId} \mid \text{guestToken}))$$
+* This construction preserves anonymity across responses while permitting one-response-per-activity enforcement via the unique compound constraint on `[activityId, participantKey]`.
+* In `ANONYMOUS` mode, individual responses in `LiveResponse` store only `activityId`, `participantKey`, and `responseValue`, preventing direct correlation with student profiles.
+* In `ANONYMOUS_TO_CLASS` mode, `LiveParticipant` records presence/participation for administrative review by the instructor, but aggregate responses displayed to peers remain anonymous.
 
 ### 3. Payload and AI Privacy Guards
 * **SSE Payload Sanitization:** Student-facing Server-Sent Events (SSE) payloads must **never** contain student names, roll numbers, user IDs, email addresses, or unhashed participant keys.
@@ -422,15 +429,15 @@ sequenceDiagram
     participant Svr as Learning Server API
     participant DB as MongoDB (LiveTally)
 
-    Prof->>Svr: POST /api/learning/live/activities/:id/open
+    Prof->>Svr: POST Open Activity (resultsVisibility: ON_REVEAL)
     Svr-->>Stud: SSE Event: ACTIVITY_OPENED (prompt, options)
     Note over Stud: Answer key NOT included!
 
-    Stud->>Svr: POST /api/learning/live/activities/:id/respond
+    Stud->>Svr: POST Respond
     Svr->>DB: updateOne({ activityId }, { $inc: { optionCounts.B: 1, totalResponses: 1 } })
     Svr-->>Prof: SSE Event: TALLY_UPDATE (totalResponses, optionCounts)
 
-    Prof->>Svr: POST /api/learning/live/activities/:id/reveal
+    Prof->>Svr: POST Reveal Activity
     Svr-->>Stud: SSE Event: ACTIVITY_REVEALED (answerKey, explanation, aggregateTallies)
     Svr-->>Prof: SSE Event: ACTIVITY_REVEALED
 ```
@@ -455,13 +462,22 @@ To prevent high-concurrency database locks during live classroom spikes (e.g., 2
   ```
 * Tallies are **never** recalculated by executing a full table aggregation scan across all `LiveResponse` rows during an active poll.
 
-### 2. Degraded-Mode Polling Fallback
-If an unstable university Wi-Fi network interrupts the SSE connection:
-* The client detects SSE disconnection via heartbeat timeout (15 seconds without a keep-alive ping).
-* The client automatically falls back to degraded-mode short polling: `GET /api/learning/live/sessions/:id/current` every 3 seconds.
-* Upon reconnection, polling ceases and the SSE stream resumes seamlessly.
+### 2. Result Visibility Modes & Reveal Policy
+The target architecture supports four visibility modes configured on `LiveActivity.resultsVisibility`:
+* `LIVE`: Aggregate tallies update continuously on student screens during polling.
+* `AFTER_CLOSE`: Aggregate tallies become visible to students only after the activity status transitions to `CLOSED`.
+* `ON_REVEAL`: Aggregate tallies and answer keys become visible only when the host explicitly transitions the activity status to `REVEALED`. This is the **agreed default** for the initial pilot to prevent peer anchoring bias during polling.
+* `NEVER`: Aggregate tallies are never broadcast to students (used for formal evaluative checkpoints or research baselines).
 
-### 3. Role-Specific Data Transfer Objects (Target Contracts)
+Regardless of the visibility mode, **answer keys are never released until the activity status reaches `REVEALED`**.
+
+### 3. Planned Degraded-Mode Polling Fallback
+In environments where unstable classroom Wi-Fi or proxy middleboxes disrupt SSE connections:
+* The client architecture plans for degraded-mode HTTP short polling as a fallback mechanism if SSE streams disconnect and fail to reconnect within an established heartbeat window.
+* When the degraded mode is active, the client polls the server for current activity state until SSE streaming can be cleanly re-established.
+* Exact endpoint paths, heartbeat thresholds, and polling backoff intervals will be defined as part of the live classroom implementation ticket (LRN-08/LRN-09).
+
+### 4. Role-Specific Data Transfer Objects (Target Contracts)
 
 #### Student DTO: `ActivityStateEvent` (Pre-Reveal)
 When an activity is `ACTIVE`, the student receives only the question prompt and choices. The `answerKey` and `tallies` are strictly omitted.
@@ -550,7 +566,7 @@ flowchart TD
     subgraph Human Oversight
         DRAFT --> PROF{Professor Review}
         PROF -->|Approve| APP[APPROVED: Available in Pools]
-        PROF -->|Reject / Edit| ARCH[REJECTED / ARCHIVED]
+        PROF -->|Reject / Retire| RET[REJECTED / RETIRED]
     end
 
     SVC --> VAL
@@ -569,7 +585,7 @@ AI-generated questions must pass six mandatory automated validation gates before
    * Response must parse cleanly against strict Zod schemas.
    * `MCQ` questions must provide non-empty options and a valid answer key matching one of the options.
    * Numerical questions must specify numeric answer keys and tolerance bounds.
-   * Open and theory questions must generate structured `rubricCriteria` with explicit scoring point breakdowns.
+   * Open and theory questions must generate structured `rubricCriteria` alongside reference answer keys.
    * Failure causes immediate rejection and retry.
 2. **Self-Consistency Gate:**
    * The generated prompt is sent to a separate generation call without the answer key to verify whether the model solves its own question identically.
@@ -585,17 +601,19 @@ AI-generated questions must pass six mandatory automated validation gates before
 5. **Quality & Clarity Judging:**
    * Evaluates prompt clarity, presence of concrete artifacts (code blocks, equations, figures), Bloom's taxonomy alignment, and absence of trick questions or hallucinated citations.
 6. **Human Approval Gate:**
-   * Passed questions are saved with `status = 'DRAFT'` and `provenance = 'AI_GENERATED'`.
+   * Passed questions are saved with `status = 'DRAFT'` and `origin = 'AI_GENERATED'`.
    * AI-generated questions **never** enter active live or practice pools until a professor or authorized instructor marks them `APPROVED`.
 
-### 3. Operational Gates & Data Privacy
-* **Advisory AI Tags:** AI-generated topic tags are stored in `TagSuggestion` models with confidence scores. They are never written directly over human-assigned topic metadata.
+### 3. Operational Gates, Billed Keys, and Data Privacy
+* **Advisory AI Tags:** AI-generated topic tags populate `TagSuggestion` models with confidence scores. They are never written directly over human-assigned topic metadata.
 * **Advisory AI Prerequisites:** AI-proposed prerequisite edges between topics remain `SUGGESTED` until confirmed by an instructor.
 * **Background Job Budgets:** Generation tasks run as queued background jobs with per-course rate limits and progress reporting.
-* **Paid-Tier & Real Student Data Invariant:**
-  * If processing real student data (e.g., student-submitted responses or handwritten notes), the system **strictly requires** `GEMINI_PAID_TIER=true` and a verified, billed Google Cloud project key.
+* **Paid-Tier Verification & `isRealStudentData` Gate:**
+  * When executing AI calls involving real student content (such as student-submitted answers or handwritten notes), the application must supply `isRealStudentData: true`.
+  * The system **strictly requires supervisor confirmation that the intended Gemini key is actually billed** (`GEMINI_PAID_TIER=true`) before real student data is sent to the model.
   * Under Google AI Studio's free tier, user prompts may be logged for model training. Real student submissions must **never** be transmitted over the free tier.
   * If `isRealStudentData === true` and `GEMINI_PAID_TIER !== 'true'`, the service immediately halts execution with HTTP 403 Forbidden.
+  * *Status Note:* Billing setup and financial budgets are currently unapproved open decisions awaiting supervisor confirmation (see Questions 11 & 12).
 
 ---
 
@@ -722,7 +740,7 @@ gantt
 
     section Phase 4: Practice
     LRN-11 Practice Attempt & Progress  :p11, 11, 13
-    LRN-20 Deprecate Fixed Matrix       :p12, 12, 14
+    LRN-20 Question Bank Migration      :p12, 12, 14
 
     section Phase 5: Verification & Pilot
     LRN-15 End-to-End Test Matrix       :p13, 14, 16
@@ -737,7 +755,7 @@ gantt
 * **Subsequent Phases:**
   * **Phase 2 (Taxonomy & Bank):** Implements `Topic`, `TopicEdge` (DAG invariant), `BankQuestion`, and generation pipelines.
   * **Phase 3 (Live Classroom):** Implements live session controllers, atomic `$inc` tally engine, and SSE distribution.
-  * **Phase 4 (Student Practice):** Implements self-study progression and executes **LRN-20** to retire the legacy fixed rotation.
+  * **Phase 4 (Student Practice):** Implements self-study progression and executes **LRN-20** to retire the legacy fixed-rotation approach and migrate questions.
   * **Phase 5 (Rollout & Validation):** Executes comprehensive load tests and reviews pilot readiness with Prof. Jawahar.
 
 > [!IMPORTANT]
