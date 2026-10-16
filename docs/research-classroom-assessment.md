@@ -176,7 +176,7 @@ The test suite in [`src/__tests__/ClassroomAssessment.test.ts`](../src/__tests__
 ### Key Practical Limitations:
 1. **Severe Handwriting Illegibility:** Extreme cursive, heavy smudging, or low-resolution camera captures can lower model confidence and OCR precision.
 2. **Complex Spatial Layouts:** Multi-column scratch work, crossed-out paragraphs, and non-linear side annotations can occasionally challenge reading order determination.
-3. **Synchronous Latency:** Evaluating an image with deep VLMs takes 1.5ΓÇô4.0 seconds. In live classrooms with > 200 concurrent students, asynchronous task queues (e.g., BullMQ/Redis) and batch dispatching are recommended.
+3. **Synchronous Latency:** Evaluating an image with deep VLMs takes 1.5–4.0 seconds. In live classrooms with > 200 concurrent students, asynchronous task queues (e.g., BullMQ/Redis) and batch dispatching are recommended.
 4. **Symbolic & Diagrammatic Ambiguity:** Handwritten circuit schematics, geometric proofs, and complex tensor diagrams require specialized multi-modal reasoning prompts or fine-tuned vision heads.
 
 ---
