@@ -100,7 +100,6 @@ classDiagram
         +ObjectId course
         +ObjectId from
         +ObjectId to
-        +string relationship
         +string source
         +string status
         +string rationale
@@ -119,7 +118,7 @@ classDiagram
         +string difficulty
         +string status
         +string origin
-        +TagProvenance tagProvenance
+        +Map tagProvenance
         +ApprovalMetadata approvalMetadata
         +string contentHash
         +EmbeddingMetadata embedding
@@ -130,12 +129,16 @@ classDiagram
     class TagSuggestion {
         +ObjectId _id
         +ObjectId question
-        +SuggestedTopic[] suggestedTopics
+        +string field
+        +any proposed
+        +any current
         +string source
+        +string model
         +number confidence
+        +string rationale
         +string status
-        +ObjectId reviewedBy
-        +Date reviewedAt
+        +ObjectId decidedBy
+        +Date createdAt
     }
 
     Topic "1" --> "*" TopicEdge : from / to
@@ -148,7 +151,7 @@ classDiagram
 | Model Name | Field | Type | Description / Invariants |
 |---|---|---|---|
 | **`Topic`** | `_id` | `ObjectId` | Unique topic identifier. |
-| | `course` | `ObjectId` | Foreign key to `Course`. Indexed. (Can be named `course` or `courseId`). |
+| | `course` | `ObjectId` | Foreign key to `Course`. Indexed. |
 | | `name` | `string` | Topic title (e.g., "Convolutional Layers & Kernels"). |
 | | `description` | `string` | Pedagogical description and scope. |
 | | `unitNumber` | `number` | Syllabus unit or module number. |
@@ -156,13 +159,12 @@ classDiagram
 | | `status` | `string` | Enum: `'DRAFT'` \| `'APPROVED'`. Defaults to `'DRAFT'`. |
 | **`TopicEdge`** | `_id` | `ObjectId` | Unique edge identifier. |
 | | `course` | `ObjectId` | Foreign key to `Course`. Indexed. |
-| | `from` | `ObjectId` | Prerequisite topic ID. |
-| | `to` | `ObjectId` | Dependent topic ID. |
-| | `relationship` | `string` | Enum: `'PREREQUISITE'`. |
-| | `source` | `string` | Enum: `'HUMAN'` \| `'AI'`. Preserves whether the edge was curated by a human or suggested by AI. |
-| | `status` | `string` | Enum: `'PROPOSED'` \| `'APPROVED'` \| `'REJECTED'`. Defaults to `'PROPOSED'`. |
+| | `from` | `ObjectId` | Prerequisite `Topic` identifier. |
+| | `to` | `ObjectId` | Dependent `Topic` identifier. |
+| | `source` | `string` | Enum: `'HUMAN'` \| `'AI'`. Preserves whether the edge was human-curated or AI-suggested. |
 | | `rationale` | `string` | Optional text explaining why this prerequisite relationship exists (especially for AI suggestions). |
-| | *Invariant* | *Rule* | **Approved prerequisite edges (`status === 'APPROVED'`) must form a Directed Acyclic Graph (DAG).** Cycles reject on edge creation or status change. |
+| | `status` | `string` | Enum: `'PROPOSED'` \| `'APPROVED'` \| `'REJECTED'`. Defaults to `'PROPOSED'`. |
+| | *Invariant* | *Rule* | **Approved prerequisite edges (`status === 'APPROVED'`) must form a Directed Acyclic Graph (DAG).** Cycles reject on edge creation or approval. |
 | **`BankQuestion`**| `_id` | `ObjectId` | Unique bank question identifier. |
 | | `course` | `ObjectId` | Foreign key to `Course`. Indexed. |
 | | `topicId` | `ObjectId` | Foreign key to `Topic`. Indexed. |
@@ -174,19 +176,22 @@ classDiagram
 | | `difficulty` | `string` | Enum: `'EASY'` \| `'MEDIUM'` \| `'HARD'`. |
 | | `status` | `string` | Enum: `'DRAFT'` \| `'IN_REVIEW'` \| `'APPROVED'` \| `'RETIRED'`. Defaults to `'DRAFT'`. |
 | | `origin` | `string` | Enum: `'HUMAN'` \| `'AI_GENERATED'` \| `'AI_VARIANT'`. Preserves question author provenance. |
-| | `tagProvenance` | `object` | Per-field metadata tracking topic tag derivation: `{ source: 'HUMAN' \| 'AI' \| 'HEURISTIC', confidence?: number, model?: string, reviewedBy?: ObjectId, reviewedAt?: Date }`. |
+| | `tagProvenance` | `Map<string, object>`| Per-field metadata map tracking tag derivation. Contains `{ source: 'HUMAN' \| 'AI' \| 'HEURISTIC', confidence?: number, model?: string, reviewedBy?: ObjectId, reviewedAt?: Date }`. |
 | | `approvalMetadata`| `object` | `{ approvedBy: ObjectId, approvedAt: Date, notes?: string }`. |
 | | `contentHash` | `string` | SHA-256 hash of normalized prompt + options for quick collision check. |
 | | `embedding` | `object` | `{ vector: number[], model: string, generatedAt: Date }`. |
 | | *Invariant* | *Rule* | **An approved bank question (`status === 'APPROVED'`) strictly requires an authoritative answer key.** Rubrics supplement grading criteria for open questions but do not substitute for a required answer key. |
 | **`TagSuggestion`**| `_id` | `ObjectId` | Unique suggestion identifier. |
 | | `question` | `ObjectId` | Foreign key to `BankQuestion`. Indexed. |
-| | `suggestedTopics` | `object[]` | Array of `{ topicId: ObjectId, score: number }`. |
-| | `source` | `string` | Enum: `'AI'` \| `'HEURISTIC'`. Indicates origin of suggested tag. |
+| | `field` | `string` | Field name for tag suggestion (e.g., `'topics'`, `'difficulty'`, `'skills'`). |
+| | `proposed` | `any` | Proposed tag value or array of suggested topic references. |
+| | `current` | `any` | Current value of the field prior to suggestion. |
+| | `source` | `string` | Enum: `'AI'` \| `'HEURISTIC'`. Indicates origin of suggestion. |
+| | `model` | `string` | Optional AI model ID generating the suggestion. |
 | | `confidence` | `number` | Float [0.0 - 1.0] indicating classification confidence. |
+| | `rationale` | `string` | Optional explanatory reasoning for the suggestion. |
 | | `status` | `string` | Enum: `'PENDING'` \| `'ACCEPTED'` \| `'EDITED'` \| `'REJECTED'`. Defaults to `'PENDING'`. |
-| | `reviewedBy` | `ObjectId` | Optional reviewer identifier. |
-| | `reviewedAt` | `Date` | Optional review timestamp. |
+| | `decidedBy` | `ObjectId` | Optional reviewer identifier who accepted, edited, or rejected the suggestion. |
 
 #### Supported Question Types
 The unified bank supports eleven question types across practice and live classroom modalities:
@@ -664,61 +669,77 @@ Before exposing student-facing learning functionality (live participation or pra
 
 ## H. Open Questions for Prof. Jawahar
 
-The following 14 questions are carried forward from Section B5 of the parent plan ([Issue #244](https://github.com/Aarathi1535/assignment_evaluation-IIIT-Hyd/issues/244)). Every question represents an unresolved pedagogical or architectural decision and is recorded as **OPEN — awaiting supervisor confirmation**.
+The following 14 questions are carried forward directly from Section B5 of the parent plan ([Issue #244](https://github.com/Aarathi1535/assignment_evaluation-IIIT-Hyd/issues/244)). Every question represents an unresolved pedagogical or architectural decision and is recorded as **OPEN — awaiting supervisor confirmation**.
 
-### 1. Course Scope & Content
-1. **Question 1 (Course Scope & Question Bank Ownership):**
+### 1. Course and Pilot Context
+1. **Question 1 (Course and Pilot Context):**
    *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* Is the question bank strictly isolated per course (e.g., each course code owns its independent taxonomy and questions), or should approved questions and topics be shareable across multiple courses or professors within the institute (e.g., shared across CS101 and CS102)?
-2. **Question 2 (Initial Seeding):**
-   *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* Will Prof. Jawahar and the course instructors provide an initial seed bank of professor-authored questions and course syllabus outlines for the first pilot course (e.g., Computer Vision, SMAI, or Intro to Programming), or should the AI generation pipeline synthesize the initial candidate pool from textbook chapters and lecture notes?
-3. **Question 3 (Human Review Authority & TA Roles):**
-   *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* Should graduate Teaching Assistants (TAs) have the authorization to review, edit, and approve AI-generated draft questions and prerequisite edges, or is approval strictly restricted to the primary course professor?
+   *Description:* Which specific course needs the ~50 questions? Which programming language(s) (e.g., Python, C, C++), when does the course run in the academic calendar, and which upcoming lecture is designated for the first in-classroom live pilot?
 
-### 2. Live Classroom Interaction & Policy
-4. **Question 4 (Live Joining & Identity):**
+### 2. Question Authorship and Preparation
+2. **Question 2 (Question Authorship and Preparation):**
    *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* For live classroom polling, should students be permitted to join rapidly on mobile browsers via a 6-character session PIN/QR code without authenticating (as guests), or must they be required to log in with their institutional student accounts?
-5. **Question 5 (Result Visibility & Moderation Policy):**
-   *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* Should real-time submission distributions and tallies remain strictly hidden until the instructor explicitly clicks "Reveal", or would the instructor prefer a live-updating bar chart on the podium display during polling?
-6. **Question 6 (Participation vs. Evaluative Grading):**
-   *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* Should live classroom participation and student practice remain strictly formative (ungraded engagement tracking), or should verified participation scores and practice streaks contribute a weighted percentage to the student's final semester grade?
-7. **Question 7 (Handwritten-Photo Pilot Inclusion):**
-   *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* Does Prof. Jawahar want the multimodal handwritten photo capture and Gemini VLM evaluation (developed in Research Direction 1) included in the first live classroom pilot, or should the pilot strictly use rapid structured types (MCQ, predict output, numerical) to minimize classroom latency?
-8. **Question 8 (Interactive Code Execution):**
-   *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* For programming questions (`FIX_THE_CODE`, `PREDICT_OUTPUT`), should the platform incorporate a real-time sandboxed execution engine (e.g., isolated Docker/WebAssembly runner) to run student code, or should evaluation rely on static text/AST analysis and AI judging?
+   *Description:* Will the professor, Teaching Assistants (TAs), or Aarathi author the initial question bank? Will they include answer keys and rubrics? By when are they needed? *(Note: A CSV bulk-upload template is planned under ticket LRN-22 to support human question seeding).*
 
-### 3. Practice & Progression
-9. **Question 9 (Adaptive Difficulty vs. Student Choice):**
+### 3. Live-Poll Visibility and Moderation
+3. **Question 3 (Live-Poll Visibility and Moderation):**
    *Status:* `OPEN — awaiting supervisor confirmation`
-   *Description:* When a student demonstrates consistent mastery in practice, should the system automatically advance them to harder questions via an adaptive algorithm (e.g., Elo or Item Response Theory), or should students retain complete manual control over topic and difficulty selection?
+   *Description:* Can students see individual answers or only aggregate results, and at what point in time (e.g., live during voting vs. only after reveal)? Should open-ended submissions (free text and word cloud) be filtered or moderated before appearing on the podium screen to prevent inappropriate content?
 
-### 4. AI Controls, Privacy & Budget
-10. **Question 10 (Billed Gemini Key, Budget, and Student Data Privacy):**
+### 4. Anonymity
+4. **Question 4 (Anonymity Modes):**
+   *Status:* `OPEN — awaiting supervisor confirmation`
+   *Description:* Should student participation be fully anonymous (`ANONYMOUS`), anonymous to classmates but visible to the professor (`ANONYMOUS_TO_CLASS`), or fully named (`NAMED`)? Does the anonymity setting differ between quick comprehension check-in polls and formal quiz-style questions?
+
+### 5. Login and Joining
+5. **Question 5 (Login and Joining):**
+   *Status:* `OPEN — awaiting supervisor confirmation`
+   *Description:* Is guest joining via a 6-character session PIN/QR code on mobile browsers acceptable without logging in, or must students authenticate with registered student accounts? Is IIIT institutional SSO an option for integration, or should the platform rely on the current email-and-password authentication system?
+
+### 6. Grading Policy
+6. **Question 6 (Grading Policy):**
+   *Status:* `OPEN — awaiting supervisor confirmation`
+   *Description:* Are live classroom sessions and practice sessions strictly formative participation tracking, or do they contribute to student semester grades? If anything counts toward formal grades, academic integrity controls are mandatory and unreviewed AI scoring cannot be accepted.
+
+### 7. Handwritten-Photo Answers
+7. **Question 7 (Handwritten-Photo Answers):**
+   *Status:* `OPEN — awaiting supervisor confirmation`
+   *Description:* Should multimodal handwritten photo capture and Gemini VLM evaluation (developed in Research Direction 1) be dropped from live sessions to prevent classroom latency, kept for student self-study practice only, or retained for both modalities?
+
+### 8. Interactive Question Types
+8. **Question 8 (Interactive Question Types):**
+   *Status:* `OPEN — awaiting supervisor confirmation`
+   *Description:* Which programming languages should be supported for interactive `FIX_THE_CODE` and `DEBUGGING` questions? Is client-side code execution (e.g., in-browser WebAssembly/Pyodide) acceptable for student practice only, or is a trusted server-side sandboxed execution runner required?
+
+### 9. Harder-Question Chat and TA Escalation
+9. **Question 9 (Harder-Question Chat and TA Escalation):**
+   *Status:* `OPEN — awaiting supervisor confirmation`
+   *Description:* When a student masters a concept and requests harder questions or deeper chat explanations, may they see AI-generated question variants before professor review if explicitly labeled as unreviewed, or must practice questions originate exclusively from the approved human-written bank? Should struggling students be routed to a TA escalation queue for chat intervention, or should the system assign a recommended remedial question?
+
+### 10. AI on Real Student Data
+10. **Question 10 (AI on Real Student Data):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* Given that Google AI Studio's free tier permits prompt data logging (violating student data privacy requirements for production student submissions), what institutional Google Cloud billing account will be provisioned for paid Gemini API calls? What is the monthly financial and token quota budget allocated per course for AI question generation, embedding duplicate detection, and automated feedback? Confirmation is required that the intended key is billed before real student content is sent to Google.
+    *Description:* Is sending real student content (written code, text answers, or uploaded photos) to Google's Gemini API acceptable, or must student content remain strictly outside AI processing? Confirmation is required for an active institutional billing account and monthly cost budget for `GEMINI_PAID_TIER=true` before real student data can be submitted.
 
-### 5. Taxonomy & Scale
-11. **Question 11 (Prerequisite Granularity and Enforcement):**
+### 11. Prerequisites
+11. **Question 11 (Prerequisites):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* Should prerequisite edges in the topic DAG strictly lock dependent practice topics until the student demonstrates proficiency in prerequisites, or should edges serve purely as advisory learning path recommendations? What level of topic granularity is expected for syllabus mapping?
-12. **Question 12 (Class Size and Deployment Scale):**
-    *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* What specific course, expected class cohort size (e.g., 60 vs. 250 concurrent students), and lecture room infrastructure are designated for the first in-classroom live trial?
+    *Description:* Should prerequisites be modeled at the high-level topic level or per-question? Should prerequisite topic edges strictly block student access until mastery is achieved, or should they serve as advisory learning path recommendations?
 
-### 6. Research Metrics & Milestones
-13. **Question 13 (Research Output and Evaluation Metrics):**
+### 12. Scale
+12. **Question 12 (Scale):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* What specific research hypotheses, pedagogical metrics, and learning outcome measurements should be tracked during the pilot to evaluate effectiveness for academic research papers and publications?
-14. **Question 14 (Pilot Timeline and Milestones):**
+    *Description:* What is the expected class size, concurrent connected device count, and Cloud Run compute/memory capacity assumptions for the live lecture pilot?
+
+### 13. Research Outputs
+13. **Question 13 (Research Outputs):**
     *Status:* `OPEN — awaiting supervisor confirmation`
-    *Description:* What is the target calendar timeline, academic term, and scheduled week for commencing the live classroom pilot?
+    *Description:* Is there an academic paper or report target for this project, and which pedagogical metrics matter most (e.g., student engagement, concept retention, latency)? Are Research Directions 3 (answer segmentation) and 4 (handwriting consistency) formally parked?
+
+### 14. Timeline
+14. **Question 14 (Timeline):**
+    *Status:* `OPEN — awaiting supervisor confirmation`
+    *Description:* Will the project and student engagement continue beyond Week 12 of the academic semester? This decision directly affects whether subsequent implementation phases (Phases 2 through 5) will be delivered.
 
 ---
 
