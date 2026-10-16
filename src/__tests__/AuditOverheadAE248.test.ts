@@ -13,7 +13,6 @@ import AuditLog from '../models/AuditLog';
 import gradingService from '../services/GradingService';
 import AllocationService from '../services/AllocationService';
 import { AnnotationPersistenceService, annotationPersistenceService } from '../services/AnnotationPersistenceService';
-import * as auditModule from '../lib/audit';
 import { writeAuditLog, sanitizeAuditFeedback } from '../lib/audit';
 
 describe('AE-248: Audit logging overhead reduction and hardening', () => {
@@ -211,27 +210,68 @@ describe('AE-248: Audit logging overhead reduction and hardening', () => {
         expect(details.newTagIds).toBeUndefined();
     });
 
-    // 2. Measure serialized audit-row size for a 2,000-character comment before and after
-    it('2. measures serialized audit-row size for a 2,000-character comment and demonstrates >60% payload reduction', () => {
+    // 2. Measure serialized audit-row size for an actual persisted GRADE_UPDATED row
+    it('2. measures serialized audit-row size of an actual persisted GRADE_UPDATED audit row and demonstrates >60% payload reduction', async () => {
         const commentBefore = 'A'.repeat(2000);
         const commentAfter = 'B'.repeat(2000);
 
-        // BEFORE (legacy with duplicates: changes, previousValues/newValues, aliases)
-        const legacyDetails: Record<string, unknown> = {
-            examId: testExamId.toString(),
-            answerScriptId: testScriptId.toString(),
+        // Step 1: Initial grade save with long comment
+        await gradingService.saveGrade({
+            scriptId: testScriptId,
             question: 1,
-            totalScore: 7,
-            marksAwardedCount: 2,
+            marksAwarded: [
+                { criterionName: 'Correctness', score: 3 },
+                { criterionName: 'Complexity', score: 2 }
+            ],
+            feedback: commentBefore,
+            userId: taId,
+            userRole: UserRole.TA,
+            isFinal: false
+        });
+
+        // Step 2: Update grade with new long comment to trigger GRADE_UPDATED audit log insertion
+        await gradingService.saveGrade({
+            scriptId: testScriptId,
+            question: 1,
+            marksAwarded: [
+                { criterionName: 'Correctness', score: 4 },
+                { criterionName: 'Complexity', score: 3 }
+            ],
+            feedback: commentAfter,
+            userId: taId,
+            userRole: UserRole.TA,
+            isFinal: false
+        });
+
+        // Retrieve the actual persisted GRADE_UPDATED row from the database
+        const persistedDoc = await AuditLog.findOne({ action: 'GRADE_UPDATED' }).lean();
+        expect(persistedDoc).not.toBeNull();
+
+        const details = (persistedDoc!.details || {}) as Record<string, unknown>;
+
+        // Verify clean structure: contains before and after, but no duplicates or aliases
+        expect(details.before).toBeDefined();
+        expect(details.after).toBeDefined();
+        expect(details.changes).toBeUndefined();
+        expect(details.previousValues).toBeUndefined();
+        expect(details.newValues).toBeUndefined();
+        expect(details.previousTotalScore).toBeUndefined();
+        expect(details.newTotalScore).toBeUndefined();
+        expect(details.previousFeedback).toBeUndefined();
+        expect(details.newFeedback).toBeUndefined();
+
+        // Measure serialized size of the actual persisted row
+        const afterSerialized = JSON.stringify(persistedDoc);
+        const afterBytes = Buffer.byteLength(afterSerialized, 'utf8');
+
+        // Construct the equivalent legacy document containing the duplicate fields
+        const legacyDetails: Record<string, unknown> = {
+            ...details,
             rubricId: testRubricId.toString(),
-            isFinal: false,
-            changedFields: ['feedback', 'totalScore'],
             changes: {
                 feedback: { previous: commentBefore, new: commentAfter },
                 totalScore: { previous: 5, new: 7 }
             },
-            before: { feedback: commentBefore, totalScore: 5 },
-            after: { feedback: commentAfter, totalScore: 7 },
             previousValues: { feedback: commentBefore, totalScore: 5 },
             newValues: { feedback: commentAfter, totalScore: 7 },
             previousTotalScore: 5,
@@ -239,54 +279,30 @@ describe('AE-248: Audit logging overhead reduction and hardening', () => {
             previousScore: 5,
             newScore: 7,
             previousFeedback: commentBefore,
-            newFeedback: commentAfter
+            newFeedback: commentAfter,
+            previousMarksAwarded: [
+                { criterionName: 'Correctness', score: 3 },
+                { criterionName: 'Complexity', score: 2 }
+            ],
+            newMarksAwarded: [
+                { criterionName: 'Correctness', score: 4 },
+                { criterionName: 'Complexity', score: 3 }
+            ]
         };
 
         const legacyAuditDoc = {
-            user: new mongoose.Types.ObjectId(taId),
-            action: 'GRADE_UPDATED',
-            outcome: 'SUCCESS',
-            entityId: new mongoose.Types.ObjectId(),
-            entityType: 'Grade',
-            details: legacyDetails,
-            ipAddress: '127.0.0.1'
-        };
-
-        // AFTER (clean with only before and after snapshots)
-        const cleanDetails: Record<string, unknown> = {
-            examId: testExamId.toString(),
-            answerScriptId: testScriptId.toString(),
-            question: 1,
-            totalScore: 7,
-            marksAwardedCount: 2,
-            rubricId: testRubricId.toString(),
-            isFinal: false,
-            changedFields: ['feedback', 'totalScore'],
-            before: { feedback: commentBefore, totalScore: 5 },
-            after: { feedback: commentAfter, totalScore: 7 }
-        };
-
-        const cleanAuditDoc = {
-            user: new mongoose.Types.ObjectId(taId),
-            action: 'GRADE_UPDATED',
-            outcome: 'SUCCESS',
-            entityId: new mongoose.Types.ObjectId(),
-            entityType: 'Grade',
-            details: cleanDetails,
-            ipAddress: '127.0.0.1'
+            ...persistedDoc,
+            details: legacyDetails
         };
 
         const beforeSerialized = JSON.stringify(legacyAuditDoc);
-        const afterSerialized = JSON.stringify(cleanAuditDoc);
-
         const beforeBytes = Buffer.byteLength(beforeSerialized, 'utf8');
-        const afterBytes = Buffer.byteLength(afterSerialized, 'utf8');
         const reductionBytes = beforeBytes - afterBytes;
         const reductionPercentage = (reductionBytes / beforeBytes) * 100;
 
-        // Size with duplicates exceeded 16KB; clean size is ~4.4KB
+        // Size with duplicates was ~17.8 KB; clean persisted row is ~4.8 KB
         expect(beforeBytes).toBeGreaterThan(16000);
-        expect(afterBytes).toBeLessThan(5000);
+        expect(afterBytes).toBeLessThan(5500);
         expect(reductionPercentage).toBeGreaterThan(65);
     });
 
@@ -310,10 +326,22 @@ describe('AE-248: Audit logging overhead reduction and hardening', () => {
             }
         });
 
-        const findByIdSpy = vi.spyOn(IngestionPage, 'findById');
+        const observedProjections: string[] = [];
+        const origFindById = IngestionPage.findById.bind(IngestionPage);
+        const findByIdSpy = vi.spyOn(IngestionPage, 'findById').mockImplementation((...args: unknown[]) => {
+            const query = (origFindById as (...fnArgs: unknown[]) => mongoose.Query<unknown, unknown>)(...args);
+            const origSelect = query.select.bind(query);
+            query.select = vi.fn().mockImplementation((proj: unknown) => {
+                if (typeof proj === 'string') {
+                    observedProjections.push(proj);
+                }
+                return origSelect(proj as never);
+            });
+            return query;
+        });
 
-        // Save new annotation to ingestion page
-        await annotationPersistenceService.savePageAnnotations({
+        // Save 1: Unthrottled save -> write will occur, so previous snapshot MUST be read using projection metadata.annotations
+        const firstSave = await annotationPersistenceService.savePageAnnotations({
             scriptId: testScriptId.toString(),
             pageIdentifier: ingestionPage._id.toString(),
             payload: {
@@ -333,49 +361,62 @@ describe('AE-248: Audit logging overhead reduction and hardening', () => {
             requireBaseUpdatedAt: false
         });
 
-        // Verify findById was called and used .select('metadata.annotations')
-        const selectCalls = findByIdSpy.mock.results;
-        expect(selectCalls.length).toBeGreaterThan(0);
+        expect(firstSave).toBeDefined();
+
+        // Assert that the projection metadata.annotations was used when snapshot was needed
+        expect(observedProjections).toContain('metadata.annotations');
 
         const logs = await AuditLog.find({ action: 'PAGE_ANNOTATIONS_SAVED', entityId: ingestionPage._id });
         expect(logs).toHaveLength(1);
         const details = logs[0].details as Record<string, unknown>;
         expect(details.annotationsAdded).toBe(1);
         expect(details.previousAnnotationsCount).toBe(1);
+
+        // Reset observed projections for throttled save check
+        observedProjections.length = 0;
+
+        // Save 2: Throttled save shortly afterward -> write will NOT occur
+        const secondSave = await annotationPersistenceService.savePageAnnotations({
+            scriptId: testScriptId.toString(),
+            pageIdentifier: ingestionPage._id.toString(),
+            payload: {
+                version: 1,
+                pages: {
+                    [ingestionPage._id.toString()]: {
+                        annotations: [
+                            { id: 'ann-init', type: 'check', x: 50, y: 50, size: 24, color: '#16a34a' },
+                            { id: 'ann-new', type: 'cross', x: 100, y: 100, size: 24, color: '#dc2626' },
+                            { id: 'ann-third', type: 'cross', x: 150, y: 150, size: 24, color: '#dc2626' }
+                        ],
+                        strokes: []
+                    }
+                }
+            },
+            userId: taId,
+            userRole: UserRole.TA,
+            requireBaseUpdatedAt: false
+        });
+
+        expect(secondSave).toBeDefined();
+
+        // Verify that a throttled save avoids reading the previous annotation snapshot
+        expect(observedProjections).not.toContain('metadata.annotations');
+
+        // Audit log count remains 1 due to throttling
+        const logsAfterThrottled = await AuditLog.find({ action: 'PAGE_ANNOTATIONS_SAVED', entityId: ingestionPage._id });
+        expect(logsAfterThrottled).toHaveLength(1);
+
+        findByIdSpy.mockRestore();
     });
 
     // 4. Throttle: Advance timestamp only after writeAuditLog succeeds; prune stale throttle keys safely
     it('4. AnnotationPersistenceService advances throttle timestamp only after writeAuditLog succeeds and prunes stale keys', async () => {
-        // Step A: Simulate writeAuditLog rejection
-        const writeSpy = vi.spyOn(auditModule, 'writeAuditLog').mockRejectedValueOnce(new Error('Audit DB write error'));
+        // Step A: Make AuditLog.create reject once instead of mocking writeAuditLog to reject
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const createSpy = vi.spyOn(AuditLog, 'create').mockRejectedValueOnce(new Error('Audit DB write error') as never);
 
-        await expect(
-            annotationPersistenceService.savePageAnnotations({
-                scriptId: testScriptId.toString(),
-                pageIdentifier: testPageId.toString(),
-                payload: {
-                    version: 1,
-                    pages: {
-                        [testPageId.toString()]: {
-                            annotations: [{ id: 'ann-1', type: 'check', x: 10, y: 20, size: 20, color: '#16a34a' }],
-                            strokes: []
-                        }
-                    }
-                },
-                userId: taId,
-                userRole: UserRole.TA,
-                requireBaseUpdatedAt: false
-            })
-        ).rejects.toThrow('Audit DB write error');
-
-        // Throttle key MUST NOT have been advanced because writeAuditLog failed
-        expect(AnnotationPersistenceService.getThrottleKeyCount()).toBe(0);
-
-        // Restore spy
-        writeSpy.mockRestore();
-
-        // Step B: Now successful save
-        await annotationPersistenceService.savePageAnnotations({
+        // Verify the first annotation save succeeds even though its audit insert fails
+        const firstSaveResult = await annotationPersistenceService.savePageAnnotations({
             scriptId: testScriptId.toString(),
             pageIdentifier: testPageId.toString(),
             payload: {
@@ -392,13 +433,59 @@ describe('AE-248: Audit logging overhead reduction and hardening', () => {
             requireBaseUpdatedAt: false
         });
 
-        // Throttle key MUST now be set
+        expect(firstSaveResult).toBeDefined();
+        expect(firstSaveResult.annotations).toHaveLength(1);
+        expect(consoleErrorSpy).toHaveBeenCalled();
+
+        // Assert that the throttle map remains empty
+        expect(AnnotationPersistenceService.getThrottleKeyCount()).toBe(0);
+
+        // Verify no audit row was inserted
+        const logsAfterFailed = await AuditLog.find({ action: 'PAGE_ANNOTATIONS_SAVED' });
+        expect(logsAfterFailed).toHaveLength(0);
+
+        // Step B: Perform a second save shortly afterward and verify that it successfully writes an audit row
+        const secondSaveResult = await annotationPersistenceService.savePageAnnotations({
+            scriptId: testScriptId.toString(),
+            pageIdentifier: testPageId.toString(),
+            payload: {
+                version: 1,
+                pages: {
+                    [testPageId.toString()]: {
+                        annotations: [
+                            { id: 'ann-1', type: 'check', x: 10, y: 20, size: 20, color: '#16a34a' },
+                            { id: 'ann-2', type: 'cross', x: 30, y: 40, size: 20, color: '#dc2626' }
+                        ],
+                        strokes: []
+                    }
+                }
+            },
+            userId: taId,
+            userRole: UserRole.TA,
+            requireBaseUpdatedAt: false
+        });
+
+        expect(secondSaveResult).toBeDefined();
+        expect(secondSaveResult.annotations).toHaveLength(2);
+
+        // Verify that the second save successfully wrote an audit row
+        const logsAfterSuccess = await AuditLog.find({ action: 'PAGE_ANNOTATIONS_SAVED' });
+        expect(logsAfterSuccess).toHaveLength(1);
+        expect(logsAfterSuccess[0].details).toMatchObject({
+            annotationsAdded: 1,
+            totalAnnotations: 2
+        });
+
+        // Verify the throttle map is populated only after the successful insertion
         expect(AnnotationPersistenceService.getThrottleKeyCount()).toBe(1);
 
         // Step C: Test pruneStaleThrottleKeys
         // Calling prune with a simulated future timestamp > 60s in the future should prune the entry
         AnnotationPersistenceService.pruneStaleThrottleKeys(Date.now() + 65000);
         expect(AnnotationPersistenceService.getThrottleKeyCount()).toBe(0);
+
+        createSpy.mockRestore();
+        consoleErrorSpy.mockRestore();
     });
 
     // 5. Sanitizer: return safe placeholder beyond depth limit and verify circular reference at depth 7 persists successfully

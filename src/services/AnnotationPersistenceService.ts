@@ -560,27 +560,34 @@ export class AnnotationPersistenceService {
         else annotationsRemoved = -diff;
       }
 
-      await writeAuditLog({
-        user: userId,
-        action: 'PAGE_ANNOTATIONS_SAVED',
-        outcome: 'SUCCESS',
-        entityId: targetPageId,
-        entityType: pageDoc ? 'Page' : 'IngestionPage',
-        details: {
-          scriptId: script._id.toString(),
-          pageNumber: targetPageNumber,
-          totalAnnotations: normalizedPageData.annotations.length,
-          totalStrokes: normalizedPageData.strokes.length,
-          annotationsAdded,
-          annotationsRemoved,
-          previousAnnotationsCount: prevAnnList.length,
-          previousStrokesCount: previousAnnotationsSnapshot.strokes.length,
-        },
-        ipAddress,
-      });
+      let auditWritten = false;
+      try {
+        auditWritten = await writeAuditLog({
+          user: userId,
+          action: 'PAGE_ANNOTATIONS_SAVED',
+          outcome: 'SUCCESS',
+          entityId: targetPageId,
+          entityType: pageDoc ? 'Page' : 'IngestionPage',
+          details: {
+            scriptId: script._id.toString(),
+            pageNumber: targetPageNumber,
+            totalAnnotations: normalizedPageData.annotations.length,
+            totalStrokes: normalizedPageData.strokes.length,
+            annotationsAdded,
+            annotationsRemoved,
+            previousAnnotationsCount: prevAnnList.length,
+            previousStrokesCount: previousAnnotationsSnapshot.strokes.length,
+          },
+          ipAddress,
+        });
+      } catch (err) {
+        console.error('Failed to write page annotation audit log:', err);
+      }
 
       // Advance throttle timestamp only after writeAuditLog succeeds (AE-248)
-      AnnotationPersistenceService.lastAuditLogTimestamps.set(throttleKey, now);
+      if (auditWritten) {
+        AnnotationPersistenceService.lastAuditLogTimestamps.set(throttleKey, now);
+      }
     }
 
     return {

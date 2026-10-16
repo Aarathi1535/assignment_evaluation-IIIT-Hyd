@@ -95,12 +95,12 @@ export function sanitizeAuditFeedback(value: unknown, activePath = new Set<objec
  * When session is provided, operations are scoped to that transaction and errors are re-thrown.
  * When session is absent, best-effort logging is preserved and errors are swallowed.
  */
-export async function writeAuditLog(params: AuditLogParams): Promise<void> {
+export async function writeAuditLog(params: AuditLogParams): Promise<boolean> {
     try {
         const userId = parseUserObjectId(params.user);
         if (!userId) {
             // Omit the audit log entry if actor ID is invalid or unavailable
-            return;
+            return false;
         }
 
         // Sanitize details by replacing raw database error info with a user-friendly message
@@ -133,10 +133,12 @@ export async function writeAuditLog(params: AuditLogParams): Promise<void> {
         } else {
             await AuditLog.create(auditDoc);
         }
+        return true;
     } catch (error) {
         if (params.session) {
             throw error;
         }
         console.error('Failed to write audit log:', error);
+        return false;
     }
 }
