@@ -2,6 +2,38 @@ import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose, { QueryFilter } from 'mongoose';
 import { SYSTEM_ROLE } from '../constants/permissions';
 
+export interface IStudentExamResponse {
+    _id: string;
+    title: string;
+    course: mongoose.Types.ObjectId | string | Record<string, unknown>;
+    examDate: Date;
+    totalMarks: number;
+    status: ExamStatus;
+    numberOfQuestions: number;
+    gradingDeadline?: Date | null;
+    createdAt?: Date;
+    updatedAt?: Date;
+}
+
+export function shapeExamForStudent(exam: IExam | Record<string, unknown>): IStudentExamResponse {
+    const doc = typeof (exam as { toObject?: () => Record<string, unknown> }).toObject === 'function'
+        ? (exam as { toObject: () => Record<string, unknown> }).toObject()
+        : { ...(exam as Record<string, unknown>) };
+
+    return {
+        _id: (doc._id as { toString?: () => string })?.toString?.() ?? String(doc._id),
+        title: String(doc.title),
+        course: doc.course as mongoose.Types.ObjectId | string | Record<string, unknown>,
+        examDate: doc.examDate as Date,
+        totalMarks: Number(doc.totalMarks),
+        status: doc.status as ExamStatus,
+        numberOfQuestions: Number(doc.numberOfQuestions),
+        gradingDeadline: (doc.gradingDeadline as Date) ?? null,
+        createdAt: doc.createdAt as Date,
+        updatedAt: doc.updatedAt as Date,
+    };
+}
+
 class ExamRepository {
     async createExam(data: Partial<IExam>): Promise<IExam> {
         const exam = new Exam(data);

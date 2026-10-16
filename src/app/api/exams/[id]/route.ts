@@ -6,6 +6,7 @@ import { updateExamSchema } from '../../../../validations/examValidation';
 import { requirePermission } from '../../../../lib/apiAuth';
 import { Permission } from '../../../../constants/permissions';
 import { HttpError } from '../../../../lib/errors';
+import { shapeExamForStudent } from '../../../../repositories/ExamRepository';
 
 export const dynamic = 'force-dynamic';
 
@@ -173,10 +174,14 @@ export async function GET(
       }, { status: 404 });
     }
 
+    const data = auth.user.role === 'STUDENT'
+      ? shapeExamForStudent(exam)
+      : exam;
+
     return NextResponse.json({
       success: true,
       message: 'Exam retrieved successfully',
-      data: exam
+      data
     }, { status: 200 });
 
   } catch (error: unknown) {
