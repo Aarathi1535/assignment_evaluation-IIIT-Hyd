@@ -18,19 +18,34 @@ export function parseBooleanFlag(val: string | undefined | null): boolean {
  * Checks whether a feature flag is enabled.
  * Defaults to false (disabled) when unset or false.
  * Supports consistent server and browser evaluation:
- * - FEATURE_<FLAG_NAME>
- * - NEXT_PUBLIC_FEATURE_<FLAG_NAME>
- * - <FLAG_NAME>
- * - NEXT_PUBLIC_<FLAG_NAME>
+ * - FEATURE_<FLAG_NAME> (server authorization gate)
+ * - NEXT_PUBLIC_FEATURE_<FLAG_NAME> (client navigation display flag)
+ *
+ * If conflicting values are configured (e.g. one true and one false),
+ * the feature remains disabled to prevent unintended exposure.
  */
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
   if (flag === 'LEARNING_MODULE') {
-    return (
-      parseBooleanFlag(process.env.FEATURE_LEARNING_MODULE) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE) ||
-      parseBooleanFlag(process.env.LEARNING_MODULE) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_LEARNING_MODULE)
-    );
+    const serverVal = process.env.FEATURE_LEARNING_MODULE;
+    const clientVal = process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE;
+
+    const hasServer = serverVal !== undefined && serverVal !== null && serverVal.trim() !== '';
+    const hasClient = clientVal !== undefined && clientVal !== null && clientVal.trim() !== '';
+
+    if (!hasServer && !hasClient) {
+      return false;
+    }
+
+    if (hasServer && !hasClient) {
+      return parseBooleanFlag(serverVal);
+    }
+
+    if (!hasServer && hasClient) {
+      return parseBooleanFlag(clientVal);
+    }
+
+    // Both are configured: both must be true; conflicting values cannot unexpectedly enable
+    return parseBooleanFlag(serverVal) && parseBooleanFlag(clientVal);
   }
 
   return false;
