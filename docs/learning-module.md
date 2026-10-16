@@ -188,8 +188,8 @@ classDiagram
 | | `current` | `any` | Current value of the field prior to suggestion. |
 | | `source` | `string` | Enum: `'AI'` \| `'HEURISTIC'`. Indicates origin of suggestion. |
 | | `model` | `string` | Optional AI model ID generating the suggestion. |
-| | `confidence` | `number` | Float [0.0 - 1.0] indicating classification confidence. |
-| | `rationale` | `string` | Optional explanatory reasoning for the suggestion. |
+| | `confidence` | `number` | Float [0.0 - 1.0] indicating classification confidence. Required. |
+| | `rationale` | `string` | Explanatory reasoning for the tag suggestion. Required. |
 | | `status` | `string` | Enum: `'PENDING'` \| `'ACCEPTED'` \| `'EDITED'` \| `'REJECTED'`. Defaults to `'PENDING'`. |
 | | `decidedBy` | `ObjectId` | Optional reviewer identifier who accepted, edited, or rejected the suggestion. |
 
