@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, BookOpen } from 'lucide-react';
 import { ReadOnlyScriptViewer } from '@/components/student/ReadOnlyScriptViewer';
+import { ItemizedFeedbackPanel } from '@/components/student/ItemizedFeedbackPanel';
 
 export default function StudentScriptViewerPage() {
   const params = useParams();
   const scriptId = (params?.scriptId as string) || '';
 
   return (
-    <div className="flex-1 space-y-4 p-4 md:p-8 pt-6 max-w-7xl mx-auto w-full">
+    <div className="flex-1 space-y-4 p-4 md:p-6 pt-4 max-w-7xl mx-auto w-full">
       {/* Top Header / Breadcrumb navigation */}
       <div className="flex items-center justify-between pb-2 border-b border-slate-200">
         <div className="flex items-center space-x-3">
@@ -30,8 +31,15 @@ export default function StudentScriptViewerPage() {
         </div>
       </div>
 
-      {/* Embedded Read-Only Script Viewer */}
-      <ReadOnlyScriptViewer scriptId={scriptId} />
+      {/* Embedded Read-Only Script Viewer beside Itemized Feedback Panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="lg:col-span-8 w-full">
+          <ReadOnlyScriptViewer scriptId={scriptId} />
+        </div>
+        <div className="lg:col-span-4 w-full">
+          <ItemizedFeedbackPanel scriptId={scriptId} />
+        </div>
+      </div>
     </div>
   );
 }

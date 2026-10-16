@@ -23,6 +23,42 @@ export interface StudentResultItemDto {
     maxMarks?: number;
 }
 
+export interface ReleasedStudentResultDto {
+    examId: string;
+    examTitle: string;
+    courseCode: string;
+    examDate: Date | string;
+    status: 'RELEASED';
+    scriptId: string;
+    total: number;
+    maxMarks: number;
+}
+
+export interface CriterionResultDto {
+    name: string;
+    score: number;
+    points: number;
+    feedback?: string;
+}
+
+export interface QuestionResultDto {
+    questionNumber: number | null;
+    maxMarks: number;
+    awarded: number;
+    feedback?: string;
+    criteria: CriterionResultDto[];
+}
+
+export interface ItemizedResultDto {
+    exam: {
+        title: string;
+        totalMarks: number;
+    };
+    mode: 'QUESTION' | 'WHOLE';
+    questions: QuestionResultDto[];
+    total: number;
+    maxTotal: number;
+}
 export class StudentResultService {
     /**
      * Validates that the request is made by an authenticated, active student
@@ -166,6 +202,18 @@ export class StudentResultService {
                 return { isReleased: false };
             }
 
+            if (wholeScriptGrade.marksAwarded && wholeScriptGrade.marksAwarded.length > 0) {
+                const allRubricCriteriaNames = new Set(
+                    (rubric.questions || []).flatMap(q => q.criteria || []).map(c => c.criterionName)
+                );
+                const hasInvalidCriterion = wholeScriptGrade.marksAwarded.some(
+                    m => !allRubricCriteriaNames.has(m.criterionName)
+                );
+                if (hasInvalidCriterion) {
+                    return { isReleased: false };
+                }
+            }
+
             const maxMarks = rubric.questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
             if (maxMarks <= 0) {
                 return { isReleased: false };
@@ -180,6 +228,11 @@ export class StudentResultService {
         }
 
         // Question-wise grading mode:
+        // Reject if any grade has invalid/non-numeric question
+        if (grades.some(g => typeof g.question !== 'number')) {
+            return { isReleased: false };
+        }
+
         // 1. Rubric version integrity: Use the persisted Grade.rubric references as the source of truth.
         // Ensure all grades reference a rubric and share a consistent rubric/version.
         const rubricIdStrings = Array.from(new Set(grades.map(g => g.rubric?.toString()).filter(Boolean)));
@@ -210,6 +263,26 @@ export class StudentResultService {
         const hasMissingRubricQuestions = requiredRubricQuestions.some(qNum => !finalGradedQuestionSet.has(qNum));
         if (hasMissingRubricQuestions) {
             return { isReleased: false };
+        }
+
+        // Validate that no duplicate or extraneous question grades exist
+        if (grades.length !== requiredRubricQuestions.length) {
+            return { isReleased: false };
+        }
+
+        // Validate that each question grade's marksAwarded criteria exist in the referenced rubric
+        for (const grade of grades) {
+            const qRubric = rubric.questions.find(q => q.questionNumber === grade.question);
+            if (!qRubric) {
+                return { isReleased: false };
+            }
+            if (grade.marksAwarded && grade.marksAwarded.length > 0) {
+                const qCriteriaNames = new Set((qRubric.criteria || []).map(c => c.criterionName));
+                const hasInvalidCriterion = grade.marksAwarded.some(m => !qCriteriaNames.has(m.criterionName));
+                if (hasInvalidCriterion) {
+                    return { isReleased: false };
+                }
+            }
         }
 
         // 2. Allocation policy for question-wise grading:
@@ -390,6 +463,157 @@ export class StudentResultService {
         }
 
         return { student, script, exam };
+    }
+
+    /**
+     * Retrieves itemized scores and per-question/criterion feedback for an answer script (AE-184).
+     * Enforces student ownership and release conditions via verifyStudentScriptAccess.
+     * Obtains maxMarks and criterion points from the rubric version referenced by each persisted grade.
+     * Computes the response total on the server from persisted Grade.totalScore.
+     * Strictly excludes sensitive and internal grading metadata.
+     */
+    async getItemizedStudentResult(
+        scriptId: string,
+        actingUserId?: string,
+        actingUserRole?: string
+    ): Promise<ItemizedResultDto> {
+        const { script, exam } = await this.verifyStudentScriptAccess(
+            scriptId,
+            actingUserId,
+            actingUserRole
+        );
+
+        const grades = await Grade.find({ answerScript: script._id }).lean();
+        if (!grades || grades.length === 0) {
+            throw new HttpError('Not found', 404);
+        }
+
+        const isWholeScript = grades.some(g => g.question === null || g.question === undefined);
+        const mode: 'QUESTION' | 'WHOLE' = isWholeScript ? 'WHOLE' : 'QUESTION';
+
+        const rubricCache = new Map<string, IRubric>();
+        const getRubric = async (rubricId: mongoose.Types.ObjectId | string): Promise<IRubric> => {
+            const idStr = rubricId.toString();
+            const cached = rubricCache.get(idStr);
+            if (cached) {
+                return cached;
+            }
+            const r = await Rubric.findById(rubricId).lean();
+            if (!r) {
+                throw new HttpError('Not found', 404);
+            }
+            rubricCache.set(idStr, r as unknown as IRubric);
+            return r as unknown as IRubric;
+        };
+
+        const questions: QuestionResultDto[] = [];
+
+        if (mode === 'QUESTION') {
+            const sortedGrades = [...grades].sort(
+                (a, b) => (Number(a.question) || 0) - (Number(b.question) || 0)
+            );
+
+            for (const grade of sortedGrades) {
+                if (!grade.rubric) {
+                    throw new HttpError('Not found', 404);
+                }
+                const rubric = await getRubric(grade.rubric);
+                const rubricQuestion = rubric.questions?.find(
+                    q => q.questionNumber === grade.question
+                );
+                if (!rubricQuestion) {
+                    throw new HttpError('Not found', 404);
+                }
+
+                const criteria: CriterionResultDto[] = (grade.marksAwarded || []).map(m => {
+                    const rubricCriterion = rubricQuestion.criteria?.find(
+                        c => c.criterionName === m.criterionName
+                    );
+                    if (!rubricCriterion) {
+                        throw new HttpError('Not found', 404);
+                    }
+                    const critObj: CriterionResultDto = {
+                        name: m.criterionName,
+                        score: m.score,
+                        points: rubricCriterion.points,
+                    };
+                    if (m.feedback && m.feedback.trim()) {
+                        critObj.feedback = m.feedback.trim();
+                    }
+                    return critObj;
+                });
+
+                const qDto: QuestionResultDto = {
+                    questionNumber: grade.question as number,
+                    maxMarks: rubricQuestion.maxMarks,
+                    awarded: grade.totalScore,
+                    criteria,
+                };
+                if (grade.feedback && grade.feedback.trim()) {
+                    qDto.feedback = grade.feedback.trim();
+                }
+
+                questions.push(qDto);
+            }
+        } else {
+            // Whole script mode
+            const grade = grades[0];
+            if (!grade.rubric) {
+                throw new HttpError('Not found', 404);
+            }
+            const rubric = await getRubric(grade.rubric);
+            const allRubricCriteria = (rubric.questions || []).flatMap(q => q.criteria || []);
+            const totalRubricMarks = (rubric.questions || []).reduce(
+                (sum, q) => sum + (Number(q.maxMarks) || 0),
+                0
+            );
+
+            const criteria: CriterionResultDto[] = (grade.marksAwarded || []).map(m => {
+                const rubricCriterion = allRubricCriteria.find(
+                    c => c.criterionName === m.criterionName
+                );
+                if (!rubricCriterion) {
+                    throw new HttpError('Not found', 404);
+                }
+                const critObj: CriterionResultDto = {
+                    name: m.criterionName,
+                    score: m.score,
+                    points: rubricCriterion.points,
+                };
+                if (m.feedback && m.feedback.trim()) {
+                    critObj.feedback = m.feedback.trim();
+                }
+                return critObj;
+            });
+
+            const qDto: QuestionResultDto = {
+                questionNumber: null,
+                maxMarks: totalRubricMarks,
+                awarded: grade.totalScore,
+                criteria,
+            };
+            if (grade.feedback && grade.feedback.trim()) {
+                qDto.feedback = grade.feedback.trim();
+            }
+
+            questions.push(qDto);
+        }
+
+        const total = Math.round(
+            grades.reduce((sum, g) => sum + (Number(g.totalScore) || 0), 0) * 100
+        ) / 100;
+        const maxTotal = questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
+
+        return {
+            exam: {
+                title: exam.title,
+                totalMarks: exam.totalMarks,
+            },
+            mode,
+            questions,
+            total,
+            maxTotal,
+        };
     }
 }
 
