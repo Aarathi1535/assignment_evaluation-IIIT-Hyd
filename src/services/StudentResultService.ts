@@ -59,7 +59,6 @@ export interface ItemizedResultDto {
     total: number;
     maxTotal: number;
 }
-
 export class StudentResultService {
     /**
      * Validates that the request is made by an authenticated, active student
@@ -203,6 +202,18 @@ export class StudentResultService {
                 return { isReleased: false };
             }
 
+            if (wholeScriptGrade.marksAwarded && wholeScriptGrade.marksAwarded.length > 0) {
+                const allRubricCriteriaNames = new Set(
+                    (rubric.questions || []).flatMap(q => q.criteria || []).map(c => c.criterionName)
+                );
+                const hasInvalidCriterion = wholeScriptGrade.marksAwarded.some(
+                    m => !allRubricCriteriaNames.has(m.criterionName)
+                );
+                if (hasInvalidCriterion) {
+                    return { isReleased: false };
+                }
+            }
+
             const maxMarks = rubric.questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
             if (maxMarks <= 0) {
                 return { isReleased: false };
@@ -217,6 +228,11 @@ export class StudentResultService {
         }
 
         // Question-wise grading mode:
+        // Reject if any grade has invalid/non-numeric question
+        if (grades.some(g => typeof g.question !== 'number')) {
+            return { isReleased: false };
+        }
+
         // 1. Rubric version integrity: Use the persisted Grade.rubric references as the source of truth.
         // Ensure all grades reference a rubric and share a consistent rubric/version.
         const rubricIdStrings = Array.from(new Set(grades.map(g => g.rubric?.toString()).filter(Boolean)));
@@ -247,6 +263,26 @@ export class StudentResultService {
         const hasMissingRubricQuestions = requiredRubricQuestions.some(qNum => !finalGradedQuestionSet.has(qNum));
         if (hasMissingRubricQuestions) {
             return { isReleased: false };
+        }
+
+        // Validate that no duplicate or extraneous question grades exist
+        if (grades.length !== requiredRubricQuestions.length) {
+            return { isReleased: false };
+        }
+
+        // Validate that each question grade's marksAwarded criteria exist in the referenced rubric
+        for (const grade of grades) {
+            const qRubric = rubric.questions.find(q => q.questionNumber === grade.question);
+            if (!qRubric) {
+                return { isReleased: false };
+            }
+            if (grade.marksAwarded && grade.marksAwarded.length > 0) {
+                const qCriteriaNames = new Set((qRubric.criteria || []).map(c => c.criterionName));
+                const hasInvalidCriterion = grade.marksAwarded.some(m => !qCriteriaNames.has(m.criterionName));
+                if (hasInvalidCriterion) {
+                    return { isReleased: false };
+                }
+            }
         }
 
         // 2. Allocation policy for question-wise grading:
@@ -452,25 +488,8 @@ export class StudentResultService {
             throw new HttpError('Not found', 404);
         }
 
-        // Return 404 if any relevant grade has isFinal: false
-        if (grades.some(g => g.isFinal !== true)) {
-            throw new HttpError('Not found', 404);
-        }
-
-        // Determine mode: QUESTION or WHOLE. Never mix the two modes.
-        const isAllQuestionWise = grades.every(g => typeof g.question === 'number');
-        const isAllWholeScript = grades.every(g => g.question === null || g.question === undefined);
-
-        if (!isAllQuestionWise && !isAllWholeScript) {
-            // Mixed modes not permitted
-            throw new HttpError('Not found', 404);
-        }
-
-        const mode: 'QUESTION' | 'WHOLE' = isAllQuestionWise ? 'QUESTION' : 'WHOLE';
-
-        if (mode === 'WHOLE' && grades.length !== 1) {
-            throw new HttpError('Not found', 404);
-        }
+        const isWholeScript = grades.some(g => g.question === null || g.question === undefined);
+        const mode: 'QUESTION' | 'WHOLE' = isWholeScript ? 'WHOLE' : 'QUESTION';
 
         const rubricCache = new Map<string, IRubric>();
         const getRubric = async (rubricId: mongoose.Types.ObjectId | string): Promise<IRubric> => {
@@ -510,10 +529,13 @@ export class StudentResultService {
                     const rubricCriterion = rubricQuestion.criteria?.find(
                         c => c.criterionName === m.criterionName
                     );
+                    if (!rubricCriterion) {
+                        throw new HttpError('Not found', 404);
+                    }
                     const critObj: CriterionResultDto = {
                         name: m.criterionName,
                         score: m.score,
-                        points: rubricCriterion ? rubricCriterion.points : m.score,
+                        points: rubricCriterion.points,
                     };
                     if (m.feedback && m.feedback.trim()) {
                         critObj.feedback = m.feedback.trim();
@@ -542,7 +564,7 @@ export class StudentResultService {
             const rubric = await getRubric(grade.rubric);
             const allRubricCriteria = (rubric.questions || []).flatMap(q => q.criteria || []);
             const totalRubricMarks = (rubric.questions || []).reduce(
-                (sum, q) => sum + (q.maxMarks || 0),
+                (sum, q) => sum + (Number(q.maxMarks) || 0),
                 0
             );
 
@@ -550,10 +572,13 @@ export class StudentResultService {
                 const rubricCriterion = allRubricCriteria.find(
                     c => c.criterionName === m.criterionName
                 );
+                if (!rubricCriterion) {
+                    throw new HttpError('Not found', 404);
+                }
                 const critObj: CriterionResultDto = {
                     name: m.criterionName,
                     score: m.score,
-                    points: rubricCriterion ? rubricCriterion.points : m.score,
+                    points: rubricCriterion.points,
                 };
                 if (m.feedback && m.feedback.trim()) {
                     critObj.feedback = m.feedback.trim();
@@ -563,7 +588,7 @@ export class StudentResultService {
 
             const qDto: QuestionResultDto = {
                 questionNumber: null,
-                maxMarks: exam.totalMarks || totalRubricMarks,
+                maxMarks: totalRubricMarks,
                 awarded: grade.totalScore,
                 criteria,
             };
@@ -577,7 +602,7 @@ export class StudentResultService {
         const total = Math.round(
             grades.reduce((sum, g) => sum + (Number(g.totalScore) || 0), 0) * 100
         ) / 100;
-        const maxTotal = exam.totalMarks || questions.reduce((sum, q) => sum + q.maxMarks, 0);
+        const maxTotal = questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
 
         return {
             exam: {

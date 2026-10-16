@@ -528,4 +528,225 @@ describe('AE-184: Itemized Scores + Per-Question Feedback View', () => {
         expect(sourceCode).not.toContain('<select');
         expect(sourceCode).not.toMatch(/method:\s*['"](POST|PUT|PATCH|DELETE)['"]/i);
     });
+
+    // 8. Regression: exam.totalMarks is 100 but graded rubric sums to 10
+    it('8. derives maximum marks from graded rubric (10) when exam.totalMarks is 100', async () => {
+        await Exam.findByIdAndUpdate(exam._id, { totalMarks: 100 });
+
+        const smallRubric = await Rubric.create({
+            exam: exam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            version: 3,
+            questions: [
+                {
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [
+                        { criterionName: 'Basic Correctness', points: 10 },
+                    ],
+                },
+            ],
+            isActive: true,
+        });
+
+        await Grade.create({
+            answerScript: scriptA._id,
+            rubric: smallRubric._id,
+            gradedBy: ta._id,
+            marksAwarded: [
+                { criterionName: 'Basic Correctness', score: 8 },
+            ],
+            totalScore: 8,
+            isFinal: true,
+        });
+
+        await Allocation.create({
+            exam: exam._id,
+            answerScript: scriptA._id,
+            ta: ta._id,
+            allocatedBy: prof._id,
+            status: AllocationStatus.COMPLETED,
+        });
+
+        const req = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`);
+        const res = await resultGET(req, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.mode).toBe('WHOLE');
+        expect(body.exam.totalMarks).toBe(100);
+        expect(body.total).toBe(8);
+        expect(body.maxTotal).toBe(10); // Strictly derived from rubric sum (10), not exam.totalMarks (100)
+        expect(body.questions).toHaveLength(1);
+        expect(body.questions[0].maxMarks).toBe(10); // Strictly derived from rubric (10), not exam.totalMarks (100)
+        expect(body.questions[0].awarded).toBe(8);
+        expect(body.questions[0].criteria[0].points).toBe(10);
+    });
+
+    // 9. Regression: missing criterion in referenced rubric cannot appear to have full marks
+    it('9. missing rubric criterion returns generic 404 and cannot appear to have full marks', async () => {
+        await Grade.create({
+            answerScript: scriptA._id,
+            rubric: rubricV1._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [
+                // 'Lexical Analysis' is in rubricV1, but 'NonExistentCriterion' is NOT in rubricV1
+                { criterionName: 'NonExistentCriterion', score: 25 },
+            ],
+            totalScore: 25,
+            isFinal: true,
+        });
+
+        await Allocation.create({
+            exam: exam._id,
+            answerScript: scriptA._id,
+            ta: ta._id,
+            question: 1,
+            allocatedBy: prof._id,
+            status: AllocationStatus.COMPLETED,
+        });
+
+        const req = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`);
+        const res = await resultGET(req, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+
+        // Must reject with generic 404
+        expect(res.status).toBe(404);
+        const body = await res.json();
+        expect(body.message).toBe('Not found');
+        // Must never leak internal details
+        expect(JSON.stringify(body)).not.toContain('NonExistentCriterion');
+        expect(JSON.stringify(body)).not.toContain('rubric');
+    });
+
+    // 10. Regression: mixed-mode results remain unavailable with generic 404
+    it('10. returns generic 404 for mixed-mode results (both whole-script and question-wise grades)', async () => {
+        // Grade 1: Whole-script grade (question undefined)
+        await Grade.create({
+            answerScript: scriptA._id,
+            rubric: rubricV1._id,
+            gradedBy: ta._id,
+            marksAwarded: [{ criterionName: 'Lexical Analysis', score: 20 }],
+            totalScore: 20,
+            isFinal: true,
+        });
+
+        // Grade 2: Insert question-wise grade directly to simulate legacy/inconsistent DB state
+        await Grade.collection.insertOne({
+            answerScript: scriptA._id,
+            rubric: rubricV1._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Lexical Analysis', score: 20 }],
+            totalScore: 20,
+            isFinal: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        });
+
+        const req = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`);
+        const res = await resultGET(req, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+
+        expect(res.status).toBe(404);
+        const body = await res.json();
+        expect(body.message).toBe('Not found');
+    });
+
+    // 11. Regression: question-wise grading derives maximum marks from rubric (10) when exam.totalMarks is 100
+    it('11. question-wise grading derives maxTotal and per-question maxMarks from rubric when exam.totalMarks is 100', async () => {
+        await Exam.findByIdAndUpdate(exam._id, { totalMarks: 100, numberOfQuestions: 2 });
+
+        const questionRubric = await Rubric.create({
+            exam: exam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            version: 4,
+            questions: [
+                {
+                    questionNumber: 1,
+                    maxMarks: 6,
+                    criteria: [
+                        { criterionName: 'Part A', points: 6 },
+                    ],
+                },
+                {
+                    questionNumber: 2,
+                    maxMarks: 4,
+                    criteria: [
+                        { criterionName: 'Part B', points: 4 },
+                    ],
+                },
+            ],
+            isActive: true,
+        });
+
+        // Grade Q1
+        await Grade.create({
+            answerScript: scriptA._id,
+            rubric: questionRubric._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Part A', score: 5 }],
+            totalScore: 5,
+            isFinal: true,
+        });
+
+        // Grade Q2
+        await Grade.create({
+            answerScript: scriptA._id,
+            rubric: questionRubric._id,
+            gradedBy: ta._id,
+            question: 2,
+            marksAwarded: [{ criterionName: 'Part B', score: 3 }],
+            totalScore: 3,
+            isFinal: true,
+        });
+
+        // Completed allocations for both questions
+        for (const qNum of [1, 2]) {
+            await Allocation.create({
+                exam: exam._id,
+                answerScript: scriptA._id,
+                ta: ta._id,
+                question: qNum,
+                allocatedBy: prof._id,
+                status: AllocationStatus.COMPLETED,
+            });
+        }
+
+        const req = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`);
+        const res = await resultGET(req, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.mode).toBe('QUESTION');
+        expect(body.exam.totalMarks).toBe(100);
+        expect(body.total).toBe(8); // 5 + 3
+        expect(body.maxTotal).toBe(10); // Strictly derived from rubric sum (6 + 4 = 10), not exam.totalMarks (100)
+
+        expect(body.questions).toHaveLength(2);
+
+        // Q1
+        expect(body.questions[0].questionNumber).toBe(1);
+        expect(body.questions[0].maxMarks).toBe(6);
+        expect(body.questions[0].awarded).toBe(5);
+        expect(body.questions[0].criteria[0].name).toBe('Part A');
+        expect(body.questions[0].criteria[0].points).toBe(6);
+
+        // Q2
+        expect(body.questions[1].questionNumber).toBe(2);
+        expect(body.questions[1].maxMarks).toBe(4);
+        expect(body.questions[1].awarded).toBe(3);
+        expect(body.questions[1].criteria[0].name).toBe('Part B');
+        expect(body.questions[1].criteria[0].points).toBe(4);
+    });
 });
