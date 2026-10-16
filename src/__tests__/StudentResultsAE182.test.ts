@@ -8,6 +8,8 @@ import Grade from '../models/Grade';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import Rubric from '../models/Rubric';
 import { NextRequest } from 'next/server';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 let mockSessionUser: any = null;
 
@@ -26,6 +28,9 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
     let resultsGET: any;
     let examsGET: any;
     let examDetailGET: any;
+    let reopenPOST: any;
+    let scriptsGET: any;
+    let imageGET: any;
 
     let studentA: any;
     let studentB: any;
@@ -40,6 +45,9 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         resultsGET = (await import('../app/api/student/results/route')).GET;
         examsGET = (await import('../app/api/exams/route')).GET;
         examDetailGET = (await import('../app/api/exams/[id]/route')).GET;
+        reopenPOST = (await import('../app/api/allocations/[id]/reopen/route')).POST;
+        scriptsGET = (await import('../app/api/scripts/[id]/route')).GET;
+        imageGET = (await import('../app/api/ingest/[id]/pages/[pageId]/image/route')).GET;
     });
 
     beforeEach(async () => {
@@ -149,8 +157,8 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         vi.restoreAllMocks();
     });
 
-    // 1. A student's own released result is listed with its total
-    it("1. lists a student's own released result with its total marks", async () => {
+    // 1. A student's own released result is listed with its total and maxMarks derived from rubric
+    it("1. lists a student's own released result with its total marks and derives maxMarks from rubric", async () => {
         const scriptA = await AnswerScript.create({
             exam: publishedExam._id,
             student: studentA._id,
@@ -160,12 +168,27 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
             hasIdentificationConflict: false
         });
 
+        // Rubric questions sum to 10 while publishedExam.totalMarks is 100
+        const rubric10 = await Rubric.create({
+            exam: publishedExam._id,
+            createdBy: prof._id,
+            scoreStep: 0.5,
+            questions: [
+                {
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    criteria: [{ criterionName: 'Correctness', points: 10 }]
+                }
+            ],
+            isActive: true
+        });
+
         await Grade.create({
             answerScript: scriptA._id,
-            rubric: rubric._id,
+            rubric: rubric10._id,
             gradedBy: ta._id,
-            marksAwarded: [{ criterionName: 'Correctness', score: 88.5 }],
-            totalScore: 88.5,
+            marksAwarded: [{ criterionName: 'Correctness', score: 8.5 }],
+            totalScore: 8.5,
             isFinal: true
         });
 
@@ -188,8 +211,10 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         expect(record.status).toBe('RELEASED');
         expect(record.examTitle).toBe('Midterm Algorithms');
         expect(record.courseCode).toBe('CS301');
-        expect(record.total).toBe(88.5);
-        expect(record.maxMarks).toBe(100);
+        expect(record.total).toBe(8.5);
+        expect(publishedExam.totalMarks).toBe(100);
+        // Released result must report maxMarks: 10, not 100
+        expect(record.maxMarks).toBe(10);
         expect(record.scriptId).toBe(scriptA._id.toString());
     });
 
@@ -350,8 +375,8 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         expect(record.maxMarks).toBeUndefined();
     });
 
-    // 6. The feature flag being off prevents access
-    it('6. returns 404 when STUDENT_RESULTS_ENABLED feature flag is off', async () => {
+    // 6. The feature flag being off prevents access and unexpected errors return generic message
+    it('6. returns 404 when STUDENT_RESULTS_ENABLED feature flag is off and generic message on unexpected 500 error', async () => {
         process.env.STUDENT_RESULTS_ENABLED = 'false';
 
         const res = await resultsGET();
@@ -359,6 +384,43 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         const body = await res.json();
         expect(body.success).toBe(false);
         expect(body.message).toBe('Not found');
+
+        // 6a. Verify unexpected 500 errors return a generic message and do NOT expose exception details
+        process.env.STUDENT_RESULTS_ENABLED = 'true';
+        const studentResultService = (await import('../services/StudentResultService')).default;
+        const getSpy = vi.spyOn(studentResultService, 'getStudentResults').mockRejectedValueOnce(
+            new Error('DATABASE_CONNECTION_LEAK: mongodb://user:pass@cluster.internal/prod_db')
+        );
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const errRes = await resultsGET();
+        expect(errRes.status).toBe(500);
+        const errBody = await errRes.json();
+        expect(errBody.success).toBe(false);
+        expect(errBody.message).toBe('An unexpected error occurred');
+        expect(JSON.stringify(errBody)).not.toContain('DATABASE_CONNECTION_LEAK');
+        expect(JSON.stringify(errBody)).not.toContain('prod_db');
+        getSpy.mockRestore();
+        consoleErrorSpy.mockRestore();
+
+        // 6b. Verify UI "View Grades" link is hidden by default and when NEXT_PUBLIC_STUDENT_RESULTS_ENABLED is false
+        delete process.env.NEXT_PUBLIC_STUDENT_RESULTS_ENABLED;
+        const StudentDashboardPage = (await import('../app/(dashboard)/student/page')).default;
+        let html = renderToStaticMarkup(React.createElement(StudentDashboardPage));
+        expect(html).not.toContain('View Grades');
+        expect(html).not.toContain('/student/results');
+
+        process.env.NEXT_PUBLIC_STUDENT_RESULTS_ENABLED = 'false';
+        html = renderToStaticMarkup(React.createElement(StudentDashboardPage));
+        expect(html).not.toContain('View Grades');
+        expect(html).not.toContain('/student/results');
+
+        // Verify "View Grades" link is displayed only when NEXT_PUBLIC_STUDENT_RESULTS_ENABLED is explicitly true
+        process.env.NEXT_PUBLIC_STUDENT_RESULTS_ENABLED = 'true';
+        html = renderToStaticMarkup(React.createElement(StudentDashboardPage));
+        expect(html).toContain('View Grades');
+        expect(html).toContain('/student/results');
+
+        delete process.env.NEXT_PUBLIC_STUDENT_RESULTS_ENABLED;
     });
 
     // 7. Unauthenticated, TA, PROFESSOR, and deactivated-student requests receive 401/403
@@ -388,6 +450,23 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         res = await resultsGET();
         expect(res.status).toBe(403);
 
+        // ADMIN role
+        const admin = await User.create({
+            name: 'Admin Albus',
+            email: 'admin@iiit.ac.in',
+            password: 'password123',
+            role: UserRole.ADMIN,
+            isActive: true
+        });
+        mockSessionUser = {
+            id: admin._id.toString(),
+            email: admin.email,
+            name: admin.name,
+            role: UserRole.ADMIN
+        };
+        res = await resultsGET();
+        expect(res.status).toBe(403);
+
         // Deactivated student
         await User.findByIdAndUpdate(studentA._id, { isActive: false });
         mockSessionUser = {
@@ -403,6 +482,27 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         await User.findByIdAndUpdate(studentA._id, { isActive: true, role: UserRole.TA });
         res = await resultsGET();
         expect(res.status).toBe(403);
+
+        // Student access to staff APIs: verify student receives HTTP 403 from GET /api/scripts/[id] and staff image route
+        await User.findByIdAndUpdate(studentA._id, { isActive: true, role: UserRole.STUDENT });
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT
+        };
+
+        const staffScriptReq = new NextRequest(`http://localhost:3000/api/scripts/${publishedExam._id}`);
+        const staffScriptRes = await scriptsGET(staffScriptReq, {
+            params: Promise.resolve({ id: publishedExam._id.toString() })
+        });
+        expect(staffScriptRes.status).toBe(403);
+
+        const staffImageReq = new NextRequest(`http://localhost:3000/api/ingest/batch-1/pages/page-1/image`);
+        const staffImageRes = await imageGET(staffImageReq, {
+            params: Promise.resolve({ id: 'batch-1', pageId: 'page-1' })
+        });
+        expect(staffImageRes.status).toBe(403);
     });
 
     // 8. Serialized responses contain none of: gradedBy, annotatedBy, enrolledStudents, qrStudentId, omrStudentId, storageKey, or isFinal
@@ -708,7 +808,7 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
             isFinal: true
         });
 
-        await Allocation.create({
+        const alloc1 = await Allocation.create({
             exam: multiQExam._id,
             ta: ta._id,
             answerScript: scriptMultiQ._id,
@@ -735,6 +835,41 @@ describe('AE-182: Student My Exams List + Auth Scope', () => {
         expect(record.total).toBe(90); // 42 + 48
         expect(record.maxMarks).toBe(100);
         expect(record.scriptId).toBe(scriptMultiQ._id.toString());
+
+        // Reopen after publish: call real POST /api/allocations/[id]/reopen route as professor
+        mockSessionUser = {
+            id: prof._id.toString(),
+            email: prof.email,
+            name: prof.name,
+            role: UserRole.PROFESSOR
+        };
+
+        const reopenReq = new NextRequest(`http://localhost:3000/api/allocations/${alloc1._id}/reopen`, {
+            method: 'POST',
+            body: JSON.stringify({ reason: 'Student submitted regrade request' })
+        });
+        const reopenRes = await reopenPOST(reopenReq, {
+            params: Promise.resolve({ id: alloc1._id.toString() })
+        });
+        expect(reopenRes.status).toBe(200);
+
+        // Switch back to Student A session: verify results list changes to NOT_AVAILABLE
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT
+        };
+
+        const afterReopenRes = await resultsGET();
+        expect(afterReopenRes.status).toBe(200);
+        const afterReopenBody = await afterReopenRes.json();
+        const afterReopenRecord = afterReopenBody.data.find((r: any) => r.examId === multiQExam._id.toString());
+        expect(afterReopenRecord).toBeDefined();
+        expect(afterReopenRecord.status).toBe('NOT_AVAILABLE');
+        expect(afterReopenRecord.total).toBeUndefined();
+        expect(afterReopenRecord.maxMarks).toBeUndefined();
+        expect(afterReopenRecord.scriptId).toBeUndefined();
     });
 
     // 13. Inactive script is never released

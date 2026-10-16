@@ -123,14 +123,19 @@ export default function StudentDashboardPage() {
     },
   ];
 
+  const isResultsEnabled =
+    process.env.NEXT_PUBLIC_STUDENT_RESULTS_ENABLED === 'true';
+
   const quickActions = (
     <>
-      <Link href="/student/results">
-        <Button variant="primary" size="md">
-          <Eye className="h-4 w-4" />
-          <span>View Grades</span>
-        </Button>
-      </Link>
+      {isResultsEnabled && (
+        <Link href="/student/results">
+          <Button variant="primary" size="md">
+            <Eye className="h-4 w-4" />
+            <span>View Grades</span>
+          </Button>
+        </Link>
+      )}
       <Button variant="secondary" size="md">
         <RefreshCw className="h-4 w-4" />
         <span>Request Regrade</span>

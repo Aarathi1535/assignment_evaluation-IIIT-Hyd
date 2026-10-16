@@ -21,12 +21,19 @@ export async function GET() {
             data: results
         }, { status: 200 });
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-        const status = error instanceof HttpError ? error.statusCode : 500;
+        if (error instanceof HttpError) {
+            return NextResponse.json({
+                success: false,
+                message: error.message,
+                data: null
+            }, { status: error.statusCode });
+        }
+
+        console.error('Unhandled error in student results route:', error);
         return NextResponse.json({
             success: false,
-            message,
+            message: 'An unexpected error occurred',
             data: null
-        }, { status });
+        }, { status: 500 });
     }
 }

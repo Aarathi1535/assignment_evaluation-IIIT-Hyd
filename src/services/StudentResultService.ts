@@ -23,17 +23,6 @@ export interface StudentResultItemDto {
     maxMarks?: number;
 }
 
-export interface ReleasedStudentResultDto {
-    examId: string;
-    examTitle: string;
-    courseCode: string;
-    examDate: Date | string;
-    status: 'RELEASED';
-    scriptId: string;
-    total: number;
-    maxMarks: number;
-}
-
 export class StudentResultService {
     /**
      * Validates that the request is made by an authenticated, active student
@@ -84,12 +73,13 @@ export class StudentResultService {
      * - All required grading work is complete (handles whole-script and question-wise grading)
      * - Every required grade has isFinal === true
      * - No associated allocation remains PENDING or IN_PROGRESS
+     * - Derives maxMarks strictly from the persisted rubric version referenced by Grade.rubric
      */
     private async evaluateReleaseConditions(
         studentId: mongoose.Types.ObjectId,
         exam: { _id?: mongoose.Types.ObjectId | string; isActive: boolean; status: ExamStatus; rubric?: mongoose.Types.ObjectId | null },
         script: IAnswerScript | null
-    ): Promise<{ isReleased: boolean; total?: number; scriptId?: string }> {
+    ): Promise<{ isReleased: boolean; total?: number; scriptId?: string; maxMarks?: number }> {
         if (!script) {
             return { isReleased: false };
         }
@@ -137,6 +127,8 @@ export class StudentResultService {
             return { isReleased: false };
         }
 
+        const examIdStr = exam._id ? exam._id.toString() : script.exam.toString();
+
         // Check for whole-script grade (question == null or undefined)
         const wholeScriptGrade = grades.find(g => g.question === null || g.question === undefined);
 
@@ -161,10 +153,29 @@ export class StudentResultService {
                 return { isReleased: false };
             }
 
+            if (!wholeScriptGrade.rubric) {
+                return { isReleased: false };
+            }
+
+            const rubric: IRubric | null = await Rubric.findById(wholeScriptGrade.rubric);
+            if (!rubric || !rubric.questions || rubric.questions.length === 0) {
+                return { isReleased: false };
+            }
+
+            if (rubric.exam.toString() !== examIdStr) {
+                return { isReleased: false };
+            }
+
+            const maxMarks = rubric.questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
+            if (maxMarks <= 0) {
+                return { isReleased: false };
+            }
+
             return {
                 isReleased: true,
                 total: Math.round(Number(wholeScriptGrade.totalScore) * 100) / 100,
-                scriptId: script._id.toString()
+                scriptId: script._id.toString(),
+                maxMarks: Math.round(maxMarks * 100) / 100
             };
         }
 
@@ -184,7 +195,6 @@ export class StudentResultService {
         }
 
         // Ensure the persisted rubric belongs to this exam
-        const examIdStr = exam._id ? exam._id.toString() : script.exam.toString();
         if (rubric.exam.toString() !== examIdStr) {
             return { isReleased: false };
         }
@@ -231,6 +241,11 @@ export class StudentResultService {
             }
         }
 
+        const maxMarks = rubric.questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
+        if (maxMarks <= 0) {
+            return { isReleased: false };
+        }
+
         // Compute total score across all finalized question grades
         const total = grades.reduce((sum, g) => sum + (Number(g.totalScore) || 0), 0);
         const roundedTotal = Math.round(total * 100) / 100;
@@ -238,7 +253,8 @@ export class StudentResultService {
         return {
             isReleased: true,
             total: roundedTotal,
-            scriptId: script._id.toString()
+            scriptId: script._id.toString(),
+            maxMarks: Math.round(maxMarks * 100) / 100
         };
     }
 
@@ -292,13 +308,13 @@ export class StudentResultService {
                 isActive: true
             });
 
-            const { isReleased, total, scriptId } = await this.evaluateReleaseConditions(
+            const { isReleased, total, scriptId, maxMarks } = await this.evaluateReleaseConditions(
                 student._id as mongoose.Types.ObjectId,
                 exam,
                 script
             );
 
-            if (isReleased && total !== undefined && scriptId) {
+            if (isReleased && total !== undefined && scriptId && maxMarks !== undefined) {
                 results.push({
                     examId: exam._id.toString(),
                     examTitle: exam.title,
@@ -307,7 +323,7 @@ export class StudentResultService {
                     status: 'RELEASED',
                     scriptId,
                     total,
-                    maxMarks: exam.totalMarks
+                    maxMarks
                 });
             } else {
                 results.push({
@@ -321,63 +337,6 @@ export class StudentResultService {
         }
 
         return results;
-    }
-
-    /**
-     * Retrieves a single released result by examId for the authenticated student.
-     * Returns generic 404 if the exam, script, or release criteria are not met.
-     */
-    async getStudentResultByExamId(
-        examId: string,
-        actingUserId?: string,
-        actingUserRole?: string
-    ): Promise<ReleasedStudentResultDto> {
-        const student = await this.validateStudentAccess(actingUserId, actingUserRole);
-
-        if (!mongoose.Types.ObjectId.isValid(examId)) {
-            throw new HttpError('Not found', 404);
-        }
-
-        const exam = await Exam.findOne({
-            _id: new mongoose.Types.ObjectId(examId),
-            isActive: true,
-            status: ExamStatus.PUBLISHED
-        }).populate<{ course: ICourse }>('course');
-
-        if (!exam) {
-            throw new HttpError('Not found', 404);
-        }
-
-        const script = await AnswerScript.findOne({
-            exam: exam._id,
-            student: student._id,
-            isActive: true
-        });
-
-        const { isReleased, total, scriptId } = await this.evaluateReleaseConditions(
-            student._id as mongoose.Types.ObjectId,
-            exam,
-            script
-        );
-
-        if (!isReleased || total === undefined || !scriptId) {
-            throw new HttpError('Not found', 404);
-        }
-
-        const courseCode = exam.course && typeof exam.course === 'object' && 'courseCode' in exam.course
-            ? exam.course.courseCode
-            : '';
-
-        return {
-            examId: exam._id.toString(),
-            examTitle: exam.title,
-            courseCode,
-            examDate: exam.examDate,
-            status: 'RELEASED',
-            scriptId,
-            total,
-            maxMarks: exam.totalMarks
-        };
     }
 }
 
