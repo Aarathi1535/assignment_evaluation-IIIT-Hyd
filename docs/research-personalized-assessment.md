@@ -147,7 +147,7 @@ During schedule creation, `PersonalizationService.generatePersonalizedAllocation
 `qIdx = (studentIndex * shiftStep + dayIndex) % M`
 
 **Why rotation reduces direct answer-sharing/copying:**
-Because the pool size is strictly validated to be $M \ge \max(N, 100)$, the cyclic offset mathematically guarantees a **collision-free daily assignment matrix**. On any given assessment day, no two students receive the same question prompt. Therefore, a student cannot simply copy-paste a peer's solutionΓÇöthey must solve their uniquely assigned problem variant.
+Because the pool size is strictly validated to be $M \ge \max(N, 100)$, the cyclic offset mathematically guarantees a **collision-free daily assignment matrix**. On any given assessment day, no two students receive the same question prompt. Therefore, a student cannot simply copy-paste a peer's solution—they must solve their uniquely assigned problem variant.
 
 **How generated question sets associate with the student's assignment:**
 The generated allocation is explicitly recorded in `PersonalizedAssessmentSchedule.ts`, mapping each `studentId` to their distinct sequence of `questionId`s. Every day, the system looks up this sequence to generate the student's unique `PersonalizedStudentAssignment` record.
