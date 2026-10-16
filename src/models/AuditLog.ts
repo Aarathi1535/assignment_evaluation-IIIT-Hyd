@@ -9,7 +9,6 @@ export interface IAuditLog extends Document {
     details?: Record<string, unknown>;
     ipAddress?: string;
     createdAt: Date;
-    updatedAt?: Date;
 }
 
 const AuditLogSchema = new Schema<IAuditLog>(

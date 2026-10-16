@@ -243,21 +243,12 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
 
         const details = (updatedLogs[0].details || {}) as Record<string, unknown>;
         expect(details.totalScore).toBe(3);
-        const changes = details.changes as Record<string, { previous: unknown; new: unknown }>;
-        expect(changes?.totalScore).toEqual({ previous: 2, new: 3 });
-        expect(details.previousTotalScore).toBe(2);
-        expect(details.newTotalScore).toBe(3);
-
-        // Verify changes behavior remains intact
-        expect(changes?.marksAwarded).toBeDefined();
-        const prevMarks = changes.marksAwarded.previous as Array<{ score: number }>;
-        const newMarks = changes.marksAwarded.new as Array<{ score: number }>;
-        expect(prevMarks[0].score).toBe(2);
-        expect(newMarks[0].score).toBe(3);
-
-        expect(changes?.tagIds).toBeDefined();
-        expect(changes.tagIds.previous).toEqual([tag1.toString()]);
-        expect(changes.tagIds.new).toEqual([tag2.toString()]);
+        // AE-248: Duplicate changes, previousValues/newValues, and score aliases removed
+        expect(details.changes).toBeUndefined();
+        expect(details.previousTotalScore).toBeUndefined();
+        expect(details.newTotalScore).toBeUndefined();
+        expect(details.previousValues).toBeUndefined();
+        expect(details.newValues).toBeUndefined();
 
         // Explicitly verify before and after snapshots (AE-179 mentor review)
         const before = details.before as Record<string, unknown>;
@@ -351,10 +342,8 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         expect(before.tagIds).toEqual([tagAlpha.toString()]);
         expect(after.tagIds).toEqual([tagBeta.toString()]);
 
-        // Changes object also intact
-        const changes = details.changes as Record<string, { previous: unknown; new: unknown }>;
-        expect(changes.marksAwarded).toBeDefined();
-        expect(changes.tagIds).toBeDefined();
+        // Duplicate changes object removed (AE-248)
+        expect(details.changes).toBeUndefined();
     });
 
     // 1c. sanitizeAuditFeedback preserves repeated objects across sibling branches while safely breaking cycles
@@ -439,17 +428,20 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         expect(updatedLogs).toHaveLength(1);
 
         const details = (updatedLogs[0].details || {}) as Record<string, unknown>;
-        const changes = details.changes as Record<string, { previous: unknown; new: unknown }>;
-        expect(changes?.feedback).toEqual({
-            previous: 'Draft comment A',
-            new: 'Draft comment B (refined)',
-        });
-        expect(details.previousFeedback).toBe('Draft comment A');
-        expect(details.newFeedback).toBe('Draft comment B (refined)');
+        expect(details.changes).toBeUndefined();
+        expect(details.previousFeedback).toBeUndefined();
+        expect(details.newFeedback).toBeUndefined();
 
-        // marksAwarded and totalScore did NOT change, so they must not be in changes
-        expect(changes?.marksAwarded).toBeUndefined();
-        expect(changes?.totalScore).toBeUndefined();
+        const before = details.before as Record<string, unknown>;
+        const after = details.after as Record<string, unknown>;
+        expect(before?.feedback).toBe('Draft comment A');
+        expect(after?.feedback).toBe('Draft comment B (refined)');
+
+        // marksAwarded and totalScore did NOT change, so they must not be in before/after
+        expect(before?.marksAwarded).toBeUndefined();
+        expect(after?.marksAwarded).toBeUndefined();
+        expect(before?.totalScore).toBeUndefined();
+        expect(after?.totalScore).toBeUndefined();
     });
 
     // 3. Saving identical grade values creates no duplicate grade-change row.
@@ -596,7 +588,8 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
             expect(typeof pAnn.hash).toBe('string');
             expect(pAnn.hash).toHaveLength(64); // SHA-256 hex string
         }
-        expect(submitDetails.perPageAnnotations).toEqual(pageAnnotations);
+        // AE-248: Duplicate perPageAnnotations key removed
+        expect(submitDetails.perPageAnnotations).toBeUndefined();
     });
 
     // 5. If reopening notification creation fails and the transaction aborts, no ALLOCATION_REOPENED success row remains.
@@ -673,7 +666,7 @@ describe('AE-179: Audit-log every grading action hardening tests', () => {
         });
 
         expect(log.createdAt).toBeDefined();
-        expect(log.updatedAt).toBeUndefined();
+        expect((log as unknown as { updatedAt?: unknown }).updatedAt).toBeUndefined();
 
         // 1. AuditLog.updateOne rejects
         await expect(

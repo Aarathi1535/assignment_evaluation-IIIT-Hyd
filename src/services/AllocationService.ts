@@ -2180,9 +2180,7 @@ export class AllocationService {
             const question = details.question !== undefined ? details.question : null;
             const description = buildActivityDescription(log.action, details, userMap);
 
-            // Clean details: do NOT include ipAddress
             const itemDetails: Record<string, unknown> = { ...details };
-            delete itemDetails.ipAddress;
             if (previousTa) itemDetails.previousTa = previousTa;
             if (newTa) itemDetails.newTa = newTa;
             if (ta) itemDetails.ta = ta;

@@ -49,7 +49,6 @@ function areTagIdsEqual(prev: string[], next: string[]): boolean {
 interface GradingDiffResult {
     hasChanges: boolean;
     changedFields: string[];
-    changes: Record<string, { previous: unknown; new: unknown }>;
     before: Record<string, unknown>;
     after: Record<string, unknown>;
 }
@@ -68,12 +67,6 @@ function computeGradingDiff(
         return {
             hasChanges: true,
             changedFields: ['marksAwarded', 'totalScore', 'feedback', 'tagIds'],
-            changes: {
-                marksAwarded: { previous: [], new: next.marksAwarded },
-                totalScore: { previous: 0, new: next.totalScore },
-                feedback: { previous: '', new: next.feedback || '' },
-                tagIds: { previous: [], new: nextTagStrings },
-            },
             before: {
                 marksAwarded: [],
                 totalScore: 0,
@@ -90,14 +83,12 @@ function computeGradingDiff(
     }
 
     const changedFields: string[] = [];
-    const changes: Record<string, { previous: unknown; new: unknown }> = {};
     const before: Record<string, unknown> = {};
     const after: Record<string, unknown> = {};
 
     // 1. marksAwarded
     if (!areMarksAwardedEqual(prev.marksAwarded, next.marksAwarded)) {
         changedFields.push('marksAwarded');
-        changes.marksAwarded = { previous: prev.marksAwarded, new: next.marksAwarded };
         before.marksAwarded = prev.marksAwarded;
         after.marksAwarded = next.marksAwarded;
     }
@@ -105,7 +96,6 @@ function computeGradingDiff(
     // 2. totalScore
     if (Number(prev.totalScore) !== Number(next.totalScore)) {
         changedFields.push('totalScore');
-        changes.totalScore = { previous: prev.totalScore, new: next.totalScore };
         before.totalScore = prev.totalScore;
         after.totalScore = next.totalScore;
     }
@@ -116,7 +106,6 @@ function computeGradingDiff(
         const newFeedback = next.feedback || '';
         if (prevFeedback !== newFeedback) {
             changedFields.push('feedback');
-            changes.feedback = { previous: prevFeedback, new: newFeedback };
             before.feedback = prevFeedback;
             after.feedback = newFeedback;
         }
@@ -127,7 +116,6 @@ function computeGradingDiff(
         const nextTagStrings = next.tagIds.map(t => t.toString());
         if (!areTagIdsEqual(prev.tagIds, nextTagStrings)) {
             changedFields.push('tagIds');
-            changes.tagIds = { previous: prev.tagIds, new: nextTagStrings };
             before.tagIds = prev.tagIds;
             after.tagIds = nextTagStrings;
         }
@@ -136,7 +124,6 @@ function computeGradingDiff(
     return {
         hasChanges: changedFields.length > 0,
         changedFields,
-        changes,
         before,
         after,
     };
@@ -669,29 +656,8 @@ export class GradingService {
                 };
                 if (diff.changedFields.length > 0) {
                     finalizeDetails.changedFields = diff.changedFields;
-                    finalizeDetails.changes = diff.changes;
                     finalizeDetails.before = diff.before;
                     finalizeDetails.after = diff.after;
-                    finalizeDetails.previousValues = diff.before;
-                    finalizeDetails.newValues = diff.after;
-                    if (diff.before.totalScore !== undefined) {
-                        finalizeDetails.previousTotalScore = diff.before.totalScore;
-                        finalizeDetails.newTotalScore = diff.after.totalScore;
-                        finalizeDetails.previousScore = diff.before.totalScore;
-                        finalizeDetails.newScore = diff.after.totalScore;
-                    }
-                    if (diff.before.feedback !== undefined) {
-                        finalizeDetails.previousFeedback = diff.before.feedback;
-                        finalizeDetails.newFeedback = diff.after.feedback;
-                    }
-                    if (diff.before.marksAwarded !== undefined) {
-                        finalizeDetails.previousMarksAwarded = diff.before.marksAwarded;
-                        finalizeDetails.newMarksAwarded = diff.after.marksAwarded;
-                    }
-                    if (diff.before.tagIds !== undefined) {
-                        finalizeDetails.previousTagIds = diff.before.tagIds;
-                        finalizeDetails.newTagIds = diff.after.tagIds;
-                    }
                 }
 
                 await writeAuditLog({
@@ -813,29 +779,8 @@ export class GradingService {
             };
             if (isExisting && diff.changedFields.length > 0) {
                 auditDetails.changedFields = diff.changedFields;
-                auditDetails.changes = diff.changes;
                 auditDetails.before = diff.before;
                 auditDetails.after = diff.after;
-                auditDetails.previousValues = diff.before;
-                auditDetails.newValues = diff.after;
-                if (diff.before.totalScore !== undefined) {
-                    auditDetails.previousTotalScore = diff.before.totalScore;
-                    auditDetails.newTotalScore = diff.after.totalScore;
-                    auditDetails.previousScore = diff.before.totalScore;
-                    auditDetails.newScore = diff.after.totalScore;
-                }
-                if (diff.before.feedback !== undefined) {
-                    auditDetails.previousFeedback = diff.before.feedback;
-                    auditDetails.newFeedback = diff.after.feedback;
-                }
-                if (diff.before.marksAwarded !== undefined) {
-                    auditDetails.previousMarksAwarded = diff.before.marksAwarded;
-                    auditDetails.newMarksAwarded = diff.after.marksAwarded;
-                }
-                if (diff.before.tagIds !== undefined) {
-                    auditDetails.previousTagIds = diff.before.tagIds;
-                    auditDetails.newTagIds = diff.after.tagIds;
-                }
             }
 
             await writeAuditLog({
@@ -1208,7 +1153,6 @@ export class GradingService {
                             finalizedQuestions,
                             allocationCount: matchingAllocations.length,
                             pageAnnotations,
-                            perPageAnnotations: pageAnnotations,
                         },
                         ipAddress,
                         session: session || undefined,
