@@ -146,6 +146,8 @@ export const generateQuestionsSchema = z.object({
             HARD: z.number().int().min(0).default(20)
         })
         .optional(),
-    selectedTopics: z.array(z.string().trim()).optional()
+    selectedTopics: z.array(z.string().trim()).optional(),
+    difficulty: z.enum(['ALL', 'EASY', 'MEDIUM', 'HARD']).optional(),
+    questionType: z.string().trim().optional()
 });
 

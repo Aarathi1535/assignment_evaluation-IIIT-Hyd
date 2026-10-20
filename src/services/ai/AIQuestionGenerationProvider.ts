@@ -7,10 +7,10 @@ import type { GeminiAICaller } from './types';
 export const generatedRubricCriterionSchema = z
     .object({
         criterionName: z.string().trim().min(1, 'Criterion name is required'),
-        points: z.number().positive('Points must be positive'),
+        points: z.coerce.number().positive('Points must be positive'),
         description: z.string().trim().optional()
     })
-    .strict();
+    .passthrough();
 
 export const generatedQuestionItemSchema = z
     .object({
@@ -20,16 +20,24 @@ export const generatedQuestionItemSchema = z
             .refine((title) => title.trim().length <= 200, 'Title too long')
             .optional(),
         topic: z.string().trim().min(1, 'Topic is required').max(100, 'Topic too long'),
+        subtopic: z.string().trim().max(100).optional(),
         unit: z.string().trim().optional(),
-        difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']),
+        difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).or(
+            z.string().transform((d) => {
+                const upper = d.toUpperCase().trim();
+                return upper === 'EASY' ? 'EASY' : upper === 'HARD' ? 'HARD' : 'MEDIUM';
+            })
+        ),
+        questionType: z.string().trim().optional(),
+        category: z.string().trim().optional(),
         questionPrompt: z.string().trim().min(1, 'Question prompt is required'),
         expectedConcepts: z.array(z.string().trim()).optional().default([]),
-        maxMarks: z.number().positive('Max marks must be positive').default(10),
+        maxMarks: z.coerce.number().positive('Max marks must be positive').default(10),
         hints: z.array(z.string().trim()).optional().default([]),
         referenceAnswer: z.string().trim().optional(),
         rubricCriteria: z.array(generatedRubricCriterionSchema).optional().default([])
     })
-    .strict();
+    .passthrough();
 
 export const generatedQuestionsResponseSchema = z.preprocess(
     (value) => (Array.isArray(value) ? { questions: value } : value),
@@ -37,7 +45,7 @@ export const generatedQuestionsResponseSchema = z.preprocess(
         .object({
             questions: z.array(generatedQuestionItemSchema).min(1, 'Response must contain at least one question')
         })
-        .strict()
+        .passthrough()
 );
 
 /**
@@ -114,8 +122,11 @@ export const GEMINI_QUESTIONS_RESPONSE_SCHEMA = {
 export interface GeneratedQuestionItem {
     title: string;
     topic: string;
+    subtopic?: string;
     unit?: string;
     difficulty: QuestionDifficulty;
+    questionType?: string;
+    category?: string;
     questionPrompt: string;
     expectedConcepts?: string[];
     maxMarks: number;
@@ -153,6 +164,8 @@ export interface GenerateQuestionsParams {
         HARD: number;
     };
     selectedTopics?: string[];
+    difficulty?: 'ALL' | 'EASY' | 'MEDIUM' | 'HARD';
+    questionType?: string;
     learningObjectives?: string[];
 }
 
@@ -283,6 +296,7 @@ export type GeminiQuestionCaller = (payload: {
     apiKey: string;
     systemInstruction: string;
     promptText: string;
+    responseSchema?: unknown;
 }) => Promise<string>;
 
 /**
@@ -301,12 +315,47 @@ export function parseGeneratedQuestions(
     }
 
     let cleaned = rawText.trim();
-    // If wrapped in markdown code fence (```json ... ``` or ``` ... ```), strip outermost fence
-    if (cleaned.startsWith('```')) {
-        const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-        if (fenceMatch && fenceMatch[1]) {
-            cleaned = fenceMatch[1].trim();
+    // Safe sanitized excerpt for diagnostic messages (no secrets, no sensitive data)
+    const sanitizedExcerpt = cleaned.slice(0, 80).replace(/[\r\n\t]+/g, ' ').trim();
+
+    // Check code fences first: ```json ... ``` or ``` ... ```
+    const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (fenceMatch && fenceMatch[1]) {
+        cleaned = fenceMatch[1].trim();
+    } else {
+        // Find outermost JSON object or array bounds
+        const firstBrace = cleaned.indexOf('{');
+        const firstBracket = cleaned.indexOf('[');
+
+        // If no JSON object or array delimiter exists at all (e.g. "X X ..." or conversational text)
+        if (firstBrace === -1 && firstBracket === -1) {
+            console.warn(
+                `[AIQuestionGenerationProvider] Non-JSON output received from Gemini (length ${rawText.length}): "${sanitizedExcerpt}..."`
+            );
+            throw new HttpError(
+                `Gemini question generation returned malformed JSON: Model output does not contain a JSON object or array (excerpt: "${sanitizedExcerpt}..."). Please retry question generation.`,
+                502
+            );
         }
+
+        const start = firstBrace !== -1 && firstBracket !== -1
+            ? Math.min(firstBrace, firstBracket)
+            : firstBrace !== -1 ? firstBrace : firstBracket;
+        const lastBrace = cleaned.lastIndexOf('}');
+        const lastBracket = cleaned.lastIndexOf(']');
+        const end = Math.max(lastBrace, lastBracket);
+
+        if (end === -1 || end < start) {
+            console.warn(
+                `[AIQuestionGenerationProvider] Truncated/incomplete JSON response (length: ${rawText.length}): "${sanitizedExcerpt}..."`
+            );
+            throw new HttpError(
+                `Gemini question generation response was truncated or incomplete (missing closing bracket/brace). Please retry with a smaller question count.`,
+                502
+            );
+        }
+
+        cleaned = cleaned.slice(start, end + 1).trim();
     }
 
     // Direct JSON parse of the structured output
@@ -314,8 +363,19 @@ export function parseGeneratedQuestions(
     try {
         parsed = JSON.parse(cleaned);
     } catch (err) {
+        const errMsg = err instanceof Error ? err.message : 'Invalid JSON';
+        const isTruncated =
+            errMsg.includes('Unexpected end') ||
+            errMsg.includes('Unterminated') ||
+            errMsg.includes('end of data');
+        if (isTruncated) {
+            throw new HttpError(
+                `Gemini question generation response was truncated or cut off prematurely. Please retry with a smaller question count.`,
+                502
+            );
+        }
         throw new HttpError(
-            `Gemini question generation returned malformed JSON: ${err instanceof Error ? err.message : 'Invalid JSON'}`,
+            `Gemini question generation returned malformed JSON: ${errMsg} (excerpt: "${sanitizedExcerpt}...")`,
             502
         );
     }
@@ -339,6 +399,8 @@ export function parseGeneratedQuestions(
     const unitMap = new Map<string, string>(); // topicLower -> unitTitle
     const topicLookup = new Map<string, string>(); // topicLower -> original topic
     for (const u of syllabusUnits) {
+        unitMap.set(u.unitTitle.toLowerCase().trim(), u.unitTitle);
+        topicLookup.set(u.unitTitle.toLowerCase().trim(), u.unitTitle);
         for (const t of u.topics) {
             const key = t.toLowerCase().trim();
             unitMap.set(key, u.unitTitle);
@@ -364,16 +426,25 @@ export function parseGeneratedQuestions(
         }
 
         if (!matchedTopic) {
-            const fallbackUnit = syllabusUnits[result.length % syllabusUnits.length];
-            matchedUnit = fallbackUnit.unitTitle;
-            matchedTopic = fallbackUnit.topics[result.length % fallbackUnit.topics.length] || allTopics[0] || 'General';
+            // Keep the AI's topic if it's descriptive, otherwise use round-robin unit topic
+            if (q.topic && q.topic.trim().length > 2) {
+                matchedTopic = q.topic.trim();
+                matchedUnit = q.unit || syllabusUnits[result.length % syllabusUnits.length]?.unitTitle || 'Module 1';
+            } else {
+                const fallbackUnit = syllabusUnits[result.length % syllabusUnits.length];
+                matchedUnit = fallbackUnit.unitTitle;
+                matchedTopic = fallbackUnit.topics[result.length % fallbackUnit.topics.length] || allTopics[0] || 'General';
+            }
         }
 
         result.push({
             title: q.title ?? q.topic,
             topic: matchedTopic,
+            subtopic: q.subtopic || matchedTopic,
             unit: matchedUnit || q.unit || syllabusUnits[0]?.unitTitle || 'Module 1',
-            difficulty: q.difficulty,
+            difficulty: q.difficulty as QuestionDifficulty,
+            questionType: q.questionType,
+            category: q.category,
             questionPrompt: q.questionPrompt,
             expectedConcepts: q.expectedConcepts,
             maxMarks: q.maxMarks,
@@ -421,11 +492,15 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         const customModel =
             process.env.GEMINI_PERSONALIZED_MODEL ||
             process.env.GEMINI_CLASSROOM_MODEL ||
-            process.env.GEMINI_MODEL;
+            process.env.GEMINI_MODEL ||
+            process.env.AI_MODEL;
         if (customModel && customModel.trim()) {
             return customModel.trim();
         }
-        return 'gemini-1.5-flash';
+        if (typeof this.sharedGeminiService?.getModelName === 'function') {
+            return this.sharedGeminiService.getModelName();
+        }
+        return 'gemini-2.5-flash';
     }
 
     isConfigured(): boolean {
@@ -459,7 +534,9 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             '9. Provide a comprehensive "referenceAnswer" or solution outline showing the derivation or key steps.',
             '10. Provide 2-4 "rubricCriteria" where each item has "criterionName", "points" (summing to maxMarks), and "description".',
             '',
-            'You must output ONLY valid JSON matching the configured responseSchema.'
+            'JSON OUTPUT FORMAT REQUIREMENT:',
+            'You must output ONLY valid, raw JSON with this exact schema: {"questions": [{"title":"...","topic":"...","unit":"...","difficulty":"EASY|MEDIUM|HARD","questionPrompt":"...","expectedConcepts":["..."],"maxMarks":10,"hints":["..."],"referenceAnswer":"...","rubricCriteria":[{"criterionName":"...","points":10,"description":"..."}]}]}',
+            'Do NOT output any markdown fences, Roman numerals, conversational text, or surrounding prose.'
         ].join('\n');
     }
 
@@ -469,6 +546,8 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         targetCount: number;
         difficultyDistribution?: { EASY: number; MEDIUM: number; HARD: number };
         selectedTopics?: string[];
+        difficulty?: 'ALL' | 'EASY' | 'MEDIUM' | 'HARD';
+        questionType?: string;
         learningObjectives?: string[];
         batchIndex?: number;
         totalBatches?: number;
@@ -479,6 +558,8 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             targetCount,
             difficultyDistribution,
             selectedTopics,
+            difficulty,
+            questionType,
             learningObjectives,
             batchIndex,
             totalBatches
@@ -491,9 +572,17 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             })
             .join('\n\n');
 
-        const difficultySpec = difficultyDistribution
-            ? `Target Difficulty: ${difficultyDistribution.EASY} EASY, ${difficultyDistribution.MEDIUM} MEDIUM, ${difficultyDistribution.HARD} HARD.`
-            : 'Target Difficulty: Balanced mix of EASY (30%), MEDIUM (50%), and HARD (20%).';
+        const difficultySpec =
+            difficulty && difficulty !== 'ALL'
+                ? `Target Difficulty: Exactly ${difficulty} difficulty level for all ${targetCount} questions.`
+                : difficultyDistribution
+                ? `Target Difficulty: ${difficultyDistribution.EASY} EASY, ${difficultyDistribution.MEDIUM} MEDIUM, ${difficultyDistribution.HARD} HARD.`
+                : 'Target Difficulty: Balanced mix of EASY (30%), MEDIUM (50%), and HARD (20%).';
+
+        const typeSpec =
+            questionType && questionType !== 'ALL'
+                ? `Target Question Type: All questions must be of format "${questionType}".`
+                : '';
 
         const objectivesText =
             learningObjectives && learningObjectives.length > 0
@@ -502,7 +591,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
 
         const filterText =
             selectedTopics && selectedTopics.length > 0
-                ? `\nFocus specifically on these topics:\n${selectedTopics.join(', ')}`
+                ? `\nCRITICAL FOCUS TOPICS:\nYou MUST strictly generate questions exclusively from these selected topics and units:\n${selectedTopics.map((t) => `- ${t}`).join('\n')}`
                 : '';
 
         const batchText =
@@ -514,6 +603,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             `Course: ${courseTitle}`,
             `Number of Questions to Generate: ${targetCount}`,
             difficultySpec,
+            typeSpec,
             batchText,
             objectivesText,
             filterText,
@@ -521,7 +611,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             '=== COURSE SYLLABUS UNITS & TOPICS ===',
             unitsListing,
             '',
-            `Please generate exactly ${targetCount} syllabus-grounded academic assessment questions adhering strictly to the required schema.`
+            `Please generate exactly ${targetCount} syllabus-grounded academic assessment questions. Output ONLY valid JSON matching the schema with no extra commentary or Roman numerals.`
         ]
             .filter(Boolean)
             .join('\n');
@@ -532,8 +622,9 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         apiKey?: string;
         systemInstruction: string;
         promptText: string;
+        responseSchema?: unknown;
     }): Promise<string> {
-        const { model, apiKey, systemInstruction, promptText } = payload;
+        const { model, apiKey, systemInstruction, promptText, responseSchema } = payload;
 
         if (!apiKey && !this.isConfigured()) {
             throw new HttpError(
@@ -547,9 +638,6 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         if (preferredModel) {
             modelsToTry.push(preferredModel);
         }
-        if (!modelsToTry.includes('gemini-1.5-flash')) {
-            modelsToTry.push('gemini-1.5-flash');
-        }
 
         let lastError: Error | null = null;
 
@@ -560,6 +648,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
                     promptText,
                     model: currentModel,
                     responseMimeType: 'application/json',
+                    responseSchema,
                     temperature: 0.2
                 });
 
@@ -595,6 +684,8 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             targetCount,
             difficultyDistribution,
             selectedTopics,
+            difficulty,
+            questionType,
             learningObjectives
         } = params;
 
@@ -617,6 +708,8 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
                 targetCount,
                 difficultyDistribution,
                 selectedTopics,
+                difficulty,
+                questionType,
                 learningObjectives
             });
             const rawOutput = await this.customGeminiCaller({
@@ -628,27 +721,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
             return parseGeneratedQuestions(rawOutput, syllabusUnits);
         }
 
-        // Live Shared Gemini Service call when configured
-        if (this.sharedGeminiService.isConfigured()) {
-            const promptText = this.buildUserPrompt({
-                courseTitle,
-                syllabusUnits,
-                targetCount,
-                difficultyDistribution,
-                selectedTopics,
-                learningObjectives
-            });
-            const rawText = await this.sharedGeminiService.generateContent({
-                systemInstruction,
-                promptText,
-                responseMimeType: 'application/json',
-                temperature: 0.2
-            });
-            const items = parseGeneratedQuestions(rawText, syllabusUnits);
-            return items.slice(0, targetCount);
-        }
-
-        // Live Gemini API call with chunked batching
+        // Live generation with chunked batching for reliability and quality
         const BATCH_SIZE = 10;
         const allGenerated: GeneratedQuestionItem[] = [];
         const seenPrompts = new Set<string>();
@@ -660,11 +733,29 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
 
             const currentBatchTarget = Math.min(BATCH_SIZE, remaining);
 
-            const easyRatio = (difficultyDistribution?.EASY ?? 30) / (targetCount || 100);
-            const medRatio = (difficultyDistribution?.MEDIUM ?? 50) / (targetCount || 100);
-            const batchEasy = Math.max(1, Math.round(currentBatchTarget * easyRatio));
-            const batchMed = Math.max(1, Math.round(currentBatchTarget * medRatio));
-            const batchHard = Math.max(0, currentBatchTarget - batchEasy - batchMed);
+            let batchEasy: number;
+            let batchMed: number;
+            let batchHard: number;
+
+            if (difficulty === 'EASY') {
+                batchEasy = currentBatchTarget;
+                batchMed = 0;
+                batchHard = 0;
+            } else if (difficulty === 'MEDIUM') {
+                batchEasy = 0;
+                batchMed = currentBatchTarget;
+                batchHard = 0;
+            } else if (difficulty === 'HARD') {
+                batchEasy = 0;
+                batchMed = 0;
+                batchHard = currentBatchTarget;
+            } else {
+                const easyRatio = (difficultyDistribution?.EASY ?? 30) / (targetCount || 100);
+                const medRatio = (difficultyDistribution?.MEDIUM ?? 50) / (targetCount || 100);
+                batchEasy = Math.max(0, Math.round(currentBatchTarget * easyRatio));
+                batchMed = Math.max(0, Math.round(currentBatchTarget * medRatio));
+                batchHard = Math.max(0, currentBatchTarget - batchEasy - batchMed);
+            }
 
             const promptText = this.buildUserPrompt({
                 courseTitle,
@@ -672,19 +763,89 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
                 targetCount: currentBatchTarget,
                 difficultyDistribution: { EASY: batchEasy, MEDIUM: batchMed, HARD: batchHard },
                 selectedTopics,
+                difficulty,
+                questionType,
                 learningObjectives,
                 batchIndex: batchIdx + 1,
                 totalBatches
             });
 
-            const rawText = await this.callGeminiApi({
-                model: this.getModelName(),
-                apiKey: this.getApiKey(),
-                systemInstruction,
-                promptText
-            });
+            let items: GeneratedQuestionItem[] | null = null;
+            let parseError: unknown = null;
 
-            const items = parseGeneratedQuestions(rawText, syllabusUnits);
+            // Attempt 1: Primary generation with schema-constrained decoding
+            try {
+                let rawText: string;
+                if (this.sharedGeminiService.isConfigured()) {
+                    rawText = await this.sharedGeminiService.generateContent({
+                        systemInstruction,
+                        promptText,
+                        model: this.getModelName(),
+                        responseMimeType: 'application/json',
+                        responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA,
+                        temperature: 0.2
+                    });
+                } else {
+                    rawText = await this.callGeminiApi({
+                        model: this.getModelName(),
+                        apiKey: this.getApiKey(),
+                        systemInstruction,
+                        promptText,
+                        responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA
+                    });
+                }
+                items = parseGeneratedQuestions(rawText, syllabusUnits);
+            } catch (err: unknown) {
+                parseError = err;
+                if (err instanceof HttpError && (err.statusCode === 400 || err.statusCode === 403 || err.statusCode === 503)) {
+                    throw err;
+                }
+                console.warn(
+                    `[AIQuestionGenerationProvider] Batch ${batchIdx + 1} initial generation attempt failed: ${err instanceof Error ? err.message : String(err)}. Attempting one controlled regeneration with reinforced instructions...`
+                );
+            }
+
+            // Attempt 2: Exactly one controlled regeneration attempt on malformed response
+            if (!items) {
+                const reinforcedSystem = [
+                    systemInstruction,
+                    '',
+                    'CRITICAL RECOVERY INSTRUCTION:',
+                    'Your previous output was malformed or not valid JSON.',
+                    'You MUST output ONLY a valid JSON object starting with {"questions": [ ... ]}.',
+                    'Do NOT output any markdown fences, Roman numerals, conversational text, or surrounding prose.'
+                ].join('\n');
+
+                try {
+                    let retryText: string;
+                    if (this.sharedGeminiService.isConfigured()) {
+                        retryText = await this.sharedGeminiService.generateContent({
+                            systemInstruction: reinforcedSystem,
+                            promptText,
+                            model: this.getModelName(),
+                            responseMimeType: 'application/json',
+                            responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA,
+                            temperature: 0.1
+                        });
+                    } else {
+                        retryText = await this.callGeminiApi({
+                            model: this.getModelName(),
+                            apiKey: this.getApiKey(),
+                            systemInstruction: reinforcedSystem,
+                            promptText,
+                            responseSchema: GEMINI_QUESTIONS_RESPONSE_SCHEMA
+                        });
+                    }
+                    items = parseGeneratedQuestions(retryText, syllabusUnits);
+                } catch (retryErr: unknown) {
+                    throw retryErr instanceof HttpError
+                        ? retryErr
+                        : (parseError instanceof HttpError
+                        ? parseError
+                        : new HttpError(`Gemini AI question generation failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`, 502));
+                }
+            }
+
             for (const it of items) {
                 const normalized = it.questionPrompt.toLowerCase().trim();
                 if (!seenPrompts.has(normalized)) {
@@ -736,7 +897,7 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
             throw new HttpError('AI question generation is not configured. Please configure an AI provider.', 503);
         }
 
-        const { targetCount, syllabusUnits, difficultyDistribution } = params;
+        const { targetCount, syllabusUnits, difficultyDistribution, selectedTopics, difficulty, questionType } = params;
         const allTopics = syllabusUnits.flatMap((u) => u.topics);
         if (allTopics.length === 0) {
             throw new HttpError('Syllabus contains no topics to generate questions from', 400);
@@ -745,27 +906,43 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
         const questions: GeneratedQuestionItem[] = [];
 
         // Compute distribution counts
-        const easyTarget = difficultyDistribution?.EASY ?? Math.floor(targetCount * 0.3);
-        const medTarget = difficultyDistribution?.MEDIUM ?? Math.floor(targetCount * 0.5);
+        const easyTarget = difficulty === 'EASY'
+            ? targetCount
+            : difficulty === 'MEDIUM' || difficulty === 'HARD'
+            ? 0
+            : difficultyDistribution?.EASY ?? Math.floor(targetCount * 0.3);
+        const medTarget = difficulty === 'MEDIUM'
+            ? targetCount
+            : difficulty === 'EASY' || difficulty === 'HARD'
+            ? 0
+            : difficultyDistribution?.MEDIUM ?? Math.floor(targetCount * 0.5);
+
+        // Effective topic source: selected topics if specified, otherwise syllabus topics
+        const effectiveTopics = selectedTopics && selectedTopics.length > 0 ? selectedTopics : allTopics;
 
         for (let i = 0; i < targetCount; i++) {
             const unit = syllabusUnits[i % syllabusUnits.length];
-            const topic = unit.topics[i % unit.topics.length];
+            const topic = effectiveTopics[i % effectiveTopics.length];
 
-            let difficulty: QuestionDifficulty = 'MEDIUM';
-            if (i < easyTarget) {
-                difficulty = 'EASY';
+            let qDifficulty: QuestionDifficulty = 'MEDIUM';
+            if (difficulty && difficulty !== 'ALL') {
+                qDifficulty = difficulty;
+            } else if (i < easyTarget) {
+                qDifficulty = 'EASY';
             } else if (i < easyTarget + medTarget) {
-                difficulty = 'MEDIUM';
+                qDifficulty = 'MEDIUM';
             } else {
-                difficulty = 'HARD';
+                qDifficulty = 'HARD';
             }
 
             questions.push({
                 title: `${topic} - Exercise ${i + 1}`,
                 topic,
+                subtopic: topic,
                 unit: unit.unitTitle,
-                difficulty,
+                difficulty: qDifficulty,
+                questionType: questionType && questionType !== 'ALL' ? questionType : 'THEORY',
+                category: 'CONCEPTUAL',
                 questionPrompt: `Given the core principles of ${topic} (${unit.unitTitle}), derive and formulate the complete step-by-step solution for scenario ${i + 1}.`,
                 expectedConcepts: [topic, unit.unitTitle, 'Analytical Proof', 'Complexity Analysis'],
                 maxMarks: 10,
@@ -832,6 +1009,7 @@ export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerati
         const rawText = await this.sharedVertexService.generateContent({
             systemInstruction,
             promptText,
+            model: this.getModelName(),
             responseMimeType: 'application/json',
             temperature: 0.2
         });

@@ -65,6 +65,8 @@ export async function POST(req: NextRequest) {
             targetCount: validation.data.targetCount,
             difficultyDistribution: validation.data.difficultyDistribution,
             selectedTopics: validation.data.selectedTopics,
+            difficulty: validation.data.difficulty,
+            questionType: validation.data.questionType,
             userId: auth.user.id
         });
 

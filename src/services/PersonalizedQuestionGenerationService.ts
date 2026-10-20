@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
 import PersonalizedQuestion, {
     IPersonalizedQuestion,
-    QuestionDifficulty
+    QuestionDifficulty,
+    QuestionType,
+    QuestionCategory
 } from '../models/PersonalizedQuestion';
 import CourseSyllabus from '../models/CourseSyllabus';
 import Course from '../models/Course';
@@ -21,6 +23,8 @@ export interface GenerateQuestionBankOptions {
         HARD: number;
     };
     selectedTopics?: string[];
+    difficulty?: 'ALL' | 'EASY' | 'MEDIUM' | 'HARD';
+    questionType?: string;
     learningObjectives?: string[];
     userId: string;
 }
@@ -47,7 +51,14 @@ export class PersonalizedQuestionGenerationService {
         options: GenerateQuestionBankOptions,
         customProvider?: IAIQuestionGenerationProvider
     ): Promise<QuestionBankGenerationResult> {
-        const { courseId, targetCount = 100, difficultyDistribution, selectedTopics, userId } = options;
+        const {
+            courseId,
+            targetCount = 100,
+            selectedTopics,
+            difficulty,
+            questionType,
+            userId
+        } = options;
 
         if (!courseId) {
             throw new HttpError('Course ID is required', 400);
@@ -80,18 +91,47 @@ export class PersonalizedQuestionGenerationService {
             );
         }
 
-        // Filter syllabus units if selectedTopics is supplied
-        const relevantUnits = selectedTopics && selectedTopics.length > 0
-            ? syllabus.units
-                  .map((u) => ({
-                      ...u,
-                      topics: u.topics.filter((t) => selectedTopics.includes(t))
-                  }))
-                  .filter((u) => u.topics.length > 0)
-            : syllabus.units;
+        // Calculate difficulty distribution
+        let effectiveDistribution = options.difficultyDistribution;
+        if (difficulty && difficulty !== 'ALL') {
+            effectiveDistribution = {
+                EASY: difficulty === 'EASY' ? targetCount : 0,
+                MEDIUM: difficulty === 'MEDIUM' ? targetCount : 0,
+                HARD: difficulty === 'HARD' ? targetCount : 0
+            };
+        }
 
-        if (relevantUnits.length === 0) {
-            throw new HttpError('Selected topics do not match any units in the syllabus', 400);
+        // Filter syllabus units if selectedTopics is supplied
+        let relevantUnits = syllabus.units;
+        if (selectedTopics && selectedTopics.length > 0) {
+            const selLower = selectedTopics.map((s) => s.toLowerCase().trim());
+            relevantUnits = syllabus.units
+                .map((u) => {
+                    const unitTitleLower = u.unitTitle.toLowerCase().trim();
+                    const unitTitleMatches = selLower.some(
+                        (s) => s === unitTitleLower || unitTitleLower.includes(s) || s.includes(unitTitleLower)
+                    );
+
+                    if (unitTitleMatches) {
+                        return u;
+                    }
+
+                    const matchedTopics = u.topics.filter((t) => {
+                        const tLower = t.toLowerCase().trim();
+                        return selLower.some((s) => s === tLower || tLower.includes(s) || s.includes(tLower));
+                    });
+
+                    return {
+                        ...u,
+                        topics: matchedTopics
+                    };
+                })
+                .filter((u) => u.topics.length > 0);
+
+            if (relevantUnits.length === 0) {
+                // If selective filter resulted in 0 units due to loose phrasing, fall back to full syllabus but focus AI prompt on selectedTopics
+                relevantUnits = syllabus.units;
+            }
         }
 
         // Invoke AI Question Generator
@@ -99,8 +139,10 @@ export class PersonalizedQuestionGenerationService {
             courseTitle: course.courseCode || course.courseName,
             syllabusUnits: relevantUnits,
             targetCount,
-            difficultyDistribution,
+            difficultyDistribution: effectiveDistribution,
             selectedTopics,
+            difficulty,
+            questionType,
             learningObjectives: syllabus.learningObjectives
         });
 
@@ -108,8 +150,14 @@ export class PersonalizedQuestionGenerationService {
             throw new HttpError('AI provider returned no questions. Please retry generation.', 502);
         }
 
-        // Validate groundedness and remove duplicates
-        const syllabusTopicSet = new Set(syllabus.extractedTopics.map((t) => t.toLowerCase()));
+        // Collect all valid topic and unit names for grounding verification
+        const allSyllabusTopics = new Set<string>();
+        for (const t of syllabus.extractedTopics) allSyllabusTopics.add(t.toLowerCase().trim());
+        for (const u of syllabus.units) {
+            allSyllabusTopics.add(u.unitTitle.toLowerCase().trim());
+            for (const t of u.topics) allSyllabusTopics.add(t.toLowerCase().trim());
+        }
+
         const uniquePrompts = new Set<string>();
         const validQuestions: GeneratedQuestionItem[] = [];
 
@@ -124,14 +172,34 @@ export class PersonalizedQuestionGenerationService {
             }
             uniquePrompts.add(normalizedPrompt);
 
-            // Verify topic is grounded in syllabus (fallback to first syllabus topic if loosely matched)
-            const topicNormalized = item.topic?.toLowerCase().trim();
-            const isGrounded = topicNormalized && syllabusTopicSet.has(topicNormalized);
-            const groundedTopic = isGrounded ? item.topic : syllabus.extractedTopics[0];
+            // Ground topic against syllabus units, extractedTopics, or selectedTopics
+            const topicNormalized = item.topic?.toLowerCase().trim() || '';
+            let groundedTopic = item.topic;
+            let isGrounded = allSyllabusTopics.has(topicNormalized);
+
+            if (!isGrounded && topicNormalized) {
+                for (const validTop of allSyllabusTopics) {
+                    if (topicNormalized.includes(validTop) || validTop.includes(topicNormalized)) {
+                        groundedTopic = item.topic;
+                        isGrounded = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!isGrounded) {
+                if (selectedTopics && selectedTopics.length > 0) {
+                    groundedTopic = selectedTopics[validQuestions.length % selectedTopics.length];
+                } else {
+                    const fallbackUnit = relevantUnits[validQuestions.length % relevantUnits.length];
+                    groundedTopic = fallbackUnit.topics[validQuestions.length % fallbackUnit.topics.length] || syllabus.extractedTopics[0];
+                }
+            }
 
             validQuestions.push({
                 ...item,
-                topic: groundedTopic
+                topic: groundedTopic,
+                subtopic: item.subtopic || groundedTopic
             });
         }
 
@@ -148,8 +216,11 @@ export class PersonalizedQuestionGenerationService {
             questionIndex: startIndex + idx,
             title: q.title || `Question ${startIndex + idx}`,
             topic: q.topic,
+            subtopic: q.subtopic || q.topic,
             unit: q.unit || 'General Module',
-            difficulty: q.difficulty || 'MEDIUM',
+            difficulty: (q.difficulty as QuestionDifficulty) || 'MEDIUM',
+            questionType: (q.questionType as QuestionType) || (questionType as QuestionType) || 'THEORY',
+            category: (q.category as QuestionCategory) || 'CONCEPTUAL',
             questionPrompt: q.questionPrompt,
             expectedConcepts: q.expectedConcepts || [],
             maxMarks: q.maxMarks || 10,
@@ -162,6 +233,7 @@ export class PersonalizedQuestionGenerationService {
                       { criterionName: 'Solution Correctness', points: 6 }
                   ],
             sourceSyllabusTopic: q.sourceSyllabusTopic || q.topic,
+            organizationStatus: 'ORGANIZED',
             createdBy: new mongoose.Types.ObjectId(userId),
             isActive: true
         }));
@@ -179,7 +251,12 @@ export class PersonalizedQuestionGenerationService {
 
         for (const q of allQuestions) {
             topicBreakdown[q.topic] = (topicBreakdown[q.topic] || 0) + 1;
-            difficultyBreakdown[q.difficulty] = (difficultyBreakdown[q.difficulty] || 0) + 1;
+            const diff = q.difficulty as QuestionDifficulty;
+            if (diff && difficultyBreakdown[diff] !== undefined) {
+                difficultyBreakdown[diff]++;
+            } else {
+                difficultyBreakdown.MEDIUM++;
+            }
         }
 
         return {

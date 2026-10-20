@@ -18,6 +18,7 @@ export interface GenerateContentParams {
   model?: string;
   temperature?: number;
   responseMimeType?: string;
+  responseSchema?: unknown;
   isRealStudentData?: boolean;
 }
 
@@ -33,4 +34,5 @@ export type GeminiAICaller = (payload: {
   promptText: string;
   imageBase64?: string;
   mimeType?: string;
+  responseSchema?: unknown;
 }) => Promise<string>;

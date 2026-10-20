@@ -110,7 +110,11 @@ export default function ProfessorPersonalizedAssessmentPage() {
     const [questions, setQuestions] = useState<QuestionItem[]>([]);
     const [loadingQuestions, setLoadingQuestions] = useState(false);
     const [showGenerateModal, setShowGenerateModal] = useState(false);
-    const [generateTargetCount, setGenerateTargetCount] = useState(100);
+    const [generateTargetCount, setGenerateTargetCount] = useState(20);
+    const [selectedGenerateTopics, setSelectedGenerateTopics] = useState<string[]>([]);
+    const [selectedGenerateDifficulty, setSelectedGenerateDifficulty] = useState<'ALL' | 'EASY' | 'MEDIUM' | 'HARD'>('ALL');
+    const [selectedGenerateType, setSelectedGenerateType] = useState<string>('ALL');
+    const [generateModalError, setGenerateModalError] = useState<string | null>(null);
     const [generating, setGenerating] = useState(false);
     const [previewQuestion, setPreviewQuestion] = useState<QuestionItem | null>(null);
 
@@ -355,8 +359,9 @@ export default function ProfessorPersonalizedAssessmentPage() {
 
     // Generate questions with AI
     const handleGenerateQuestionBank = async () => {
-        if (!selectedCourseId) return;
+        if (!selectedCourseId || generating) return;
         setGenerating(true);
+        setGenerateModalError(null);
         setFormError(null);
         setFormSuccess(null);
         setAiSetupWarning(null);
@@ -366,20 +371,25 @@ export default function ProfessorPersonalizedAssessmentPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 courseId: selectedCourseId,
-                targetCount: generateTargetCount
+                targetCount: Math.max(1, generateTargetCount),
+                selectedTopics: selectedGenerateTopics.length > 0 ? selectedGenerateTopics : undefined,
+                difficulty: selectedGenerateDifficulty !== 'ALL' ? selectedGenerateDifficulty : undefined,
+                questionType: selectedGenerateType !== 'ALL' ? selectedGenerateType : undefined
             })
         });
 
         if (result.ok && result.data) {
             setShowGenerateModal(false);
+            setGenerateModalError(null);
             setFormSuccess(`Successfully generated ${result.data.totalGenerated} syllabus-grounded questions! Total pool: ${result.data.totalInPool}`);
             await loadCourseQuestions(selectedCourseId);
         } else {
+            const errorText = formatError(result, 'Failed to generate question bank.');
             if (result.error?.code === 'AI_NOT_CONFIGURED' || result.status === 503) {
                 setAiSetupWarning(result.error?.message || result.message || 'AI Question Generation provider is not configured in the environment.');
-            } else {
-                setFormError(formatError(result, 'Failed to generate question bank.'));
             }
+            setGenerateModalError(errorText);
+            setFormError(errorText);
         }
         setGenerating(false);
     };
@@ -999,49 +1009,215 @@ Unit 4: Advanced Data Structures
             {/* MODAL: GENERATE QUESTIONS WITH AI */}
             {showGenerateModal && (
                 <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-                    <Card className="max-w-md w-full p-6 space-y-5 bg-white">
+                    <Card className="max-w-xl w-full p-6 space-y-5 bg-white max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <h3 className="text-lg font-bold text-slate-900">
-                                Generate Question Bank with AI
-                            </h3>
+                            <div className="flex items-center gap-2">
+                                <Sparkles className="h-5 w-5 text-indigo-600" />
+                                <h3 className="text-lg font-bold text-slate-900">
+                                    Generate Syllabus-Grounded Question Bank
+                                </h3>
+                            </div>
                             <button
-                                onClick={() => setShowGenerateModal(false)}
-                                className="text-slate-400 hover:text-slate-600 font-bold"
+                                onClick={() => {
+                                    if (!generating) {
+                                        setShowGenerateModal(false);
+                                        setGenerateModalError(null);
+                                    }
+                                }}
+                                disabled={generating}
+                                className="text-slate-400 hover:text-slate-600 font-bold disabled:opacity-50"
                             >
                                 ✕
                             </button>
                         </div>
 
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                                    Number of Questions to Generate
-                                </label>
-                                <input
-                                    type="number"
-                                    min={10}
-                                    max={300}
-                                    value={generateTargetCount}
-                                    onChange={(e) => setGenerateTargetCount(Number(e.target.value))}
-                                    className="w-full rounded-xl border border-slate-300 p-2.5 text-sm font-semibold"
-                                />
-                                <p className="text-2xs text-slate-400 mt-1">
-                                    Target quantity to generate for {enrolledCount} enrolled students.
-                                </p>
+                        {generateModalError && (
+                            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-rose-800 text-xs">
+                                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                                <div>
+                                    <p className="font-bold">Generation Failed</p>
+                                    <p>{generateModalError}</p>
+                                </div>
                             </div>
+                        )}
 
-                            <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-xs text-indigo-900 space-y-1">
-                                <p className="font-bold">Syllabus Grounding Rule:</p>
-                                <p>• Generated questions are strictly grounded in the {syllabus?.units?.length || 0} extracted course units.</p>
-                                <p>• Balanced across Easy, Medium, and Hard difficulty levels.</p>
+                        {!syllabus || !syllabus.units || syllabus.units.length === 0 ? (
+                            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3 text-amber-900 text-xs">
+                                <p className="font-bold">No Syllabus Uploaded for {currentCourse?.courseCode}</p>
+                                <p className="text-amber-800">
+                                    Questions cannot be grounded without a syllabus. Please upload and parse your course syllabus first.
+                                </p>
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => {
+                                        setShowGenerateModal(false);
+                                        setActiveTab('SYLLABUS');
+                                    }}
+                                >
+                                    Go to Semester Syllabus Tab
+                                </Button>
                             </div>
-                        </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    {/* Question Count */}
+                                    <div>
+                                        <label className="block text-2xs font-extrabold text-slate-500 uppercase mb-1">
+                                            Quantity
+                                        </label>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={300}
+                                            value={generateTargetCount}
+                                            disabled={generating}
+                                            onChange={(e) => setGenerateTargetCount(Math.max(1, Math.min(300, Number(e.target.value))))}
+                                            className="w-full rounded-xl border border-slate-300 p-2 text-xs font-semibold focus:border-brand-primary"
+                                        />
+                                    </div>
+
+                                    {/* Difficulty */}
+                                    <div>
+                                        <label className="block text-2xs font-extrabold text-slate-500 uppercase mb-1">
+                                            Difficulty
+                                        </label>
+                                        <select
+                                            value={selectedGenerateDifficulty}
+                                            disabled={generating}
+                                            onChange={(e) => setSelectedGenerateDifficulty(e.target.value as 'ALL' | 'EASY' | 'MEDIUM' | 'HARD')}
+                                            className="w-full rounded-xl border border-slate-300 p-2 text-xs font-semibold focus:border-brand-primary"
+                                        >
+                                            <option value="ALL">All (Balanced: 30%E, 50%M, 20%H)</option>
+                                            <option value="EASY">EASY (Foundational)</option>
+                                            <option value="MEDIUM">MEDIUM (Application)</option>
+                                            <option value="HARD">HARD (Advanced Design)</option>
+                                        </select>
+                                    </div>
+
+                                    {/* Question Type */}
+                                    <div>
+                                        <label className="block text-2xs font-extrabold text-slate-500 uppercase mb-1">
+                                            Question Type
+                                        </label>
+                                        <select
+                                            value={selectedGenerateType}
+                                            disabled={generating}
+                                            onChange={(e) => setSelectedGenerateType(e.target.value)}
+                                            className="w-full rounded-xl border border-slate-300 p-2 text-xs font-semibold focus:border-brand-primary"
+                                        >
+                                            <option value="ALL">All Types</option>
+                                            <option value="THEORY">Theory & Derivations</option>
+                                            <option value="CODING">Coding & Algorithms</option>
+                                            <option value="ANALYTICAL">Analytical Proofs</option>
+                                            <option value="NUMERICAL">Numerical Problems</option>
+                                            <option value="CONCEPTUAL">Conceptual Analysis</option>
+                                            <option value="DESIGN">System Design</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                {/* Syllabus Topic Selection */}
+                                <div className="space-y-2 border border-slate-200 rounded-xl p-3 bg-slate-50">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-2xs font-extrabold text-slate-700 uppercase">
+                                            Syllabus Grounding Focus ({selectedGenerateTopics.length > 0 ? `${selectedGenerateTopics.length} selected` : 'All Topics'})
+                                        </label>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                disabled={generating}
+                                                onClick={() => setSelectedGenerateTopics([])}
+                                                className="text-3xs font-bold text-indigo-600 hover:text-indigo-800"
+                                            >
+                                                Select All
+                                            </button>
+                                            <span className="text-slate-300">|</span>
+                                            <button
+                                                type="button"
+                                                disabled={generating}
+                                                onClick={() => {
+                                                    const allUnitTopics = syllabus.units.flatMap((u) => u.topics);
+                                                    setSelectedGenerateTopics(allUnitTopics.slice(0, 3));
+                                                }}
+                                                className="text-3xs font-bold text-slate-500 hover:text-slate-700"
+                                            >
+                                                Select Sample
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                                        {syllabus.units.map((unit) => {
+                                            const isUnitSelected = selectedGenerateTopics.includes(unit.unitTitle);
+                                            return (
+                                                <div key={unit.unitNumber} className="bg-white p-2 rounded-lg border border-slate-200 space-y-1.5">
+                                                    <div className="flex items-center justify-between">
+                                                        <label className="flex items-center gap-1.5 text-xs font-bold text-slate-800 cursor-pointer">
+                                                            <input
+                                                                type="checkbox"
+                                                                disabled={generating}
+                                                                checked={isUnitSelected || unit.topics.every((t) => selectedGenerateTopics.includes(t))}
+                                                                onChange={(e) => {
+                                                                    if (e.target.checked) {
+                                                                        const toAdd = [unit.unitTitle, ...unit.topics];
+                                                                        setSelectedGenerateTopics((prev) => Array.from(new Set([...prev, ...toAdd])));
+                                                                    } else {
+                                                                        const toRemove = new Set([unit.unitTitle, ...unit.topics]);
+                                                                        setSelectedGenerateTopics((prev) => prev.filter((t) => !toRemove.has(t)));
+                                                                    }
+                                                                }}
+                                                                className="rounded text-brand-primary"
+                                                            />
+                                                            <span>Unit {unit.unitNumber}: {unit.unitTitle}</span>
+                                                        </label>
+                                                        <span className="text-3xs text-slate-400">{unit.topics.length} topics</span>
+                                                    </div>
+
+                                                    <div className="flex flex-wrap gap-1 pl-5">
+                                                        {unit.topics.map((top, idx) => {
+                                                            const isTopicSelected = selectedGenerateTopics.includes(top);
+                                                            return (
+                                                                <button
+                                                                    key={idx}
+                                                                    type="button"
+                                                                    disabled={generating}
+                                                                    onClick={() => {
+                                                                        setSelectedGenerateTopics((prev) =>
+                                                                            prev.includes(top) ? prev.filter((t) => t !== top) : [...prev, top]
+                                                                        );
+                                                                    }}
+                                                                    className={`px-2 py-0.5 rounded text-3xs font-medium border transition-colors ${
+                                                                        isTopicSelected
+                                                                            ? 'bg-indigo-100 text-indigo-800 border-indigo-300'
+                                                                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                                                                    }`}
+                                                                >
+                                                                    {top}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    <p className="text-3xs text-slate-500">
+                                        💡 Selected topics and modules are strictly enforced in the AI generation prompt and validated on output.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                             <Button
                                 variant="secondary"
                                 size="md"
-                                onClick={() => setShowGenerateModal(false)}
+                                onClick={() => {
+                                    setShowGenerateModal(false);
+                                    setGenerateModalError(null);
+                                }}
+                                disabled={generating}
                             >
                                 Cancel
                             </Button>
@@ -1049,10 +1225,10 @@ Unit 4: Advanced Data Structures
                                 variant="primary"
                                 size="md"
                                 onClick={handleGenerateQuestionBank}
-                                disabled={generating}
+                                disabled={generating || !syllabus || !syllabus.units || syllabus.units.length === 0}
                             >
-                                <Sparkles className="h-4 w-4 mr-1.5" />
-                                <span>{generating ? 'Generating Questions...' : 'Generate Questions'}</span>
+                                <Sparkles className={`h-4 w-4 mr-1.5 ${generating ? 'animate-spin' : ''}`} />
+                                <span>{generating ? 'Generating Syllabus Questions...' : 'Generate Questions'}</span>
                             </Button>
                         </div>
                     </Card>

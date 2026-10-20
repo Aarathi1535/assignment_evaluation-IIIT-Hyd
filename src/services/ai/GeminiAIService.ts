@@ -102,13 +102,15 @@ export class GeminiAIService {
   }
 
   /**
-   * Returns the model name. Defaults to 'gemini-1.5-flash'.
+   * Returns the model name. Defaults to currently supported 'gemini-2.5-flash'.
    */
   public getModelName(): string {
     return (
+      process.env.GEMINI_PERSONALIZED_MODEL?.trim() ||
+      process.env.GEMINI_CLASSROOM_MODEL?.trim() ||
       process.env.GEMINI_MODEL?.trim() ||
       process.env.AI_MODEL?.trim() ||
-      'gemini-1.5-flash'
+      'gemini-2.5-flash'
     );
   }
 
@@ -200,6 +202,7 @@ export class GeminiAIService {
       model = this.getModelName(),
       temperature = 0.2,
       responseMimeType = 'application/json',
+      responseSchema,
       isRealStudentData = false,
     } = params;
 
@@ -211,6 +214,7 @@ export class GeminiAIService {
         region: this.getRegion(),
         systemInstruction,
         promptText,
+        responseSchema,
       });
     }
 
@@ -223,18 +227,42 @@ export class GeminiAIService {
 
     const client = this.getClient();
     return this.executeWithRetry(async () => {
+      // Build request config with structured outputs if responseSchema is provided
+      const config: Record<string, unknown> = {
+        systemInstruction: systemInstruction.trim() || undefined,
+        temperature,
+        responseMimeType: responseMimeType || undefined,
+      };
+      if (responseSchema) {
+        config.responseSchema = responseSchema;
+      }
+
       const response = await client.models.generateContent({
         model,
         contents: promptText,
-        config: {
-          systemInstruction: systemInstruction.trim() || undefined,
-          temperature,
-          responseMimeType: responseMimeType || undefined,
-        },
+        config: config as unknown as Parameters<typeof client.models.generateContent>[0]['config'],
       });
 
-      const rawText = response.text;
+      // Robust response text extraction across SDK formats and candidate parts
+      let rawText = response.text;
+      if (!rawText && response.candidates && response.candidates.length > 0) {
+        const candidate = response.candidates[0];
+        const parts = candidate.content?.parts || [];
+        rawText = parts
+          .filter(
+            (p): p is { text: string; thought?: boolean } =>
+              typeof (p as { text?: unknown })?.text === 'string' &&
+              !(p as { thought?: unknown })?.thought
+          )
+          .map((p) => p.text)
+          .join('');
+      }
+
       if (!rawText || rawText.trim().length === 0) {
+        const finishReason = response.candidates?.[0]?.finishReason || 'UNKNOWN';
+        console.warn(
+          `[GeminiAIService] Model ${model} returned empty content candidate (finishReason: ${finishReason})`
+        );
         throw new HttpError('Gemini AI returned an empty response candidate', 502);
       }
       return rawText;

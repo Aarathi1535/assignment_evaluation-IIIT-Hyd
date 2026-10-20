@@ -73,9 +73,9 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(Object.keys(config)).not.toContain('apiKey');
     });
 
-    it('defaults model to gemini-1.5-flash and supports environment override', () => {
+    it('defaults model to gemini-2.5-flash and supports environment override', () => {
       const service = new GeminiAIService();
-      expect(service.getModelName()).toBe('gemini-1.5-flash');
+      expect(service.getModelName()).toBe('gemini-2.5-flash');
 
       process.env.GEMINI_MODEL = 'gemini-2.0-flash';
       expect(service.getModelName()).toBe('gemini-2.0-flash');
@@ -203,7 +203,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(result).toContain('Mocked Gemini GenAI output');
       expect(mockGenerateContent).toHaveBeenCalledTimes(1);
       expect(capturedArgs).toEqual({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: 'Evaluate question 1',
         config: {
           systemInstruction: 'Act as expert grader',
@@ -247,7 +247,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(result).toContain('Good handwritten response');
       expect(mockGenerateContent).toHaveBeenCalledTimes(1);
       expect(capturedArgs).toEqual({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: [
           { text: 'Grade this handwritten solution' },
           {
@@ -341,7 +341,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       });
 
       expect(capturedPayload).not.toBeNull();
-      expect(capturedPayload!.model).toBe('gemini-1.5-flash');
+      expect(capturedPayload!.model).toBe('gemini-2.5-flash');
       expect(capturedPayload!.promptText).toBe('Evaluate synthetic test work');
       expect(capturedPayload!.imageBase64).toBe('dGVzdA==');
       expect(capturedPayload!.mimeType).toBe('image/png');
@@ -354,7 +354,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
     it('uses the shared Gemini AI service instance and preserves scoring behavior without rewrites', async () => {
       const classroomService = new ClassroomEvaluationService(geminiAIService);
 
-      expect(classroomService.getModelName()).toBe('gemini-1.5-flash');
+      expect(classroomService.getModelName()).toBe('gemini-2.5-flash');
 
       geminiAIService.setCustomCaller(async () => {
         return JSON.stringify({
@@ -405,7 +405,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       const provider = new VertexAIQuestionGenerationProvider(geminiAIService);
 
       expect(provider.providerName).toBe('VertexAI');
-      expect(provider.getModelName()).toBe('gemini-1.5-flash');
+      expect(provider.getModelName()).toBe('gemini-2.5-flash');
 
       geminiAIService.setCustomCaller(async () => {
         return JSON.stringify({
