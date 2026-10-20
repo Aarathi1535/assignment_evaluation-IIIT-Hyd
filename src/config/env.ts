@@ -8,11 +8,21 @@ const envSchema = z.object({
     ORIGINAL_STORAGE_KEY_ID: z.string().default('v1'),
     ORIGINAL_STORAGE_PATH: z.string().optional(),
     DERIVED_PAGE_STORAGE_BUCKET: z.string().trim().min(1).optional(),
-    STUDENT_RESULTS_ENABLED: z.string().optional().default('false')
+    STUDENT_RESULTS_ENABLED: z.string().optional().default('false'),
+    FEATURE_LEARNING_MODULE: z.string().optional().default('false'),
+    NEXT_PUBLIC_FEATURE_LEARNING_MODULE: z.string().optional().default('false')
 });
 
 export function isStudentResultsEnabled(): boolean {
     return process.env.STUDENT_RESULTS_ENABLED === 'true';
+}
+
+export function isLearningModuleServerEnabled(): boolean {
+    return process.env.FEATURE_LEARNING_MODULE === 'true';
+}
+
+export function isLearningModulePublicEnabled(): boolean {
+    return process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE === 'true';
 }
 
 export function validateEnv() {

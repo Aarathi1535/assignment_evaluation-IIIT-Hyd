@@ -1,28 +1,56 @@
-import { withAuth } from 'next-auth/middleware';
-import { NextResponse } from 'next/server';
+import { withAuth, NextRequestWithAuth } from 'next-auth/middleware';
+import { JWT } from 'next-auth/jwt';
+import { NextRequest, NextResponse } from 'next/server';
 import { hasPermission, Permission, UserRole } from './constants/permissions';
+import { isLearningModuleServerEnabled } from './config/env';
 
-export default withAuth(
-  function middleware(req) {
-    const token = req.nextauth.token;
-    const path = req.nextUrl.pathname;
+/**
+ * Matches learning module route families:
+ * - /api/learning/*
+ * - /professor/learning*
+ * - /student/learning*
+ *
+ * Avoids matching unrelated routes like /api/learning-center or /professor/learning-analytics.
+ */
+export function isLearningRoute(path: string): boolean {
+  return (
+    path === '/api/learning' ||
+    path.startsWith('/api/learning/') ||
+    path === '/professor/learning' ||
+    path.startsWith('/professor/learning/') ||
+    path === '/student/learning' ||
+    path.startsWith('/student/learning/')
+  );
+}
 
-    // API route protection (JSON 401 instead of redirecting)
-    if (path.startsWith('/api')) {
-      // Allow public access ONLY to /api/auth/** and /api/health
-      if (path.startsWith('/api/auth') || path === '/api/health') {
-        return;
-      }
-      
-      // Protect all other API routes
-      if (!token) {
-        return NextResponse.json(
-          { success: false, message: 'Unauthorized' },
-          { status: 401 }
-        );
-      }
+export function proxyMiddleware(req: NextRequestWithAuth) {
+  const token = req.nextauth?.token;
+  const path = req.nextUrl.pathname;
+
+  // Feature flag security guard: generic 404 when server flag is off
+  if (isLearningRoute(path) && !isLearningModuleServerEnabled()) {
+    return NextResponse.json(
+      { success: false, message: 'Not Found', data: null },
+      { status: 404 }
+    );
+  }
+
+  // API route protection (JSON 401 instead of redirecting)
+  if (path.startsWith('/api')) {
+    // Allow public access ONLY to /api/auth/** and /api/health
+    if (path.startsWith('/api/auth') || path === '/api/health') {
       return;
     }
+
+    // Protect all other API routes
+    if (!token) {
+      return NextResponse.json(
+        { success: false, message: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    return;
+  }
 
     if (token) {
       const rawRole = token.role as string;
@@ -70,30 +98,38 @@ export default withAuth(
         return NextResponse.redirect(new URL(`/${userRoleLower}`, req.url));
       }
     }
-  },
-  {
-    callbacks: {
-      authorized: ({ token, req }) => {
-        const path = req.nextUrl.pathname;
+}
 
-        // Allow public routes
-        if (
-          path.startsWith('/api') ||
-          (process.env.NODE_ENV !== 'production' && process.env.AE174_PROFILE_ONLY === 'true' && path === '/ae174-profile') ||
-          path === '/login' ||
-          path === '/register' ||
-          path === '/forgot-password' ||
-          path === '/reset-password'
-        ) {
-          return true;
-        }
+export const proxyAuthOptions = {
+  callbacks: {
+    authorized: ({ token, req }: { token: JWT | null; req: NextRequest }) => {
+      const path = req.nextUrl.pathname;
 
-        // Require authentication for all other routes
-        return !!token;
-      },
+      // When Learning Module is disabled, permit request to reach proxyMiddleware
+      // so it returns a generic 404 rather than redirecting to login (avoiding information disclosure)
+      if (isLearningRoute(path) && !isLearningModuleServerEnabled()) {
+        return true;
+      }
+
+      // Allow public routes
+      if (
+        path.startsWith('/api') ||
+        (process.env.NODE_ENV !== 'production' && process.env.AE174_PROFILE_ONLY === 'true' && path === '/ae174-profile') ||
+        path === '/login' ||
+        path === '/register' ||
+        path === '/forgot-password' ||
+        path === '/reset-password'
+      ) {
+        return true;
+      }
+
+      // Require authentication for all other routes
+      return !!token;
     },
-  }
-);
+  },
+};
+
+export default withAuth(proxyMiddleware, proxyAuthOptions);
 
 export const config = {
   matcher: [

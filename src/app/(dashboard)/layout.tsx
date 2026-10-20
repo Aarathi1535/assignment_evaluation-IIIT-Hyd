@@ -16,9 +16,11 @@ import {
   FileText,
   Plus,
   Flag,
+  Sparkles,
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { clearUserDrafts } from '@/lib/offlineDrafts';
+import { isPublicFeatureEnabled } from '@/config/features';
 
 interface NavLinksProps {
   menuItems: Array<{ label: string; href: string; icon: LucideIcon }>;
@@ -114,26 +116,40 @@ export default function DashboardLayout({
   const rawRole = user.role || 'STUDENT';
   const role = rawRole.toUpperCase();
 
+  const isLearningEnabled = isPublicFeatureEnabled('LEARNING_MODULE');
+
+  const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
+    { label: 'Courses', href: '/professor/courses', icon: BookOpen },
+    { label: 'Exams', href: '/professor/exams', icon: FileText },
+  ];
+  if (isLearningEnabled) {
+    professorNavItems.push({ label: 'Learning Module', href: '/professor/learning', icon: Sparkles });
+  }
+  professorNavItems.push(
+    { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
+    { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
+    { label: 'Create Exam', href: '/professor/exams/create', icon: Plus }
+  );
+
+  const studentNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
+  ];
+  if (isLearningEnabled) {
+    studentNavItems.push({ label: 'Learning Module', href: '/student/learning', icon: Sparkles });
+  }
+
   // Define navigation items per role
   const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
     ADMIN: [
       { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
       { label: 'Users', href: '/admin/users', icon: Users },
     ],
-    PROFESSOR: [
-      { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
-      { label: 'Courses', href: '/professor/courses', icon: BookOpen },
-      { label: 'Exams', href: '/professor/exams', icon: FileText },
-      { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
-      { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
-      { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
-    ],
+    PROFESSOR: professorNavItems,
     TA: [
       { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
     ],
-    STUDENT: [
-      { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
-    ],
+    STUDENT: studentNavItems,
   };
 
   const menuItems = navItemsByRole[role] || navItemsByRole.STUDENT;
