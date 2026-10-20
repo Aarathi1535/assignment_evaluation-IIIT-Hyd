@@ -1,13 +1,15 @@
 # Research Direction 2: Student Login + Personalized Assessment
 
-**Author / Lead Researcher:** Antigravity AI Engineering (Pair Programming with IIIT Hyderabad Team)
+**Author / Lead Researcher:** Aarathi Sree (IIIT Hyderabad)
 **Research Advisor:** Prof. C. V. Jawahar
 **Branch:** `research/jawahar-2-personalized-assessment`
 **Status:** Complete Working Architecture with Syllabus-Driven Question Generation, Student Personalization, Mathematical Allocation Invariants, and Anti-Postponement Guards
 
 ---
 
-> **Architecture status:** This document is retained as the historical research-direction reference. The canonical combined architecture, data models, privacy rules, SSE contracts and AI gates are maintained in [the Learning Module Design Note](./learning-module.md). Where implementation-specific legacy details differ from the combined design, consult the canonical note for the target architecture.
+> **Architecture status & branch scope:** This document is retained as the historical research-direction reference for Direction 2. The canonical combined architecture, data models, privacy rules, SSE contracts, and AI gates are maintained in [the Learning Module Design Note](./learning-module.md).
+>
+> **Note on Source Files:** The implementation files referenced in this document (including `src/models/CourseSyllabus.ts`, `src/models/PersonalizedQuestion.ts`, `src/models/PersonalizedAssessmentSchedule.ts`, `src/models/PersonalizedStudentAssignment.ts`, `src/services/PersonalizationService.ts`, `src/services/PersonalizedAssessmentService.ts`, `src/services/PersonalizedQuestionGenerationService.ts`, `src/services/SyllabusProcessingService.ts`, `src/app/api/personalized/*`, and `src/__tests__/PersonalizedAssessment.test.ts`) exist **only** on the legacy research prototype branch `research/jawahar-2-personalized-assessment` and are not part of `main` or `research/learning`.
 
 ---
 

@@ -1,13 +1,15 @@
 # Research Direction 1: Interactive Classroom Assessment
 
-**Author / Lead Researcher:** Antigravity AI Engineering (Pair Programming with IIIT Hyderabad Team)
+**Author / Lead Researcher:** Aarathi Sree (IIIT Hyderabad)
 **Research Advisor:** Prof. C. V. Jawahar
 **Branch:** `research/jawahar-1-classroom-assessment`
 **Status:** Multimodal Gemini VLM Evaluator with Server-Side Guardrails Implemented (Research Prototype)
 
 ---
 
-> **Architecture status:** This document is retained as the historical research-direction reference. The canonical combined architecture, data models, privacy rules, SSE contracts and AI gates are maintained in [the Learning Module Design Note](./learning-module.md). Where implementation-specific legacy details differ from the combined design, consult the canonical note for the target architecture.
+> **Architecture status & branch scope:** This document is retained as the historical research-direction reference for Direction 1. The canonical combined architecture, data models, privacy rules, SSE contracts, and AI gates are maintained in [the Learning Module Design Note](./learning-module.md).
+>
+> **Note on Source Files:** The implementation files referenced in this document (including `src/services/ClassroomEvaluationService.ts`, `src/services/ClassroomAssessmentService.ts`, `src/repositories/ClassroomAssessmentRepository.ts`, `src/models/ClassroomQuestion.ts`, `src/models/ClassroomSubmission.ts`, `src/app/api/classroom/*`, and `src/__tests__/ClassroomAssessment.test.ts`) exist **only** on the legacy research prototype branch `research/jawahar-1-classroom-assessment` and are not part of `main` or `research/learning`.
 
 ---
 
