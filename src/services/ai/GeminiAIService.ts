@@ -10,11 +10,12 @@ import {
 
 export class GeminiAIService {
   private static instance: GeminiAIService | null = null;
-  public static readonly SECRET_NAME = 'assignment-eval-gemini-api-key';
+  public static readonly SECRET_NAME = 'GEMINI_API_KEY';
 
   private customCaller: GeminiAICaller | null = null;
   private client: GoogleGenAI | null = null;
   private lastApiKey: string | null = null;
+  private isInjectedClient: boolean = false;
   private explicitPaidTier: boolean | null = null;
 
   public static getInstance(): GeminiAIService {
@@ -39,20 +40,11 @@ export class GeminiAIService {
   }
 
   /**
-   * Reads the Gemini API key from environment / secrets configuration.
-   * Priority:
-   * 1. process.env['assignment-eval-gemini-api-key']
-   * 2. process.env.ASSIGNMENT_EVAL_GEMINI_API_KEY
-   * 3. process.env.GEMINI_API_KEY
-   *
+   * Reads the Gemini API key from environment configuration (GEMINI_API_KEY).
    * Note: The key value is never exposed in logs or publicly printed.
    */
   public getApiKey(): string | null {
-    const key =
-      process.env[GeminiAIService.SECRET_NAME]?.trim() ||
-      process.env.ASSIGNMENT_EVAL_GEMINI_API_KEY?.trim() ||
-      process.env.GEMINI_API_KEY?.trim();
-
+    const key = process.env.GEMINI_API_KEY?.trim();
     return key && key.length > 0 ? key : null;
   }
 
@@ -95,11 +87,7 @@ export class GeminiAIService {
     if (this.explicitPaidTier !== null) {
       return this.explicitPaidTier;
     }
-    const tierEnv =
-      process.env.GEMINI_TIER?.trim().toLowerCase() ||
-      process.env.ASSIGNMENT_EVAL_GEMINI_TIER?.trim().toLowerCase() ||
-      process.env.GEMINI_PAID_TIER?.trim().toLowerCase();
-
+    const tierEnv = process.env.GEMINI_PAID_TIER?.trim().toLowerCase();
     return tierEnv === 'paid' || tierEnv === 'true';
   }
 
@@ -172,9 +160,31 @@ export class GeminiAIService {
 
   /**
    * Direct client injection hook for tests.
+   * If options.isInjected is true (the default for tests), the client is treated as an intentional
+   * dependency injection and preserved across calls.
+   * If options.isInjected is false, the client is treated as an externally provided cached client
+   * whose credential association is tracked via options.lastApiKey (or unknown if null).
    */
-  public setClient(client: GoogleGenAI | null): void {
+  public setClient(
+    client: GoogleGenAI | null,
+    options?: { isInjected?: boolean; lastApiKey?: string | null } | boolean
+  ): void {
     this.client = client;
+    if (client === null) {
+      this.isInjectedClient = false;
+      this.lastApiKey = null;
+      return;
+    }
+
+    if (typeof options === 'boolean') {
+      this.isInjectedClient = options;
+      this.lastApiKey = options ? this.getApiKey() : null;
+    } else {
+      this.isInjectedClient = options?.isInjected ?? true;
+      this.lastApiKey = options?.lastApiKey !== undefined
+        ? options.lastApiKey
+        : (this.isInjectedClient ? this.getApiKey() : null);
+    }
   }
 
   public hasCustomCaller(): boolean {
@@ -183,23 +193,30 @@ export class GeminiAIService {
 
   /**
    * Gets or initializes the shared @google/genai GoogleGenAI client instance.
+   * Recreates the client whenever its credential association is unknown (null)
+   * or differs from the current GEMINI_API_KEY, while preserving intentional dependency
+   * injection in tests.
    */
   public getClient(): GoogleGenAI {
-    if (this.client) {
-      return this.client;
-    }
-
     const apiKey = this.getApiKey();
     if (!apiKey) {
       throw new HttpError(
-        `Gemini AI credentials are not configured. Please configure the secret '${this.getSecretName()}'.`,
+        `Gemini AI credentials are not configured. Please configure the environment variable '${this.getSecretName()}'.`,
         503
       );
     }
 
-    if (!this.client || this.lastApiKey !== apiKey) {
+    // Preserve intentional dependency injection in tests
+    if (this.client && this.isInjectedClient) {
+      return this.client;
+    }
+
+    // Recreate the client if missing, if its credential association is unknown (null),
+    // or if the key has rotated (lastApiKey !== apiKey).
+    if (!this.client || this.lastApiKey === null || this.lastApiKey !== apiKey) {
       this.client = new GoogleGenAI({ apiKey });
       this.lastApiKey = apiKey;
+      this.isInjectedClient = false;
     }
 
     return this.client;
@@ -232,7 +249,7 @@ export class GeminiAIService {
 
     if (!this.isConfigured()) {
       throw new HttpError(
-        `Gemini AI credentials are not configured. Please configure the secret '${this.getSecretName()}'.`,
+        `Gemini AI credentials are not configured. Please configure the environment variable '${this.getSecretName()}'.`,
         503
       );
     }
@@ -290,7 +307,7 @@ export class GeminiAIService {
 
     if (!this.isConfigured()) {
       throw new HttpError(
-        `Gemini AI credentials are not configured. Please configure the secret '${this.getSecretName()}'.`,
+        `Gemini AI credentials are not configured. Please configure the environment variable '${this.getSecretName()}'.`,
         503
       );
     }
@@ -358,8 +375,9 @@ export class GeminiAIService {
           continue;
         }
 
+        console.error(`[GeminiAIService] Request failed for model ${model}:`, errMsg);
         throw new HttpError(
-          `Gemini AI model ${model} request failed: ${errMsg}`,
+          'Gemini AI service request failed. Please try again later.',
           502
         );
       }
@@ -367,7 +385,7 @@ export class GeminiAIService {
 
     throw lastError instanceof HttpError
       ? lastError
-      : new HttpError(`Gemini AI model ${model} request failed after retries`, 502);
+      : new HttpError('Gemini AI service request failed after retries. Please try again later.', 502);
   }
 }
 

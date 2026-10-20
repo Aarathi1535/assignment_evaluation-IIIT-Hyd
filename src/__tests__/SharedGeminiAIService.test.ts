@@ -9,8 +9,8 @@ import {
 } from '../services/ai/GeminiAIService';
 import {
   GeminiAIQuestionGenerationProvider,
-  VertexAIQuestionGenerationProvider,
   MockAIQuestionGenerationProvider,
+  parseGeneratedQuestions,
 } from '../services/ai/AIQuestionGenerationProvider';
 import { HttpError } from '../lib/errors';
 
@@ -19,8 +19,6 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
 
   beforeEach(() => {
     process.env = { ...origEnv };
-    delete process.env['assignment-eval-gemini-api-key'];
-    delete process.env.ASSIGNMENT_EVAL_GEMINI_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_MODEL;
     delete process.env.GEMINI_EMBEDDING_MODEL;
@@ -30,7 +28,6 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
     delete process.env.GEMINI_CLASSROOM_MODEL;
     delete process.env.GEMINI_TIER;
     delete process.env.GEMINI_PAID_TIER;
-    delete process.env.ASSIGNMENT_EVAL_GEMINI_TIER;
 
     geminiAIService.setCustomCaller(null);
     geminiAIService.setClient(null);
@@ -46,32 +43,34 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
   });
 
   describe('Configuration & Secret Resolution', () => {
-    it('uses the mentor-specified secret name assignment-eval-gemini-api-key', () => {
+    it('uses the canonical secret name GEMINI_API_KEY', () => {
       const service = new GeminiAIService();
-      expect(service.getSecretName()).toBe('assignment-eval-gemini-api-key');
-      expect(GeminiAIService.SECRET_NAME).toBe('assignment-eval-gemini-api-key');
+      expect(service.getSecretName()).toBe('GEMINI_API_KEY');
+      expect(GeminiAIService.SECRET_NAME).toBe('GEMINI_API_KEY');
     });
 
-    it('reads the API key from assignment-eval-gemini-api-key environment secret', () => {
-      process.env['assignment-eval-gemini-api-key'] = 'mentor-assigned-secret-test-key-123';
+    it('reads the API key from GEMINI_API_KEY environment variable', () => {
+      process.env.GEMINI_API_KEY = 'gemini-secret-test-key-123';
       const service = new GeminiAIService();
-      expect(service.getApiKey()).toBe('mentor-assigned-secret-test-key-123');
+      expect(service.getApiKey()).toBe('gemini-secret-test-key-123');
       expect(service.isConfigured()).toBe(true);
     });
 
-    it('falls back to POSIX aliases ASSIGNMENT_EVAL_GEMINI_API_KEY or GEMINI_API_KEY if primary secret is absent', () => {
-      process.env.ASSIGNMENT_EVAL_GEMINI_API_KEY = 'posix-gemini-key-456';
-      const service1 = new GeminiAIService();
-      expect(service1.getApiKey()).toBe('posix-gemini-key-456');
+    it('reinitializes client when API key is rotated in environment', () => {
+      process.env.GEMINI_API_KEY = 'initial-api-key';
+      const service = new GeminiAIService();
+      const client1 = service.getClient();
+      expect(client1).toBeDefined();
 
-      delete process.env.ASSIGNMENT_EVAL_GEMINI_API_KEY;
-      process.env.GEMINI_API_KEY = 'gemini-fallback-key-789';
-      const service2 = new GeminiAIService();
-      expect(service2.getApiKey()).toBe('gemini-fallback-key-789');
+      // Rotate API key
+      process.env.GEMINI_API_KEY = 'rotated-api-key-new';
+      const client2 = service.getClient();
+      expect(client2).toBeDefined();
+      expect(client2).not.toBe(client1);
     });
 
     it('never exposes credentials in public config or serialized representations', () => {
-      process.env['assignment-eval-gemini-api-key'] = 'super-sensitive-secret-token-do-not-leak';
+      process.env.GEMINI_API_KEY = 'super-sensitive-secret-token-do-not-leak';
       process.env.GEMINI_MODEL = 'gemini-test-model';
       process.env.GEMINI_EMBEDDING_MODEL = 'gemini-test-embedding';
 
@@ -79,7 +78,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       const config = service.getConfig();
       const embedConfig = service.getEmbeddingConfig();
 
-      expect(config.secretName).toBe('assignment-eval-gemini-api-key');
+      expect(config.secretName).toBe('GEMINI_API_KEY');
       expect(config.isConfigured).toBe(true);
       expect(JSON.stringify(config)).not.toContain('super-sensitive-secret-token-do-not-leak');
       expect(JSON.stringify(embedConfig)).not.toContain('super-sensitive-secret-token-do-not-leak');
@@ -136,7 +135,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
 
     it('throws 503 HttpError on generateContent call when GEMINI_MODEL is missing', async () => {
       delete process.env.GEMINI_MODEL;
-      process.env['assignment-eval-gemini-api-key'] = 'mock-key';
+      process.env.GEMINI_API_KEY = 'mock-key';
       const service = new GeminiAIService();
 
       await expect(
@@ -155,7 +154,7 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
     it('passes configured GEMINI_MODEL verbatim to GoogleGenAI client', async () => {
       const customModelId = 'gemini-custom-generation-model-id-verbatim';
       process.env.GEMINI_MODEL = customModelId;
-      process.env['assignment-eval-gemini-api-key'] = 'test-key';
+      process.env.GEMINI_API_KEY = 'test-key';
 
       const service = new GeminiAIService();
       let capturedArgs: unknown = null;
@@ -276,13 +275,13 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
     it('returns embedding config with verbatim embeddingModel and safe metadata', () => {
       const customEmbeddingModel = 'gemini-custom-embedding-prod-verbatim';
       process.env.GEMINI_EMBEDDING_MODEL = customEmbeddingModel;
-      process.env['assignment-eval-gemini-api-key'] = 'secret-api-key';
+      process.env.GEMINI_API_KEY = 'secret-api-key';
 
       const service = new GeminiAIService();
       const config = service.getEmbeddingConfig();
 
       expect(config.embeddingModel).toBe(customEmbeddingModel);
-      expect(config.secretName).toBe('assignment-eval-gemini-api-key');
+      expect(config.secretName).toBe('GEMINI_API_KEY');
       expect(config.isConfigured).toBe(true);
     });
   });
@@ -335,47 +334,6 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(capturedModelInSharedService).toBe(sharedModel);
     });
 
-    it('VertexAIQuestionGenerationProvider delegates to shared service without fallback chains', async () => {
-      const sharedModel = 'gemini-shared-vertex-provider-model';
-      process.env.GEMINI_MODEL = sharedModel;
-
-      const provider = new VertexAIQuestionGenerationProvider(geminiAIService);
-      expect(provider.getModelName()).toBe(sharedModel);
-
-      let callerInvoked = false;
-      geminiAIService.setCustomCaller(async (payload) => {
-        callerInvoked = true;
-        expect(payload.model).toBe(sharedModel);
-        return JSON.stringify({
-          questions: [
-            {
-              title: 'Sorting Problem',
-              topic: 'Sorting',
-              unit: 'Unit 1: Sorting',
-              difficulty: 'EASY',
-              questionPrompt: 'Describe QuickSort average case complexity.',
-              maxMarks: 10,
-            },
-          ],
-        });
-      });
-
-      const questions = await provider.generateQuestions({
-        courseTitle: 'Algorithms',
-        syllabusUnits: [
-          {
-            unitNumber: 1,
-            unitTitle: 'Unit 1: Sorting',
-            topics: ['Sorting'],
-          },
-        ],
-        targetCount: 1,
-      });
-
-      expect(callerInvoked).toBe(true);
-      expect(questions).toHaveLength(1);
-    });
-
     it('MockAIQuestionGenerationProvider operates deterministically without external calls', async () => {
       const mockProvider = new MockAIQuestionGenerationProvider();
       expect(mockProvider.isConfigured()).toBe(true);
@@ -398,37 +356,365 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
     });
   });
 
-  describe('Retry logic preserves model without fallback switching', () => {
-    it('retries transient 429 errors using the same configured model without switching', async () => {
-      const configuredModel = 'gemini-strict-retry-model';
-      process.env.GEMINI_MODEL = configuredModel;
-      process.env['assignment-eval-gemini-api-key'] = 'mock-key';
+  describe('Tier enforcement using GEMINI_PAID_TIER', () => {
+    it('checks GEMINI_PAID_TIER for paid tier activation', () => {
+      process.env.GEMINI_PAID_TIER = 'true';
+      const service1 = new GeminiAIService();
+      expect(service1.isPaidTier()).toBe(true);
+
+      process.env.GEMINI_PAID_TIER = 'paid';
+      const service2 = new GeminiAIService();
+      expect(service2.isPaidTier()).toBe(true);
+
+      process.env.GEMINI_PAID_TIER = 'false';
+      const service3 = new GeminiAIService();
+      expect(service3.isPaidTier()).toBe(false);
+    });
+
+    it('rejects real student data when GEMINI_PAID_TIER is not active', () => {
+      process.env.GEMINI_PAID_TIER = 'false';
+      const service = new GeminiAIService();
+      expect(() => service.validateTierForPayload({ isRealStudentData: true })).toThrow(HttpError);
+    });
+  });
+
+  describe('Retry logic & safe error reporting', () => {
+    it('retries transient 429 errors using fake timers without real sleeping', async () => {
+      vi.useFakeTimers();
+      try {
+        const configuredModel = 'gemini-strict-retry-model';
+        process.env.GEMINI_MODEL = configuredModel;
+        process.env.GEMINI_API_KEY = 'mock-key';
+
+        const service = new GeminiAIService();
+        let attempts = 0;
+        const invokedModels: string[] = [];
+
+        const mockGenerateContent = vi.fn().mockImplementation(async (args) => {
+          attempts++;
+          invokedModels.push(args.model);
+          if (attempts === 1) {
+            throw new Error('429 RESOURCE_EXHAUSTED: Rate limit exceeded');
+          }
+          return { text: JSON.stringify({ status: 'recovered' }) };
+        });
+
+        const mockClient = {
+          models: {
+            generateContent: mockGenerateContent,
+          },
+        } as unknown as GoogleGenAI;
+
+        service.setClient(mockClient);
+
+        const promise = service.generateContent({ promptText: 'Retry test' });
+        await vi.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result).toBe(JSON.stringify({ status: 'recovered' }));
+        expect(attempts).toBe(2);
+        expect(invokedModels).toEqual([configuredModel, configuredModel]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('returns a safe stable error message without raw upstream error text', async () => {
+      process.env.GEMINI_MODEL = 'gemini-model';
+      process.env.GEMINI_API_KEY = 'mock-key';
 
       const service = new GeminiAIService();
-      let attempts = 0;
-      const invokedModels: string[] = [];
-
-      const mockGenerateContent = vi.fn().mockImplementation(async (args) => {
-        attempts++;
-        invokedModels.push(args.model);
-        if (attempts === 1) {
-          throw new Error('429 RESOURCE_EXHAUSTED: Rate limit exceeded');
-        }
-        return { text: JSON.stringify({ status: 'recovered' }) };
-      });
-
       const mockClient = {
         models: {
-          generateContent: mockGenerateContent,
+          generateContent: vi.fn().mockRejectedValue(new Error('Internal raw upstream credential detail: token_abc_123 failed')),
         },
       } as unknown as GoogleGenAI;
-
       service.setClient(mockClient);
 
-      const result = await service.generateContent({ promptText: 'Retry test' });
-      expect(result).toBe(JSON.stringify({ status: 'recovered' }));
-      expect(attempts).toBe(2);
-      expect(invokedModels).toEqual([configuredModel, configuredModel]);
+      await expect(service.generateContent({ promptText: 'test' })).rejects.toThrow(
+        'Gemini AI service request failed. Please try again later.'
+      );
+    });
+  });
+
+  describe('Client caching and key rotation', () => {
+    it('creates and caches a client when key is configured', () => {
+      process.env.GEMINI_API_KEY = 'key-initial';
+      const service = new GeminiAIService();
+      const client1 = service.getClient();
+      expect(client1).toBeDefined();
+    });
+
+    it('reuses cached client when API key is unchanged (unchanged-key reuse)', () => {
+      process.env.GEMINI_API_KEY = 'key-unchanged';
+      const service = new GeminiAIService();
+      const client1 = service.getClient();
+      const client2 = service.getClient();
+      expect(client2).toBe(client1);
+    });
+
+    it('recreates client when GEMINI_API_KEY rotates (key rotation)', () => {
+      process.env.GEMINI_API_KEY = 'key-1';
+      const service = new GeminiAIService();
+      const client1 = service.getClient();
+
+      process.env.GEMINI_API_KEY = 'key-2';
+      const client2 = service.getClient();
+      expect(client2).not.toBe(client1);
+    });
+
+    it('recreates client when cached client has unknown credential association (the unknown-key case)', () => {
+      process.env.GEMINI_API_KEY = 'key-active';
+      const service = new GeminiAIService();
+      const mockUnknownClient = {} as unknown as GoogleGenAI;
+      // Simulate a cached client whose credential association is unknown (isInjected: false, lastApiKey: null)
+      service.setClient(mockUnknownClient, { isInjected: false, lastApiKey: null });
+      const client = service.getClient();
+      expect(client).not.toBe(mockUnknownClient);
+    });
+
+    it('preserves intentional dependency injection in tests', () => {
+      process.env.GEMINI_API_KEY = 'key-injected';
+      const service = new GeminiAIService();
+      const mockInjectedClient = {
+        models: { generateContent: vi.fn() },
+      } as unknown as GoogleGenAI;
+      service.setClient(mockInjectedClient);
+      const client = service.getClient();
+      expect(client).toBe(mockInjectedClient);
+    });
+  });
+
+  describe('Syllabus grounding and off-syllabus question rejection', () => {
+    it('drops off-syllabus questions, reports rejectedOffSyllabusCount, and never silently reassigns them (partial rejection)', () => {
+      const syllabusUnits = [
+        {
+          unitNumber: 1,
+          unitTitle: 'Unit 1: Sorting',
+          topics: ['MergeSort', 'QuickSort'],
+        },
+      ];
+
+      const mockRawResponse = JSON.stringify({
+        questions: [
+          {
+            title: 'MergeSort Analysis',
+            topic: 'MergeSort',
+            unit: 'Unit 1: Sorting',
+            difficulty: 'EASY',
+            questionPrompt: 'Explain MergeSort recursion tree and recurrence relation.',
+            maxMarks: 10,
+          },
+          {
+            title: 'Quantum Computing Intro',
+            topic: 'Quantum Computing', // Completely off-syllabus!
+            unit: 'Random Unit',
+            difficulty: 'HARD',
+            questionPrompt: 'Explain quantum superposition.',
+            maxMarks: 10,
+          },
+        ],
+      });
+
+      let callbackReportedCount = -1;
+      const parsed = parseGeneratedQuestions(mockRawResponse, syllabusUnits, (count) => {
+        callbackReportedCount = count;
+      });
+
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].topic).toBe('MergeSort');
+      expect(parsed.rejectedOffSyllabusCount).toBe(1);
+      expect(callbackReportedCount).toBe(1);
+
+      const topics = parsed.map((q) => q.topic);
+      expect(topics).not.toContain('Quantum Computing');
+      // Verify off-syllabus question was not reassigned to QuickSort
+      expect(topics.filter((t) => t === 'QuickSort')).toHaveLength(0);
+    });
+
+    it('throws 502 error when all generated questions are off-syllabus (complete rejection)', () => {
+      const syllabusUnits = [
+        {
+          unitNumber: 1,
+          unitTitle: 'Unit 1: Data Structures',
+          topics: ['Binary Search Trees'],
+        },
+      ];
+
+      const mockRawResponse = JSON.stringify({
+        questions: [
+          {
+            title: 'Astrophysics Intro',
+            topic: 'Astrophysics',
+            difficulty: 'MEDIUM',
+            questionPrompt: 'Describe stellar nucleosynthesis.',
+            maxMarks: 5,
+          },
+        ],
+      });
+
+      expect(() => parseGeneratedQuestions(mockRawResponse, syllabusUnits)).toThrow(
+        /rejected count: 1/i
+      );
+    });
+
+    it('reports rejectedOffSyllabusCount via server-side structured log and callback even when JSON.stringify omits named array properties', () => {
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+      try {
+        const syllabusUnits = [
+          {
+            unitNumber: 1,
+            unitTitle: 'Unit 1: Sorting',
+            topics: ['MergeSort'],
+          },
+        ];
+
+        const mockRawResponse = JSON.stringify({
+          questions: [
+            {
+              title: 'MergeSort Analysis',
+              topic: 'MergeSort',
+              difficulty: 'EASY',
+              questionPrompt: 'Explain MergeSort.',
+              maxMarks: 10,
+            },
+            {
+              title: 'Off Syllabus Item',
+              topic: 'Rocket Science',
+              difficulty: 'HARD',
+              questionPrompt: 'Explain propulsion.',
+              maxMarks: 10,
+            },
+          ],
+        });
+
+        let callbackCount = -1;
+        const result = parseGeneratedQuestions(mockRawResponse, syllabusUnits, {
+          onRejected: (c) => {
+            callbackCount = c;
+          },
+        });
+
+        // 1. Verify in-memory TypeScript property is accessible
+        expect(result.rejectedOffSyllabusCount).toBe(1);
+        expect(callbackCount).toBe(1);
+
+        // 2. Verify JSON.stringify omits named array properties per ECMAScript specification
+        const serialized = JSON.stringify(result);
+        const deserialized = JSON.parse(serialized);
+        expect(Array.isArray(deserialized)).toBe(true);
+        expect(deserialized[0].topic).toBe('MergeSort');
+        expect((deserialized as { rejectedOffSyllabusCount?: number }).rejectedOffSyllabusCount).toBeUndefined();
+
+        // 3. Verify server-side structured log was emitted with the exact rejection summary
+        expect(infoSpy).toHaveBeenCalled();
+        const loggedCall = infoSpy.mock.calls.find((call) => {
+          try {
+            const data = JSON.parse(call[0] as string);
+            return data.event === 'off_syllabus_rejection_summary';
+          } catch {
+            return false;
+          }
+        });
+        expect(loggedCall).toBeDefined();
+        const payload = JSON.parse(loggedCall![0] as string);
+        expect(payload).toEqual({
+          event: 'off_syllabus_rejection_summary',
+          rejectedOffSyllabusCount: 1,
+          acceptedCount: 1,
+          totalParsed: 2,
+        });
+      } finally {
+        infoSpy.mockRestore();
+      }
+    });
+
+    it('distinguishes empty responses from off-syllabus rejections with a 502 empty-response error', () => {
+      const syllabusUnits = [{ unitNumber: 1, unitTitle: 'Unit 1', topics: ['Trees'] }];
+      expect(() => parseGeneratedQuestions('', syllabusUnits)).toThrow(
+        /Gemini question generation returned an empty response/i
+      );
+      expect(() => parseGeneratedQuestions('   ', syllabusUnits)).toThrow(
+        /Gemini question generation returned an empty response/i
+      );
+    });
+
+    it('distinguishes malformed JSON from off-syllabus rejections with a 502 malformed-JSON error', () => {
+      const syllabusUnits = [{ unitNumber: 1, unitTitle: 'Unit 1', topics: ['Trees'] }];
+      expect(() => parseGeneratedQuestions('not valid json syntax', syllabusUnits)).toThrow(
+        /Gemini question generation returned malformed JSON/i
+      );
+    });
+
+    it('distinguishes schema-invalid questions from off-syllabus rejections with a 502 schema-validation error', () => {
+      const syllabusUnits = [{ unitNumber: 1, unitTitle: 'Unit 1', topics: ['Trees'] }];
+      // Missing required fields like difficulty, questionPrompt, maxMarks
+      const invalidQuestion = JSON.stringify({
+        questions: [{ title: 'Incomplete Question', topic: 'Trees' }],
+      });
+      expect(() => parseGeneratedQuestions(invalidQuestion, syllabusUnits)).toThrow(
+        /Gemini question generation response failed schema validation/i
+      );
+    });
+
+    it('distinguishes empty questions array from off-syllabus rejections with a 502 schema-validation error', () => {
+      const syllabusUnits = [{ unitNumber: 1, unitTitle: 'Unit 1', topics: ['Trees'] }];
+      const emptyQuestions = JSON.stringify({ questions: [] });
+      expect(() => parseGeneratedQuestions(emptyQuestions, syllabusUnits)).toThrow(
+        /Gemini question generation response failed schema validation/i
+      );
+    });
+
+    it('GeminiAIQuestionGenerationProvider tracks and exposes partial rejection count through provider methods and params', async () => {
+      process.env.GEMINI_MODEL = 'gemini-test-model';
+      process.env.GEMINI_API_KEY = 'mock-key';
+      const mockService = new GeminiAIService();
+      const provider = new GeminiAIQuestionGenerationProvider(mockService);
+
+      const syllabusUnits = [
+        {
+          unitNumber: 1,
+          unitTitle: 'Unit 1: Sorting',
+          topics: ['MergeSort'],
+        },
+      ];
+
+      const mockRawResponse = JSON.stringify({
+        questions: [
+          {
+            title: 'MergeSort Analysis',
+            topic: 'MergeSort',
+            difficulty: 'EASY',
+            questionPrompt: 'Explain MergeSort.',
+            maxMarks: 10,
+          },
+          {
+            title: 'Off Syllabus Item',
+            topic: 'Rocket Science',
+            difficulty: 'HARD',
+            questionPrompt: 'Explain propulsion.',
+            maxMarks: 10,
+          },
+        ],
+      });
+
+      provider.setGeminiCaller(async () => mockRawResponse);
+
+      let paramCallbackCount = -1;
+      const result = await provider.generateQuestions({
+        courseTitle: 'Algorithms',
+        syllabusUnits,
+        targetCount: 1,
+        onRejected: (count) => {
+          paramCallbackCount = count;
+        },
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result.rejectedOffSyllabusCount).toBe(1);
+      expect(provider.getLastRejectedCount()).toBe(1);
+      expect(provider.getLastRejectedOffSyllabusCount()).toBe(1);
+      expect(paramCallbackCount).toBe(1);
     });
   });
 
@@ -442,8 +728,11 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       const em = 'ini';
       const dash = '-';
       return [
-        [g, em, dash, '1.5', dash, 'flash'].join(''),
-        [g, em, dash, '1.5', dash, 'pro'].join(''),
+        [g, em, dash, '1.5'].join(''),
+        [g, em, dash, '2.0'].join(''),
+        [g, em, dash, '2.5'].join(''),
+        [g, em, dash, 'flash', dash, 'latest'].join(''),
+        [g, em, dash, 'pro', dash, 'latest'].join(''),
         [g, em, dash, '1.0', dash, 'pro'].join(''),
         ['text', dash, 'embedding', dash, '004'].join(''),
         [g, em, dash, 'pro'].join(''),
@@ -461,12 +750,15 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
           }
           getAllSourceFiles(fullPath, fileList);
         } else if (entry.isFile()) {
-          // Include typescript and javascript source files, excluding test files
-          if (
-            (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx') || entry.name.endsWith('.js')) &&
-            !entry.name.includes('.test.') &&
-            !entry.name.includes('.spec.')
-          ) {
+          // Include typescript, javascript, mjs, and cjs source files, excluding test files
+          const extMatches =
+            entry.name.endsWith('.ts') ||
+            entry.name.endsWith('.tsx') ||
+            entry.name.endsWith('.js') ||
+            entry.name.endsWith('.jsx') ||
+            entry.name.endsWith('.mjs') ||
+            entry.name.endsWith('.cjs');
+          if (extMatches && !entry.name.includes('.test.') && !entry.name.includes('.spec.')) {
             fileList.push(fullPath);
           }
         }
@@ -507,6 +799,41 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       const fakeSource = `const defaultModel = '${legacyPatterns[0]}';`;
       const detected = legacyPatterns.some((pattern) => fakeSource.includes(pattern));
       expect(detected).toBe(true);
+    });
+
+    it('proves each forbidden pattern is detected by scanner', () => {
+      const legacyPatterns = buildLegacyModelPatterns();
+      const forbiddenSamples = [
+        'gemini-1.5',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-2.0',
+        'gemini-2.0-flash',
+        'gemini-2.5',
+        'gemini-2.5-flash',
+        'gemini-flash-latest',
+        'gemini-pro-latest',
+      ];
+      for (const sample of forbiddenSamples) {
+        const detected = legacyPatterns.some((pattern) => sample.includes(pattern));
+        expect(detected, `Sample ${sample} should be detected`).toBe(true);
+      }
+    });
+
+    it('proves valid configured model IDs are not incorrectly flagged as legacy patterns', () => {
+      const legacyPatterns = buildLegacyModelPatterns();
+      const validModels = [
+        'gemini-3.5-flash',
+        'gemini-3.1-flash-lite',
+        'gemini-3.7-flash',
+        'gemini-3.8-flash',
+        'gemini-embedding-2',
+        'gemini-embedding-001',
+      ];
+      for (const validModel of validModels) {
+        const falsePositive = legacyPatterns.some((pattern) => validModel.includes(pattern));
+        expect(falsePositive, `Valid model ${validModel} should not be flagged`).toBe(false);
+      }
     });
   });
 });

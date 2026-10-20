@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { HttpError } from '../../lib/errors';
 import { QuestionDifficulty } from './types';
 import { geminiAIService, GeminiAIService } from './GeminiAIService';
-import type { GeminiAICaller } from './types';
 
 export const generatedRubricCriterionSchema = z
   .object({
@@ -154,13 +153,22 @@ export interface GenerateQuestionsParams {
   };
   selectedTopics?: string[];
   learningObjectives?: string[];
+  onRejected?: (rejectedCount: number) => void;
+}
+
+export interface ParseGeneratedQuestionsOptions {
+  onRejected?: (rejectedCount: number) => void;
+}
+
+export interface GeneratedQuestionsResult extends Array<GeneratedQuestionItem> {
+  rejectedOffSyllabusCount?: number;
 }
 
 export interface IAIQuestionGenerationProvider {
   readonly providerName: string;
   isConfigured(): boolean;
   extractSyllabus(rawText: string, courseCode?: string): Promise<ExtractedSyllabusData>;
-  generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]>;
+  generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionsResult>;
 }
 
 /**
@@ -281,7 +289,6 @@ export class DeterministicSyllabusParser {
 
 export type GeminiQuestionCaller = (payload: {
   model: string;
-  apiKey: string;
   systemInstruction: string;
   promptText: string;
 }) => Promise<string>;
@@ -292,8 +299,9 @@ export type GeminiQuestionCaller = (payload: {
  */
 export function parseGeneratedQuestions(
   rawText: string,
-  syllabusUnits: ExtractedSyllabusUnit[]
-): GeneratedQuestionItem[] {
+  syllabusUnits: ExtractedSyllabusUnit[],
+  optionsOrOnRejected?: ParseGeneratedQuestionsOptions | ((rejectedCount: number) => void)
+): GeneratedQuestionsResult {
   if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
     throw new HttpError(
       'Gemini question generation returned an empty response. Please retry generation.',
@@ -336,7 +344,6 @@ export function parseGeneratedQuestions(
   const { questions } = validation.data;
 
   // Grounding verification against syllabus units & topics
-  const allTopics = syllabusUnits.flatMap((u) => u.topics);
   const unitMap = new Map<string, string>(); // topicLower -> unitTitle
   const topicLookup = new Map<string, string>(); // topicLower -> original topic
   for (const u of syllabusUnits) {
@@ -348,6 +355,7 @@ export function parseGeneratedQuestions(
   }
 
   const result: GeneratedQuestionItem[] = [];
+  let rejectedOffSyllabusCount = 0;
 
   for (const q of questions) {
     const topicKey = q.topic.toLowerCase().trim();
@@ -365,9 +373,9 @@ export function parseGeneratedQuestions(
     }
 
     if (!matchedTopic) {
-      const fallbackUnit = syllabusUnits[result.length % syllabusUnits.length];
-      matchedUnit = fallbackUnit.unitTitle;
-      matchedTopic = fallbackUnit.topics[result.length % fallbackUnit.topics.length] || allTopics[0] || 'General';
+      // Off-syllabus: reject/drop this question. Never silently relabel to another topic!
+      rejectedOffSyllabusCount++;
+      continue;
     }
 
     result.push({
@@ -385,7 +393,45 @@ export function parseGeneratedQuestions(
     });
   }
 
-  return result;
+  if (rejectedOffSyllabusCount > 0) {
+    console.warn(
+      `[AIQuestionGenerationProvider] Rejected ${rejectedOffSyllabusCount} off-syllabus question(s).`
+    );
+  }
+
+  // Server-side structured log for observability and downstream log aggregators
+  console.info(
+    JSON.stringify({
+      event: 'off_syllabus_rejection_summary',
+      rejectedOffSyllabusCount,
+      acceptedCount: result.length,
+      totalParsed: questions.length,
+    })
+  );
+
+  if (typeof optionsOrOnRejected === 'function') {
+    optionsOrOnRejected(rejectedOffSyllabusCount);
+  } else if (typeof optionsOrOnRejected === 'object' && optionsOrOnRejected?.onRejected) {
+    optionsOrOnRejected.onRejected(rejectedOffSyllabusCount);
+  }
+
+  if (result.length === 0 && questions.length > 0) {
+    if (rejectedOffSyllabusCount === questions.length) {
+      throw new HttpError(
+        `All generated questions were rejected as off-syllabus (rejected count: ${rejectedOffSyllabusCount}).`,
+        502
+      );
+    }
+    throw new HttpError(
+      `No valid questions were produced from the generation response (rejected off-syllabus: ${rejectedOffSyllabusCount}).`,
+      502
+    );
+  }
+
+  const output: GeneratedQuestionsResult = result;
+  output.rejectedOffSyllabusCount = rejectedOffSyllabusCount;
+
+  return output;
 }
 
 /**
@@ -397,9 +443,18 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
   readonly providerName: string = 'GeminiAI';
   private customGeminiCaller: GeminiQuestionCaller | null = null;
   private sharedGeminiService: GeminiAIService;
+  private lastRejectedOffSyllabusCount: number = 0;
 
   constructor(aiService: GeminiAIService = geminiAIService) {
     this.sharedGeminiService = aiService;
+  }
+
+  getLastRejectedCount(): number {
+    return this.lastRejectedOffSyllabusCount;
+  }
+
+  getLastRejectedOffSyllabusCount(): number {
+    return this.lastRejectedOffSyllabusCount;
   }
 
   /**
@@ -407,16 +462,6 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
    */
   setGeminiCaller(caller: GeminiQuestionCaller | null): void {
     this.customGeminiCaller = caller;
-  }
-
-  getApiKey(): string {
-    return (
-      this.sharedGeminiService.getApiKey() ||
-      process.env.GEMINI_API_KEY ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GOOGLE_GENAI_API_KEY ||
-      ''
-    ).trim();
   }
 
   getModelName(): string {
@@ -520,7 +565,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
       .join('\n');
   }
 
-  async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
+  async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionsResult> {
     if (!this.isConfigured()) {
       throw new HttpError(
         'AI question generation is not configured. Please configure an AI provider with GEMINI_API_KEY in the environment.',
@@ -560,11 +605,14 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
       });
       const rawOutput = await this.customGeminiCaller({
         model: this.getModelName(),
-        apiKey: this.getApiKey(),
         systemInstruction,
         promptText,
       });
-      return parseGeneratedQuestions(rawOutput, syllabusUnits);
+      const parsed = parseGeneratedQuestions(rawOutput, syllabusUnits, params.onRejected);
+      this.lastRejectedOffSyllabusCount = parsed.rejectedOffSyllabusCount ?? 0;
+      const sliced: GeneratedQuestionsResult = parsed.slice(0, targetCount);
+      sliced.rejectedOffSyllabusCount = this.lastRejectedOffSyllabusCount;
+      return sliced;
     }
 
     // Live generation via centralized shared Gemini service
@@ -582,8 +630,11 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
       responseMimeType: 'application/json',
       temperature: 0.2,
     });
-    const items = parseGeneratedQuestions(rawText, syllabusUnits);
-    return items.slice(0, targetCount);
+    const items = parseGeneratedQuestions(rawText, syllabusUnits, params.onRejected);
+    this.lastRejectedOffSyllabusCount = items.rejectedOffSyllabusCount ?? 0;
+    const sliced: GeneratedQuestionsResult = items.slice(0, targetCount);
+    sliced.rejectedOffSyllabusCount = this.lastRejectedOffSyllabusCount;
+    return sliced;
   }
 }
 
@@ -613,7 +664,7 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
     return DeterministicSyllabusParser.parse(rawText, courseCode);
   }
 
-  async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
+  async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionsResult> {
     if (!this.isConfigured()) {
       throw new HttpError('AI question generation is not configured. Please configure an AI provider.', 503);
     }
@@ -661,66 +712,8 @@ export class MockAIQuestionGenerationProvider implements IAIQuestionGenerationPr
       });
     }
 
-    return questions;
+    const output: GeneratedQuestionsResult = questions;
+    output.rejectedOffSyllabusCount = 0;
+    return output;
   }
 }
-
-/**
- * Vertex AI question generation provider alias / delegation to GeminiAIService.
- * Does NOT require or read separate VERTEX_AI credentials or models.
- */
-export class VertexAIQuestionGenerationProvider extends GeminiAIQuestionGenerationProvider {
-  override readonly providerName = 'VertexAI';
-  private sharedVertexService: GeminiAIService;
-
-  constructor(aiService: GeminiAIService = geminiAIService) {
-    super(aiService);
-    this.sharedVertexService = aiService;
-  }
-
-  override isConfigured(): boolean {
-    return this.sharedVertexService.isConfigured();
-  }
-
-  override getModelName(): string {
-    return this.sharedVertexService.getModelName();
-  }
-
-  getRegion(): string {
-    return this.sharedVertexService.getRegion();
-  }
-
-  setCustomCaller(caller: GeminiAICaller | null): void {
-    this.sharedVertexService.setCustomCaller(caller);
-  }
-
-  override async generateQuestions(params: GenerateQuestionsParams): Promise<GeneratedQuestionItem[]> {
-    if (!this.isConfigured()) {
-      throw new HttpError(
-        'AI question generation is not configured. Please configure credentials via GEMINI_API_KEY.',
-        503
-      );
-    }
-
-    const { syllabusUnits, targetCount } = params;
-    if (!syllabusUnits || syllabusUnits.length === 0) {
-      throw new HttpError('Syllabus contains no units to generate questions from', 400);
-    }
-
-    const systemInstruction = this.buildSystemInstruction();
-    const promptText = this.buildUserPrompt(params);
-
-    const rawText = await this.sharedVertexService.generateContent({
-      systemInstruction,
-      promptText,
-      responseMimeType: 'application/json',
-      temperature: 0.2,
-    });
-
-    const questions = parseGeneratedQuestions(rawText, syllabusUnits);
-    return questions.slice(0, targetCount);
-  }
-}
-
-export const AIQuestionGenerationProvider = GeminiAIQuestionGenerationProvider;
-export const GeminiQuestionGenerationProvider = GeminiAIQuestionGenerationProvider;
