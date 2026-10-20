@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { clearUserDrafts } from '@/lib/offlineDrafts';
-import { isFeatureEnabled } from '@/config/features';
+import { isPublicFeatureEnabled } from '@/config/features';
 
 interface NavLinksProps {
   menuItems: Array<{ label: string; href: string; icon: LucideIcon }>;
@@ -116,7 +116,7 @@ export default function DashboardLayout({
   const rawRole = user.role || 'STUDENT';
   const role = rawRole.toUpperCase();
 
-  const isLearningEnabled = isFeatureEnabled('LEARNING_MODULE');
+  const isLearningEnabled = isPublicFeatureEnabled('LEARNING_MODULE');
 
   const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
     { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },

@@ -7,6 +7,8 @@ import {
   getFeatureFlags,
   parseBooleanFlag,
   isLearningModuleEnabled,
+  isServerFeatureEnabled,
+  isPublicFeatureEnabled,
 } from '../config/features';
 import { requireFeature } from '../lib/apiAuth';
 import DashboardLayout from '../app/(dashboard)/layout';
@@ -56,6 +58,8 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
     it('defaults to disabled (false) when env vars are unset', () => {
       expect(isFeatureEnabled('LEARNING_MODULE')).toBe(false);
       expect(isLearningModuleEnabled()).toBe(false);
+      expect(isServerFeatureEnabled('LEARNING_MODULE')).toBe(false);
+      expect(isPublicFeatureEnabled('LEARNING_MODULE')).toBe(false);
 
       const flags = getFeatureFlags();
       expect(flags).toEqual({
@@ -63,50 +67,78 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
       });
     });
 
-    it('remains disabled for explicit false and falsy values', () => {
-      const falsyValues = ['false', '0', 'no', 'off', 'undefined', 'null', '', 'random', 'FALSE'];
-      for (const val of falsyValues) {
+    it('enables flag via FEATURE_LEARNING_MODULE ONLY with exact string "true"', () => {
+      process.env.FEATURE_LEARNING_MODULE = 'true';
+      expect(isFeatureEnabled('LEARNING_MODULE')).toBe(true);
+      expect(isLearningModuleEnabled()).toBe(true);
+      expect(isServerFeatureEnabled('LEARNING_MODULE')).toBe(true);
+    });
+
+    it('remains disabled for non-exact values (1, yes, on, TRUE, False, 0, no, off, undefined, etc.)', () => {
+      const nonExactValues = [
+        '1',
+        'yes',
+        'on',
+        'TRUE',
+        'True',
+        'ON',
+        'YES',
+        'false',
+        '0',
+        'no',
+        'off',
+        'undefined',
+        'null',
+        '',
+        'random',
+        'FALSE',
+      ];
+      for (const val of nonExactValues) {
         process.env.FEATURE_LEARNING_MODULE = val;
         expect(isFeatureEnabled('LEARNING_MODULE')).toBe(false);
         expect(isLearningModuleEnabled()).toBe(false);
+        expect(isServerFeatureEnabled('LEARNING_MODULE')).toBe(false);
       }
     });
 
-    it('enables flag via FEATURE_LEARNING_MODULE with truthy strings', () => {
-      const truthyValues = ['true', '1', 'yes', 'on', 'TRUE', 'True', 'ON'];
-      for (const val of truthyValues) {
-        process.env.FEATURE_LEARNING_MODULE = val;
-        expect(isFeatureEnabled('LEARNING_MODULE')).toBe(true);
-        expect(isLearningModuleEnabled()).toBe(true);
-      }
-    });
-
-    it('enables flag via NEXT_PUBLIC_FEATURE_LEARNING_MODULE for browser consistency', () => {
-      process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = 'true';
-      expect(isFeatureEnabled('LEARNING_MODULE')).toBe(true);
-      expect(isLearningModuleEnabled()).toBe(true);
-    });
-
-    it('prevents conflicting public flag from unexpectedly enabling server when FEATURE_LEARNING_MODULE is false', () => {
-      // Authoritative server gate is explicitly false, but client flag is true
-      process.env.FEATURE_LEARNING_MODULE = 'false';
+    it('public flag NEXT_PUBLIC_FEATURE_LEARNING_MODULE never enables server access', () => {
+      delete process.env.FEATURE_LEARNING_MODULE;
       process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = 'true';
 
+      // Public flag is enabled for UI
+      expect(isPublicFeatureEnabled('LEARNING_MODULE')).toBe(true);
+
+      // Server access remains strictly disabled
       expect(isFeatureEnabled('LEARNING_MODULE')).toBe(false);
       expect(isLearningModuleEnabled()).toBe(false);
+      expect(isServerFeatureEnabled('LEARNING_MODULE')).toBe(false);
 
       const guard = requireFeature('LEARNING_MODULE');
       expect(guard.authorized).toBe(false);
       expect(guard.response!.status).toBe(404);
     });
 
-    it('correctly normalizes values in parseBooleanFlag', () => {
-      expect(parseBooleanFlag('true')).toBe(true);
-      expect(parseBooleanFlag('1')).toBe(true);
-      expect(parseBooleanFlag('yes')).toBe(true);
-      expect(parseBooleanFlag('on')).toBe(true);
-      expect(parseBooleanFlag('  true  ')).toBe(true);
+    it('prevents public flag from enabling server even when set to "true" and server flag is false', () => {
+      process.env.FEATURE_LEARNING_MODULE = 'false';
+      process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = 'true';
 
+      expect(isFeatureEnabled('LEARNING_MODULE')).toBe(false);
+      expect(isLearningModuleEnabled()).toBe(false);
+      expect(isServerFeatureEnabled('LEARNING_MODULE')).toBe(false);
+
+      const guard = requireFeature('LEARNING_MODULE');
+      expect(guard.authorized).toBe(false);
+      expect(guard.response!.status).toBe(404);
+    });
+
+    it('standardizes parseBooleanFlag strictly to exact string "true"', () => {
+      expect(parseBooleanFlag('true')).toBe(true);
+
+      expect(parseBooleanFlag('1')).toBe(false);
+      expect(parseBooleanFlag('yes')).toBe(false);
+      expect(parseBooleanFlag('on')).toBe(false);
+      expect(parseBooleanFlag('TRUE')).toBe(false);
+      expect(parseBooleanFlag('True')).toBe(false);
       expect(parseBooleanFlag('false')).toBe(false);
       expect(parseBooleanFlag('0')).toBe(false);
       expect(parseBooleanFlag('no')).toBe(false);
@@ -152,7 +184,7 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
       expect(serialized).not.toContain('learning');
     });
 
-    it('allows route to proceed when flag is enabled', () => {
+    it('allows route to proceed when server flag is enabled with exact string "true"', () => {
       process.env.FEATURE_LEARNING_MODULE = 'true';
 
       const guard = requireFeature('LEARNING_MODULE');
@@ -160,12 +192,14 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
       expect(guard.response).toBeNull();
     });
 
-    it('allows route to proceed when NEXT_PUBLIC_FEATURE_LEARNING_MODULE is enabled and server flag unset', () => {
+    it('denies server access when NEXT_PUBLIC_FEATURE_LEARNING_MODULE is enabled and server flag unset', () => {
       process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = 'true';
+      delete process.env.FEATURE_LEARNING_MODULE;
 
       const guard = requireFeature('LEARNING_MODULE');
-      expect(guard.authorized).toBe(true);
-      expect(guard.response).toBeNull();
+      expect(guard.authorized).toBe(false);
+      expect(guard.response).not.toBeNull();
+      expect(guard.response!.status).toBe(404);
     });
 
     it('denies access before protected handler logic runs when disabled', async () => {
@@ -250,6 +284,33 @@ describe('LRN-02: LEARNING_MODULE Feature Flag & Navigation', () => {
       expect(screen.getByText('Dashboard')).toBeDefined();
       expect(screen.getByText('Courses')).toBeDefined();
       expect(screen.getByText('Exams')).toBeDefined();
+    });
+
+    it('hides Learning Module navigation for Professor when server flag is true but public flag is unset', () => {
+      process.env.FEATURE_LEARNING_MODULE = 'true';
+      delete process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE;
+      currentMockUser = { name: 'Professor Oak', email: 'prof@iiit.ac.in', role: 'PROFESSOR' };
+
+      render(
+        <DashboardLayout>
+          <div>Main Content</div>
+        </DashboardLayout>
+      );
+
+      expect(screen.queryByText('Learning Module')).toBeNull();
+    });
+
+    it('hides Learning Module navigation when public flag is a truthy non-true value (e.g. "1" or "yes")', () => {
+      process.env.NEXT_PUBLIC_FEATURE_LEARNING_MODULE = '1';
+      currentMockUser = { name: 'Professor Oak', email: 'prof@iiit.ac.in', role: 'PROFESSOR' };
+
+      render(
+        <DashboardLayout>
+          <div>Main Content</div>
+        </DashboardLayout>
+      );
+
+      expect(screen.queryByText('Learning Module')).toBeNull();
     });
 
     it('hides Learning Module navigation for Student when disabled', () => {
