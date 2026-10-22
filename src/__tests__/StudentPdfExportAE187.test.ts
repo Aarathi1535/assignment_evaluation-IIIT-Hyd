@@ -199,7 +199,7 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
             student: studentA._id,
             anonymousId: 'ANON-ALICE-187',
             rollNumber: '2023101001',
-            mappingSource: 'QR',
+            isVerified: true,
         });
 
         // 8. Derived storage files

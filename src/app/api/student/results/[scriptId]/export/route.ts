@@ -326,7 +326,6 @@ export async function GET(
                 );
 
             const pageAnnotationsToComposite: SerializedPageAnnotations = {
-                pageNumber: page.pageNumber,
                 annotations: sanitizedAnnotations,
                 strokes: sanitizedStrokes,
             };
