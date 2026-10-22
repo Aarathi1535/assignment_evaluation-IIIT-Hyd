@@ -289,6 +289,9 @@ class ExamService {
                 if (data.gradingDeadline !== undefined) {
                     changedFields.push('gradingDeadline');
                 }
+                if (data.studentDownloadPolicy !== undefined && data.studentDownloadPolicy !== examBefore.studentDownloadPolicy) {
+                    changedFields.push('studentDownloadPolicy');
+                }
 
                 await writeAuditLog({
                     user: context.actingUserId,
