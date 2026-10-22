@@ -20,6 +20,11 @@ export enum IngestionApprovalStatus {
     APPROVED = 'APPROVED'
 }
 
+export enum StudentDownloadPolicy {
+    DISABLED = 'DISABLED',
+    WATERMARKED = 'WATERMARKED'
+}
+
 export interface IOMRBubble {
     value: string;
     x: number;
@@ -62,6 +67,7 @@ export interface IExam extends Document {
     assemblySealBy?: mongoose.Types.ObjectId | null;
     blindGrading?: boolean;
     gradingDeadline?: Date | null;
+    studentDownloadPolicy?: StudentDownloadPolicy;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -194,6 +200,11 @@ const ExamSchema = new Schema<IExam>(
         gradingDeadline: {
             type: Date,
             default: null
+        },
+        studentDownloadPolicy: {
+            type: String,
+            enum: Object.values(StudentDownloadPolicy),
+            default: StudentDownloadPolicy.DISABLED
         }
     },
     {
