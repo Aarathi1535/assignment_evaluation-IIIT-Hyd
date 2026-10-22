@@ -1538,17 +1538,51 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         const spoofQuery = `?studentId=${bobId}&userId=${bobId}`;
 
         // Case 1: Alice accesses her own resources while supplying Bob's IDs in query params -> SUCCEEDS (200)
-        // 1a. Results list
+        // 1a. Results list: baseline request as Alice without identity query parameters
+        const baseListReq = new NextRequest('http://localhost:3000/api/student/results');
+        const baseListRes = await resultsListGET(baseListReq);
+        expect(baseListRes.status).toBe(200);
+        const baseListBody = await baseListRes.json();
+        expect(baseListBody.success).toBe(true);
+        const baseAliceRecord = baseListBody.data.find((r: any) => r.scriptId === scriptA._id.toString());
+        expect(baseAliceRecord).toBeDefined();
+        expect(baseListBody.data.find((r: any) => r.scriptId === scriptB._id.toString())).toBeUndefined();
+
+        // 1a (cont.). Repeat with Bob's ID in studentId and userId
         const listReq = new NextRequest(`http://localhost:3000/api/student/results${spoofQuery}`);
         const listRes = await resultsListGET(listReq);
         expect(listRes.status).toBe(200);
         const listBody = await listRes.json();
         expect(listBody.success).toBe(true);
-        // Ensure Alice's own scriptId is in the data, not Bob's
-        const aliceRecord = listBody.data.find((r: any) => r.scriptId === scriptA._id.toString());
-        expect(aliceRecord).toBeDefined();
-        const bobRecord = listBody.data.find((r: any) => r.scriptId === scriptB._id.toString());
-        expect(bobRecord).toBeUndefined();
+
+        // 1a (cont.). Repeat with a valid but nonexistent ObjectId in both parameters
+        const nonexistentId = new mongoose.Types.ObjectId().toString();
+        const nonexistentListReq = new NextRequest(
+            `http://localhost:3000/api/student/results?studentId=${nonexistentId}&userId=${nonexistentId}`
+        );
+        const nonexistentListRes = await resultsListGET(nonexistentListReq);
+        expect(nonexistentListRes.status).toBe(200);
+        const nonexistentListBody = await nonexistentListRes.json();
+        expect(nonexistentListBody.success).toBe(true);
+
+        // 1a (cont.). Repeat with malformed values in both parameters
+        const malformedValue = 'malformed-not-an-object-id';
+        const malformedListReq = new NextRequest(
+            `http://localhost:3000/api/student/results?studentId=${malformedValue}&userId=${malformedValue}`
+        );
+        const malformedListRes = await resultsListGET(malformedListReq);
+        expect(malformedListRes.status).toBe(200);
+        const malformedListBody = await malformedListRes.json();
+        expect(malformedListBody.success).toBe(true);
+
+        // 1a (cont.). Assert all collection requests return successful 200 and equivalent data containing Alice's script and not Bob's
+        for (const body of [listBody, nonexistentListBody, malformedListBody]) {
+            expect(body).toEqual(baseListBody);
+            const aliceRecord = body.data.find((r: any) => r.scriptId === scriptA._id.toString());
+            expect(aliceRecord).toBeDefined();
+            const bobRecord = body.data.find((r: any) => r.scriptId === scriptB._id.toString());
+            expect(bobRecord).toBeUndefined();
+        }
 
         // 1b. Results detail
         const detailReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}${spoofQuery}`);
