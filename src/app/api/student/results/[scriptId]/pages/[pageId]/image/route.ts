@@ -68,7 +68,7 @@ export async function GET(
             _id: pageIdObj,
             answerScript: script._id,
             isDuplicate: { $ne: true },
-        }).select('storageKey width height');
+        }).select('storageKey width height batchId fileId pageNumber');
 
         if (!ingestionPage || !ingestionPage.storageKey) {
             return NextResponse.json(
@@ -77,25 +77,65 @@ export async function GET(
             );
         }
 
-        const width = ingestionPage.width ?? 0;
-        const height = ingestionPage.height ?? 0;
+        const storageKey = ingestionPage.storageKey;
 
-        // Constraint check: reject pages that exceed maxLongEdge or maxPixels
-        if (width > 0 && height > 0) {
-            const longEdge = Math.max(width, height);
-            const totalPixels = width * height;
-            if (
-                longEdge > DEFAULT_PAGE_RENDERING_CONFIG.maxLongEdge ||
-                totalPixels > DEFAULT_PAGE_RENDERING_CONFIG.maxPixels
-            ) {
+        // 1. Strict storage-key validation: must reside under batches/{batchId}/derived/... namespace
+        // and match getDerivedPageKey convention when batchId/fileId/pageNumber are present
+        if (!storageKey.startsWith('batches/') || !storageKey.includes('/derived/')) {
+            return NextResponse.json(
+                { success: false, message: 'Not found' },
+                { status: 404, headers: SECURITY_HEADERS }
+            );
+        }
+
+        if (ingestionPage.batchId && ingestionPage.fileId && typeof ingestionPage.pageNumber === 'number') {
+            const extMatch = storageKey.match(/\.([a-zA-Z0-9]+)$/);
+            const format = extMatch ? extMatch[1] : 'png';
+            const expectedKey = DerivedStorageService.getDerivedPageKey(
+                ingestionPage.batchId,
+                ingestionPage.fileId,
+                ingestionPage.pageNumber,
+                format
+            );
+            if (storageKey !== expectedKey) {
                 return NextResponse.json(
-                    {
-                        success: false,
-                        message: 'Page exceeds maximum allowed dimensions for rendering',
-                    },
-                    { status: 422, headers: SECURITY_HEADERS }
+                    { success: false, message: 'Not found' },
+                    { status: 404, headers: SECURITY_HEADERS }
                 );
             }
+        }
+
+        // 2. Strict dimension validation: fail closed on missing, invalid, <= 0, or oversized dimensions
+        const width = ingestionPage.width;
+        const height = ingestionPage.height;
+
+        if (
+            typeof width !== 'number' ||
+            typeof height !== 'number' ||
+            Number.isNaN(width) ||
+            Number.isNaN(height) ||
+            width <= 0 ||
+            height <= 0
+        ) {
+            return NextResponse.json(
+                { success: false, message: 'Invalid page dimensions' },
+                { status: 422, headers: SECURITY_HEADERS }
+            );
+        }
+
+        const longEdge = Math.max(width, height);
+        const totalPixels = width * height;
+        if (
+            longEdge > DEFAULT_PAGE_RENDERING_CONFIG.maxLongEdge ||
+            totalPixels > DEFAULT_PAGE_RENDERING_CONFIG.maxPixels
+        ) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    message: 'Page exceeds maximum allowed dimensions for rendering',
+                },
+                { status: 422, headers: SECURITY_HEADERS }
+            );
         }
 
         const now = new Date();
@@ -106,10 +146,10 @@ export async function GET(
             day: dayStr,
             width,
             height,
-            storageKey: ingestionPage.storageKey,
+            storageKey,
         });
 
-        // 1. Check cache hit
+        // 3. Check cache hit
         const cached = await getCachedWatermarkRender(cacheKey);
         if (cached) {
             return new NextResponse(new Uint8Array(cached.buffer), {
@@ -123,7 +163,7 @@ export async function GET(
             });
         }
 
-        // 2. Cache miss: acquire concurrency slot
+        // 4. Cache miss: acquire concurrency slot
         let releaseSlot: (() => void) | null = null;
         try {
             releaseSlot = tryAcquireWatermarkSlot();
@@ -145,10 +185,9 @@ export async function GET(
 
         try {
             // Read derived page buffer safely
-            const rawBuffer = await DerivedStorageService.readDerivedPage(ingestionPage.storageKey);
+            const rawBuffer = await DerivedStorageService.readDerivedPage(storageKey);
 
             // Fetch StudentMapping for exam and student to resolve rollNumber if available
-            // Note: student._id from script.student
             const studentUserObjId = script.student;
             let rollNumber: string | null = null;
             if (studentUserObjId && script.exam) {
@@ -178,27 +217,13 @@ export async function GET(
             // Burn watermark into image
             const watermarkedBuffer = await applyWatermark(rawBuffer, watermarkText);
 
-            // Store to cache
-            await storeCachedWatermarkRender(cacheKey, watermarkedBuffer, {
-                pageId,
-                storageKey: ingestionPage.storageKey,
-                width,
-                height,
-                watermarkVersion: WATERMARK_VERSION,
-                userId: authUserId,
-                day: dayStr,
-                issuedAt,
-                traceCode,
-                rollNumber,
-            });
-
             // Write audit entry: deduplicated per student/page/day (only written upon rendering)
             const clientIp =
                 req.headers.get('x-forwarded-for') ||
                 req.headers.get('x-real-ip') ||
                 undefined;
 
-            await writeAuditLog({
+            const auditSuccess = await writeAuditLog({
                 user: authUserId,
                 action: 'STUDENT_PAGE_IMAGE_WATERMARKED',
                 outcome: 'SUCCESS',
@@ -215,6 +240,22 @@ export async function GET(
                     day: dayStr,
                 },
             });
+
+            // If audit write fails, do not store to cache so subsequent attempts will not bypass audit
+            if (auditSuccess) {
+                await storeCachedWatermarkRender(cacheKey, watermarkedBuffer, {
+                    pageId,
+                    storageKey,
+                    width,
+                    height,
+                    watermarkVersion: WATERMARK_VERSION,
+                    userId: authUserId,
+                    day: dayStr,
+                    issuedAt,
+                    traceCode,
+                    rollNumber,
+                });
+            }
 
             return new NextResponse(new Uint8Array(watermarkedBuffer), {
                 status: 200,

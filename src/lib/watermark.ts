@@ -4,6 +4,7 @@ import path from 'path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { getConfiguredStorageBucket } from './cloudStorage';
 import derivedStorageService from '../services/DerivedStorageService';
+import { getHmacSecret } from '../utils/hmacStorage';
 
 export const WATERMARK_VERSION = 'v1';
 export const MAX_CONCURRENT_WATERMARK_RENDERS = 2;
@@ -120,8 +121,38 @@ export interface GenerateTraceCodeInput {
 }
 
 /**
+ * Resolves the HMAC secret safely without hardcoded fallbacks or leaking NEXTAUTH_SECRET.
+ * Precedence:
+ * 1. input.secret (if provided)
+ * 2. process.env.WATERMARK_HMAC_SECRET (if configured)
+ * 3. getHmacSecret().secret from hmacStorage (if configured)
+ * If none available, throws Error to fail closed safely.
+ */
+export function resolveWatermarkHmacSecret(customSecret?: string): string {
+    if (customSecret && customSecret.trim() !== '') {
+        return customSecret;
+    }
+
+    const watermarkSecret = process.env.WATERMARK_HMAC_SECRET;
+    if (watermarkSecret && watermarkSecret.trim() !== '') {
+        return watermarkSecret;
+    }
+
+    try {
+        const { secret } = getHmacSecret();
+        if (secret && secret.trim() !== '') {
+            return secret;
+        }
+    } catch {
+        // Fall through to fail closed
+    }
+
+    throw new Error('HMAC secret configuration is missing or invalid');
+}
+
+/**
  * Generates the first 10 hex characters of HMAC(secret, userId|scriptId|pageId|issuedAt).
- * Never exposes the HMAC secret.
+ * Never exposes the HMAC secret. Fails closed safely if no secret is available.
  */
 export function generateTraceCode(input: GenerateTraceCodeInput): string {
     const issuedAtStr =
@@ -129,13 +160,7 @@ export function generateTraceCode(input: GenerateTraceCodeInput): string {
             ? input.issuedAt.toISOString()
             : String(input.issuedAt);
 
-    const secret =
-        input.secret ||
-        process.env.WATERMARK_HMAC_SECRET ||
-        process.env.ORIGINAL_STORAGE_HMAC_SECRET ||
-        process.env.NEXTAUTH_SECRET ||
-        'fallback-watermark-secret-key';
-
+    const secret = resolveWatermarkHmacSecret(input.secret);
     const payload = `${input.userId}|${input.scriptId}|${input.pageId}|${issuedAtStr}`;
     const hmac = crypto.createHmac('sha256', secret).update(payload).digest('hex');
     return hmac.slice(0, 10);
@@ -230,7 +255,8 @@ export interface WatermarkCacheMetadata {
 
 /**
  * Builds deterministic storage key for student cached render:
- * `student-renders/${userId}/${pageId}/${day}_${WATERMARK_VERSION}_${width}x${height}_${cleanStorageKey}.jpg`
+ * `student-renders/${userId}/${pageId}/${day}_${WATERMARK_VERSION}_${width}x${height}_${keyHash}.jpg`
+ * Uses sha256 hash (first 16 hex chars) of the storage key to avoid character-replacement collisions.
  */
 export function buildRenderCacheKey(params: {
     userId: string;
@@ -240,8 +266,8 @@ export function buildRenderCacheKey(params: {
     height: number;
     storageKey: string;
 }): string {
-    const cleanKey = params.storageKey.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return `student-renders/${params.userId}/${params.pageId}/${params.day}_${WATERMARK_VERSION}_${params.width}x${params.height}_${cleanKey}.jpg`;
+    const keyHash = crypto.createHash('sha256').update(params.storageKey).digest('hex').slice(0, 16);
+    return `student-renders/${params.userId}/${params.pageId}/${params.day}_${WATERMARK_VERSION}_${params.width}x${params.height}_${keyHash}.jpg`;
 }
 
 /**

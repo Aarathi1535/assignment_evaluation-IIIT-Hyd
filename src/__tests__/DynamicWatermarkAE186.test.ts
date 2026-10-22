@@ -20,6 +20,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import {
     buildWatermarkText,
     generateTraceCode,
+    resolveWatermarkHmacSecret,
     tryAcquireWatermarkSlot,
     resetWatermarkConcurrencySlots,
     WatermarkCapacityError,
@@ -336,7 +337,7 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         oversizedPage = await IngestionPage.create({
             batchId: 'batch-ae186',
             job: jobId,
-            fileId: 'file-ae186-oversized',
+            fileId: 'file-ae186-a',
             fileIndex: 3,
             pageNumber: 1,
             width: 2500,
@@ -410,6 +411,28 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
             secret: 'super-secret-key',
         });
         expect(traceCode).toBe(traceCode2);
+
+        // Fallback to getHmacSecret when WATERMARK_HMAC_SECRET is unset
+        delete process.env.WATERMARK_HMAC_SECRET;
+        process.env.ORIGINAL_STORAGE_HMAC_SECRET = 'original-storage-hmac-test-secret';
+        const fallbackSecret = resolveWatermarkHmacSecret();
+        expect(fallbackSecret).toBe('original-storage-hmac-test-secret');
+
+        // Fail closed safely when no secret is configured
+        delete process.env.WATERMARK_HMAC_SECRET;
+        delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+        expect(() => resolveWatermarkHmacSecret()).toThrow('HMAC secret configuration is missing or invalid');
+        expect(() =>
+            generateTraceCode({
+                userId: 'user123',
+                scriptId: 'script456',
+                pageId: 'page789',
+                issuedAt: '2026-10-22T10:00:00.000Z',
+            })
+        ).toThrow('HMAC secret configuration is missing or invalid');
+
+        // Restore WATERMARK_HMAC_SECRET for subsequent tests
+        process.env.WATERMARK_HMAC_SECRET = 'test-watermark-secret-key-12345';
     });
 
     // 4. Returned image bytes differ from the stored source and retain the same dimensions
@@ -603,22 +626,76 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         expect(res2.status).toBe(200);
     });
 
-    // 10. Oversized images are rejected
-    it('10. Oversized images are rejected with 422', async () => {
-        const req = new NextRequest(
+    // 10. Oversized and invalid dimension images are rejected
+    it('10. Oversized and invalid dimension images are rejected with 422', async () => {
+        // 10a. Oversized dimensions (exceeds maxLongEdge or maxPixels)
+        const reqOversized = new NextRequest(
             `http://localhost:3000/api/student/results/${scriptA._id}/pages/${oversizedPage._id}/image`
         );
-        const res = await imageGET(req, {
+        const resOversized = await imageGET(reqOversized, {
             params: Promise.resolve({
                 scriptId: scriptA._id.toString(),
                 pageId: oversizedPage._id.toString(),
             }),
         });
 
-        expect(res.status).toBe(422);
-        const body = await res.json();
-        expect(body.success).toBe(false);
-        expect(body.message).toContain('Page exceeds maximum allowed dimensions');
+        expect(resOversized.status).toBe(422);
+        const bodyOversized = await resOversized.json();
+        expect(bodyOversized.success).toBe(false);
+        expect(bodyOversized.message).toContain('Page exceeds maximum allowed dimensions');
+
+        // 10b. Invalid / missing dimensions
+        const invalidPageMissing = await IngestionPage.create({
+            batchId: 'batch-ae186',
+            job: pageA.job,
+            fileId: 'file-ae186-a',
+            fileIndex: 10,
+            pageNumber: 1,
+            // width and height intentionally omitted
+            storageKey: storedPageA.storageKey,
+            status: PageProcessingStatus.PROCESSED,
+            answerScript: scriptA._id,
+        });
+
+        const reqMissing = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${invalidPageMissing._id}/image`
+        );
+        const resMissing = await imageGET(reqMissing, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: invalidPageMissing._id.toString(),
+            }),
+        });
+        expect(resMissing.status).toBe(422);
+        const bodyMissing = await resMissing.json();
+        expect(bodyMissing.message).toBe('Invalid page dimensions');
+
+        // 10c. Storage key outside derived namespace (e.g. original or arbitrary key)
+        const invalidKeyPage = await IngestionPage.create({
+            batchId: 'batch-ae186',
+            job: pageA.job,
+            fileId: 'file-ae186-a',
+            fileIndex: 11,
+            pageNumber: 1,
+            width: 1200,
+            height: 1600,
+            storageKey: 'originals/batch-ae186/secret.pdf',
+            status: PageProcessingStatus.PROCESSED,
+            answerScript: scriptA._id,
+        });
+
+        const reqInvalidKey = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${invalidKeyPage._id}/image`
+        );
+        const resInvalidKey = await imageGET(reqInvalidKey, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: invalidKeyPage._id.toString(),
+            }),
+        });
+        expect(resInvalidKey.status).toBe(404);
+        const bodyInvalidKey = await resInvalidKey.json();
+        expect(bodyInvalidKey.message).toBe('Not found');
     });
 
     // 11. Audit entries contain userId, scriptId, pageId, and traceCode, with daily deduplication
@@ -670,6 +747,43 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
             user: studentA._id,
         });
         expect(logsAfterSecond.length).toBe(initialCount + 1);
+
+        // Request 3: When audit write fails, output must NOT be cached
+        const auditModule = await import('../lib/audit');
+        const writeAuditLogSpy = vi.spyOn(auditModule, 'writeAuditLog').mockResolvedValueOnce(false);
+
+        // Use Charlie's uncached page
+        mockSessionUser = {
+            id: studentNoRoll._id.toString(),
+            email: studentNoRoll.email,
+            role: UserRole.STUDENT,
+        };
+
+        const reqCharlie1 = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptNoRoll._id}/pages/${pageNoRoll._id}/image`
+        );
+        const resCharlie1 = await imageGET(reqCharlie1, {
+            params: Promise.resolve({
+                scriptId: scriptNoRoll._id.toString(),
+                pageId: pageNoRoll._id.toString(),
+            }),
+        });
+        expect(resCharlie1.status).toBe(200);
+
+        // Verify cache was NOT populated because audit failed
+        const { buildRenderCacheKey, getCachedWatermarkRender, formatISTDateOnly } = await import('../lib/watermark');
+        const charlieCacheKey = buildRenderCacheKey({
+            userId: studentNoRoll._id.toString(),
+            pageId: pageNoRoll._id.toString(),
+            day: formatISTDateOnly(new Date()),
+            width: pageNoRoll.width,
+            height: pageNoRoll.height,
+            storageKey: pageNoRoll.storageKey,
+        });
+        const charlieCached = await getCachedWatermarkRender(charlieCacheKey);
+        expect(charlieCached).toBeNull();
+
+        writeAuditLogSpy.mockRestore();
     });
 
     // 12. The route never sends unwatermarked bytes on an error or fallback path
