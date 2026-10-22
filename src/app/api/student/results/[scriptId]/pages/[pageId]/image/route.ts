@@ -5,7 +5,23 @@ import { requireAuth } from '../../../../../../../../lib/apiAuth';
 import studentResultService from '../../../../../../../../services/StudentResultService';
 import DerivedStorageService from '../../../../../../../../services/DerivedStorageService';
 import IngestionPage from '../../../../../../../../models/IngestionPage';
+import StudentMapping from '../../../../../../../../models/StudentMapping';
 import { HttpError } from '../../../../../../../../lib/errors';
+import { DEFAULT_PAGE_RENDERING_CONFIG } from '../../../../../../../../services/PageRenderer';
+import { writeAuditLog } from '../../../../../../../../lib/audit';
+import {
+    applyWatermark,
+    buildRenderCacheKey,
+    buildWatermarkText,
+    formatISTDateOnly,
+    formatISTDateTime,
+    generateTraceCode,
+    getCachedWatermarkRender,
+    storeCachedWatermarkRender,
+    tryAcquireWatermarkSlot,
+    WATERMARK_VERSION,
+    WatermarkCapacityError,
+} from '../../../../../../../../lib/watermark';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,29 +29,6 @@ const SECURITY_HEADERS = {
     'Cache-Control': 'private, no-store',
     'X-Content-Type-Options': 'nosniff',
 } as const;
-
-function toWebReadableStream(
-  stream: NodeJS.ReadableStream & AsyncIterable<Uint8Array | string>
-): ReadableStream<Uint8Array> {
-  const iterator = stream[Symbol.asyncIterator]();
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const chunk = await iterator.next();
-      if (chunk.done) {
-        controller.close();
-      } else {
-        const bytes =
-          typeof chunk.value === 'string'
-            ? new TextEncoder().encode(chunk.value)
-            : new Uint8Array(chunk.value);
-        controller.enqueue(bytes);
-      }
-    },
-    async cancel() {
-      await iterator.return?.();
-    },
-  });
-}
 
 export async function GET(
     req: NextRequest,
@@ -59,10 +52,14 @@ export async function GET(
 
     try {
         await connectDB();
+        // Resolve authenticated user identity only. Never trust query params.
+        const authUserId = auth.user.id;
+        const authUserRole = auth.user.role;
+
         const { script } = await studentResultService.verifyStudentScriptAccess(
             scriptId,
-            auth.user.id,
-            auth.user.role
+            authUserId,
+            authUserRole
         );
 
         // Find page belonging strictly to this answer script and skip duplicates
@@ -71,7 +68,7 @@ export async function GET(
             _id: pageIdObj,
             answerScript: script._id,
             isDuplicate: { $ne: true },
-        }).select('storageKey');
+        }).select('storageKey width height');
 
         if (!ingestionPage || !ingestionPage.storageKey) {
             return NextResponse.json(
@@ -80,42 +77,173 @@ export async function GET(
             );
         }
 
-        const storageKey = ingestionPage.storageKey;
+        const width = ingestionPage.width ?? 0;
+        const height = ingestionPage.height ?? 0;
 
-        // Open derived page image stream safely without signed URLs or redirects
-        let opened: { stream: NodeJS.ReadableStream & AsyncIterable<Uint8Array | string>; size: number };
+        // Constraint check: reject pages that exceed maxLongEdge or maxPixels
+        if (width > 0 && height > 0) {
+            const longEdge = Math.max(width, height);
+            const totalPixels = width * height;
+            if (
+                longEdge > DEFAULT_PAGE_RENDERING_CONFIG.maxLongEdge ||
+                totalPixels > DEFAULT_PAGE_RENDERING_CONFIG.maxPixels
+            ) {
+                return NextResponse.json(
+                    {
+                        success: false,
+                        message: 'Page exceeds maximum allowed dimensions for rendering',
+                    },
+                    { status: 422, headers: SECURITY_HEADERS }
+                );
+            }
+        }
+
+        const now = new Date();
+        const dayStr = formatISTDateOnly(now);
+        const cacheKey = buildRenderCacheKey({
+            userId: authUserId,
+            pageId,
+            day: dayStr,
+            width,
+            height,
+            storageKey: ingestionPage.storageKey,
+        });
+
+        // 1. Check cache hit
+        const cached = await getCachedWatermarkRender(cacheKey);
+        if (cached) {
+            return new NextResponse(new Uint8Array(cached.buffer), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'image/jpeg',
+                    'Content-Length': cached.buffer.length.toString(),
+                    'Cache-Control': 'private, no-store',
+                    'X-Content-Type-Options': 'nosniff',
+                },
+            });
+        }
+
+        // 2. Cache miss: acquire concurrency slot
+        let releaseSlot: (() => void) | null = null;
         try {
-            opened = await DerivedStorageService.openDerivedPage(storageKey);
-        } catch {
+            releaseSlot = tryAcquireWatermarkSlot();
+        } catch (slotErr) {
+            if (slotErr instanceof WatermarkCapacityError) {
+                return NextResponse.json(
+                    { success: false, message: slotErr.message },
+                    {
+                        status: 503,
+                        headers: {
+                            ...SECURITY_HEADERS,
+                            'Retry-After': String(slotErr.retryAfterSeconds),
+                        },
+                    }
+                );
+            }
+            throw slotErr;
+        }
+
+        try {
+            // Read derived page buffer safely
+            const rawBuffer = await DerivedStorageService.readDerivedPage(ingestionPage.storageKey);
+
+            // Fetch StudentMapping for exam and student to resolve rollNumber if available
+            // Note: student._id from script.student
+            const studentUserObjId = script.student;
+            let rollNumber: string | null = null;
+            if (studentUserObjId && script.exam) {
+                const mapping = await StudentMapping.findOne({
+                    exam: script.exam,
+                    student: studentUserObjId,
+                }).select('rollNumber');
+                if (mapping && mapping.rollNumber) {
+                    rollNumber = mapping.rollNumber;
+                }
+            }
+
+            const issuedAt = now.toISOString();
+            const traceCode = generateTraceCode({
+                userId: authUserId,
+                scriptId,
+                pageId,
+                issuedAt,
+            });
+
+            const watermarkText = buildWatermarkText({
+                rollNumber,
+                timestamp: formatISTDateTime(now),
+                traceCode,
+            });
+
+            // Burn watermark into image
+            const watermarkedBuffer = await applyWatermark(rawBuffer, watermarkText);
+
+            // Store to cache
+            await storeCachedWatermarkRender(cacheKey, watermarkedBuffer, {
+                pageId,
+                storageKey: ingestionPage.storageKey,
+                width,
+                height,
+                watermarkVersion: WATERMARK_VERSION,
+                userId: authUserId,
+                day: dayStr,
+                issuedAt,
+                traceCode,
+                rollNumber,
+            });
+
+            // Write audit entry: deduplicated per student/page/day (only written upon rendering)
+            const clientIp =
+                req.headers.get('x-forwarded-for') ||
+                req.headers.get('x-real-ip') ||
+                undefined;
+
+            await writeAuditLog({
+                user: authUserId,
+                action: 'STUDENT_PAGE_IMAGE_WATERMARKED',
+                outcome: 'SUCCESS',
+                entityId: pageId,
+                entityType: 'IngestionPage',
+                ipAddress: clientIp,
+                details: {
+                    userId: authUserId,
+                    scriptId,
+                    pageId,
+                    traceCode,
+                    rollNumber: rollNumber || null,
+                    issuedAt,
+                    day: dayStr,
+                },
+            });
+
+            return new NextResponse(new Uint8Array(watermarkedBuffer), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'image/jpeg',
+                    'Content-Length': watermarkedBuffer.length.toString(),
+                    'Cache-Control': 'private, no-store',
+                    'X-Content-Type-Options': 'nosniff',
+                },
+            });
+        } finally {
+            if (releaseSlot) {
+                releaseSlot();
+            }
+        }
+    } catch (error: unknown) {
+        if (error instanceof WatermarkCapacityError) {
             return NextResponse.json(
-                { success: false, message: 'Not found' },
-                { status: 404, headers: SECURITY_HEADERS }
+                { success: false, message: error.message },
+                {
+                    status: 503,
+                    headers: {
+                        ...SECURITY_HEADERS,
+                        'Retry-After': String(error.retryAfterSeconds),
+                    },
+                }
             );
         }
 
-        const { stream, size } = opened;
-
-        // Content-Type resolution
-        let contentType = 'image/png';
-        const keyLower = storageKey.toLowerCase();
-        if (keyLower.endsWith('.jpg') || keyLower.endsWith('.jpeg')) {
-            contentType = 'image/jpeg';
-        } else if (keyLower.endsWith('.webp')) {
-            contentType = 'image/webp';
-        } else if (keyLower.endsWith('.gif')) {
-            contentType = 'image/gif';
-        }
-
-        return new NextResponse(toWebReadableStream(stream), {
-            status: 200,
-            headers: {
-                'Content-Type': contentType,
-                'Content-Length': size.toString(),
-                'Cache-Control': 'private, no-store',
-                'X-Content-Type-Options': 'nosniff',
-            },
-        });
-    } catch (error: unknown) {
         const status = error instanceof HttpError ? error.statusCode : 404;
         return NextResponse.json(
             { success: false, message: status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : 'Not found' },
