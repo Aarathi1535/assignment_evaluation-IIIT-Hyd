@@ -64,6 +64,17 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
     let pagesGET: any;
     let imageGET: any;
     let annotationsGET: any;
+    let resultsListGET: any;
+    let resultDetailGET: any;
+    let staffScriptGET: any;
+    let staffGradesGET: any;
+    let staffGradesPOST: any;
+    let staffPagesGET: any;
+    let staffAnnotationsGET: any;
+    let staffAnnotationsPUT: any;
+    let staffImageGET: any;
+    let staffThumbnailGET: any;
+    let verifyAssemblyPOST: any;
 
     let studentA: any;
     let studentB: any;
@@ -113,6 +124,18 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         pagesGET = (await import('../app/api/student/results/[scriptId]/pages/route')).GET;
         imageGET = (await import('../app/api/student/results/[scriptId]/pages/[pageId]/image/route')).GET;
         annotationsGET = (await import('../app/api/student/results/[scriptId]/pages/[pageId]/annotations/route')).GET;
+        resultsListGET = (await import('../app/api/student/results/route')).GET;
+        resultDetailGET = (await import('../app/api/student/results/[scriptId]/route')).GET;
+
+        staffScriptGET = (await import('../app/api/scripts/[id]/route')).GET;
+        staffGradesGET = (await import('../app/api/scripts/[id]/grades/route')).GET;
+        staffGradesPOST = (await import('../app/api/scripts/[id]/grades/route')).POST;
+        staffPagesGET = (await import('../app/api/scripts/[id]/pages/route')).GET;
+        staffAnnotationsGET = (await import('../app/api/scripts/[id]/pages/[p]/annotations/route')).GET;
+        staffAnnotationsPUT = (await import('../app/api/scripts/[id]/pages/[p]/annotations/route')).PUT;
+        staffImageGET = (await import('../app/api/ingest/[id]/pages/[pageId]/image/route')).GET;
+        staffThumbnailGET = (await import('../app/api/ingest/[id]/pages/[pageId]/thumbnail/route')).GET;
+        verifyAssemblyPOST = (await import('../app/api/exams/[id]/verify-assembly/route')).POST;
     });
 
     beforeEach(async () => {
@@ -1027,5 +1050,575 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         expect(sourceCode).not.toContain('offlineDrafts');
         expect(sourceCode).not.toContain('/api/scripts');
         expect(sourceCode).not.toMatch(/method:\s*['"](POST|PUT|PATCH|DELETE)['"]/i);
+    });
+
+    // 16. (AE-189 A) Cross-student annotations returns generic 404
+    it("16. (AE-189 A) returns generic 404 for cross-student annotation requests (Bob's script + page, or Alice's script + Bob's page)", async () => {
+        // Case 1: Alice requests Bob's script and Bob's page
+        const req1 = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptB._id}/pages/${pageB1._id}/annotations`
+        );
+        const res1 = await annotationsGET(req1, {
+            params: Promise.resolve({
+                scriptId: scriptB._id.toString(),
+                pageId: pageB1._id.toString(),
+            }),
+        });
+        expect(res1.status).toBe(404);
+        const body1 = await res1.json();
+        expect(body1).toEqual({ success: false, message: 'Not found' });
+        expect(res1.headers.get('Cache-Control')).toBe('private, no-store');
+        expect(res1.headers.get('X-Content-Type-Options')).toBe('nosniff');
+
+        // Case 2: Alice requests Alice's script but Bob's page
+        const req2 = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageB1._id}/annotations`
+        );
+        const res2 = await annotationsGET(req2, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: pageB1._id.toString(),
+            }),
+        });
+        expect(res2.status).toBe(404);
+        const body2 = await res2.json();
+        expect(body2).toEqual({ success: false, message: 'Not found' });
+        expect(res2.headers.get('Cache-Control')).toBe('private, no-store');
+        expect(res2.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    });
+
+    // 17. (AE-189 B) Role matrix on student routes
+    it('17. (AE-189 B) enforces 403 role matrix across student route families (ADMIN, PROFESSOR, deactivated STUDENT, role mismatch) and 401 for unauthenticated', async () => {
+        const admin = await User.create({
+            name: 'Admin Dumbledore',
+            email: 'admin.189@iiit.ac.in',
+            password: 'password123',
+            role: UserRole.ADMIN,
+            isActive: true,
+        });
+
+        const testAllFourRoutes = async (expectedStatus: number) => {
+            // 1. student results detail
+            const detailReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`);
+            const detailRes = await resultDetailGET(detailReq, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(detailRes.status).toBe(expectedStatus);
+
+            // 2. student pages
+            const pagesReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages`);
+            const pagesRes = await pagesGET(pagesReq, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(pagesRes.status).toBe(expectedStatus);
+
+            // 3. student image
+            const imageReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image`
+            );
+            const imageRes = await imageGET(imageReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            });
+            expect(imageRes.status).toBe(expectedStatus);
+
+            // 4. student annotations
+            const annReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/annotations`
+            );
+            const annRes = await annotationsGET(annReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            });
+            expect(annRes.status).toBe(expectedStatus);
+        };
+
+        // 1. Unauthenticated (401)
+        mockSessionUser = null;
+        await testAllFourRoutes(401);
+
+        // 2. ADMIN role (403)
+        mockSessionUser = {
+            id: admin._id.toString(),
+            email: admin.email,
+            name: admin.name,
+            role: UserRole.ADMIN,
+        };
+        await testAllFourRoutes(403);
+
+        // 3. PROFESSOR role (403)
+        mockSessionUser = {
+            id: prof._id.toString(),
+            email: prof.email,
+            name: prof.name,
+            role: UserRole.PROFESSOR,
+        };
+        await testAllFourRoutes(403);
+
+        // 4. Deactivated STUDENT (403)
+        await User.findByIdAndUpdate(studentA._id, { isActive: false });
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT,
+        };
+        await testAllFourRoutes(403);
+        await User.findByIdAndUpdate(studentA._id, { isActive: true });
+
+        // 5. Session claiming STUDENT when the database role has changed (403)
+        await User.findByIdAndUpdate(studentA._id, { role: UserRole.TA });
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT,
+        };
+        await testAllFourRoutes(403);
+        await User.findByIdAndUpdate(studentA._id, { role: UserRole.STUDENT });
+    });
+
+    // 18. (AE-189 C) Student access to staff routes
+    it('18. (AE-189 C) asserts that a STUDENT receives 403 across all staff routes using actual fixture IDs', async () => {
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT,
+        };
+
+        const actualScriptId = scriptA._id.toString();
+        const actualPageId = pageA1._id.toString();
+        const actualBatchId = 'batch-183';
+        const actualExamId = exam._id.toString();
+
+        // 1. GET /api/scripts/[id]
+        const scriptReq = new NextRequest(`http://localhost:3000/api/scripts/${actualScriptId}`);
+        const scriptRes = await staffScriptGET(scriptReq, {
+            params: Promise.resolve({ id: actualScriptId }),
+        });
+        expect(scriptRes.status).toBe(403);
+
+        // 2. GET & POST /api/scripts/[id]/grades
+        const gradesGetReq = new NextRequest(`http://localhost:3000/api/scripts/${actualScriptId}/grades`);
+        const gradesGetRes = await staffGradesGET(gradesGetReq, {
+            params: Promise.resolve({ id: actualScriptId }),
+        });
+        expect(gradesGetRes.status).toBe(403);
+
+        const gradesPostReq = new NextRequest(`http://localhost:3000/api/scripts/${actualScriptId}/grades`, {
+            method: 'POST',
+            body: JSON.stringify({ question: 1, marksAwarded: [], clientTotalScore: 0, isFinal: true }),
+        });
+        const gradesPostRes = await staffGradesPOST(gradesPostReq, {
+            params: Promise.resolve({ id: actualScriptId }),
+        });
+        expect(gradesPostRes.status).toBe(403);
+
+        // 3. GET /api/scripts/[id]/pages
+        const staffPagesReq = new NextRequest(`http://localhost:3000/api/scripts/${actualScriptId}/pages`);
+        const staffPagesRes = await staffPagesGET(staffPagesReq, {
+            params: Promise.resolve({ id: actualScriptId }),
+        });
+        expect(staffPagesRes.status).toBe(403);
+
+        // 4. GET & PUT /api/scripts/[id]/pages/[p]/annotations
+        const staffAnnGetReq = new NextRequest(
+            `http://localhost:3000/api/scripts/${actualScriptId}/pages/${actualPageId}/annotations`
+        );
+        const staffAnnGetRes = await staffAnnotationsGET(staffAnnGetReq, {
+            params: Promise.resolve({ id: actualScriptId, p: actualPageId }),
+        });
+        expect(staffAnnGetRes.status).toBe(403);
+
+        const staffAnnPutReq = new NextRequest(
+            `http://localhost:3000/api/scripts/${actualScriptId}/pages/${actualPageId}/annotations`,
+            {
+                method: 'PUT',
+                body: JSON.stringify({ annotations: [], strokes: [] }),
+            }
+        );
+        const staffAnnPutRes = await staffAnnotationsPUT(staffAnnPutReq, {
+            params: Promise.resolve({ id: actualScriptId, p: actualPageId }),
+        });
+        expect(staffAnnPutRes.status).toBe(403);
+
+        // 5. GET /api/ingest/[id]/pages/[pageId]/image
+        const staffImgReq = new NextRequest(
+            `http://localhost:3000/api/ingest/${actualBatchId}/pages/${actualPageId}/image`
+        );
+        const staffImgRes = await staffImageGET(staffImgReq, {
+            params: Promise.resolve({ id: actualBatchId, pageId: actualPageId }),
+        });
+        expect(staffImgRes.status).toBe(403);
+
+        // 6. GET /api/ingest/[id]/pages/[pageId]/thumbnail
+        const staffThumbReq = new NextRequest(
+            `http://localhost:3000/api/ingest/${actualBatchId}/pages/${actualPageId}/thumbnail`
+        );
+        const staffThumbRes = await staffThumbnailGET(staffThumbReq, {
+            params: Promise.resolve({ id: actualBatchId, pageId: actualPageId }),
+        });
+        expect(staffThumbRes.status).toBe(403);
+
+        // 7. POST /api/exams/[id]/verify-assembly
+        const verifyReq = new NextRequest(
+            `http://localhost:3000/api/exams/${actualExamId}/verify-assembly`,
+            { method: 'POST' }
+        );
+        const verifyRes = await verifyAssemblyPOST(verifyReq, {
+            params: Promise.resolve({ id: actualExamId }),
+        });
+        expect(verifyRes.status).toBe(403);
+    });
+
+    // 19. (AE-189 D) Indistinguishable student-resource failures
+    it('19. (AE-189 D) asserts identical 404 status codes and identical response bodies for other student ID, nonexistent ID, and malformed ID', async () => {
+        const nonexistentId = new mongoose.Types.ObjectId().toString();
+        const malformedId = 'malformed-not-an-object-id';
+
+        // Helper to check status & exact JSON body equality across the 3 failure cases
+        const assertIndistinguishableFailures = async (
+            invoke: (id: string) => Promise<any>
+        ) => {
+            const resOther = await invoke(scriptB._id.toString());
+            const resNonexistent = await invoke(nonexistentId);
+            const resMalformed = await invoke(malformedId);
+
+            expect(resOther.status).toBe(404);
+            expect(resNonexistent.status).toBe(404);
+            expect(resMalformed.status).toBe(404);
+
+            const bodyOther = await resOther.json();
+            const bodyNonexistent = await resNonexistent.json();
+            const bodyMalformed = await resMalformed.json();
+
+            expect(bodyOther).toEqual({ success: false, message: 'Not found' });
+            expect(bodyNonexistent).toEqual(bodyOther);
+            expect(bodyMalformed).toEqual(bodyOther);
+        };
+
+        // 1. Itemized feedback detail route: /api/student/results/[scriptId]
+        await assertIndistinguishableFailures((sId) =>
+            resultDetailGET(new NextRequest(`http://localhost:3000/api/student/results/${sId}`), {
+                params: Promise.resolve({ scriptId: sId }),
+            })
+        );
+
+        // 2. Pages route: /api/student/results/[scriptId]/pages
+        await assertIndistinguishableFailures((sId) =>
+            pagesGET(new NextRequest(`http://localhost:3000/api/student/results/${sId}/pages`), {
+                params: Promise.resolve({ scriptId: sId }),
+            })
+        );
+
+        // 3. Image route: /api/student/results/[scriptId]/pages/[pageId]/image
+        // 3a. ScriptId failure cases
+        await assertIndistinguishableFailures((sId) =>
+            imageGET(
+                new NextRequest(
+                    `http://localhost:3000/api/student/results/${sId}/pages/${pageA1._id}/image`
+                ),
+                {
+                    params: Promise.resolve({ scriptId: sId, pageId: pageA1._id.toString() }),
+                }
+            )
+        );
+        // 3b. PageId failure cases under student's own script
+        const resImgOtherPage = await imageGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageB1._id}/image`
+            ),
+            {
+                params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: pageB1._id.toString() }),
+            }
+        );
+        const resImgNonexistentPage = await imageGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${nonexistentId}/image`
+            ),
+            {
+                params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: nonexistentId }),
+            }
+        );
+        const resImgMalformedPage = await imageGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${malformedId}/image`
+            ),
+            {
+                params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: malformedId }),
+            }
+        );
+        expect(resImgOtherPage.status).toBe(404);
+        expect(resImgNonexistentPage.status).toBe(404);
+        expect(resImgMalformedPage.status).toBe(404);
+        const bodyImgOther = await resImgOtherPage.json();
+        const bodyImgNonexistent = await resImgNonexistentPage.json();
+        const bodyImgMalformed = await resImgMalformedPage.json();
+        expect(bodyImgOther).toEqual({ success: false, message: 'Not found' });
+        expect(bodyImgNonexistent).toEqual(bodyImgOther);
+        expect(bodyImgMalformed).toEqual(bodyImgOther);
+
+        // 4. Annotations route: /api/student/results/[scriptId]/pages/[pageId]/annotations
+        // 4a. ScriptId failure cases
+        await assertIndistinguishableFailures((sId) =>
+            annotationsGET(
+                new NextRequest(
+                    `http://localhost:3000/api/student/results/${sId}/pages/${pageA1._id}/annotations`
+                ),
+                {
+                    params: Promise.resolve({ scriptId: sId, pageId: pageA1._id.toString() }),
+                }
+            )
+        );
+        // 4b. PageId failure cases under student's own script
+        const resAnnOtherPage = await annotationsGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageB1._id}/annotations`
+            ),
+            {
+                params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: pageB1._id.toString() }),
+            }
+        );
+        const resAnnNonexistentPage = await annotationsGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${nonexistentId}/annotations`
+            ),
+            {
+                params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: nonexistentId }),
+            }
+        );
+        const resAnnMalformedPage = await annotationsGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${malformedId}/annotations`
+            ),
+            {
+                params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: malformedId }),
+            }
+        );
+        expect(resAnnOtherPage.status).toBe(404);
+        expect(resAnnNonexistentPage.status).toBe(404);
+        expect(resAnnMalformedPage.status).toBe(404);
+        const bodyAnnOther = await resAnnOtherPage.json();
+        const bodyAnnNonexistent = await resAnnNonexistentPage.json();
+        const bodyAnnMalformed = await resAnnMalformedPage.json();
+        expect(bodyAnnOther).toEqual({ success: false, message: 'Not found' });
+        expect(bodyAnnNonexistent).toEqual(bodyAnnOther);
+        expect(bodyAnnMalformed).toEqual(bodyAnnOther);
+    });
+
+    // 20. (AE-189 E) Duplicate page returns 404 on image and annotations
+    it('20. (AE-189 E) returns generic 404 on image and annotations routes when own page has isDuplicate: true', async () => {
+        await IngestionPage.findByIdAndUpdate(pageA2._id, { isDuplicate: true });
+
+        try {
+            // Image route
+            const imgReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA2._id}/image`
+            );
+            const imgRes = await imageGET(imgReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA2._id.toString(),
+                }),
+            });
+            expect(imgRes.status).toBe(404);
+            const imgBody = await imgRes.json();
+            expect(imgBody).toEqual({ success: false, message: 'Not found' });
+
+            // Annotations route
+            const annReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA2._id}/annotations`
+            );
+            const annRes = await annotationsGET(annReq, {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA2._id.toString(),
+                }),
+            });
+            expect(annRes.status).toBe(404);
+            const annBody = await annRes.json();
+            expect(annBody).toEqual({ success: false, message: 'Not found' });
+
+            // Also verify pages list excludes the duplicate page
+            const pagesReq = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages`
+            );
+            const pagesRes = await pagesGET(pagesReq, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(pagesRes.status).toBe(200);
+            const pagesList = await pagesRes.json();
+            const foundDup = pagesList.find((p: any) => p.pageId === pageA2._id.toString());
+            expect(foundDup).toBeUndefined();
+        } finally {
+            await IngestionPage.findByIdAndUpdate(pageA2._id, { isDuplicate: false });
+        }
+    });
+
+    // 21. (AE-189 F) Exam visibility changes (non-PUBLISHED and isActive: false)
+    it('21. (AE-189 F) returns generic 404 for pages, image, annotations, and itemized feedback when exam is non-PUBLISHED or inactive', async () => {
+        const assertAllFourReturn404 = async () => {
+            // 1. Pages
+            const pagesRes = await pagesGET(
+                new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages`),
+                { params: Promise.resolve({ scriptId: scriptA._id.toString() }) }
+            );
+            expect(pagesRes.status).toBe(404);
+            const pagesBody = await pagesRes.json();
+            expect(pagesBody).toEqual({ success: false, message: 'Not found' });
+
+            // 2. Image
+            const imgRes = await imageGET(
+                new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image`),
+                { params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: pageA1._id.toString() }) }
+            );
+            expect(imgRes.status).toBe(404);
+            const imgBody = await imgRes.json();
+            expect(imgBody).toEqual({ success: false, message: 'Not found' });
+
+            // 3. Annotations
+            const annRes = await annotationsGET(
+                new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/annotations`),
+                { params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: pageA1._id.toString() }) }
+            );
+            expect(annRes.status).toBe(404);
+            const annBody = await annRes.json();
+            expect(annBody).toEqual({ success: false, message: 'Not found' });
+
+            // 4. Itemized feedback detail
+            const detailRes = await resultDetailGET(
+                new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`),
+                { params: Promise.resolve({ scriptId: scriptA._id.toString() }) }
+            );
+            expect(detailRes.status).toBe(404);
+            const detailBody = await detailRes.json();
+            expect(detailBody).toEqual({ success: false, message: 'Not found' });
+        };
+
+        // Scenario 1: Change exam to non-PUBLISHED state (DRAFT)
+        await Exam.findByIdAndUpdate(exam._id, { status: ExamStatus.DRAFT });
+        await assertAllFourReturn404();
+
+        // Restore exam status to PUBLISHED and verify access is restored
+        await Exam.findByIdAndUpdate(exam._id, { status: ExamStatus.PUBLISHED });
+        const restoredDetailRes = await resultDetailGET(
+            new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`),
+            { params: Promise.resolve({ scriptId: scriptA._id.toString() }) }
+        );
+        expect(restoredDetailRes.status).toBe(200);
+
+        // Scenario 2: Separately set isActive: false on exam
+        await Exam.findByIdAndUpdate(exam._id, { isActive: false });
+        await assertAllFourReturn404();
+
+        // Restore exam isActive: true
+        await Exam.findByIdAndUpdate(exam._id, { isActive: true });
+        const restoredDetailRes2 = await resultDetailGET(
+            new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}`),
+            { params: Promise.resolve({ scriptId: scriptA._id.toString() }) }
+        );
+        expect(restoredDetailRes2.status).toBe(200);
+    });
+
+    // 22. (AE-189 G) Query-parameter spoofing cannot bypass identity or ownership
+    it('22. (AE-189 G) ensures ?studentId and ?userId query parameters cannot spoof identity or bypass ownership', async () => {
+        mockSessionUser = {
+            id: studentA._id.toString(),
+            email: studentA.email,
+            name: studentA.name,
+            role: UserRole.STUDENT,
+        };
+
+        const bobId = studentB._id.toString();
+        const spoofQuery = `?studentId=${bobId}&userId=${bobId}`;
+
+        // Case 1: Alice accesses her own resources while supplying Bob's IDs in query params -> SUCCEEDS (200)
+        // 1a. Results list
+        const listReq = new NextRequest(`http://localhost:3000/api/student/results${spoofQuery}`);
+        const listRes = await resultsListGET(listReq);
+        expect(listRes.status).toBe(200);
+        const listBody = await listRes.json();
+        expect(listBody.success).toBe(true);
+        // Ensure Alice's own scriptId is in the data, not Bob's
+        const aliceRecord = listBody.data.find((r: any) => r.scriptId === scriptA._id.toString());
+        expect(aliceRecord).toBeDefined();
+        const bobRecord = listBody.data.find((r: any) => r.scriptId === scriptB._id.toString());
+        expect(bobRecord).toBeUndefined();
+
+        // 1b. Results detail
+        const detailReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}${spoofQuery}`);
+        const detailRes = await resultDetailGET(detailReq, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+        expect(detailRes.status).toBe(200);
+        const detailBody = await detailRes.json();
+        expect(detailBody.total).toBe(45); // Alice's awarded score
+
+        // 1c. Pages
+        const pagesReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages${spoofQuery}`);
+        const pagesRes = await pagesGET(pagesReq, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+        });
+        expect(pagesRes.status).toBe(200);
+
+        // 1d. Image
+        const imgReq = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image${spoofQuery}`
+        );
+        const imgRes = await imageGET(imgReq, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: pageA1._id.toString() }),
+        });
+        expect(imgRes.status).toBe(200);
+
+        // 1e. Annotations
+        const annReq = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/annotations${spoofQuery}`
+        );
+        const annRes = await annotationsGET(annReq, {
+            params: Promise.resolve({ scriptId: scriptA._id.toString(), pageId: pageA1._id.toString() }),
+        });
+        expect(annRes.status).toBe(200);
+
+        // Case 2: Alice attempts to access Bob's resource while supplying Bob's IDs in query params -> REJECTED (404)
+        // 2a. Results detail
+        const bobDetailReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptB._id}${spoofQuery}`);
+        const bobDetailRes = await resultDetailGET(bobDetailReq, {
+            params: Promise.resolve({ scriptId: scriptB._id.toString() }),
+        });
+        expect(bobDetailRes.status).toBe(404);
+        expect(await bobDetailRes.json()).toEqual({ success: false, message: 'Not found' });
+
+        // 2b. Pages
+        const bobPagesReq = new NextRequest(`http://localhost:3000/api/student/results/${scriptB._id}/pages${spoofQuery}`);
+        const bobPagesRes = await pagesGET(bobPagesReq, {
+            params: Promise.resolve({ scriptId: scriptB._id.toString() }),
+        });
+        expect(bobPagesRes.status).toBe(404);
+        expect(await bobPagesRes.json()).toEqual({ success: false, message: 'Not found' });
+
+        // 2c. Image
+        const bobImgReq = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptB._id}/pages/${pageB1._id}/image${spoofQuery}`
+        );
+        const bobImgRes = await imageGET(bobImgReq, {
+            params: Promise.resolve({ scriptId: scriptB._id.toString(), pageId: pageB1._id.toString() }),
+        });
+        expect(bobImgRes.status).toBe(404);
+        expect(await bobImgRes.json()).toEqual({ success: false, message: 'Not found' });
+
+        // 2d. Annotations
+        const bobAnnReq = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptB._id}/pages/${pageB1._id}/annotations${spoofQuery}`
+        );
+        const bobAnnRes = await annotationsGET(bobAnnReq, {
+            params: Promise.resolve({ scriptId: scriptB._id.toString(), pageId: pageB1._id.toString() }),
+        });
+        expect(bobAnnRes.status).toBe(404);
+        expect(await bobAnnRes.json()).toEqual({ success: false, message: 'Not found' });
     });
 });
