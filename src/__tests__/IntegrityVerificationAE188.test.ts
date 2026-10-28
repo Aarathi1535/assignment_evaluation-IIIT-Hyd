@@ -708,4 +708,96 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
 
         logSpy.mockRestore();
     });
+
+    it('20. regression: batch discovery resolves both direct exam batches and answer-script-associated batches via cursor streaming', async () => {
+        // Setup direct exam batch
+        const { exam } = await createIntactExamSetup(professorId, false);
+
+        // Setup a secondary batch not directly linked by exam field on Batch, but linked via AnswerScript
+        const extraBatchId = `batch-script-linked-${Date.now()}`;
+        const extraFileId = 'file-extra-002';
+
+        const extraOriginalBytes = Buffer.from('%PDF-1.4 Extra submission linked via script');
+        const storedExtraOriginal = await immutableStorageService.storeOriginal({
+            batchId: extraBatchId,
+            fileId: extraFileId,
+            sequenceNumber: 1,
+            uploader: professorId,
+            buffer: extraOriginalBytes,
+            originalFilename: 'extra-submission.pdf',
+            fileExtension: 'pdf'
+        });
+
+        // Batch document without direct exam reference
+        await BatchRepository.createBatch({
+            batchId: extraBatchId,
+            uploadedBy: new mongoose.Types.ObjectId(professorId),
+            exam: new mongoose.Types.ObjectId(), // Different / unlinked exam
+            files: [{
+                fileId: extraFileId,
+                fileIndex: 0,
+                originalFilename: 'extra-submission.pdf',
+                fileType: 'pdf',
+                mimeType: 'application/pdf',
+                size: extraOriginalBytes.length,
+                pageCount: 1,
+                storageKey: storedExtraOriginal.storageKey,
+                hmac: storedExtraOriginal.hmac,
+                keyId: storedExtraOriginal.keyId,
+                sequenceNumber: storedExtraOriginal.sequenceNumber,
+                integrityMetadata: storedExtraOriginal.integrityMetadata
+            }],
+            totalFiles: 1,
+            totalSize: extraOriginalBytes.length,
+            totalPageCount: 1,
+            status: BatchStatus.DONE,
+            isActive: true
+        });
+
+        const extraScript = await AnswerScript.create({
+            exam: exam._id, // Belongs to target exam!
+            batchId: extraBatchId,
+            fileIndex: 0,
+            startPageNumber: 1,
+            endPageNumber: 1,
+            pageCount: 1,
+            identificationStatus: 'UNIDENTIFIED',
+            isActive: true
+        });
+
+        const storedExtraPage = await derivedStorageService.storeDerivedPage({
+            batchId: extraBatchId,
+            fileId: extraFileId,
+            pageNumber: 1,
+            buffer: Buffer.from('Extra Derived Page Bytes'),
+            format: 'png'
+        });
+
+        await IngestionPage.create({
+            batchId: extraBatchId,
+            job: new mongoose.Types.ObjectId(),
+            fileId: extraFileId,
+            fileIndex: 0,
+            storageKey: storedExtraPage.storageKey,
+            pageNumber: 1,
+            status: PageProcessingStatus.PROCESSED,
+            answerScript: extraScript._id
+        });
+
+        const summary = await integrityVerificationService.verifyExamIntegrity(
+            exam._id.toString(),
+            undefined,
+            { includeAllItems: true }
+        );
+
+        // Direct batch had 1 file + extra batch had 1 file = 2 total
+        expect(summary.originalFiles.total).toBe(2);
+        expect(summary.originalFiles.intact).toBe(2);
+        // Direct batch had 2 pages + extra batch had 1 page = 3 total
+        expect(summary.derivedPages.total).toBe(3);
+        expect(summary.derivedPages.intact).toBe(3);
+
+        const discoveredBatchIds = summary.originalFiles.items.map((f) => f.batchId);
+        expect(discoveredBatchIds).toContain(extraBatchId);
+    });
 });

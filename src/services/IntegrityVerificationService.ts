@@ -75,6 +75,13 @@ export interface VerifyExamIntegrityOptions {
      * If false (default), keeps memory use bounded and returns only problem items in `items` arrays.
      */
     includeAllItems?: boolean;
+    /**
+     * Optional cap on the number of problem items retained in memory and returned in the summary
+     * to protect against unbounded memory growth during mass-corruption events.
+     * Summary counts (total, intact, mismatch, error, unsealed) always remain exact.
+     * Defaults to unlimited.
+     */
+    maxProblemRecords?: number;
 }
 
 export class IntegrityVerificationService {
@@ -143,9 +150,13 @@ export class IntegrityVerificationService {
      * Performs a read-only integrity verification across an exam's originals, derived pages, and assembly.
      * Never mutates, repairs, or reseals objects or records.
      *
-     * Scalability:
-     * - IngestionPage records are fetched via streaming cursor with projection avoiding heavy fields (e.g. metadata.annotations).
-     * - Memory usage is bounded: by default, only problem items are retained in memory.
+     * Scalability & Memory Bounding:
+     * - Batches and IngestionPages are streamed using Mongoose cursors with projections
+     *   (selecting only batchId and files for batches; _id, batchId, fileId, pageNumber, storageKey for pages).
+     * - Large documents and nested fields (such as metadata.annotations) are never materialized into memory.
+     * - Memory scales as O(B_ids + F_batch + P_retained) where B_ids is the set of unique batch IDs,
+     *   F_batch is the file array of the single active batch being processed, and P_retained is the
+     *   problem records array (bounded by options.maxProblemRecords if set).
      * - Sequential storage existence checks prevent unbounded concurrency against storage backends.
      *
      * Security:
@@ -158,6 +169,7 @@ export class IntegrityVerificationService {
         options?: VerifyExamIntegrityOptions
     ): Promise<IntegrityVerificationSummary> {
         const includeAllItems = options?.includeAllItems ?? false;
+        const maxProblemRecords = options?.maxProblemRecords ?? Infinity;
 
         if (!mongoose.Types.ObjectId.isValid(examId)) {
             throw new HttpError('Invalid Exam ID format', 400);
@@ -175,22 +187,31 @@ export class IntegrityVerificationService {
         const examObjectId = new mongoose.Types.ObjectId(examId);
 
         // 1. Resolve all Batches associated with this Exam
-        const directBatches = await Batch.find({ exam: examObjectId, isActive: true }).lean();
+        // Select only batchId from direct exam batches via distinct query
+        const directBatchIds = (await Batch.distinct('batchId', {
+            exam: examObjectId,
+            isActive: true
+        })) as string[];
 
         const answerScripts = await AnswerScript.find({ exam: examObjectId, isActive: true }).select('_id').lean();
         const scriptIds = answerScripts.map((s) => s._id);
 
-        const pagesFromScripts = scriptIds.length > 0
-            ? await IngestionPage.find({ answerScript: { $in: scriptIds } }).select('batchId').lean()
+        // Retrieve distinct batch IDs for pages linked to this exam's answer scripts without loading documents
+        const pagesBatchIds = scriptIds.length > 0
+            ? ((await IngestionPage.distinct('batchId', {
+                answerScript: { $in: scriptIds }
+            })) as string[])
             : [];
-        const extraBatchIds = pagesFromScripts.map((p) => p.batchId).filter(Boolean);
 
         const allBatchIds = Array.from(new Set([
-            ...directBatches.map((b) => b.batchId),
-            ...extraBatchIds
-        ]));
+            ...directBatchIds.map((b) => String(b)),
+            ...pagesBatchIds.map((b) => String(b))
+        ])).filter(Boolean);
 
-        const batches = await Batch.find({ batchId: { $in: allBatchIds }, isActive: true }).lean();
+        // Stream batches with projection covering only needed fields
+        const batchCursor = Batch.find({ batchId: { $in: allBatchIds }, isActive: true })
+            .select('batchId files')
+            .cursor();
 
         // 2. Verify Original Uploaded Files
         const allOriginalItems: OriginalFileVerificationItem[] = [];
@@ -203,7 +224,7 @@ export class IntegrityVerificationService {
         let unsealedOriginal = 0;
         let errorOriginal = 0;
 
-        for (const batch of batches) {
+        for await (const batch of batchCursor) {
             const files = batch.files || [];
             for (const file of files) {
                 totalOriginal += 1;
@@ -219,13 +240,15 @@ export class IntegrityVerificationService {
                         status: 'UNSEALED',
                         reason: 'Original file lacks required HMAC seal or binding metadata'
                     };
-                    problemOriginalItems.push(item);
-                    problemFiles.push({
-                        batchId: batch.batchId,
-                        fileId: file.fileId,
-                        status: 'UNSEALED',
-                        reason: item.reason
-                    });
+                    if (problemOriginalItems.length < maxProblemRecords) {
+                        problemOriginalItems.push(item);
+                        problemFiles.push({
+                            batchId: batch.batchId,
+                            fileId: file.fileId,
+                            status: 'UNSEALED',
+                            reason: item.reason
+                        });
+                    }
                     if (includeAllItems) {
                         allOriginalItems.push(item);
                     }
@@ -245,13 +268,15 @@ export class IntegrityVerificationService {
                         status: 'ERROR',
                         reason: 'HMAC key configuration unavailable or not configured'
                     };
-                    problemOriginalItems.push(item);
-                    problemFiles.push({
-                        batchId: batch.batchId,
-                        fileId: file.fileId,
-                        status: 'ERROR',
-                        reason: item.reason
-                    });
+                    if (problemOriginalItems.length < maxProblemRecords) {
+                        problemOriginalItems.push(item);
+                        problemFiles.push({
+                            batchId: batch.batchId,
+                            fileId: file.fileId,
+                            status: 'ERROR',
+                            reason: item.reason
+                        });
+                    }
                     if (includeAllItems) {
                         allOriginalItems.push(item);
                     }
@@ -274,13 +299,15 @@ export class IntegrityVerificationService {
                         status: 'ERROR',
                         reason: safeReason
                     };
-                    problemOriginalItems.push(item);
-                    problemFiles.push({
-                        batchId: batch.batchId,
-                        fileId: file.fileId,
-                        status: 'ERROR',
-                        reason: safeReason
-                    });
+                    if (problemOriginalItems.length < maxProblemRecords) {
+                        problemOriginalItems.push(item);
+                        problemFiles.push({
+                            batchId: batch.batchId,
+                            fileId: file.fileId,
+                            status: 'ERROR',
+                            reason: safeReason
+                        });
+                    }
                     if (includeAllItems) {
                         allOriginalItems.push(item);
                     }
@@ -317,13 +344,15 @@ export class IntegrityVerificationService {
                         status,
                         reason
                     };
-                    problemOriginalItems.push(item);
-                    problemFiles.push({
-                        batchId: batch.batchId,
-                        fileId: file.fileId,
-                        status,
-                        reason
-                    });
+                    if (problemOriginalItems.length < maxProblemRecords) {
+                        problemOriginalItems.push(item);
+                        problemFiles.push({
+                            batchId: batch.batchId,
+                            fileId: file.fileId,
+                            status,
+                            reason
+                        });
+                    }
                     if (includeAllItems) {
                         allOriginalItems.push(item);
                     }
@@ -371,15 +400,17 @@ export class IntegrityVerificationService {
                     status: 'MISMATCH',
                     reason: keyValidation.reason
                 };
-                problemDerivedItems.push(item);
-                problemPages.push({
-                    pageId: pageIdStr,
-                    batchId: page.batchId,
-                    fileId: page.fileId,
-                    pageNumber: page.pageNumber,
-                    status: 'MISMATCH',
-                    reason: keyValidation.reason
-                });
+                if (problemDerivedItems.length < maxProblemRecords) {
+                    problemDerivedItems.push(item);
+                    problemPages.push({
+                        pageId: pageIdStr,
+                        batchId: page.batchId,
+                        fileId: page.fileId,
+                        pageNumber: page.pageNumber,
+                        status: 'MISMATCH',
+                        reason: keyValidation.reason
+                    });
+                }
                 if (includeAllItems) {
                     allDerivedItems.push(item);
                 }
@@ -399,15 +430,17 @@ export class IntegrityVerificationService {
                         status: 'ERROR',
                         reason: 'OBJECT_NOT_FOUND'
                     };
-                    problemDerivedItems.push(item);
-                    problemPages.push({
-                        pageId: pageIdStr,
-                        batchId: page.batchId,
-                        fileId: page.fileId,
-                        pageNumber: page.pageNumber,
-                        status: 'ERROR',
-                        reason: 'OBJECT_NOT_FOUND'
-                    });
+                    if (problemDerivedItems.length < maxProblemRecords) {
+                        problemDerivedItems.push(item);
+                        problemPages.push({
+                            pageId: pageIdStr,
+                            batchId: page.batchId,
+                            fileId: page.fileId,
+                            pageNumber: page.pageNumber,
+                            status: 'ERROR',
+                            reason: 'OBJECT_NOT_FOUND'
+                        });
+                    }
                     if (includeAllItems) {
                         allDerivedItems.push(item);
                     }
@@ -433,15 +466,17 @@ export class IntegrityVerificationService {
                     status: 'ERROR',
                     reason: 'STORAGE_READ_FAILED'
                 };
-                problemDerivedItems.push(item);
-                problemPages.push({
-                    pageId: pageIdStr,
-                    batchId: page.batchId,
-                    fileId: page.fileId,
-                    pageNumber: page.pageNumber,
-                    status: 'ERROR',
-                    reason: 'STORAGE_READ_FAILED'
-                });
+                if (problemDerivedItems.length < maxProblemRecords) {
+                    problemDerivedItems.push(item);
+                    problemPages.push({
+                        pageId: pageIdStr,
+                        batchId: page.batchId,
+                        fileId: page.fileId,
+                        pageNumber: page.pageNumber,
+                        status: 'ERROR',
+                        reason: 'STORAGE_READ_FAILED'
+                    });
+                }
                 if (includeAllItems) {
                     allDerivedItems.push(item);
                 }
