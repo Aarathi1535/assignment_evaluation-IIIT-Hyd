@@ -130,7 +130,7 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
         });
     }
 
-    async function createIntactExamSetup(ownerId: string) {
+    async function createIntactExamSetup(ownerId: string, shouldApprove = true) {
         const exam = await createExam(ownerId);
         const batchId = `batch-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
         const fileId = 'file-001';
@@ -222,7 +222,10 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
             storageKey: storedP1.storageKey,
             pageNumber: 1,
             status: PageProcessingStatus.PROCESSED,
-            answerScript: script._id
+            answerScript: script._id,
+            metadata: {
+                annotations: [{ x: 10, y: 10, text: 'Sample annotation' }]
+            }
         });
 
         const page2 = await IngestionPage.create({
@@ -233,15 +236,20 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
             storageKey: storedP2.storageKey,
             pageNumber: 2,
             status: PageProcessingStatus.PROCESSED,
-            answerScript: script._id
+            answerScript: script._id,
+            metadata: {
+                annotations: [{ x: 20, y: 20, text: 'Another annotation' }]
+            }
         });
 
-        // 3. Approve assembly to establish assembly seal
-        mockSessionUser = { id: ownerId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
-        await approveIngestionPOST(
-            new Request(`http://localhost/api/exams/${exam._id}/approve-ingestion`, { method: 'POST' }),
-            { params: Promise.resolve({ id: exam._id.toString() }) }
-        );
+        // 3. Approve assembly if requested
+        if (shouldApprove) {
+            mockSessionUser = { id: ownerId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+            await approveIngestionPOST(
+                new Request(`http://localhost/api/exams/${exam._id}/approve-ingestion`, { method: 'POST' }),
+                { params: Promise.resolve({ id: exam._id.toString() }) }
+            );
+        }
 
         return { exam, batch, script, page1, page2, storedOriginal };
     }
@@ -263,7 +271,11 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
     it('1. valid original content with a valid seal returns INTACT', async () => {
         const { exam } = await createIntactExamSetup(professorId);
 
-        const summary = await integrityVerificationService.verifyExamIntegrity(exam._id.toString());
+        const summary = await integrityVerificationService.verifyExamIntegrity(
+            exam._id.toString(),
+            undefined,
+            { includeAllItems: true }
+        );
 
         expect(summary.valid).toBe(true);
         expect(summary.status).toBe('INTACT');
@@ -273,6 +285,7 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
         expect(summary.originalFiles.items[0].status).toBe('INTACT');
         expect(summary.derivedPages.total).toBe(2);
         expect(summary.derivedPages.intact).toBe(2);
+        expect(summary.derivedPages.items[0].status).toBe('INTACT');
         expect(summary.assembly.valid).toBe(true);
         expect(summary.assembly.status).toBe('INTACT');
         expect(summary.problemRecords.files).toHaveLength(0);
@@ -481,18 +494,22 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
         expect(res.status).toBe(200);
         const serialized = JSON.stringify(body);
 
+        // Fetch persisted assembly seal from DB to make seal test non-vacuous
+        const examDoc = await Exam.findById(exam._id).lean();
+        expect(examDoc?.assemblySeal).toBeDefined();
+
         // Must not expose secrets
         expect(serialized).not.toContain('active-secret-key');
         expect(serialized).not.toContain('rotated-v2-secret-key');
-        // Must not expose raw HMAC hex signature strings
-        expect(serialized).not.toContain(body.data.assembly.assemblySeal);
+        // Must not expose raw HMAC hex signature string of assembly seal
+        expect(serialized).not.toContain(examDoc!.assemblySeal!);
         // Must not expose gs:// paths or internal storage paths
         expect(serialized).not.toContain('gs://');
         expect(serialized).not.toContain(tempOriginalsDir);
         expect(serialized).not.toContain(tempDerivedDir);
-        // Must not expose raw storageKey fields in items
-        expect(body.data.originalFiles.items[0]).not.toHaveProperty('storageKey');
-        expect(body.data.derivedPages.items[0]).not.toHaveProperty('storageKey');
+        // API response has problem-only items, so 0 items for intact exam
+        expect(body.data.originalFiles.items).toHaveLength(0);
+        expect(body.data.derivedPages.items).toHaveLength(0);
     });
 
     it('12. audit logging records the verification action and does not falsely claim success after failed checks', async () => {
@@ -518,9 +535,10 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
         const { exam, storedOriginal } = await createIntactExamSetup(professorId);
 
         // Test CLI parser
-        const parsed = parseArguments(['--exam', exam._id.toString(), '--json']);
+        const parsed = parseArguments(['--exam', exam._id.toString(), '--json', '--detailed']);
         expect(parsed.examId).toBe(exam._id.toString());
         expect(parsed.json).toBe(true);
+        expect(parsed.detailed).toBe(true);
 
         // 1. Success exit status 0
         const codeSuccess = await runCli(['--exam', exam._id.toString()]);
@@ -533,5 +551,161 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
         // Non-zero exit status on mismatch
         const codeFailure = await runCli(['--exam', exam._id.toString()]);
         expect(codeFailure).toBe(1);
+    });
+
+    // ─── AE-188 Follow-Up & Review Hardening Tests ──────────────────────────────
+
+    it('14. failure injection on original file read maps to safe reason code and does not leak absolute path or bucket key', async () => {
+        const { exam } = await createIntactExamSetup(professorId);
+
+        const fakeSensitivePath = 'C:\\secrets\\internal_vault\\bucket_super_secret\\batches\\b-999\\original.pdf';
+        const readSpy = vi.spyOn(immutableStorageService, 'readOriginalContent').mockRejectedValueOnce(
+            new Error(`ENOENT: no such file or directory, open '${fakeSensitivePath}'`)
+        );
+
+        // API Test
+        mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+        const res = await verifyIntegrityPOST(makeRequest(), makeContext(exam._id.toString()));
+        const body = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(body.data.status).toBe('ERROR');
+        expect(body.data.originalFiles.error).toBe(1);
+        expect(body.data.problemRecords.files[0].reason).toBe('STORAGE_READ_FAILED');
+
+        const serialized = JSON.stringify(body);
+        expect(serialized).not.toContain(fakeSensitivePath);
+        expect(serialized).not.toContain('bucket_super_secret');
+        expect(serialized).not.toContain('internal_vault');
+
+        // CLI Test
+        const logs: string[] = [];
+        const logSpy = vi.spyOn(console, 'log').mockImplementation((msg) => { logs.push(String(msg)); });
+        readSpy.mockRejectedValueOnce(new Error(`ENOENT: open '${fakeSensitivePath}'`));
+
+        const cliExitCode = await runCli(['--exam', exam._id.toString()]);
+        expect(cliExitCode).toBe(1);
+
+        const cliOutput = logs.join('\n');
+        expect(cliOutput).not.toContain(fakeSensitivePath);
+        expect(cliOutput).not.toContain('bucket_super_secret');
+        expect(cliOutput).toContain('STORAGE_READ_FAILED');
+
+        readSpy.mockRestore();
+        logSpy.mockRestore();
+    });
+
+    it('15. failure injection on derived storage existence check maps to safe reason code without leaking bucket or key', async () => {
+        const { exam } = await createIntactExamSetup(professorId);
+
+        const fakeBucketUri = 'gs://confidential-university-storage/batches/batch-001/derived/file-001/1/page.png';
+        const storageExistsSpy = vi.spyOn(derivedStorageService, 'derivedPageExists').mockRejectedValueOnce(
+            new Error(`GCS backend error accessing ${fakeBucketUri}`)
+        );
+
+        mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+        const res = await verifyIntegrityPOST(makeRequest(), makeContext(exam._id.toString()));
+        const body = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(body.data.status).toBe('ERROR');
+        expect(body.data.derivedPages.error).toBeGreaterThan(0);
+        expect(body.data.problemRecords.pages[0].reason).toBe('STORAGE_READ_FAILED');
+
+        const serialized = JSON.stringify(body);
+        expect(serialized).not.toContain('confidential-university-storage');
+        expect(serialized).not.toContain('gs://');
+
+        storageExistsSpy.mockRestore();
+    });
+
+    it('16. generic API 500 response returns safe "Verification failed" without leaking internal exception message', async () => {
+        const { exam } = await createIntactExamSetup(professorId);
+
+        const sensitiveDbError = 'Connection failed to mongodb://admin:p@ssw0rd123@cluster0.private.internal:27017';
+        const serviceSpy = vi.spyOn(integrityVerificationService, 'verifyExamIntegrity').mockRejectedValueOnce(
+            new Error(sensitiveDbError)
+        );
+
+        mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+        const res = await verifyIntegrityPOST(makeRequest(), makeContext(exam._id.toString()));
+        const body = await res.json();
+
+        expect(res.status).toBe(500);
+        expect(body.success).toBe(false);
+        expect(body.message).toBe('Verification failed');
+
+        const serialized = JSON.stringify(body);
+        expect(serialized).not.toContain('p@ssw0rd123');
+        expect(serialized).not.toContain('cluster0.private.internal');
+        expect(serialized).not.toContain('Connection failed');
+
+        serviceSpy.mockRestore();
+    });
+
+    it('17. scalability: API returns summary counts with problem-only items, bounded for large exams', async () => {
+        const { exam } = await createIntactExamSetup(professorId);
+
+        mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+        const res = await verifyIntegrityPOST(makeRequest(), makeContext(exam._id.toString()));
+        const body = await res.json();
+
+        expect(res.status).toBe(200);
+        // Summary counts are accurately returned
+        expect(body.data.originalFiles.total).toBe(1);
+        expect(body.data.originalFiles.intact).toBe(1);
+        expect(body.data.derivedPages.total).toBe(2);
+        expect(body.data.derivedPages.intact).toBe(2);
+
+        // Problem-only arrays: since all items are intact, items arrays are empty (not materializing full pages)
+        expect(body.data.originalFiles.items).toHaveLength(0);
+        expect(body.data.derivedPages.items).toHaveLength(0);
+        expect(body.data.problemRecords.files).toHaveLength(0);
+        expect(body.data.problemRecords.pages).toHaveLength(0);
+    });
+
+    it('18. unapproved exam returns NOT_APPLICABLE status and is not misleadingly reported as tampered (MISMATCH)', async () => {
+        // Create exam without calling approveIngestion
+        const { exam } = await createIntactExamSetup(professorId, false);
+
+        const summary = await integrityVerificationService.verifyExamIntegrity(exam._id.toString());
+
+        expect(summary.valid).toBe(true);
+        expect(summary.status).toBe('NOT_APPLICABLE');
+        expect(summary.assembly.status).toBe('NOT_APPLICABLE');
+        expect(summary.reason).toContain('not approved');
+        // Must NOT report as MISMATCH
+        expect(summary.status).not.toBe('MISMATCH');
+
+        // Verify API response for unapproved exam
+        mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+        const res = await verifyIntegrityPOST(makeRequest(), makeContext(exam._id.toString()));
+        const body = await res.json();
+
+        expect(res.status).toBe(200);
+        expect(body.data.status).toBe('NOT_APPLICABLE');
+        expect(body.message).toContain('not applicable - exam not approved');
+
+        // CLI exit code for unapproved but untampered exam must be 0
+        const cliExitCode = await runCli(['--exam', exam._id.toString()]);
+        expect(cliExitCode).toBe(0);
+    });
+
+    it('19. CLI outputs detailed records when --detailed is requested', async () => {
+        const { exam } = await createIntactExamSetup(professorId);
+
+        const logs: string[] = [];
+        const logSpy = vi.spyOn(console, 'log').mockImplementation((msg) => { logs.push(String(msg)); });
+
+        const exitCode = await runCli(['--exam', exam._id.toString(), '--detailed']);
+        expect(exitCode).toBe(0);
+
+        const fullOutput = logs.join('\n');
+        expect(fullOutput).toContain('--- Detailed Original Files ---');
+        expect(fullOutput).toContain('--- Detailed Derived Pages ---');
+        expect(fullOutput).toContain('PageNum: 1 -> Status: INTACT');
+        expect(fullOutput).toContain('PageNum: 2 -> Status: INTACT');
+
+        logSpy.mockRestore();
     });
 });

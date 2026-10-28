@@ -16,6 +16,11 @@ import { writeAuditLog } from '../../../../../lib/audit';
  * 2. Derived page storage keys (deterministic shape, expected namespace, object presence)
  * 3. Exam assembly seal (canonical ordering, page membership, cryptographic seal)
  *
+ * Scalability & Privacy:
+ * - Returns summary counts and problem items only; does not echo full lists of valid pages.
+ * - Error paths map to fixed safe reason codes without leaking infrastructure paths or keys.
+ * - 500 responses return a safe fixed message ("Verification failed").
+ *
  * Authorization: Requires APPROVE_INGESTION permission (same as verify-assembly).
  */
 export async function POST(
@@ -49,17 +54,23 @@ export async function POST(
             req.headers.get('x-real-ip') ||
             undefined;
 
-        const summary = await integrityVerificationService.verifyExamIntegrity(id, {
-            actingUserId: auth.user.id,
-            actingUserRole: auth.user.role,
-            ipAddress
-        });
+        // Execute verification with bounded memory (includeAllItems: false)
+        const summary = await integrityVerificationService.verifyExamIntegrity(
+            id,
+            {
+                actingUserId: auth.user.id,
+                actingUserRole: auth.user.role,
+                ipAddress
+            },
+            { includeAllItems: false }
+        );
 
-        // Audit the integrity check; fail outcome if required checks failed
+        // Audit the integrity check; fail outcome on mismatch or error
+        const isFailureOutcome = summary.status === 'MISMATCH' || summary.status === 'ERROR';
         await writeAuditLog({
             user: auth.user.id,
             action: 'INTEGRITY_VERIFIED',
-            outcome: summary.valid ? 'SUCCESS' : 'FAILURE',
+            outcome: isFailureOutcome ? 'FAILURE' : 'SUCCESS',
             entityId: new mongoose.Types.ObjectId(id),
             entityType: 'Exam',
             details: {
@@ -85,19 +96,25 @@ export async function POST(
             ipAddress
         });
 
+        let message = 'Exam integrity verification completed successfully';
+        if (summary.status === 'NOT_APPLICABLE') {
+            message = 'Exam integrity verification completed (assembly verification not applicable - exam not approved)';
+        } else if (!summary.valid) {
+            message = 'Exam integrity verification completed with issues detected';
+        }
+
         return NextResponse.json(
             {
                 success: true,
-                message: summary.valid
-                    ? 'Exam integrity verification completed successfully'
-                    : 'Exam integrity verification completed with issues detected',
+                message,
                 data: summary
             },
             { status: 200 }
         );
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'An unexpected error occurred';
-        const status = error instanceof HttpError ? error.statusCode : 500;
+        const isHttpError = error instanceof HttpError;
+        const status = isHttpError ? error.statusCode : 500;
+        const message = isHttpError ? error.message : 'Verification failed';
         return NextResponse.json(
             {
                 success: false,

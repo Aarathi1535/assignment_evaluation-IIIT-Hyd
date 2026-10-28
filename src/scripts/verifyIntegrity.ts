@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 export interface ParsedArguments {
     examId?: string;
     json?: boolean;
+    detailed?: boolean;
 }
 
 export function parseArguments(args: string[]): ParsedArguments {
@@ -12,6 +13,8 @@ export function parseArguments(args: string[]): ParsedArguments {
         const argument = args[index];
         if (argument === '--json') {
             parsed.json = true;
+        } else if (argument === '--detailed' || argument === '--all' || argument === '-d') {
+            parsed.detailed = true;
         } else if (argument === '--exam' || argument === '--examId' || argument === '--id') {
             const value = args[index + 1];
             if (!value || value.startsWith('--')) {
@@ -26,7 +29,7 @@ export function parseArguments(args: string[]): ParsedArguments {
         }
     }
     if (!parsed.examId) {
-        throw new Error('Usage: npm run verify:integrity -- --exam <EXAM_ID> [--json]');
+        throw new Error('Usage: npm run verify:integrity -- --exam <EXAM_ID> [--json] [--detailed]');
     }
     return parsed;
 }
@@ -45,7 +48,12 @@ export async function runCli(argsArray: string[]): Promise<number> {
 
     try {
         const { default: integrityService } = await import('../services/IntegrityVerificationService');
-        const summary = await integrityService.verifyExamIntegrity(args.examId!);
+        // By default, bounded memory iteration is used. --detailed requests per-item records.
+        const summary = await integrityService.verifyExamIntegrity(
+            args.examId!,
+            undefined,
+            { includeAllItems: args.detailed || args.json }
+        );
 
         if (args.json) {
             console.log(JSON.stringify(summary, null, 2));
@@ -76,6 +84,20 @@ export async function runCli(argsArray: string[]): Promise<number> {
                 console.log(`Reason:   ${summary.assembly.reason}`);
             }
 
+            if (args.detailed && summary.originalFiles.items.length > 0) {
+                console.log('\n--- Detailed Original Files ---');
+                for (const file of summary.originalFiles.items) {
+                    console.log(`[FILE] Batch: ${file.batchId}, File: ${file.fileId} -> Status: ${file.status}${file.reason ? ` (${file.reason})` : ''}`);
+                }
+            }
+
+            if (args.detailed && summary.derivedPages.items.length > 0) {
+                console.log('\n--- Detailed Derived Pages ---');
+                for (const page of summary.derivedPages.items) {
+                    console.log(`[PAGE] Page: ${page.pageId}, Batch: ${page.batchId}, File: ${page.fileId}, PageNum: ${page.pageNumber} -> Status: ${page.status}${page.reason ? ` (${page.reason})` : ''}`);
+                }
+            }
+
             if (summary.problemRecords.files.length > 0 || summary.problemRecords.pages.length > 0) {
                 console.log('\n--- Problem Records ---');
                 for (const file of summary.problemRecords.files) {
@@ -87,7 +109,7 @@ export async function runCli(argsArray: string[]): Promise<number> {
             }
         }
 
-        const exitCode = summary.valid ? 0 : 1;
+        const exitCode = (summary.status === 'MISMATCH' || summary.status === 'ERROR') ? 1 : 0;
         process.exitCode = exitCode;
         return exitCode;
     } finally {

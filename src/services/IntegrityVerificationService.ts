@@ -12,7 +12,8 @@ import { HttpError } from '../lib/errors';
 import { SYSTEM_PRINCIPAL_ID, SYSTEM_ROLE } from '../constants/permissions';
 
 export type IntegrityStatus = 'INTACT' | 'MISMATCH' | 'UNSEALED' | 'ERROR';
-export type AssemblyStatus = 'INTACT' | 'MISMATCH' | 'UNAPPROVED' | 'UNSEALED' | 'ERROR';
+export type AssemblyStatus = 'INTACT' | 'MISMATCH' | 'UNAPPROVED' | 'UNSEALED' | 'ERROR' | 'NOT_APPLICABLE';
+export type OverallIntegrityStatus = 'INTACT' | 'MISMATCH' | 'ERROR' | 'NOT_APPLICABLE';
 
 export interface OriginalFileVerificationItem {
     batchId: string;
@@ -41,8 +42,8 @@ export interface AssemblyVerificationResult {
 
 export interface IntegrityVerificationSummary {
     valid: boolean;
-    status: 'INTACT' | 'MISMATCH' | 'ERROR';
-    outcome: 'INTACT' | 'MISMATCH' | 'ERROR';
+    status: OverallIntegrityStatus;
+    outcome: OverallIntegrityStatus;
     reason?: string;
     examId: string;
     timestamp: string;
@@ -66,6 +67,14 @@ export interface IntegrityVerificationSummary {
         files: Array<{ batchId: string; fileId: string; status: string; reason?: string }>;
         pages: Array<{ pageId: string; batchId: string; fileId: string; pageNumber: number; status: string; reason?: string }>;
     };
+}
+
+export interface VerifyExamIntegrityOptions {
+    /**
+     * If true, populates all per-item verification results (including INTACT items).
+     * If false (default), keeps memory use bounded and returns only problem items in `items` arrays.
+     */
+    includeAllItems?: boolean;
 }
 
 export class IntegrityVerificationService {
@@ -133,11 +142,23 @@ export class IntegrityVerificationService {
     /**
      * Performs a read-only integrity verification across an exam's originals, derived pages, and assembly.
      * Never mutates, repairs, or reseals objects or records.
+     *
+     * Scalability:
+     * - IngestionPage records are fetched via streaming cursor with projection avoiding heavy fields (e.g. metadata.annotations).
+     * - Memory usage is bounded: by default, only problem items are retained in memory.
+     * - Sequential storage existence checks prevent unbounded concurrency against storage backends.
+     *
+     * Security:
+     * - No raw infrastructure error messages, absolute filesystem paths, bucket names, secrets, or storage keys
+     *   are exposed in public failure reasons. Failures map to safe fixed reason codes.
      */
     async verifyExamIntegrity(
         examId: string,
-        context?: IngestionApprovalAuditContext
+        context?: IngestionApprovalAuditContext,
+        options?: VerifyExamIntegrityOptions
     ): Promise<IntegrityVerificationSummary> {
+        const includeAllItems = options?.includeAllItems ?? false;
+
         if (!mongoose.Types.ObjectId.isValid(examId)) {
             throw new HttpError('Invalid Exam ID format', 400);
         }
@@ -172,36 +193,68 @@ export class IntegrityVerificationService {
         const batches = await Batch.find({ batchId: { $in: allBatchIds }, isActive: true }).lean();
 
         // 2. Verify Original Uploaded Files
-        const originalFileItems: OriginalFileVerificationItem[] = [];
+        const allOriginalItems: OriginalFileVerificationItem[] = [];
+        const problemOriginalItems: OriginalFileVerificationItem[] = [];
+        const problemFiles: Array<{ batchId: string; fileId: string; status: string; reason?: string }> = [];
+
+        let totalOriginal = 0;
+        let intactOriginal = 0;
+        let mismatchOriginal = 0;
+        let unsealedOriginal = 0;
+        let errorOriginal = 0;
 
         for (const batch of batches) {
             const files = batch.files || [];
             for (const file of files) {
+                totalOriginal += 1;
+
                 // Check if file lacks seal metadata
                 if (!file.hmac || !file.integrityMetadata) {
-                    originalFileItems.push({
+                    unsealedOriginal += 1;
+                    const item: OriginalFileVerificationItem = {
                         batchId: batch.batchId,
                         fileId: file.fileId,
                         fileIndex: file.fileIndex,
                         originalFilename: file.originalFilename,
                         status: 'UNSEALED',
                         reason: 'Original file lacks required HMAC seal or binding metadata'
+                    };
+                    problemOriginalItems.push(item);
+                    problemFiles.push({
+                        batchId: batch.batchId,
+                        fileId: file.fileId,
+                        status: 'UNSEALED',
+                        reason: item.reason
                     });
+                    if (includeAllItems) {
+                        allOriginalItems.push(item);
+                    }
                     continue;
                 }
 
                 // Verify historical key configuration is available without falling back
                 try {
                     getHmacSecret(file.keyId);
-                } catch (keyErr) {
-                    originalFileItems.push({
+                } catch {
+                    errorOriginal += 1;
+                    const item: OriginalFileVerificationItem = {
                         batchId: batch.batchId,
                         fileId: file.fileId,
                         fileIndex: file.fileIndex,
                         originalFilename: file.originalFilename,
                         status: 'ERROR',
-                        reason: keyErr instanceof Error ? keyErr.message : 'HMAC key configuration unavailable'
+                        reason: 'HMAC key configuration unavailable or not configured'
+                    };
+                    problemOriginalItems.push(item);
+                    problemFiles.push({
+                        batchId: batch.batchId,
+                        fileId: file.fileId,
+                        status: 'ERROR',
+                        reason: item.reason
                     });
+                    if (includeAllItems) {
+                        allOriginalItems.push(item);
+                    }
                     continue;
                 }
 
@@ -209,44 +262,77 @@ export class IntegrityVerificationService {
                 let contentBuffer: Buffer;
                 try {
                     contentBuffer = await immutableStorageService.readOriginalContent(file.storageKey);
-                } catch (readErr) {
-                    originalFileItems.push({
+                } catch (readErr: unknown) {
+                    errorOriginal += 1;
+                    const isNotFound = readErr && typeof readErr === 'object' && ('code' in readErr) && (readErr as { code?: string | number }).code === 'ENOENT';
+                    const safeReason = isNotFound ? 'OBJECT_NOT_FOUND' : 'STORAGE_READ_FAILED';
+                    const item: OriginalFileVerificationItem = {
                         batchId: batch.batchId,
                         fileId: file.fileId,
                         fileIndex: file.fileIndex,
                         originalFilename: file.originalFilename,
                         status: 'ERROR',
-                        reason: readErr instanceof Error ? readErr.message : 'Failed to read original content from storage'
+                        reason: safeReason
+                    };
+                    problemOriginalItems.push(item);
+                    problemFiles.push({
+                        batchId: batch.batchId,
+                        fileId: file.fileId,
+                        status: 'ERROR',
+                        reason: safeReason
                     });
+                    if (includeAllItems) {
+                        allOriginalItems.push(item);
+                    }
                     continue;
                 }
 
                 // Verify HMAC seal against content and recorded metadata
                 const verification = immutableStorageService.verifyOriginalIntegrity(contentBuffer, file);
                 if (verification.valid) {
-                    originalFileItems.push({
-                        batchId: batch.batchId,
-                        fileId: file.fileId,
-                        fileIndex: file.fileIndex,
-                        originalFilename: file.originalFilename,
-                        status: 'INTACT'
-                    });
+                    intactOriginal += 1;
+                    if (includeAllItems) {
+                        allOriginalItems.push({
+                            batchId: batch.batchId,
+                            fileId: file.fileId,
+                            fileIndex: file.fileIndex,
+                            originalFilename: file.originalFilename,
+                            status: 'INTACT'
+                        });
+                    }
                 } else {
-                    const reason = verification.reason || 'Content or binding metadata failed integrity verification';
+                    const reason = verification.reason || 'VERIFICATION_FAILED';
                     const isKeyError = reason.includes('unavailable') || reason.includes('not configured');
-                    originalFileItems.push({
+                    const status: IntegrityStatus = isKeyError ? 'ERROR' : 'MISMATCH';
+                    if (status === 'ERROR') {
+                        errorOriginal += 1;
+                    } else {
+                        mismatchOriginal += 1;
+                    }
+                    const item: OriginalFileVerificationItem = {
                         batchId: batch.batchId,
                         fileId: file.fileId,
                         fileIndex: file.fileIndex,
                         originalFilename: file.originalFilename,
-                        status: isKeyError ? 'ERROR' : 'MISMATCH',
+                        status,
+                        reason
+                    };
+                    problemOriginalItems.push(item);
+                    problemFiles.push({
+                        batchId: batch.batchId,
+                        fileId: file.fileId,
+                        status,
                         reason
                     });
+                    if (includeAllItems) {
+                        allOriginalItems.push(item);
+                    }
                 }
             }
         }
 
         // 3. Verify Derived Pages
+        // Bounded cursor streaming with projection: avoid loading annotations or heavy metadata
         const pageQuery = allBatchIds.length > 0 || scriptIds.length > 0
             ? {
                 $or: [
@@ -256,16 +342,37 @@ export class IntegrityVerificationService {
             }
             : { batchId: '__NO_MATCH__' };
 
-        const pages = await IngestionPage.find(pageQuery).lean();
-        const derivedPageItems: DerivedPageVerificationItem[] = [];
+        const pageCursor = IngestionPage.find(pageQuery)
+            .select('_id batchId fileId pageNumber storageKey')
+            .cursor();
 
-        for (const page of pages) {
+        let totalPages = 0;
+        let intactPages = 0;
+        let mismatchPages = 0;
+        let errorPages = 0;
+
+        const allDerivedItems: DerivedPageVerificationItem[] = [];
+        const problemDerivedItems: DerivedPageVerificationItem[] = [];
+        const problemPages: Array<{ pageId: string; batchId: string; fileId: string; pageNumber: number; status: string; reason?: string }> = [];
+
+        for await (const page of pageCursor) {
+            totalPages += 1;
             const pageIdStr = page._id.toString();
 
             // Validate key structure, namespace, and deterministic format before storage access
             const keyValidation = this.validateDerivedKeyShape(page);
             if (!keyValidation.valid) {
-                derivedPageItems.push({
+                mismatchPages += 1;
+                const item: DerivedPageVerificationItem = {
+                    pageId: pageIdStr,
+                    batchId: page.batchId,
+                    fileId: page.fileId,
+                    pageNumber: page.pageNumber,
+                    status: 'MISMATCH',
+                    reason: keyValidation.reason
+                };
+                problemDerivedItems.push(item);
+                problemPages.push({
                     pageId: pageIdStr,
                     batchId: page.batchId,
                     fileId: page.fileId,
@@ -273,39 +380,71 @@ export class IntegrityVerificationService {
                     status: 'MISMATCH',
                     reason: keyValidation.reason
                 });
+                if (includeAllItems) {
+                    allDerivedItems.push(item);
+                }
                 continue;
             }
 
-            // Key is validated: verify existence in derived storage backend
+            // Key is validated: verify existence in derived storage backend (sequential, bounded)
             try {
                 const exists = await derivedStorageService.derivedPageExists(page.storageKey);
                 if (!exists) {
-                    derivedPageItems.push({
+                    errorPages += 1;
+                    const item: DerivedPageVerificationItem = {
                         pageId: pageIdStr,
                         batchId: page.batchId,
                         fileId: page.fileId,
                         pageNumber: page.pageNumber,
                         status: 'ERROR',
-                        reason: 'Derived page image not found on storage backend'
-                    });
-                } else {
-                    derivedPageItems.push({
+                        reason: 'OBJECT_NOT_FOUND'
+                    };
+                    problemDerivedItems.push(item);
+                    problemPages.push({
                         pageId: pageIdStr,
                         batchId: page.batchId,
                         fileId: page.fileId,
                         pageNumber: page.pageNumber,
-                        status: 'INTACT'
+                        status: 'ERROR',
+                        reason: 'OBJECT_NOT_FOUND'
                     });
+                    if (includeAllItems) {
+                        allDerivedItems.push(item);
+                    }
+                } else {
+                    intactPages += 1;
+                    if (includeAllItems) {
+                        allDerivedItems.push({
+                            pageId: pageIdStr,
+                            batchId: page.batchId,
+                            fileId: page.fileId,
+                            pageNumber: page.pageNumber,
+                            status: 'INTACT'
+                        });
+                    }
                 }
-            } catch (storageErr) {
-                derivedPageItems.push({
+            } catch {
+                errorPages += 1;
+                const item: DerivedPageVerificationItem = {
                     pageId: pageIdStr,
                     batchId: page.batchId,
                     fileId: page.fileId,
                     pageNumber: page.pageNumber,
                     status: 'ERROR',
-                    reason: storageErr instanceof Error ? storageErr.message : 'Storage access error'
+                    reason: 'STORAGE_READ_FAILED'
+                };
+                problemDerivedItems.push(item);
+                problemPages.push({
+                    pageId: pageIdStr,
+                    batchId: page.batchId,
+                    fileId: page.fileId,
+                    pageNumber: page.pageNumber,
+                    status: 'ERROR',
+                    reason: 'STORAGE_READ_FAILED'
                 });
+                if (includeAllItems) {
+                    allDerivedItems.push(item);
+                }
             }
         }
 
@@ -318,50 +457,40 @@ export class IntegrityVerificationService {
 
         const assemblyResult = await IngestionApprovalService.verifyAssembly(examId, auditContext);
 
+        const isAssemblyUnapproved = assemblyResult.status === 'UNAPPROVED';
+        const effectiveAssemblyStatus: AssemblyStatus = isAssemblyUnapproved ? 'NOT_APPLICABLE' : assemblyResult.status;
+        const effectiveAssemblyReason = isAssemblyUnapproved
+            ? 'Ingestion has not been approved for this exam (assembly seal not applicable)'
+            : assemblyResult.reason;
+
         // 5. Aggregate Counts
         const originalCounts = {
-            total: originalFileItems.length,
-            intact: originalFileItems.filter((f) => f.status === 'INTACT').length,
-            mismatch: originalFileItems.filter((f) => f.status === 'MISMATCH').length,
-            unsealed: originalFileItems.filter((f) => f.status === 'UNSEALED').length,
-            error: originalFileItems.filter((f) => f.status === 'ERROR').length,
-            items: originalFileItems
+            total: totalOriginal,
+            intact: intactOriginal,
+            mismatch: mismatchOriginal,
+            unsealed: unsealedOriginal,
+            error: errorOriginal,
+            items: includeAllItems ? allOriginalItems : problemOriginalItems
         };
 
         const derivedCounts = {
-            total: derivedPageItems.length,
-            intact: derivedPageItems.filter((p) => p.status === 'INTACT').length,
-            mismatch: derivedPageItems.filter((p) => p.status === 'MISMATCH').length,
-            error: derivedPageItems.filter((p) => p.status === 'ERROR').length,
-            items: derivedPageItems
+            total: totalPages,
+            intact: intactPages,
+            mismatch: mismatchPages,
+            error: errorPages,
+            items: includeAllItems ? allDerivedItems : problemDerivedItems
         };
 
-        // 6. Determine Problem Records (safe identifiers only)
-        const problemFiles = originalFileItems
-            .filter((f) => f.status !== 'INTACT')
-            .map((f) => ({ batchId: f.batchId, fileId: f.fileId, status: f.status, reason: f.reason }));
-
-        const problemPages = derivedPageItems
-            .filter((p) => p.status !== 'INTACT')
-            .map((p) => ({
-                pageId: p.pageId,
-                batchId: p.batchId,
-                fileId: p.fileId,
-                pageNumber: p.pageNumber,
-                status: p.status,
-                reason: p.reason
-            }));
-
-        // 7. Determine Overall Outcome
+        // 6. Determine Overall Outcome
         const hasFileMismatch = originalCounts.mismatch > 0 || originalCounts.unsealed > 0;
         const hasPageMismatch = derivedCounts.mismatch > 0;
-        const hasAssemblyMismatch = assemblyResult.status === 'MISMATCH' || assemblyResult.status === 'UNSEALED' || assemblyResult.status === 'UNAPPROVED';
+        const hasAssemblyMismatch = effectiveAssemblyStatus === 'MISMATCH' || effectiveAssemblyStatus === 'UNSEALED';
 
         const hasFileError = originalCounts.error > 0;
         const hasPageError = derivedCounts.error > 0;
-        const hasAssemblyError = assemblyResult.status === 'ERROR';
+        const hasAssemblyError = effectiveAssemblyStatus === 'ERROR';
 
-        let overallStatus: 'INTACT' | 'MISMATCH' | 'ERROR' = 'INTACT';
+        let overallStatus: OverallIntegrityStatus = 'INTACT';
         let overallValid = true;
         let overallReason: string | undefined;
 
@@ -373,6 +502,10 @@ export class IntegrityVerificationService {
             overallStatus = 'ERROR';
             overallValid = false;
             overallReason = 'Integrity verification encountered errors preventing complete verification';
+        } else if (isAssemblyUnapproved) {
+            overallStatus = 'NOT_APPLICABLE';
+            overallValid = true;
+            overallReason = 'Exam ingestion is not approved; assembly verification is not applicable. Original files and derived pages are intact.';
         } else if (!assemblyResult.valid) {
             overallStatus = 'MISMATCH';
             overallValid = false;
@@ -390,8 +523,8 @@ export class IntegrityVerificationService {
             derivedPages: derivedCounts,
             assembly: {
                 valid: assemblyResult.valid,
-                status: assemblyResult.status,
-                reason: assemblyResult.reason,
+                status: effectiveAssemblyStatus,
+                reason: effectiveAssemblyReason,
                 timestamp: assemblyResult.timestamp
             },
             problemRecords: {
