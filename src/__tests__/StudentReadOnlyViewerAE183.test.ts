@@ -1098,7 +1098,7 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
     });
 
     // 17. (AE-189 B) Role matrix on student routes
-    it('17. (AE-189 B) enforces 403 role matrix across student route families (ADMIN, PROFESSOR, deactivated STUDENT, role mismatch) and 401 for unauthenticated', async () => {
+    it('17. (AE-189 B) enforces 403 role matrix across student route families (ADMIN, PROFESSOR, TA, deactivated STUDENT, role mismatch) and 401 for unauthenticated', async () => {
         const admin = await User.create({
             name: 'Admin Dumbledore',
             email: 'admin.189@iiit.ac.in',
@@ -1169,7 +1169,16 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         };
         await testAllFourRoutes(403);
 
-        // 4. Deactivated STUDENT (403)
+        // 4. TA role (403)
+        mockSessionUser = {
+            id: ta._id.toString(),
+            email: ta.email,
+            name: ta.name,
+            role: UserRole.TA,
+        };
+        await testAllFourRoutes(403);
+
+        // 5. Deactivated STUDENT (403)
         await User.findByIdAndUpdate(studentA._id, { isActive: false });
         mockSessionUser = {
             id: studentA._id.toString(),
@@ -1180,7 +1189,7 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         await testAllFourRoutes(403);
         await User.findByIdAndUpdate(studentA._id, { isActive: true });
 
-        // 5. Session claiming STUDENT when the database role has changed (403)
+        // 6. Session claiming STUDENT when the database role has changed (403)
         await User.findByIdAndUpdate(studentA._id, { role: UserRole.TA });
         mockSessionUser = {
             id: studentA._id.toString(),
