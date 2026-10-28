@@ -16,19 +16,16 @@ import {
     buildWatermarkText,
     formatISTDateTime,
     generateTraceCode,
+    WatermarkCapacityError,
 } from '../../../../../../lib/watermark';
 import {
     compositePageAnnotations,
 } from '../../../../../../services/AnnotationCompositor';
-import {
-    cloneMarkAnnotation,
-    cloneFreehandStroke,
-    type SerializedPageAnnotations,
-} from '../../../../../../lib/annotationSerialization';
-import type { MarkAnnotation } from '../../../../../../lib/stampTool';
-import type { FreehandStroke } from '../../../../../../lib/penTool';
+import { getStudentPageAnnotations } from '../../../../../../lib/studentAnnotations';
 import {
     checkStudentExportRateLimit,
+    ExportTimeoutError,
+    getExportDeadlineMs,
     PdfExportCapacityError,
     recordStudentExport,
     tryAcquirePdfExportSlot,
@@ -83,6 +80,8 @@ export async function GET(
 
         // 2. Exam download policy evaluation
         // Missing, null, unknown, or DISABLED policies must fail closed with generic 403
+        // DISABLED means no official PDF download is available. It cannot prevent viewing, screenshots,
+        // screen capture, or saving visible images; that is why viewer images remain watermarked.
         const effectivePolicy =
             exam.studentDownloadPolicy === StudentDownloadPolicy.WATERMARKED
                 ? StudentDownloadPolicy.WATERMARKED
@@ -110,11 +109,14 @@ export async function GET(
             );
         }
 
-        // 4. Instance-wide concurrency capacity (max 1 PDF export at a time)
+        // 4. Instance-wide concurrency capacity (1 export slot + 1 shared watermark render slot)
         try {
             releaseSlot = tryAcquirePdfExportSlot();
         } catch (slotErr) {
-            if (slotErr instanceof PdfExportCapacityError) {
+            if (
+                slotErr instanceof PdfExportCapacityError ||
+                slotErr instanceof WatermarkCapacityError
+            ) {
                 return NextResponse.json(
                     { success: false, message: slotErr.message },
                     {
@@ -129,7 +131,10 @@ export async function GET(
             throw slotErr;
         }
 
-        // 5. Fetch script pages in expected page order (skipping duplicate ingestion pages)
+        // 5. Total export deadline setup (~60 seconds budget)
+        const deadline = Date.now() + getExportDeadlineMs();
+
+        // 6. Fetch script pages in expected page order (skipping duplicate ingestion pages)
         const ingestionPages = await IngestionPage.find({
             answerScript: script._id,
             isDuplicate: { $ne: true },
@@ -172,7 +177,7 @@ export async function GET(
             );
         }
 
-        // 6. Enforce maximum 40 pages per export
+        // 7. Enforce maximum 40 pages per export
         if (scriptPages.length > MAX_EXPORT_PAGES) {
             return NextResponse.json(
                 {
@@ -183,7 +188,7 @@ export async function GET(
             );
         }
 
-        // 7. Resolve student roll number if available
+        // 8. Resolve student roll number if available
         let rollNumber: string | null = null;
         if (script.student && script.exam) {
             const mapping = await StudentMapping.findOne({
@@ -195,14 +200,25 @@ export async function GET(
             }
         }
 
+        // Consistent issuance timestamp across all exported pages for exact audit traceability
         const now = new Date();
         const istTimestamp = formatISTDateTime(now);
         const issuedAt = now.toISOString();
+        const traceCodes: Array<{ pageId: string; traceCode: string }> = [];
 
-        // 8. Build PDF document using pdf-lib
+        // 9. Build PDF document using pdf-lib
+        // NOTE: The complete PDF is held in memory in Node.js before delivery (`pdfDoc.save()`)
+        // rather than streamed over HTTP chunk-by-chunk. Memory consumption is strictly bounded by
+        // MAX_EXPORT_PAGES (40), per-page dimension limits, lossless PNG compositing, 60s deadline,
+        // and shared render concurrency slots.
         const pdfDoc = await PDFDocument.create();
 
         for (const page of scriptPages) {
+            // Check overall export deadline boundary before processing page
+            if (Date.now() >= deadline) {
+                throw new ExportTimeoutError('PDF export timed out. Please retry shortly.', 5);
+            }
+
             const storageKey = page.storageKey;
 
             // Strict storage-key validation
@@ -268,82 +284,41 @@ export async function GET(
                 );
             }
 
+            // Check deadline before storage read & compositing
+            if (Date.now() >= deadline) {
+                throw new ExportTimeoutError('PDF export timed out. Please retry shortly.', 5);
+            }
+
             // Read original derived page safely
             const rawBuffer = await DerivedStorageService.readDerivedPage(storageKey);
 
-            // Fetch annotations for this page
-            let rawAnnotations = (page.metadata?.annotations as SerializedPageAnnotations) || null;
-            if (!rawAnnotations) {
-                const stdPage = await Page.findOne({
-                    answerScript: script._id,
-                    pageNumber: page.pageNumber,
-                    isActive: true,
-                }).select('annotations');
-                if (stdPage?.annotations) {
-                    rawAnnotations = stdPage.annotations as SerializedPageAnnotations;
-                }
-            }
-
-            // Sanitize annotations with strict allowlist projection
-            const rawAnnotationList = Array.isArray(rawAnnotations?.annotations)
-                ? rawAnnotations.annotations
-                : [];
-            const sanitizedAnnotations = rawAnnotationList
-                .map((a: unknown) => {
-                    const raw =
-                        a && typeof (a as { toObject?: () => Record<string, unknown> }).toObject === 'function'
-                            ? (a as { toObject: () => Record<string, unknown> }).toObject()
-                            : ((a as Record<string, unknown>) || {});
-                    const type = (raw.type as string) || (raw.tool as string);
-                    const normalized = {
-                        ...raw,
-                        type,
-                        pageKey: raw.pageKey ?? page._id.toString(),
-                    };
-                    return cloneMarkAnnotation(normalized as MarkAnnotation);
-                })
-                .filter((a) => a && ['check', 'cross', 'highlight', 'text'].includes(a.type));
-
-            const rawStrokeList = Array.isArray(rawAnnotations?.strokes) ? rawAnnotations.strokes : [];
-            const sanitizedStrokes = rawStrokeList
-                .map((s: unknown) => {
-                    const raw =
-                        s && typeof (s as { toObject?: () => Record<string, unknown> }).toObject === 'function'
-                            ? (s as { toObject: () => Record<string, unknown> }).toObject()
-                            : ((s as Record<string, unknown>) || {});
-                    const normalized = {
-                        ...raw,
-                        pageKey: raw.pageKey ?? page._id.toString(),
-                    };
-                    return cloneFreehandStroke(normalized as FreehandStroke);
-                })
-                .filter(
-                    (s): s is FreehandStroke =>
-                        Boolean(s) &&
-                        Array.isArray(s?.points) &&
-                        s.points.length >= 2 &&
-                        s.points.every((pt) => typeof pt === 'number' && !Number.isNaN(pt))
-                );
-
-            const pageAnnotationsToComposite: SerializedPageAnnotations = {
-                annotations: sanitizedAnnotations,
-                strokes: sanitizedStrokes,
-            };
+            // Fetch annotations for this exact physical page using shared viewer helper
+            // Guarantees 100% parity with what the student sees in the viewer and prevents
+            // cross-file mark collisions from repeating pageNumber across files
+            const pageAnnotationsToComposite =
+                (await getStudentPageAnnotations(script._id, page._id)) || {
+                    annotations: [],
+                    strokes: [],
+                };
 
             // Composite vector annotations onto source image
+            // Uses format: 'png' to avoid unnecessary double JPEG compression artifacts,
+            // producing a clean lossless intermediate before final JPEG watermarking
             const annotatedBuffer = await compositePageAnnotations(
                 rawBuffer,
                 pageAnnotationsToComposite,
-                { format: 'jpeg', quality: 90 }
+                { format: 'png' }
             );
 
             // Generate watermark trace code and text
+            const pageIdStr = page._id.toString();
             const traceCode = generateTraceCode({
                 userId: auth.user.id,
                 scriptId,
-                pageId: page._id.toString(),
+                pageId: pageIdStr,
                 issuedAt,
             });
+            traceCodes.push({ pageId: pageIdStr, traceCode });
 
             const watermarkText = buildWatermarkText({
                 rollNumber,
@@ -351,7 +326,7 @@ export async function GET(
                 traceCode,
             });
 
-            // Burn watermark into annotated image
+            // Burn watermark into annotated image (single JPEG encoding at quality 80)
             const watermarkedJpg = await applyWatermark(annotatedBuffer, watermarkText);
 
             // Embed into PDF page maintaining natural dimensions
@@ -368,7 +343,8 @@ export async function GET(
 
         const pdfBytes = await pdfDoc.save();
 
-        // 9. Write audit log entry (must succeed before returning PDF bytes)
+        // 10. Write audit log entry (must succeed before returning PDF bytes)
+        // Records exact issuedAt timestamp and per-page traceCodes for complete traceability
         const clientIp =
             req.headers.get('x-forwarded-for') ||
             req.headers.get('x-real-ip') ||
@@ -386,6 +362,8 @@ export async function GET(
                 examId: exam._id.toString(),
                 pageCount: scriptPages.length,
                 hasRollNumber: Boolean(rollNumber),
+                issuedAt,
+                traceCodes,
             },
         });
 
@@ -409,7 +387,11 @@ export async function GET(
             },
         });
     } catch (error: unknown) {
-        if (error instanceof PdfExportCapacityError) {
+        if (
+            error instanceof PdfExportCapacityError ||
+            error instanceof WatermarkCapacityError ||
+            error instanceof ExportTimeoutError
+        ) {
             return NextResponse.json(
                 { success: false, message: error.message },
                 {

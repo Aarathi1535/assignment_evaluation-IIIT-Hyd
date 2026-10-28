@@ -20,6 +20,10 @@ export enum IngestionApprovalStatus {
     APPROVED = 'APPROVED'
 }
 
+/**
+ * Student PDF download policy for an exam.
+ * DISABLED means no official PDF download is available. It cannot prevent viewing, screenshots, screen capture, or saving visible images; that is why viewer images remain watermarked.
+ */
 export enum StudentDownloadPolicy {
     DISABLED = 'DISABLED',
     WATERMARKED = 'WATERMARKED'
@@ -67,6 +71,10 @@ export interface IExam extends Document {
     assemblySealBy?: mongoose.Types.ObjectId | null;
     blindGrading?: boolean;
     gradingDeadline?: Date | null;
+    /**
+     * Policy controlling student PDF downloads.
+     * DISABLED means no official PDF download is available. It cannot prevent viewing, screenshots, screen capture, or saving visible images; that is why viewer images remain watermarked.
+     */
     studentDownloadPolicy?: StudentDownloadPolicy;
     createdAt: Date;
     updatedAt: Date;
@@ -201,6 +209,10 @@ const ExamSchema = new Schema<IExam>(
             type: Date,
             default: null
         },
+        /**
+         * Policy controlling student PDF downloads.
+         * DISABLED means no official PDF download is available. It cannot prevent viewing, screenshots, screen capture, or saving visible images; that is why viewer images remain watermarked.
+         */
         studentDownloadPolicy: {
             type: String,
             enum: Object.values(StudentDownloadPolicy),

@@ -20,7 +20,15 @@ import * as watermarkModule from '../lib/watermark';
 import {
     resetPdfExportGuards,
     tryAcquirePdfExportSlot,
+    getActivePdfExportCount,
+    setExportDeadlineMsForTest,
+    resetExportDeadlineMs,
 } from '../lib/pdfExportGuards';
+import {
+    tryAcquireWatermarkSlot,
+    getActiveWatermarkRenderCount,
+} from '../lib/watermark';
+import { getStudentPageAnnotations } from '../lib/studentAnnotations';
 import { shapeExamForStudent } from '../repositories/ExamRepository';
 
 let mockSessionUser: any = null;
@@ -600,6 +608,198 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
             const afterBuf = await DerivedStorageService.readDerivedPage(page1Key);
             expect(Buffer.compare(beforeBuf, afterBuf)).toBe(0);
         });
+
+        it('uses single JPEG encode via lossless intermediate PNG and avoids double JPEG artifacts', async () => {
+            const compositorSpy = vi.spyOn(compositorModule, 'compositePageAnnotations');
+
+            const req = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const res = await exportGET(req, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+
+            expect(res.status).toBe(200);
+            expect(compositorSpy).toHaveBeenCalledTimes(2);
+            // Confirms lossless PNG format is used for intermediate composition, NOT lossy JPEG
+            for (const call of compositorSpy.mock.calls) {
+                expect(call[2]).toEqual({ format: 'png' });
+            }
+
+            compositorSpy.mockRestore();
+        });
+
+        it('multi-file regression: correctly maps annotations to physical pages when page numbers repeat across files', async () => {
+            const examMulti = await Exam.create({
+                title: 'Multi-file Exam',
+                course: course._id,
+                examDate: new Date('2026-10-15'),
+                totalMarks: 50,
+                status: ExamStatus.PUBLISHED,
+                numberOfQuestions: 1,
+                createdBy: prof._id,
+                studentDownloadPolicy: StudentDownloadPolicy.WATERMARKED,
+                isActive: true,
+            });
+
+            const rubricMulti = await Rubric.create({
+                exam: examMulti._id,
+                createdBy: prof._id,
+                scoreStep: 0.5,
+                questions: [
+                    {
+                        questionNumber: 1,
+                        maxMarks: 50,
+                        criteria: [{ criterionName: 'Logic', points: 50 }],
+                    },
+                ],
+                isActive: true,
+            });
+            await Exam.findByIdAndUpdate(examMulti._id, { rubric: rubricMulti._id });
+
+            await StudentMapping.create({
+                exam: examMulti._id,
+                student: studentA._id,
+                anonymousId: 'ANON-ALICE-MULTI',
+                rollNumber: '2023101001',
+                isVerified: true,
+            });
+
+            // Create a multi-file script where file 1 and file 2 both have pageNumber: 1
+            const multiFileScript = await AnswerScript.create({
+                exam: examMulti._id,
+                student: studentA._id,
+                identificationStatus: IdentificationStatus.IDENTIFIED,
+                hasIdentificationConflict: false,
+                needsManualId: false,
+                isActive: true,
+            });
+
+            await Grade.create({
+                answerScript: multiFileScript._id,
+                rubric: rubricMulti._id,
+                gradedBy: ta._id,
+                question: 1,
+                marksAwarded: [{ criterionName: 'Logic', score: 45 }],
+                totalScore: 45,
+                isFinal: true,
+            });
+
+            await Allocation.create({
+                exam: examMulti._id,
+                answerScript: multiFileScript._id,
+                ta: ta._id,
+                question: 1,
+                allocatedBy: prof._id,
+                status: AllocationStatus.COMPLETED,
+            });
+
+            const batchId = 'batch-multi-001';
+            const file1Id = 'file-part-1';
+            const file2Id = 'file-part-2';
+
+            const stored1 = await DerivedStorageService.storeDerivedPage({
+                batchId,
+                fileId: file1Id,
+                pageNumber: 1,
+                buffer: sampleSourceBuffer,
+                format: 'png',
+            });
+            const stored2 = await DerivedStorageService.storeDerivedPage({
+                batchId,
+                fileId: file2Id,
+                pageNumber: 1,
+                buffer: sampleSourceBuffer,
+                format: 'png',
+            });
+
+            const dummyJobId = new mongoose.Types.ObjectId();
+            const pageFile1 = await IngestionPage.create({
+                batchId,
+                job: dummyJobId,
+                fileId: file1Id,
+                fileIndex: 0,
+                storageKey: stored1.storageKey,
+                width: 1200,
+                height: 1600,
+                pageNumber: 1,
+                status: PageProcessingStatus.PROCESSED,
+                answerScript: multiFileScript._id,
+                metadata: {
+                    annotations: {
+                        pageNumber: 1,
+                        annotations: [
+                            {
+                                id: 'ann-file1-p1',
+                                type: 'check',
+                                x: 100,
+                                y: 200,
+                                size: 24,
+                            },
+                        ],
+                        strokes: [],
+                    },
+                },
+            });
+
+            const pageFile2 = await IngestionPage.create({
+                batchId,
+                job: dummyJobId,
+                fileId: file2Id,
+                fileIndex: 1,
+                storageKey: stored2.storageKey,
+                width: 1200,
+                height: 1600,
+                pageNumber: 1,
+                status: PageProcessingStatus.PROCESSED,
+                answerScript: multiFileScript._id,
+                metadata: {
+                    annotations: {
+                        pageNumber: 1,
+                        annotations: [
+                            {
+                                id: 'ann-file2-p1',
+                                type: 'cross',
+                                x: 300,
+                                y: 400,
+                                size: 24,
+                            },
+                        ],
+                        strokes: [],
+                    },
+                },
+            });
+
+            // Verify shared helper resolves independent annotations for each physical page
+            const viewerAnnotations1 = await getStudentPageAnnotations(multiFileScript._id, pageFile1._id);
+            const viewerAnnotations2 = await getStudentPageAnnotations(multiFileScript._id, pageFile2._id);
+            expect(viewerAnnotations1?.annotations[0].type).toBe('check');
+            expect(viewerAnnotations2?.annotations[0].type).toBe('cross');
+
+            const compositorSpy = vi.spyOn(compositorModule, 'compositePageAnnotations');
+
+            const req = new NextRequest(
+                `http://localhost:3000/api/student/results/${multiFileScript._id}/export`
+            );
+            const res = await exportGET(req, {
+                params: Promise.resolve({ scriptId: multiFileScript._id.toString() }),
+            });
+
+            expect(res.status).toBe(200);
+            expect(compositorSpy).toHaveBeenCalledTimes(2);
+
+            // Export page 1 must receive exactly the annotations viewer resolves for file 1
+            const exportCall1Annotations = compositorSpy.mock.calls[0][1];
+            expect(exportCall1Annotations?.annotations[0].type).toBe('check');
+            expect(exportCall1Annotations?.annotations[0].pageKey).toBe(pageFile1._id.toString());
+
+            // Export page 2 must receive exactly the annotations viewer resolves for file 2
+            const exportCall2Annotations = compositorSpy.mock.calls[1][1];
+            expect(exportCall2Annotations?.annotations[0].type).toBe('cross');
+            expect(exportCall2Annotations?.annotations[0].pageKey).toBe(pageFile2._id.toString());
+
+            compositorSpy.mockRestore();
+        });
     });
 
     describe('4. Guard Limits: Concurrency, Rate Limit, and 40-Page Cap', () => {
@@ -690,6 +890,75 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
             const body = await blockedRes.json();
             expect(body.message).toBe('Rate limit exceeded');
         });
+
+        it('enforces shared render capacity limit alongside watermark operations (503 when saturated)', async () => {
+            // Schedulers/workers acquire both available watermark render slots
+            const releaseWatermark1 = tryAcquireWatermarkSlot();
+            const releaseWatermark2 = tryAcquireWatermarkSlot();
+
+            try {
+                const req = new NextRequest(
+                    `http://localhost:3000/api/student/results/${scriptA._id}/export`
+                );
+                const res = await exportGET(req, {
+                    params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+                });
+
+                expect(res.status).toBe(503);
+                expect(res.headers.get('Retry-After')).toBe('1');
+                const body = await res.json();
+                expect(body.success).toBe(false);
+                expect(body.message).toContain('Watermark render capacity reached');
+            } finally {
+                releaseWatermark1();
+                releaseWatermark2();
+            }
+
+            // After releasing watermark slots, PDF export acquires its slot and shared watermark slot successfully
+            const req2 = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const res2 = await exportGET(req2, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(res2.status).toBe(200);
+        });
+
+        it('enforces export deadline, returns 503, never returns partial PDF, and releases slots on timeout', async () => {
+            // Set 0ms deadline to simulate immediate timeout during processing
+            setExportDeadlineMsForTest(0);
+
+            try {
+                const req = new NextRequest(
+                    `http://localhost:3000/api/student/results/${scriptA._id}/export`
+                );
+                const res = await exportGET(req, {
+                    params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+                });
+
+                expect(res.status).toBe(503);
+                expect(res.headers.get('Retry-After')).toBe('5');
+                expect(res.headers.get('Content-Type')).toContain('application/json');
+                const body = await res.json();
+                expect(body.success).toBe(false);
+                expect(body.message).toContain('PDF export timed out');
+
+                // Verify admission slots are completely released after timeout
+                expect(getActivePdfExportCount()).toBe(0);
+                expect(getActiveWatermarkRenderCount()).toBe(0);
+            } finally {
+                resetExportDeadlineMs();
+            }
+
+            // Immediately subsequent request with normal deadline succeeds
+            const reqSuccess = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const resSuccess = await exportGET(reqSuccess, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(resSuccess.status).toBe(200);
+        });
     });
 
     describe('5. Audit and Information Leakage Protections', () => {
@@ -748,6 +1017,72 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
             expect(text404).not.toContain('batches/');
             expect(text404).not.toContain(studentA.name);
             expect(text404).not.toContain(studentA.email);
+        });
+
+        it('records exact issuedAt and per-page traceCodes in audit log with complete traceability to PDF watermark', async () => {
+            const auditSpy = vi.spyOn(auditModule, 'writeAuditLog');
+            const watermarkSpy = vi.spyOn(watermarkModule, 'applyWatermark');
+
+            const req = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const res = await exportGET(req, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+
+            expect(res.status).toBe(200);
+            expect(auditSpy).toHaveBeenCalledTimes(1);
+
+            const auditCall = auditSpy.mock.calls[0][0];
+            expect(auditCall.action).toBe('STUDENT_PDF_EXPORT');
+            expect(auditCall.outcome).toBe('SUCCESS');
+            expect(auditCall.entityId?.toString()).toBe(scriptA._id.toString());
+
+            const details = auditCall.details as any;
+            expect(details.scriptId).toBe(scriptA._id.toString());
+            expect(details.examId).toBe(exam._id.toString());
+            expect(details.pageCount).toBe(2);
+            expect(details.hasRollNumber).toBe(true);
+
+            // Audit row must record exact issuedAt ISO string
+            expect(typeof details.issuedAt).toBe('string');
+            expect(new Date(details.issuedAt).toISOString()).toBe(details.issuedAt);
+
+            // Audit row must record traceCodes array: [{ pageId, traceCode }]
+            expect(Array.isArray(details.traceCodes)).toBe(true);
+            expect(details.traceCodes).toHaveLength(2);
+
+            const page1Trace = details.traceCodes.find((tc: any) => tc.pageId === pageA1._id.toString());
+            const page2Trace = details.traceCodes.find((tc: any) => tc.pageId === pageA2._id.toString());
+            expect(page1Trace).toBeDefined();
+            expect(page2Trace).toBeDefined();
+
+            // Trace codes must exactly match HMAC calculated with that exact issuedAt
+            const expectedTrace1 = watermarkModule.generateTraceCode({
+                userId: studentA._id.toString(),
+                scriptId: scriptA._id.toString(),
+                pageId: pageA1._id.toString(),
+                issuedAt: details.issuedAt,
+            });
+            const expectedTrace2 = watermarkModule.generateTraceCode({
+                userId: studentA._id.toString(),
+                scriptId: scriptA._id.toString(),
+                pageId: pageA2._id.toString(),
+                issuedAt: details.issuedAt,
+            });
+            expect(page1Trace.traceCode).toBe(expectedTrace1);
+            expect(page2Trace.traceCode).toBe(expectedTrace2);
+
+            // Trace codes in audit log must be the exact ones burned into the PDF pages
+            expect(watermarkSpy.mock.calls[0][1]).toContain(expectedTrace1);
+            expect(watermarkSpy.mock.calls[1][1]).toContain(expectedTrace2);
+
+            // HMAC secrets, raw keys, or sensitive auth data must NEVER appear in audit details
+            const auditSerialized = JSON.stringify(auditCall);
+            expect(auditSerialized).not.toContain(testSecret);
+
+            auditSpy.mockRestore();
+            watermarkSpy.mockRestore();
         });
     });
 });
