@@ -412,16 +412,14 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         });
         expect(traceCode).toBe(traceCode2);
 
-        // Fallback to getHmacSecret when WATERMARK_HMAC_SECRET is unset
+        // Configured dedicated WATERMARK_HMAC_SECRET works
+        process.env.WATERMARK_HMAC_SECRET = 'dedicated-watermark-secret-key';
+        expect(resolveWatermarkHmacSecret()).toBe('dedicated-watermark-secret-key');
+
+        // ORIGINAL_STORAGE_HMAC_SECRET alone is NOT accepted as a substitute
         delete process.env.WATERMARK_HMAC_SECRET;
         process.env.ORIGINAL_STORAGE_HMAC_SECRET = 'original-storage-hmac-test-secret';
-        const fallbackSecret = resolveWatermarkHmacSecret();
-        expect(fallbackSecret).toBe('original-storage-hmac-test-secret');
-
-        // Fail closed safely when no secret is configured
-        delete process.env.WATERMARK_HMAC_SECRET;
-        delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
-        expect(() => resolveWatermarkHmacSecret()).toThrow('HMAC secret configuration is missing or invalid');
+        expect(() => resolveWatermarkHmacSecret()).toThrow('WATERMARK_HMAC_SECRET is missing or not configured');
         expect(() =>
             generateTraceCode({
                 userId: 'user123',
@@ -429,7 +427,12 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
                 pageId: 'page789',
                 issuedAt: '2026-10-22T10:00:00.000Z',
             })
-        ).toThrow('HMAC secret configuration is missing or invalid');
+        ).toThrow('WATERMARK_HMAC_SECRET is missing or not configured');
+
+        // Missing dedicated secret fails closed when no secret is configured
+        delete process.env.WATERMARK_HMAC_SECRET;
+        delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+        expect(() => resolveWatermarkHmacSecret()).toThrow('WATERMARK_HMAC_SECRET is missing or not configured');
 
         // Restore WATERMARK_HMAC_SECRET for subsequent tests
         process.env.WATERMARK_HMAC_SECRET = 'test-watermark-secret-key-12345';
@@ -696,6 +699,93 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         expect(resInvalidKey.status).toBe(404);
         const bodyInvalidKey = await resInvalidKey.json();
         expect(bodyInvalidKey.message).toBe('Not found');
+
+        // 10d. Valid legacy metadata dimensions (page has no top-level width/height, but metadata.width and metadata.height exist)
+        const legacyPage = await IngestionPage.create({
+            batchId: 'batch-ae186',
+            job: pageA.job,
+            fileId: 'file-ae186-a',
+            fileIndex: 12,
+            pageNumber: 1,
+            // top-level width and height omitted
+            storageKey: storedPageA.storageKey,
+            status: PageProcessingStatus.PROCESSED,
+            answerScript: scriptA._id,
+            metadata: {
+                width: 1200,
+                height: 1600,
+            },
+        });
+
+        const reqLegacy = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${legacyPage._id}/image`
+        );
+        const resLegacy = await imageGET(reqLegacy, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: legacyPage._id.toString(),
+            }),
+        });
+        expect(resLegacy.status).toBe(200);
+        expect(resLegacy.headers.get('Content-Type')).toContain('image/jpeg');
+
+        // 10e. Truly missing or non-positive metadata dimensions receive 422
+        const legacyInvalidPage = await IngestionPage.create({
+            batchId: 'batch-ae186',
+            job: pageA.job,
+            fileId: 'file-ae186-a',
+            fileIndex: 13,
+            pageNumber: 1,
+            storageKey: storedPageA.storageKey,
+            status: PageProcessingStatus.PROCESSED,
+            answerScript: scriptA._id,
+            metadata: {
+                width: 0,
+                height: -100,
+            },
+        });
+
+        const reqLegacyInvalid = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${legacyInvalidPage._id}/image`
+        );
+        const resLegacyInvalid = await imageGET(reqLegacyInvalid, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: legacyInvalidPage._id.toString(),
+            }),
+        });
+        expect(resLegacyInvalid.status).toBe(422);
+        const bodyLegacyInvalid = await resLegacyInvalid.json();
+        expect(bodyLegacyInvalid.message).toBe('Invalid page dimensions');
+
+        // 10f. Legacy metadata dimensions exceeding limits receive 422
+        const legacyOversizedPage = await IngestionPage.create({
+            batchId: 'batch-ae186',
+            job: pageA.job,
+            fileId: 'file-ae186-a',
+            fileIndex: 14,
+            pageNumber: 1,
+            storageKey: storedPageA.storageKey,
+            status: PageProcessingStatus.PROCESSED,
+            answerScript: scriptA._id,
+            metadata: {
+                width: 5000,
+                height: 5000,
+            },
+        });
+
+        const reqLegacyOversized = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptA._id}/pages/${legacyOversizedPage._id}/image`
+        );
+        const resLegacyOversized = await imageGET(reqLegacyOversized, {
+            params: Promise.resolve({
+                scriptId: scriptA._id.toString(),
+                pageId: legacyOversizedPage._id.toString(),
+            }),
+        });
+        expect(resLegacyOversized.status).toBe(422);
+        const bodyLegacyOversized = await resLegacyOversized.json();
+        expect(bodyLegacyOversized.message).toContain('Page exceeds maximum allowed dimensions');
     });
 
     // 11. Audit entries contain userId, scriptId, pageId, and traceCode, with daily deduplication
@@ -748,7 +838,7 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         });
         expect(logsAfterSecond.length).toBe(initialCount + 1);
 
-        // Request 3: When audit write fails, output must NOT be cached
+        // Request 3: When audit write fails, output must FAIL CLOSED (500) and NOT be cached
         const auditModule = await import('../lib/audit');
         const writeAuditLogSpy = vi.spyOn(auditModule, 'writeAuditLog').mockResolvedValueOnce(false);
 
@@ -768,7 +858,11 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
                 pageId: pageNoRoll._id.toString(),
             }),
         });
-        expect(resCharlie1.status).toBe(200);
+        expect(resCharlie1.status).toBe(500);
+        const bodyCharlie1 = await resCharlie1.json();
+        expect(bodyCharlie1.success).toBe(false);
+        expect(bodyCharlie1.message).toBe('Internal server error');
+        expect(resCharlie1.headers.get('Content-Type')).toContain('application/json');
 
         // Verify cache was NOT populated because audit failed
         const { buildRenderCacheKey, getCachedWatermarkRender, formatISTDateOnly } = await import('../lib/watermark');
@@ -783,7 +877,42 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         const charlieCached = await getCachedWatermarkRender(charlieCacheKey);
         expect(charlieCached).toBeNull();
 
+        // Request 3b: When audit write throws an exception, also fail closed (500) and no cache
+        writeAuditLogSpy.mockRejectedValueOnce(new Error('Audit DB write error'));
+        const reqCharlieThrow = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptNoRoll._id}/pages/${pageNoRoll._id}/image`
+        );
+        const resCharlieThrow = await imageGET(reqCharlieThrow, {
+            params: Promise.resolve({
+                scriptId: scriptNoRoll._id.toString(),
+                pageId: pageNoRoll._id.toString(),
+            }),
+        });
+        expect(resCharlieThrow.status).toBe(500);
+        const bodyCharlieThrow = await resCharlieThrow.json();
+        expect(bodyCharlieThrow.success).toBe(false);
+        expect(bodyCharlieThrow.message).toBe('Internal server error');
+        expect(resCharlieThrow.headers.get('Content-Type')).toContain('application/json');
+        const charlieCachedThrow = await getCachedWatermarkRender(charlieCacheKey);
+        expect(charlieCachedThrow).toBeNull();
+
+        // Restore audit module spy
         writeAuditLogSpy.mockRestore();
+
+        // Request 4: Subsequent request when audit succeeds renders properly and populates cache
+        const reqCharlieSuccess = new NextRequest(
+            `http://localhost:3000/api/student/results/${scriptNoRoll._id}/pages/${pageNoRoll._id}/image`
+        );
+        const resCharlieSuccess = await imageGET(reqCharlieSuccess, {
+            params: Promise.resolve({
+                scriptId: scriptNoRoll._id.toString(),
+                pageId: pageNoRoll._id.toString(),
+            }),
+        });
+        expect(resCharlieSuccess.status).toBe(200);
+        expect(resCharlieSuccess.headers.get('Content-Type')).toContain('image/jpeg');
+        const charlieCachedSuccess = await getCachedWatermarkRender(charlieCacheKey);
+        expect(charlieCachedSuccess).not.toBeNull();
     });
 
     // 12. The route never sends unwatermarked bytes on an error or fallback path
@@ -833,5 +962,33 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         const corruptedCt = resCorrupted.headers.get('Content-Type') || '';
         expect(corruptedCt).toContain('application/json');
         expect(corruptedCt).not.toContain('image/');
+    });
+
+    // 13. buildRenderCacheKey produces isolated cache keys for different user IDs
+    it('13. buildRenderCacheKey produces isolated cache keys for different user IDs with constant inputs', async () => {
+        const { buildRenderCacheKey } = await import('../lib/watermark');
+        const sharedParams = {
+            pageId: pageA._id.toString(),
+            day: '2026-10-28',
+            width: 1200,
+            height: 1600,
+            storageKey: pageA.storageKey,
+        };
+
+        const keyAlice = buildRenderCacheKey({
+            ...sharedParams,
+            userId: studentA._id.toString(),
+        });
+
+        const keyBob = buildRenderCacheKey({
+            ...sharedParams,
+            userId: studentB._id.toString(),
+        });
+
+        expect(keyAlice).not.toBe(keyBob);
+        expect(keyAlice).toContain(`student-renders/${studentA._id.toString()}/${pageA._id.toString()}/`);
+        expect(keyBob).toContain(`student-renders/${studentB._id.toString()}/${pageA._id.toString()}/`);
+        expect(keyAlice.endsWith('.jpg')).toBe(true);
+        expect(keyBob.endsWith('.jpg')).toBe(true);
     });
 });

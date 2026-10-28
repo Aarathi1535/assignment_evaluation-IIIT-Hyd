@@ -68,7 +68,7 @@ export async function GET(
             _id: pageIdObj,
             answerScript: script._id,
             isDuplicate: { $ne: true },
-        }).select('storageKey width height batchId fileId pageNumber');
+        }).select('storageKey width height batchId fileId pageNumber metadata');
 
         if (!ingestionPage || !ingestionPage.storageKey) {
             return NextResponse.json(
@@ -105,9 +105,22 @@ export async function GET(
             }
         }
 
-        // 2. Strict dimension validation: fail closed on missing, invalid, <= 0, or oversized dimensions
-        const width = ingestionPage.width;
-        const height = ingestionPage.height;
+        // 2. Strict dimension validation: resolve width/height from top-level or metadata fallback.
+        // Fail closed on missing, invalid, <= 0, or oversized dimensions.
+        const metaWidth = (ingestionPage.metadata as Record<string, unknown> | undefined)?.width;
+        const metaHeight = (ingestionPage.metadata as Record<string, unknown> | undefined)?.height;
+        const width =
+            typeof ingestionPage.width === 'number' && ingestionPage.width > 0
+                ? ingestionPage.width
+                : typeof metaWidth === 'number' && metaWidth > 0
+                ? metaWidth
+                : undefined;
+        const height =
+            typeof ingestionPage.height === 'number' && ingestionPage.height > 0
+                ? ingestionPage.height
+                : typeof metaHeight === 'number' && metaHeight > 0
+                ? metaHeight
+                : undefined;
 
         if (
             typeof width !== 'number' ||
@@ -223,39 +236,52 @@ export async function GET(
                 req.headers.get('x-real-ip') ||
                 undefined;
 
-            const auditSuccess = await writeAuditLog({
-                user: authUserId,
-                action: 'STUDENT_PAGE_IMAGE_WATERMARKED',
-                outcome: 'SUCCESS',
-                entityId: pageId,
-                entityType: 'IngestionPage',
-                ipAddress: clientIp,
-                details: {
-                    userId: authUserId,
-                    scriptId,
-                    pageId,
-                    traceCode,
-                    rollNumber: rollNumber || null,
-                    issuedAt,
-                    day: dayStr,
-                },
-            });
-
-            // If audit write fails, do not store to cache so subsequent attempts will not bypass audit
-            if (auditSuccess) {
-                await storeCachedWatermarkRender(cacheKey, watermarkedBuffer, {
-                    pageId,
-                    storageKey,
-                    width,
-                    height,
-                    watermarkVersion: WATERMARK_VERSION,
-                    userId: authUserId,
-                    day: dayStr,
-                    issuedAt,
-                    traceCode,
-                    rollNumber,
+            let auditSuccess = false;
+            try {
+                auditSuccess = await writeAuditLog({
+                    user: authUserId,
+                    action: 'STUDENT_PAGE_IMAGE_WATERMARKED',
+                    outcome: 'SUCCESS',
+                    entityId: pageId,
+                    entityType: 'IngestionPage',
+                    ipAddress: clientIp,
+                    details: {
+                        userId: authUserId,
+                        scriptId,
+                        pageId,
+                        traceCode,
+                        rollNumber: rollNumber || null,
+                        issuedAt,
+                        day: dayStr,
+                    },
                 });
+            } catch (auditErr) {
+                console.error('Failed to write watermark audit log:', auditErr);
+                auditSuccess = false;
             }
+
+            // Security requirement: fail closed if audit write fails.
+            // A failed audit write must prevent watermarked bytes from being returned,
+            // must NOT populate cache, and must return a generic server error without exposing image bytes.
+            if (!auditSuccess) {
+                return NextResponse.json(
+                    { success: false, message: 'Internal server error' },
+                    { status: 500, headers: SECURITY_HEADERS }
+                );
+            }
+
+            await storeCachedWatermarkRender(cacheKey, watermarkedBuffer, {
+                pageId,
+                storageKey,
+                width,
+                height,
+                watermarkVersion: WATERMARK_VERSION,
+                userId: authUserId,
+                day: dayStr,
+                issuedAt,
+                traceCode,
+                rollNumber,
+            });
 
             return new NextResponse(new Uint8Array(watermarkedBuffer), {
                 status: 200,

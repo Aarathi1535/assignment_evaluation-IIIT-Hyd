@@ -88,6 +88,10 @@ A clear cryptographic and operational distinction exists between original scan d
 
 On Cloud Run, configure `DERIVED_PAGE_STORAGE_BUCKET` with an existing Google Cloud Storage bucket for derived page images and thumbnails. The Cloud Run service account must have object read, write, and delete permissions on that bucket. The application uses Application Default Credentials, keeps the existing `batches/{batchId}/derived/...` object keys, and does not create buckets. Original uploaded files continue using their existing storage configuration.
 
+> [!NOTE]
+> **Deployment Recommendation (AE-186 Render Cache Lifecycle)**: For cloud deployments using `DERIVED_PAGE_STORAGE_BUCKET`, it is recommended to configure an Object Lifecycle Management rule targeting the `student-renders/` prefix with an age-based deletion policy (such as 7 days). Because watermarked page images are cached per student per day (`student-renders/{userId}/{pageId}/{day}_v1_...`), this lifecycle rule prevents daily cached renders from accumulating indefinitely in the storage bucket. Note: This policy must be configured in your cloud bucket settings and is not applied automatically by the application.
+
+
 ---
 
 ## 5. Enhancement and Determinism

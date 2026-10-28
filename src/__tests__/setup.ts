@@ -17,6 +17,7 @@ beforeAll(async () => {
   process.env.NEXTAUTH_URL = process.env.NEXTAUTH_URL || 'http://localhost:3000';
   process.env.ORIGINAL_STORAGE_HMAC_SECRET = process.env.ORIGINAL_STORAGE_HMAC_SECRET || 'test-storage-hmac-secret-at-least-32-chars';
   process.env.ORIGINAL_STORAGE_KEY_ID = process.env.ORIGINAL_STORAGE_KEY_ID || 'v1';
+  process.env.WATERMARK_HMAC_SECRET = process.env.WATERMARK_HMAC_SECRET || 'test-watermark-secret-at-least-32-chars';
 
   // Start in-memory MongoDB
   mongoServer = await MongoMemoryServer.create({ instance: { launchTimeout: 120000 } });

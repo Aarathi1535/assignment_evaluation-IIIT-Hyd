@@ -4,7 +4,6 @@ import path from 'path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { getConfiguredStorageBucket } from './cloudStorage';
 import derivedStorageService from '../services/DerivedStorageService';
-import { getHmacSecret } from '../utils/hmacStorage';
 
 export const WATERMARK_VERSION = 'v1';
 export const MAX_CONCURRENT_WATERMARK_RENDERS = 2;
@@ -121,12 +120,12 @@ export interface GenerateTraceCodeInput {
 }
 
 /**
- * Resolves the HMAC secret safely without hardcoded fallbacks or leaking NEXTAUTH_SECRET.
+ * Resolves the dedicated HMAC secret safely without hardcoded fallbacks or leaking secrets.
  * Precedence:
- * 1. input.secret (if provided)
+ * 1. customSecret (if provided)
  * 2. process.env.WATERMARK_HMAC_SECRET (if configured)
- * 3. getHmacSecret().secret from hmacStorage (if configured)
  * If none available, throws Error to fail closed safely.
+ * Never falls back to ORIGINAL_STORAGE_HMAC_SECRET or NEXTAUTH_SECRET.
  */
 export function resolveWatermarkHmacSecret(customSecret?: string): string {
     if (customSecret && customSecret.trim() !== '') {
@@ -138,16 +137,7 @@ export function resolveWatermarkHmacSecret(customSecret?: string): string {
         return watermarkSecret;
     }
 
-    try {
-        const { secret } = getHmacSecret();
-        if (secret && secret.trim() !== '') {
-            return secret;
-        }
-    } catch {
-        // Fall through to fail closed
-    }
-
-    throw new Error('HMAC secret configuration is missing or invalid');
+    throw new Error('WATERMARK_HMAC_SECRET is missing or not configured');
 }
 
 /**
