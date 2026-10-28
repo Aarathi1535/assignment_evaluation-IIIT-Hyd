@@ -40,6 +40,19 @@ export interface CompositeAnnotationsOptions {
 /**
  * Defensive resource bounds for the server-side annotation compositor.
  * Protects against memory exhaustion and oversized attacker-controlled payloads.
+ *
+ * Rationale & reconciliation with PageRenderer:
+ * - PageRenderer's DEFAULT_PAGE_RENDERING_CONFIG specifies maxLongEdge: 2048 as a downscaling
+ *   target for standard 150 DPI PDF page ingestion.
+ * - However, PageRenderer accepts configurable render constraints up to its hard ceiling
+ *   maxPixels: 16,777,216 (4096x4096).
+ * - Real production answer scripts include high-DPI scans:
+ *   - 200 DPI A4 portrait pages: 1654 x 2339 (long edge 2339 > 2048)
+ *   - 300 DPI A4 portrait pages: 2480 x 3508 (long edge 3508 > 2048)
+ * - AnnotationCompositor acts as an admission guard prior to canvas creation, not an ingestion downscaler.
+ * - Setting MAX_COMPOSITOR_LONG_EDGE = 4096 safely accommodates all valid production and high-DPI
+ *   derived pages (including the required 1654x2339 fixture) while strictly bounding maximum
+ *   uncompressed canvas allocation to 64 MB (4096 * 4096 * 4 bytes).
  */
 export const MAX_COMPOSITOR_LONG_EDGE = 4096;
 export const MAX_COMPOSITOR_PIXELS = 4096 * 4096; // 16,777,216 pixels

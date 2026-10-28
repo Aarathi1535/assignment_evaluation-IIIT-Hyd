@@ -6,6 +6,8 @@ export interface IPage extends Document {
     pageNumber: number;
     imagePath: string;
     isActive: boolean;
+    width?: number;
+    height?: number;
     annotations?: SerializedPageAnnotations | null;
     annotatedBy?: mongoose.Types.ObjectId | null;
     createdAt: Date;
@@ -33,6 +35,14 @@ const PageSchema = new Schema<IPage>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        width: {
+            type: Number,
+            min: 1
+        },
+        height: {
+            type: Number,
+            min: 1
         },
         annotations: {
             type: Schema.Types.Mixed,

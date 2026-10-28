@@ -742,7 +742,39 @@ describe('AE-185: Server-side Annotation Compositor for PDF Export (#252)', () =
 
   // 17. Defensive Resource Limits
   describe('Defensive Resource Limits', () => {
-    it('rejects image whose decoded long edge exceeds MAX_COMPOSITOR_LONG_EDGE', async () => {
+    it('accepts images at PageRenderer default long edge (2048), portrait fixture (2339), and maximum bound (4096)', async () => {
+      // 1. Long edge 2048 (PageRenderer DEFAULT_PAGE_RENDERING_CONFIG maxLongEdge)
+      const c2048 = createCanvas(2048, 100);
+      const res2048 = await compositePageAnnotations(c2048.toBuffer('image/png'), {
+        annotations: [],
+        strokes: [],
+      });
+      const img2048 = await loadImage(res2048);
+      expect(img2048.width).toBe(2048);
+      expect(img2048.height).toBe(100);
+
+      // 2. Long edge 2339 (A4 200 DPI portrait fixture, 100x2339 > 2048)
+      const c2339 = createCanvas(100, 2339);
+      const res2339 = await compositePageAnnotations(c2339.toBuffer('image/png'), {
+        annotations: [],
+        strokes: [],
+      });
+      const img2339 = await loadImage(res2339);
+      expect(img2339.width).toBe(100);
+      expect(img2339.height).toBe(2339);
+
+      // 3. Exact boundary: Long edge 4096 (MAX_COMPOSITOR_LONG_EDGE)
+      const c4096 = createCanvas(100, 4096);
+      const res4096 = await compositePageAnnotations(c4096.toBuffer('image/png'), {
+        annotations: [],
+        strokes: [],
+      });
+      const img4096 = await loadImage(res4096);
+      expect(img4096.width).toBe(100);
+      expect(img4096.height).toBe(4096);
+    });
+
+    it('rejects image whose decoded long edge exceeds MAX_COMPOSITOR_LONG_EDGE (boundary 4097)', async () => {
       const mockLoader = async () => ({
         width: MAX_COMPOSITOR_LONG_EDGE + 1,
         height: 1000,

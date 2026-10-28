@@ -68,6 +68,8 @@ export interface SavePageAnnotationsResult {
   totalStrokes: number;
   savedAt: string;
   updatedAt?: string;
+  naturalWidth?: number;
+  naturalHeight?: number;
 }
 
 export interface GetPageAnnotationsOptions {
@@ -88,6 +90,8 @@ export interface GetPageAnnotationsResult {
   totalStrokes: number;
   annotatedBy?: string | null;
   updatedAt?: string;
+  naturalWidth?: number;
+  naturalHeight?: number;
 }
 
 export class AnnotationPersistenceService {
@@ -177,6 +181,9 @@ export class AnnotationPersistenceService {
     let annotatedBy: string | null = null;
     let updatedAt: string | undefined = undefined;
 
+    let authoritativeWidth: number | undefined;
+    let authoritativeHeight: number | undefined;
+
     if (isObjectId) {
       const pageIdObj = new mongoose.Types.ObjectId(pageIdentifier);
 
@@ -190,9 +197,24 @@ export class AnnotationPersistenceService {
         rawAnnotations = pageDoc.annotations;
         annotatedBy = pageDoc.annotatedBy?.toString() || null;
         updatedAt = pageDoc.updatedAt?.toISOString();
+        if (typeof pageDoc.width === 'number' && typeof pageDoc.height === 'number') {
+          authoritativeWidth = pageDoc.width;
+          authoritativeHeight = pageDoc.height;
+        } else {
+          const matchingIngestion = await IngestionPage.findOne({
+            answerScript: script._id,
+            pageNumber: targetPageNumber,
+          })
+            .select('width height metadata')
+            .lean();
+          if (matchingIngestion) {
+            authoritativeWidth = matchingIngestion.width || (matchingIngestion.metadata as Record<string, unknown>)?.width as number | undefined;
+            authoritativeHeight = matchingIngestion.height || (matchingIngestion.metadata as Record<string, unknown>)?.height as number | undefined;
+          }
+        }
       } else {
         const ingestionDoc = await IngestionPage.findById(pageIdObj)
-          .select('_id answerScript pageNumber updatedAt metadata.annotations metadata.annotatedBy')
+          .select('_id answerScript pageNumber updatedAt width height metadata')
           .lean();
         if (ingestionDoc) {
           if (
@@ -203,9 +225,11 @@ export class AnnotationPersistenceService {
           }
           targetPageId = ingestionDoc._id;
           targetPageNumber = ingestionDoc.pageNumber;
-          rawAnnotations = ingestionDoc.metadata?.annotations as SerializedPageAnnotations;
+          rawAnnotations = (ingestionDoc.metadata?.annotations as SerializedPageAnnotations) || null;
           annotatedBy = (ingestionDoc.metadata?.annotatedBy as string) || null;
           updatedAt = ingestionDoc.updatedAt?.toISOString();
+          authoritativeWidth = ingestionDoc.width || (ingestionDoc.metadata as Record<string, unknown>)?.width as number | undefined;
+          authoritativeHeight = ingestionDoc.height || (ingestionDoc.metadata as Record<string, unknown>)?.height as number | undefined;
         } else {
           throw new HttpError('Page not found', 404);
         }
@@ -225,25 +249,47 @@ export class AnnotationPersistenceService {
         rawAnnotations = pageDoc.annotations;
         annotatedBy = pageDoc.annotatedBy?.toString() || null;
         updatedAt = pageDoc.updatedAt?.toISOString();
+        if (typeof pageDoc.width === 'number' && typeof pageDoc.height === 'number') {
+          authoritativeWidth = pageDoc.width;
+          authoritativeHeight = pageDoc.height;
+        } else {
+          const matchingIngestion = await IngestionPage.findOne({
+            answerScript: script._id,
+            pageNumber: targetPageNumber,
+          })
+            .select('width height metadata')
+            .lean();
+          if (matchingIngestion) {
+            authoritativeWidth = matchingIngestion.width || (matchingIngestion.metadata as Record<string, unknown>)?.width as number | undefined;
+            authoritativeHeight = matchingIngestion.height || (matchingIngestion.metadata as Record<string, unknown>)?.height as number | undefined;
+          }
+        }
       } else {
         const ingestionDoc = await IngestionPage.findOne({
           answerScript: script._id,
           pageNumber: pageNum,
         })
-          .select('_id answerScript pageNumber updatedAt metadata.annotations metadata.annotatedBy')
+          .select('_id answerScript pageNumber updatedAt width height metadata')
           .lean();
 
         if (ingestionDoc) {
           targetPageId = ingestionDoc._id;
           targetPageNumber = ingestionDoc.pageNumber;
-          rawAnnotations = ingestionDoc.metadata?.annotations as SerializedPageAnnotations;
+          rawAnnotations = (ingestionDoc.metadata?.annotations as SerializedPageAnnotations) || null;
           annotatedBy = (ingestionDoc.metadata?.annotatedBy as string) || null;
           updatedAt = ingestionDoc.updatedAt?.toISOString();
+          authoritativeWidth = ingestionDoc.width || (ingestionDoc.metadata as Record<string, unknown>)?.width as number | undefined;
+          authoritativeHeight = ingestionDoc.height || (ingestionDoc.metadata as Record<string, unknown>)?.height as number | undefined;
         } else {
           throw new HttpError(`Page ${pageNum} not found for this answer script`, 404);
         }
       }
     }
+
+    const authoritativeDimensions =
+      typeof authoritativeWidth === 'number' && typeof authoritativeHeight === 'number'
+        ? { width: authoritativeWidth, height: authoritativeHeight }
+        : undefined;
 
     // 6. If no annotations exist on the Page document, return clean empty collection
     if (!rawAnnotations) {
@@ -257,6 +303,8 @@ export class AnnotationPersistenceService {
         totalStrokes: 0,
         annotatedBy: null,
         updatedAt,
+        naturalWidth: authoritativeDimensions?.width,
+        naturalHeight: authoritativeDimensions?.height,
       };
     }
 
@@ -264,7 +312,8 @@ export class AnnotationPersistenceService {
     try {
       const normalized = this.validateAndNormalizePayload(
         rawAnnotations,
-        targetPageId.toString()
+        targetPageId.toString(),
+        authoritativeDimensions
       );
 
       return {
@@ -277,6 +326,8 @@ export class AnnotationPersistenceService {
         totalStrokes: normalized.strokes.length,
         annotatedBy,
         updatedAt,
+        naturalWidth: normalized.naturalWidth,
+        naturalHeight: normalized.naturalHeight,
       };
     } catch {
       // Corrupt or malformed payload in database falls back safely to empty state
@@ -359,14 +410,14 @@ export class AnnotationPersistenceService {
     // 6. Resolve target Page and verify it belongs to this AnswerScript
     let targetPageId: mongoose.Types.ObjectId;
     let targetPageNumber: number;
-    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date } | null = null;
-    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date } | null = null;
+    let pageDoc: { _id: mongoose.Types.ObjectId; answerScript: mongoose.Types.ObjectId; pageNumber: number; updatedAt?: Date; width?: number; height?: number } | null = null;
+    let ingestionDoc: { _id: mongoose.Types.ObjectId; answerScript?: mongoose.Types.ObjectId | null; pageNumber: number; updatedAt?: Date; width?: number; height?: number; metadata?: Record<string, unknown> } | null = null;
 
     if (isObjectId) {
       const pageIdObj = new mongoose.Types.ObjectId(pageIdentifier);
 
       const foundPage = await Page.findOne({ _id: pageIdObj, isActive: true })
-        .select('_id answerScript pageNumber updatedAt')
+        .select('_id answerScript pageNumber updatedAt width height')
         .lean();
 
       if (foundPage) {
@@ -378,7 +429,7 @@ export class AnnotationPersistenceService {
         targetPageNumber = foundPage.pageNumber;
       } else {
         const foundIngestion = await IngestionPage.findById(pageIdObj)
-          .select('_id answerScript pageNumber updatedAt')
+          .select('_id answerScript pageNumber updatedAt width height metadata')
           .lean();
 
         if (foundIngestion) {
@@ -403,7 +454,7 @@ export class AnnotationPersistenceService {
         pageNumber: pageNum,
         isActive: true,
       })
-        .select('_id answerScript pageNumber updatedAt')
+        .select('_id answerScript pageNumber updatedAt width height')
         .lean();
 
       if (foundPage) {
@@ -415,7 +466,7 @@ export class AnnotationPersistenceService {
           answerScript: script._id,
           pageNumber: pageNum,
         })
-          .select('_id answerScript pageNumber updatedAt')
+          .select('_id answerScript pageNumber updatedAt width height metadata')
           .lean();
 
         if (foundIngestion) {
@@ -428,10 +479,40 @@ export class AnnotationPersistenceService {
       }
     }
 
+    let authoritativeWidth: number | undefined;
+    let authoritativeHeight: number | undefined;
+
+    if (pageDoc) {
+      if (typeof pageDoc.width === 'number' && typeof pageDoc.height === 'number') {
+        authoritativeWidth = pageDoc.width;
+        authoritativeHeight = pageDoc.height;
+      } else {
+        const matchingIngestion = await IngestionPage.findOne({
+          answerScript: script._id,
+          pageNumber: targetPageNumber,
+        })
+          .select('width height metadata')
+          .lean();
+        if (matchingIngestion) {
+          authoritativeWidth = matchingIngestion.width || (matchingIngestion.metadata as Record<string, unknown>)?.width as number | undefined;
+          authoritativeHeight = matchingIngestion.height || (matchingIngestion.metadata as Record<string, unknown>)?.height as number | undefined;
+        }
+      }
+    } else if (ingestionDoc) {
+      authoritativeWidth = ingestionDoc.width || (ingestionDoc.metadata as Record<string, unknown>)?.width as number | undefined;
+      authoritativeHeight = ingestionDoc.height || (ingestionDoc.metadata as Record<string, unknown>)?.height as number | undefined;
+    }
+
+    const authoritativeDimensions =
+      typeof authoritativeWidth === 'number' && typeof authoritativeHeight === 'number'
+        ? { width: authoritativeWidth, height: authoritativeHeight }
+        : undefined;
+
     // 7. Validate and normalize the vector annotation payload
     const normalizedPageData = this.validateAndNormalizePayload(
       payload,
-      targetPageId.toString()
+      targetPageId.toString(),
+      authoritativeDimensions
     );
 
     // 8. Validate baseUpdatedAt for optimistic concurrency
@@ -600,21 +681,61 @@ export class AnnotationPersistenceService {
       totalStrokes: normalizedPageData.strokes.length,
       savedAt: new Date().toISOString(),
       updatedAt: updatedDocTimestamp.toISOString(),
+      naturalWidth: normalizedPageData.naturalWidth,
+      naturalHeight: normalizedPageData.naturalHeight,
     };
   }
 
   /**
    * Validates and normalizes unknown payload into a valid SerializedPageAnnotations structure.
+   * If authoritative natural page dimensions are provided, enforces that client payload dimensions
+   * match or derives them when omitted. Unvalidated client dimensions or viewport dimensions
+   * that conflict with authoritative page dimensions are strictly rejected.
    */
   private validateAndNormalizePayload(
     payload: unknown,
-    pageKey: string
+    pageKey: string,
+    authoritativeDimensions?: { width?: number; height?: number }
   ): SerializedPageAnnotations {
     if (!payload || typeof payload !== 'object') {
       throw new HttpError('Invalid annotation payload: Payload must be an object', 400);
     }
 
     const raw = payload as Record<string, unknown>;
+
+    const resolveDimensions = (payloadW?: unknown, payloadH?: unknown) => {
+      const numPayloadW =
+        typeof payloadW === 'number' && Number.isFinite(payloadW) && payloadW > 0
+          ? payloadW
+          : undefined;
+      const numPayloadH =
+        typeof payloadH === 'number' && Number.isFinite(payloadH) && payloadH > 0
+          ? payloadH
+          : undefined;
+
+      const authW = authoritativeDimensions?.width;
+      const authH = authoritativeDimensions?.height;
+
+      if (typeof authW === 'number' && authW > 0 && typeof authH === 'number' && authH > 0) {
+        if (
+          numPayloadW !== undefined &&
+          numPayloadH !== undefined &&
+          (numPayloadW !== authW || numPayloadH !== authH)
+        ) {
+          throw new HttpError(
+            `Payload natural dimensions (${numPayloadW}x${numPayloadH}) do not match authoritative page dimensions (${authW}x${authH})`,
+            400
+          );
+        }
+        return { naturalWidth: authW, naturalHeight: authH };
+      }
+
+      if (numPayloadW !== undefined && numPayloadH !== undefined) {
+        return { naturalWidth: numPayloadW, naturalHeight: numPayloadH };
+      }
+
+      return {};
+    };
 
     // Case A: Full SerializedAnnotationDocument with `version` and `pages`
     if (typeof raw.version === 'number' && raw.pages && typeof raw.pages === 'object') {
@@ -630,13 +751,18 @@ export class AnnotationPersistenceService {
         strokes: [],
       };
 
-      return {
+      const dims = resolveDimensions(pageData.naturalWidth, pageData.naturalHeight);
+
+      const result: SerializedPageAnnotations = {
         annotations: (pageData.annotations || []).map(cloneMarkAnnotation),
         strokes: (pageData.strokes || []).map(cloneFreehandStroke),
       };
+      if (dims.naturalWidth !== undefined) result.naturalWidth = dims.naturalWidth;
+      if (dims.naturalHeight !== undefined) result.naturalHeight = dims.naturalHeight;
+      return result;
     }
 
-    // Case B: Single-page payload `{ annotations?: [...], strokes?: [...] }`
+    // Case B: Single-page payload `{ annotations?: [...], strokes?: [...], naturalWidth?: ..., naturalHeight?: ... }`
     const singlePageWrapper: SerializedAnnotationDocument = {
       version: 1,
       pages: {
@@ -646,16 +772,28 @@ export class AnnotationPersistenceService {
         },
       },
     };
+    if (typeof raw.naturalWidth === 'number') {
+      singlePageWrapper.pages[pageKey].naturalWidth = raw.naturalWidth;
+    }
+    if (typeof raw.naturalHeight === 'number') {
+      singlePageWrapper.pages[pageKey].naturalHeight = raw.naturalHeight;
+    }
 
     const validation = validateAnnotationDocument(singlePageWrapper);
     if (!validation.valid) {
       throw new HttpError(`Invalid annotation payload: ${validation.errors.join('; ')}`, 400);
     }
 
-    return {
-      annotations: (singlePageWrapper.pages[pageKey].annotations || []).map(cloneMarkAnnotation),
-      strokes: (singlePageWrapper.pages[pageKey].strokes || []).map(cloneFreehandStroke),
+    const pageObj = singlePageWrapper.pages[pageKey];
+    const dims = resolveDimensions(pageObj.naturalWidth, pageObj.naturalHeight);
+
+    const result: SerializedPageAnnotations = {
+      annotations: (pageObj.annotations || []).map(cloneMarkAnnotation),
+      strokes: (pageObj.strokes || []).map(cloneFreehandStroke),
     };
+    if (dims.naturalWidth !== undefined) result.naturalWidth = dims.naturalWidth;
+    if (dims.naturalHeight !== undefined) result.naturalHeight = dims.naturalHeight;
+    return result;
   }
 }
 
