@@ -3,7 +3,14 @@ import { createCanvas, loadImage } from '@napi-rs/canvas';
 import {
   compositePageAnnotations,
   compositeDocumentPageAnnotations,
+  MAX_COMPOSITOR_LONG_EDGE,
+  MAX_COMPOSITOR_PIXELS,
+  MAX_ANNOTATIONS_PER_PAGE,
+  MAX_STROKES_PER_PAGE,
+  MAX_STROKE_POINTS,
+  MAX_TEXT_NOTE_LENGTH,
 } from '../services/AnnotationCompositor';
+import { calculateImageFitBounds } from '../lib/annotations';
 import type {
   CheckAnnotation,
   CrossAnnotation,
@@ -461,5 +468,475 @@ describe('AE-185: Server-side Annotation Compositor for PDF Export (#252)', () =
     await expect(
       compositePageAnnotations(Buffer.from('not-an-image'), { annotations: [], strokes: [] })
     ).rejects.toThrow();
+  });
+
+  // 13. Coordinate and rendering parity on standard portrait page (1654 x 2339)
+  it('13. renders all annotation types with coordinate parity on a portrait page (1654 x 2339)', async () => {
+    const pWidth = 1654;
+    const pHeight = 2339;
+    const pCanvas = createCanvas(pWidth, pHeight);
+    const pCtx = pCanvas.getContext('2d');
+    pCtx.fillStyle = '#ffffff';
+    pCtx.fillRect(0, 0, pWidth, pHeight);
+    const portraitBuffer = pCanvas.toBuffer('image/png');
+
+    const check: CheckAnnotation = {
+      id: 'p-check',
+      pageKey: 1,
+      type: 'check',
+      x: Math.round(pWidth / 2),
+      y: Math.round(pHeight / 2),
+      size: 40,
+      color: '#16a34a',
+      createdAt: Date.now(),
+    };
+
+    const cross: CrossAnnotation = {
+      id: 'p-cross',
+      pageKey: 1,
+      type: 'cross',
+      x: 80,
+      y: 90,
+      size: 40,
+      color: '#dc2626',
+      createdAt: Date.now(),
+    };
+
+    const highlight: HighlightAnnotation = {
+      id: 'p-hl',
+      pageKey: 1,
+      type: 'highlight',
+      x: 1400,
+      y: 2200,
+      width: 200,
+      height: 50,
+      color: '#fde047',
+      opacity: 0.5,
+      createdAt: Date.now(),
+    };
+
+    const note: TextNoteAnnotation = {
+      id: 'p-note',
+      pageKey: 1,
+      type: 'text',
+      x: 300,
+      y: 500,
+      text: 'Portrait text',
+      fontSize: 16,
+      color: '#0f172a',
+      backgroundColor: '#fef08a',
+      borderColor: '#ca8a04',
+      createdAt: Date.now(),
+    };
+
+    const stroke: FreehandStroke = {
+      id: 'p-stroke',
+      pageKey: 1,
+      points: [500, 700, 520, 710, 540, 705, 560, 720],
+      color: '#2563eb',
+      strokeWidth: 4,
+      createdAt: Date.now(),
+    };
+
+    const result = await compositePageAnnotations(portraitBuffer, {
+      annotations: [check, cross, highlight, note],
+      strokes: [stroke],
+    });
+
+    const img = await loadImage(result);
+    // Explicit assertion: dimensions are strictly preserved and NOT swapped
+    expect(img.width).toBe(pWidth);
+    expect(img.height).toBe(pHeight);
+
+    // Check vertex probe (center)
+    const checkPixel = await getPixelAt(result, pWidth / 2 - 40 * 0.05, pHeight / 2 + 40 * 0.35);
+    expect(checkPixel.g).toBeGreaterThan(100);
+
+    // Cross center probe (top-left margin)
+    const crossPixel = await getPixelAt(result, 80, 90);
+    expect(crossPixel.r).toBeGreaterThan(150);
+
+    // Highlight probe (bottom-right margin)
+    const hlPixel = await getPixelAt(result, 1450, 2225);
+    expect(hlPixel.b).toBeLessThan(255); // Tinted from pure white
+    expect(hlPixel.r).toBeGreaterThan(200);
+
+    // Text card probe (interior)
+    const textPixel = await getPixelAt(result, 305, 505);
+    expect(textPixel.r).toBeGreaterThan(200);
+    expect(textPixel.g).toBeGreaterThan(200);
+
+    // Pen stroke probe
+    const strokePixel = await getPixelAt(result, 500, 700);
+    expect(strokePixel.b).toBeGreaterThan(150);
+
+    // Distant untouched pixel
+    const pristinePixel = await getPixelAt(result, 1000, 200);
+    expect(pristinePixel.r).toBe(255);
+    expect(pristinePixel.g).toBe(255);
+    expect(pristinePixel.b).toBe(255);
+  });
+
+  // 14. Coordinate and rendering parity on standard landscape page (2048 x 1448)
+  it('14. renders all annotation types with coordinate parity on a landscape page (2048 x 1448)', async () => {
+    const lWidth = 2048;
+    const lHeight = 1448;
+    const lCanvas = createCanvas(lWidth, lHeight);
+    const lCtx = lCanvas.getContext('2d');
+    lCtx.fillStyle = '#ffffff';
+    lCtx.fillRect(0, 0, lWidth, lHeight);
+    const landscapeBuffer = lCanvas.toBuffer('image/png');
+
+    const check: CheckAnnotation = {
+      id: 'l-check',
+      pageKey: 1,
+      type: 'check',
+      x: Math.round(lWidth / 2),
+      y: Math.round(lHeight / 2),
+      size: 40,
+      color: '#16a34a',
+      createdAt: Date.now(),
+    };
+
+    const cross: CrossAnnotation = {
+      id: 'l-cross',
+      pageKey: 1,
+      type: 'cross',
+      x: 90,
+      y: 70,
+      size: 40,
+      color: '#dc2626',
+      createdAt: Date.now(),
+    };
+
+    const highlight: HighlightAnnotation = {
+      id: 'l-hl',
+      pageKey: 1,
+      type: 'highlight',
+      x: 500,
+      y: 300,
+      width: 150,
+      height: 40,
+      color: '#fde047',
+      opacity: 0.5,
+      createdAt: Date.now(),
+    };
+
+    const note: TextNoteAnnotation = {
+      id: 'l-note',
+      pageKey: 1,
+      type: 'text',
+      x: 1800,
+      y: 1350,
+      text: 'Landscape margin',
+      fontSize: 14,
+      color: '#0f172a',
+      backgroundColor: '#fef08a',
+      borderColor: '#ca8a04',
+      createdAt: Date.now(),
+    };
+
+    const stroke: FreehandStroke = {
+      id: 'l-stroke',
+      pageKey: 1,
+      points: [1200, 800, 1220, 810, 1240, 805, 1260, 820],
+      color: '#2563eb',
+      strokeWidth: 4,
+      createdAt: Date.now(),
+    };
+
+    const result = await compositePageAnnotations(landscapeBuffer, {
+      annotations: [check, cross, highlight, note],
+      strokes: [stroke],
+    });
+
+    const img = await loadImage(result);
+    // Explicit assertion: dimensions are strictly preserved and NOT swapped
+    expect(img.width).toBe(lWidth);
+    expect(img.height).toBe(lHeight);
+
+    // Check vertex probe (center)
+    const checkPixel = await getPixelAt(result, lWidth / 2 - 40 * 0.05, lHeight / 2 + 40 * 0.35);
+    expect(checkPixel.g).toBeGreaterThan(100);
+
+    // Cross center probe
+    const crossPixel = await getPixelAt(result, 90, 70);
+    expect(crossPixel.r).toBeGreaterThan(150);
+
+    // Highlight probe
+    const hlPixel = await getPixelAt(result, 550, 320);
+    expect(hlPixel.b).toBeLessThan(255);
+
+    // Text card probe near bottom right
+    const textPixel = await getPixelAt(result, 1805, 1355);
+    expect(textPixel.r).toBeGreaterThan(200);
+
+    // Pen stroke probe
+    const strokePixel = await getPixelAt(result, 1200, 800);
+    expect(strokePixel.b).toBeGreaterThan(150);
+  });
+
+  // 15. Coordinate calculation parity vs viewer computeImageLayout
+  it('15. produces 1:1 natural pixel alignment matching viewer layout bounds without offset or scaling', () => {
+    // When the container matches natural image dimensions (as in PDF export full page render)
+    const portraitBounds = calculateImageFitBounds(1654, 2339, 1654, 2339, 'natural');
+    expect(portraitBounds.x).toBe(0);
+    expect(portraitBounds.y).toBe(0);
+    expect(portraitBounds.width).toBe(1654);
+    expect(portraitBounds.height).toBe(2339);
+    expect(portraitBounds.scale).toBe(1);
+
+    const landscapeBounds = calculateImageFitBounds(2048, 1448, 2048, 1448, 'natural');
+    expect(landscapeBounds.x).toBe(0);
+    expect(landscapeBounds.y).toBe(0);
+    expect(landscapeBounds.width).toBe(2048);
+    expect(landscapeBounds.height).toBe(1448);
+    expect(landscapeBounds.scale).toBe(1);
+  });
+
+  // 16. AE-179 repair dimension changes
+  describe('AE-179 dimension repair handling', () => {
+    it('rejects composition when page was repaired to different dimensions than recorded in document', async () => {
+      // Document authored for 1654 x 2339
+      const repairedPageAnnotations: SerializedPageAnnotations = {
+        annotations: [],
+        strokes: [],
+        naturalWidth: 1654,
+        naturalHeight: 2339,
+      };
+
+      // Base image is 400x400 (repaired / altered dimensions)
+      await expect(
+        compositePageAnnotations(baseImageBuffer, repairedPageAnnotations)
+      ).rejects.toThrow(
+        /Composite dimension mismatch: annotation document was authored for 1654x2339, but image has natural dimensions 400x400/
+      );
+    });
+
+    it('preserves backward compatibility when naturalWidth/naturalHeight are omitted (legacy annotations)', async () => {
+      const legacyAnnotations: SerializedPageAnnotations = {
+        annotations: [
+          {
+            id: 'legacy-1',
+            pageKey: 1,
+            type: 'check',
+            x: 100,
+            y: 100,
+            size: 30,
+            color: '#16a34a',
+            createdAt: Date.now(),
+          },
+        ],
+        strokes: [],
+      };
+
+      // Legacy documents without dimensions do not throw and render at raw natural-pixel offsets
+      const result = await compositePageAnnotations(baseImageBuffer, legacyAnnotations);
+      const img = await loadImage(result);
+      expect(img.width).toBe(WIDTH);
+      expect(img.height).toBe(HEIGHT);
+      const pixel = await getPixelAt(result, 100 - 30 * 0.05, 100 + 30 * 0.35);
+      expect(pixel.g).toBeGreaterThan(100);
+    });
+  });
+
+  // 17. Defensive Resource Limits
+  describe('Defensive Resource Limits', () => {
+    it('rejects image whose decoded long edge exceeds MAX_COMPOSITOR_LONG_EDGE', async () => {
+      const mockLoader = async () => ({
+        width: MAX_COMPOSITOR_LONG_EDGE + 1,
+        height: 1000,
+      });
+
+      await expect(
+        compositePageAnnotations(
+          baseImageBuffer,
+          { annotations: [], strokes: [] },
+          { _imageLoader: mockLoader }
+        )
+      ).rejects.toThrow(
+        new RegExp(`Image long edge \\(${MAX_COMPOSITOR_LONG_EDGE + 1}px\\) exceeds maximum allowed compositor limit \\(${MAX_COMPOSITOR_LONG_EDGE}px\\)`)
+      );
+    });
+
+    it('rejects image whose decoded total pixels exceed MAX_COMPOSITOR_PIXELS', async () => {
+      const mockLoader = async () => ({
+        width: 4096,
+        height: 4097, // 4096 * 4097 > 16,777,216
+      });
+
+      await expect(
+        compositePageAnnotations(
+          baseImageBuffer,
+          { annotations: [], strokes: [] },
+          { _imageLoader: mockLoader }
+        )
+      ).rejects.toThrow(
+        new RegExp(`Image pixel count \\(\\d+px\\) exceeds maximum allowed compositor limit \\(${MAX_COMPOSITOR_PIXELS}px\\)`)
+      );
+    });
+
+    it('rejects when annotation count exceeds MAX_ANNOTATIONS_PER_PAGE', async () => {
+      const oversizedAnnotations: CheckAnnotation[] = Array.from(
+        { length: MAX_ANNOTATIONS_PER_PAGE + 1 },
+        (_, i) => ({
+          id: `check-${i}`,
+          pageKey: 1,
+          type: 'check' as const,
+          x: 100,
+          y: 100,
+          size: 30,
+          color: '#16a34a',
+          createdAt: Date.now(),
+        })
+      );
+
+      await expect(
+        compositePageAnnotations(baseImageBuffer, {
+          annotations: oversizedAnnotations,
+          strokes: [],
+        })
+      ).rejects.toThrow(
+        new RegExp(`Annotation count \\(${MAX_ANNOTATIONS_PER_PAGE + 1}\\) exceeds maximum allowed per page \\(${MAX_ANNOTATIONS_PER_PAGE}\\)`)
+      );
+    });
+
+    it('rejects when stroke count exceeds MAX_STROKES_PER_PAGE', async () => {
+      const oversizedStrokes: FreehandStroke[] = Array.from(
+        { length: MAX_STROKES_PER_PAGE + 1 },
+        (_, i) => ({
+          id: `stroke-${i}`,
+          pageKey: 1,
+          points: [10, 10, 20, 20],
+          color: '#2563eb',
+          strokeWidth: 2,
+          createdAt: Date.now(),
+        })
+      );
+
+      await expect(
+        compositePageAnnotations(baseImageBuffer, {
+          annotations: [],
+          strokes: oversizedStrokes,
+        })
+      ).rejects.toThrow(
+        new RegExp(`Stroke count \\(${MAX_STROKES_PER_PAGE + 1}\\) exceeds maximum allowed per page \\(${MAX_STROKES_PER_PAGE}\\)`)
+      );
+    });
+
+    it('rejects when a stroke has more points than MAX_STROKE_POINTS', async () => {
+      const hugeStroke: FreehandStroke = {
+        id: 'stroke-overflow',
+        pageKey: 1,
+        points: new Array(MAX_STROKE_POINTS + 2).fill(10),
+        color: '#2563eb',
+        strokeWidth: 2,
+        createdAt: Date.now(),
+      };
+
+      await expect(
+        compositePageAnnotations(baseImageBuffer, {
+          annotations: [],
+          strokes: [hugeStroke],
+        })
+      ).rejects.toThrow(
+        new RegExp(`Stroke stroke-overflow has ${MAX_STROKE_POINTS + 2} points, exceeding maximum allowed points \\(${MAX_STROKE_POINTS}\\)`)
+      );
+    });
+
+    it('rejects when a text note exceeds MAX_TEXT_NOTE_LENGTH', async () => {
+      const hugeNote: TextNoteAnnotation = {
+        id: 'note-overflow',
+        pageKey: 1,
+        type: 'text',
+        x: 50,
+        y: 50,
+        text: 'A'.repeat(MAX_TEXT_NOTE_LENGTH + 1),
+        createdAt: Date.now(),
+      };
+
+      await expect(
+        compositePageAnnotations(baseImageBuffer, {
+          annotations: [hugeNote],
+          strokes: [],
+        })
+      ).rejects.toThrow(
+        new RegExp(`Text annotation note-overflow exceeds maximum allowed length of ${MAX_TEXT_NOTE_LENGTH} characters`)
+      );
+    });
+  });
+
+  // 18. Pen smoothing with Cardinal Spline tension: 0.2
+  it('18. renders pen strokes smoothly using cardinal spline tension (0.2)', async () => {
+    // 4 points forming a zigzag curve
+    const stroke: FreehandStroke = {
+      id: 'spline-stroke',
+      pageKey: 1,
+      points: [50, 100, 100, 50, 150, 150, 200, 100],
+      color: '#2563eb',
+      strokeWidth: 8,
+      createdAt: Date.now(),
+    };
+
+    const result = await compositePageAnnotations(baseImageBuffer, {
+      annotations: [],
+      strokes: [stroke],
+    });
+
+    // Check that start and end points receive stroke color
+    const startPixel = await getPixelAt(result, 50, 100);
+    expect(startPixel.b).toBeGreaterThan(150);
+
+    const endPixel = await getPixelAt(result, 200, 100);
+    expect(endPixel.b).toBeGreaterThan(150);
+
+    // Check intermediate vertex
+    const midPixel = await getPixelAt(result, 100, 50);
+    expect(midPixel.b).toBeGreaterThan(150);
+
+    // Far pixel remains white
+    const blank = await getPixelAt(result, 300, 300);
+    expect(blank.r).toBe(255);
+    expect(blank.g).toBe(255);
+    expect(blank.b).toBe(255);
+  });
+
+  // 19. Multiline text note line-height parity (lineHeight = fontSize)
+  it('19. adheres to lineHeight = fontSize (Konva default) in multiline text note cards', async () => {
+    const fontSize = 14;
+    const note: TextNoteAnnotation = {
+      id: 'multiline-note',
+      pageKey: 1,
+      type: 'text',
+      x: 100,
+      y: 100,
+      text: 'Line 1\nLine 2\nLine 3',
+      fontSize,
+      color: '#0f172a',
+      backgroundColor: '#fef08a', // Yellow card
+      borderColor: '#ca8a04',
+      createdAt: Date.now(),
+    };
+
+    const result = await compositePageAnnotations(baseImageBuffer, {
+      annotations: [note],
+      strokes: [],
+    });
+
+    // With padding = 6:
+    // With lineHeight = fontSize (14): cardHeight = 3 * 14 + 12 = 54px. Card extends from y=100 to y=154.
+    // If the old fontSize * 1.2 had been used: cardHeight = 3 * 16.8 + 12 = 62.4px, extending to y=162.4.
+
+    // Sample inside card at y = 150 (4px inside bottom boundary) -> should have card background color
+    const insidePixel = await getPixelAt(result, 115, 150);
+    expect(insidePixel.r).toBeGreaterThan(200);
+    expect(insidePixel.g).toBeGreaterThan(200);
+    expect(insidePixel.b).toBeLessThan(200); // Yellow card tint
+
+    // Sample outside card at y = 158 (outside card with lineHeight = 14, but would be inside with old 1.2 multiplier)
+    const outsidePixel = await getPixelAt(result, 115, 158);
+    expect(outsidePixel.r).toBe(255);
+    expect(outsidePixel.g).toBe(255);
+    expect(outsidePixel.b).toBe(255);
   });
 });

@@ -1,4 +1,4 @@
-import { createCanvas, loadImage, type SKRSContext2D } from '@napi-rs/canvas';
+import { createCanvas, loadImage, Image, type SKRSContext2D } from '@napi-rs/canvas';
 import type {
   CheckAnnotation,
   CrossAnnotation,
@@ -30,7 +30,23 @@ export interface CompositeAnnotationsOptions {
   format?: SupportedImageOutputFormat;
   /** JPEG quality between 1 and 100 (default: 90) when format is 'jpeg' */
   quality?: number;
+  /**
+   * Optional image loader override for testing/mocking without allocating huge buffers.
+   * @internal
+   */
+  _imageLoader?: (buffer: Buffer) => Promise<Image | { width: number; height: number }>;
 }
+
+/**
+ * Defensive resource bounds for the server-side annotation compositor.
+ * Protects against memory exhaustion and oversized attacker-controlled payloads.
+ */
+export const MAX_COMPOSITOR_LONG_EDGE = 4096;
+export const MAX_COMPOSITOR_PIXELS = 4096 * 4096; // 16,777,216 pixels
+export const MAX_ANNOTATIONS_PER_PAGE = 500;
+export const MAX_STROKES_PER_PAGE = 500;
+export const MAX_STROKE_POINTS = 10000;
+export const MAX_TEXT_NOTE_LENGTH = 2000;
 
 /**
  * Server-side annotation compositor (AE-185 for AE-187 PDF export).
@@ -54,7 +70,8 @@ export async function compositePageAnnotations(
     throw new Error('sourceImageBuffer is required and cannot be empty');
   }
 
-  const img = await loadImage(sourceImageBuffer);
+  const loader = options?._imageLoader || loadImage;
+  const img = await loader(sourceImageBuffer);
   const width = img.width;
   const height = img.height;
 
@@ -62,11 +79,77 @@ export async function compositePageAnnotations(
     throw new Error(`Invalid image dimensions: ${width}x${height}`);
   }
 
+  // Guard against oversized decoded images before canvas allocation
+  const longEdge = Math.max(width, height);
+  const totalPixels = width * height;
+  if (totalPixels > MAX_COMPOSITOR_PIXELS) {
+    throw new Error(
+      `Image pixel count (${totalPixels}px) exceeds maximum allowed compositor limit (${MAX_COMPOSITOR_PIXELS}px)`
+    );
+  }
+  if (longEdge > MAX_COMPOSITOR_LONG_EDGE) {
+    throw new Error(
+      `Image long edge (${longEdge}px) exceeds maximum allowed compositor limit (${MAX_COMPOSITOR_LONG_EDGE}px)`
+    );
+  }
+
+  if (pageAnnotations) {
+    // Validate source natural dimensions if provided: fail closed on mismatch
+    if (
+      typeof pageAnnotations.naturalWidth === 'number' &&
+      typeof pageAnnotations.naturalHeight === 'number' &&
+      pageAnnotations.naturalWidth > 0 &&
+      pageAnnotations.naturalHeight > 0
+    ) {
+      if (pageAnnotations.naturalWidth !== width || pageAnnotations.naturalHeight !== height) {
+        throw new Error(
+          `Composite dimension mismatch: annotation document was authored for ${pageAnnotations.naturalWidth}x${pageAnnotations.naturalHeight}, but image has natural dimensions ${width}x${height}`
+        );
+      }
+    }
+
+    // Defensive input count guards
+    if (Array.isArray(pageAnnotations.annotations)) {
+      if (pageAnnotations.annotations.length > MAX_ANNOTATIONS_PER_PAGE) {
+        throw new Error(
+          `Annotation count (${pageAnnotations.annotations.length}) exceeds maximum allowed per page (${MAX_ANNOTATIONS_PER_PAGE})`
+        );
+      }
+      for (const ann of pageAnnotations.annotations) {
+        if (ann && typeof ann === 'object' && ann.type === 'text') {
+          const text = (ann as TextNoteAnnotation).text;
+          if (typeof text === 'string' && text.length > MAX_TEXT_NOTE_LENGTH) {
+            const annId = ann.id ? `Text annotation ${ann.id}` : 'Text annotation';
+            throw new Error(
+              `${annId} exceeds maximum allowed length of ${MAX_TEXT_NOTE_LENGTH} characters`
+            );
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(pageAnnotations.strokes)) {
+      if (pageAnnotations.strokes.length > MAX_STROKES_PER_PAGE) {
+        throw new Error(
+          `Stroke count (${pageAnnotations.strokes.length}) exceeds maximum allowed per page (${MAX_STROKES_PER_PAGE})`
+        );
+      }
+      for (const stroke of pageAnnotations.strokes) {
+        if (stroke && Array.isArray(stroke.points) && stroke.points.length > MAX_STROKE_POINTS) {
+          const strokeId = stroke.id ? `Stroke ${stroke.id}` : 'Stroke';
+          throw new Error(
+            `${strokeId} has ${stroke.points.length} points, exceeding maximum allowed points (${MAX_STROKE_POINTS})`
+          );
+        }
+      }
+    }
+  }
+
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
 
   // 1. Draw source image at natural dimensions
-  ctx.drawImage(img, 0, 0, width, height);
+  ctx.drawImage(img as unknown as Image, 0, 0, width, height);
 
   if (pageAnnotations) {
     // 2. Render freehand pen strokes
@@ -107,12 +190,66 @@ export async function compositeDocumentPageAnnotations(
 }
 
 /**
+ * Calculates control points for a tension-smoothed curve segment.
+ * Matches Konva.Line tension calculation.
+ */
+function getControlPoints(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  t: number
+): [number, number, number, number] {
+  const d01 = Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2);
+  const d12 = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  const dSum = d01 + d12;
+  if (dSum === 0) {
+    return [x1, y1, x1, y1];
+  }
+  const fa = (t * d01) / dSum;
+  const fb = (t * d12) / dSum;
+  return [
+    x1 - fa * (x2 - x0),
+    y1 - fa * (y2 - y0),
+    x1 + fb * (x2 - x0),
+    y1 + fb * (y2 - y0),
+  ];
+}
+
+/**
+ * Expands line points into Bezier control points using Konva's cardinal spline algorithm.
+ */
+function expandPoints(p: number[], tension: number): number[] {
+  const len = p.length;
+  const allPoints: number[] = [];
+  for (let n = 2; n < len - 2; n += 2) {
+    const cp = getControlPoints(
+      p[n - 2],
+      p[n - 1],
+      p[n],
+      p[n + 1],
+      p[n + 2],
+      p[n + 3],
+      tension
+    );
+    if (Number.isNaN(cp[0])) {
+      continue;
+    }
+    allPoints.push(cp[0], cp[1], p[n], p[n + 1], cp[2], cp[3]);
+  }
+  return allPoints;
+}
+
+/**
  * Renders a single freehand stroke onto the 2D canvas context.
  * Matches PenLayer.tsx:
  * - points: [x0, y0, x1, y1, ...]
  * - lineCap: 'round', lineJoin: 'round'
  * - strokeWidth: stroke.strokeWidth
  * - stroke: stroke.color
+ * - tension: 0.2 (cardinal spline smoothing matching Konva.Line)
  */
 function renderFreehandStroke(
   ctx: SKRSContext2D,
@@ -145,14 +282,42 @@ function renderFreehandStroke(
     return;
   }
 
-  // Draw continuous line segments matching Konva.Line default rendering
+  if (pts.length === 4) {
+    // Two points: simple straight line segment
+    ctx.beginPath();
+    ctx.moveTo(pts[0], pts[1]);
+    ctx.lineTo(pts[2], pts[3]);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // 3 or more points: smooth using cardinal spline with tension: 0.2 (matching Konva PenLayer)
+  const tension = 0.2;
+  const tp = expandPoints(pts, tension);
+  const len = tp.length;
+  let n = 4;
+
   ctx.beginPath();
   ctx.moveTo(pts[0], pts[1]);
-  for (let i = 2; i < pts.length; i += 2) {
-    if (typeof pts[i] === 'number' && typeof pts[i + 1] === 'number') {
-      ctx.lineTo(pts[i], pts[i + 1]);
-    }
+  // Initial quadratic curve from first point through first control point
+  ctx.quadraticCurveTo(tp[0], tp[1], tp[2], tp[3]);
+  while (n < len - 2) {
+    const cp1x = tp[n++];
+    const cp1y = tp[n++];
+    const cp2x = tp[n++];
+    const cp2y = tp[n++];
+    const x = tp[n++];
+    const y = tp[n++];
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y);
   }
+  // Terminal quadratic curve to final point
+  ctx.quadraticCurveTo(
+    tp[len - 2],
+    tp[len - 1],
+    pts[pts.length - 2],
+    pts[pts.length - 1]
+  );
   ctx.stroke();
   ctx.restore();
 }
@@ -277,8 +442,8 @@ function renderMarkAnnotation(
         }
       }
 
-      // Height calculation: line height is approximately fontSize * 1.2
-      const lineHeight = fontSize * 1.2;
+      // Height calculation: line height is fontSize (matching Konva.Text default lineHeight: 1 in MarkLayer.tsx)
+      const lineHeight = fontSize;
       const contentHeight = lines.length * lineHeight;
       const totalWidth = maxLineWidth + padding * 2;
       const totalHeight = contentHeight + padding * 2;
