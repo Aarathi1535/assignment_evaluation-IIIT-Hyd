@@ -594,8 +594,11 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
             const batchId = 'batch-ae187-001';
             const fileId = 'file-ae187-001';
             const page1Key = DerivedStorageService.getDerivedPageKey(batchId, fileId, 1, 'png');
+            const page2Key = DerivedStorageService.getDerivedPageKey(batchId, fileId, 2, 'png');
 
-            const beforeBuf = await DerivedStorageService.readDerivedPage(page1Key);
+            // Capture raw stored derived-page bytes before export
+            const beforeBuf1 = await DerivedStorageService.readDerivedPage(page1Key);
+            const beforeBuf2 = await DerivedStorageService.readDerivedPage(page2Key);
 
             const req = new NextRequest(
                 `http://localhost:3000/api/student/results/${scriptA._id}/export`
@@ -605,8 +608,18 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
             });
             expect(res.status).toBe(200);
 
-            const afterBuf = await DerivedStorageService.readDerivedPage(page1Key);
-            expect(Buffer.compare(beforeBuf, afterBuf)).toBe(0);
+            // Re-read stored page bytes after export
+            const afterBuf1 = await DerivedStorageService.readDerivedPage(page1Key);
+            const afterBuf2 = await DerivedStorageService.readDerivedPage(page2Key);
+
+            // Assert exact binary equality for all stored derived-page images
+            expect(Buffer.compare(beforeBuf1, afterBuf1)).toBe(0);
+            expect(Buffer.compare(beforeBuf2, afterBuf2)).toBe(0);
+
+            // Ensure exported PDF is a new composited document and does not match original page buffers
+            const pdfBytes = Buffer.from(await res.arrayBuffer());
+            expect(Buffer.compare(beforeBuf1, pdfBytes)).not.toBe(0);
+            expect(Buffer.compare(beforeBuf2, pdfBytes)).not.toBe(0);
         });
 
         it('uses single JPEG encode via lossless intermediate PNG and avoids double JPEG artifacts', async () => {
@@ -958,6 +971,70 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
                 params: Promise.resolve({ scriptId: scriptA._id.toString() }),
             });
             expect(resSuccess.status).toBe(200);
+        });
+
+        it('regression: enforces deadline when the final page-processing operation exceeds time budget', async () => {
+            const auditSpy = vi.spyOn(auditModule, 'writeAuditLog');
+
+            const realNow = Date.now.bind(Date);
+            let currentTime = realNow();
+            const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentTime);
+
+            let watermarkCalls = 0;
+            const originalApplyWatermark = watermarkModule.applyWatermark;
+            const watermarkSpy = vi.spyOn(watermarkModule, 'applyWatermark').mockImplementation(
+                async (buf, text) => {
+                    watermarkCalls++;
+                    const res = await originalApplyWatermark(buf, text);
+                    if (watermarkCalls === 2) {
+                        // Simulate final page-processing operation crossing the 60-second deadline
+                        currentTime += 65_000;
+                    }
+                    return res;
+                }
+            );
+
+            try {
+                const req = new NextRequest(
+                    `http://localhost:3000/api/student/results/${scriptA._id}/export`
+                );
+                const res = await exportGET(req, {
+                    params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+                });
+
+                // Must return 503, not a successful 200 or partial PDF response
+                expect(res.status).toBe(503);
+                expect(res.headers.get('Retry-After')).toBe('5');
+                expect(res.headers.get('Content-Type')).toContain('application/json');
+
+                const body = await res.json();
+                expect(body.success).toBe(false);
+                expect(body.message).toContain('PDF export timed out');
+
+                // Must NOT write a success audit record for the rejected export
+                const exportAuditCalls = auditSpy.mock.calls.filter(
+                    (call) => call[0].action === 'STUDENT_PDF_EXPORT' && call[0].outcome === 'SUCCESS'
+                );
+                expect(exportAuditCalls).toHaveLength(0);
+
+                // Both admission slots (PDF export + shared watermark slot) must be released
+                expect(getActivePdfExportCount()).toBe(0);
+                expect(getActiveWatermarkRenderCount()).toBe(0);
+            } finally {
+                nowSpy.mockRestore();
+                watermarkSpy.mockRestore();
+                auditSpy.mockRestore();
+            }
+
+            // A subsequent request can acquire available slots and succeed normally
+            const reqSubsequent = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const resSubsequent = await exportGET(reqSubsequent, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+            expect(resSubsequent.status).toBe(200);
+            expect(resSubsequent.headers.get('Content-Type')).toBe('application/pdf');
         });
     });
 

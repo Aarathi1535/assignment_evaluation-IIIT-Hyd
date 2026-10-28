@@ -310,6 +310,11 @@ export async function GET(
                 { format: 'png' }
             );
 
+            // Check deadline after compositing
+            if (Date.now() >= deadline) {
+                throw new ExportTimeoutError('PDF export timed out. Please retry shortly.', 5);
+            }
+
             // Generate watermark trace code and text
             const pageIdStr = page._id.toString();
             const traceCode = generateTraceCode({
@@ -329,6 +334,11 @@ export async function GET(
             // Burn watermark into annotated image (single JPEG encoding at quality 80)
             const watermarkedJpg = await applyWatermark(annotatedBuffer, watermarkText);
 
+            // Check deadline after watermarking
+            if (Date.now() >= deadline) {
+                throw new ExportTimeoutError('PDF export timed out. Please retry shortly.', 5);
+            }
+
             // Embed into PDF page maintaining natural dimensions
             const imageBytes = new Uint8Array(watermarkedJpg);
             const embeddedImage = await pdfDoc.embedJpg(imageBytes);
@@ -341,7 +351,17 @@ export async function GET(
             });
         }
 
+        // Check deadline after page loop before PDF serialization
+        if (Date.now() >= deadline) {
+            throw new ExportTimeoutError('PDF export timed out. Please retry shortly.', 5);
+        }
+
         const pdfBytes = await pdfDoc.save();
+
+        // Check deadline after PDF serialization before writing success audit record
+        if (Date.now() >= deadline) {
+            throw new ExportTimeoutError('PDF export timed out. Please retry shortly.', 5);
+        }
 
         // 10. Write audit log entry (must succeed before returning PDF bytes)
         // Records exact issuedAt timestamp and per-page traceCodes for complete traceability
