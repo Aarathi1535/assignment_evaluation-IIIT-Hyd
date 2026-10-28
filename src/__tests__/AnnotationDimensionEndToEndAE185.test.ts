@@ -303,4 +303,211 @@ describe('AE-185: End-to-End Annotation Dimension Metadata & Repair Protection',
       /Composite dimension mismatch: annotation document was authored for 2048x1448, but image has natural dimensions 1024x724/
     );
   });
+
+  it('6. rejects width-only conflict even when height is omitted', async () => {
+    const p = await Page.findById(pageId);
+    const baseUpdatedAt = p!.updatedAt;
+
+    await expect(
+      annotationPersistenceService.savePageAnnotations({
+        scriptId,
+        pageIdentifier: pageId,
+        payload: {
+          annotations: [],
+          strokes: [],
+          naturalWidth: 1024,
+        },
+        userId: professorId,
+        userRole: 'PROFESSOR',
+        baseUpdatedAt,
+      })
+    ).rejects.toThrow(/Payload naturalWidth \(1024\) does not match authoritative page width \(1654\)/);
+  });
+
+  it('7. rejects height-only conflict even when width is omitted', async () => {
+    const p = await Page.findById(pageId);
+    const baseUpdatedAt = p!.updatedAt;
+
+    await expect(
+      annotationPersistenceService.savePageAnnotations({
+        scriptId,
+        pageIdentifier: pageId,
+        payload: {
+          annotations: [],
+          strokes: [],
+          naturalHeight: 768,
+        },
+        userId: professorId,
+        userRole: 'PROFESSOR',
+        baseUpdatedAt,
+      })
+    ).rejects.toThrow(/Payload naturalHeight \(768\) does not match authoritative page height \(2339\)/);
+  });
+
+  it('8. accepts payload when both dimensions match authoritative values exactly', async () => {
+    const p = await Page.findById(pageId);
+    const baseUpdatedAt = p!.updatedAt;
+
+    const saveResult = await annotationPersistenceService.savePageAnnotations({
+      scriptId,
+      pageIdentifier: pageId,
+      payload: {
+        annotations: [],
+        strokes: [],
+        naturalWidth: 1654,
+        naturalHeight: 2339,
+      },
+      userId: professorId,
+      userRole: 'PROFESSOR',
+      baseUpdatedAt,
+    });
+
+    expect(saveResult.naturalWidth).toBe(1654);
+    expect(saveResult.naturalHeight).toBe(2339);
+  });
+
+  it('9. derives both dimensions from authoritative page record when both are omitted', async () => {
+    const p = await Page.findById(pageId);
+    const baseUpdatedAt = p!.updatedAt;
+
+    const saveResult = await annotationPersistenceService.savePageAnnotations({
+      scriptId,
+      pageIdentifier: pageId,
+      payload: {
+        annotations: [],
+        strokes: [],
+      },
+      userId: professorId,
+      userRole: 'PROFESSOR',
+      baseUpdatedAt,
+    });
+
+    expect(saveResult.naturalWidth).toBe(1654);
+    expect(saveResult.naturalHeight).toBe(2339);
+  });
+
+  it('10. regression: handles ambiguous dimension fallback safely when two ingestion pages share pageNumber', async () => {
+    const multiScript = await AnswerScript.create({
+      exam: new mongoose.Types.ObjectId(),
+      student: new mongoose.Types.ObjectId(),
+      isActive: true,
+    });
+    const multiScriptId = multiScript._id.toString();
+
+    // Page record with NO dimensions and generic imagePath
+    const ambiguousPage = await Page.create({
+      answerScript: multiScript._id,
+      pageNumber: 1,
+      imagePath: 'uploads/unrelated-page-1.png',
+      isActive: true,
+    });
+    const ambiguousPageId = ambiguousPage._id.toString();
+
+    // Two IngestionPage records in the same script sharing pageNumber: 1 but with different files and dimensions
+    await IngestionPage.create({
+      answerScript: multiScript._id,
+      pageNumber: 1,
+      batchId: new mongoose.Types.ObjectId().toString(),
+      fileId: new mongoose.Types.ObjectId().toString(),
+      fileIndex: 0,
+      storageKey: 'derived/batch/file0/page-1.png',
+      status: PageProcessingStatus.PROCESSED,
+      job: new mongoose.Types.ObjectId(),
+      width: 1654,
+      height: 2339,
+    });
+
+    await IngestionPage.create({
+      answerScript: multiScript._id,
+      pageNumber: 1,
+      batchId: new mongoose.Types.ObjectId().toString(),
+      fileId: new mongoose.Types.ObjectId().toString(),
+      fileIndex: 1,
+      storageKey: 'derived/batch/file1/page-1.png',
+      status: PageProcessingStatus.PROCESSED,
+      job: new mongoose.Types.ObjectId(),
+      width: 1200,
+      height: 800,
+    });
+
+    // Case 1: Ambiguous lookup cannot attach either dimension to getPageAnnotations
+    const getResult = await annotationPersistenceService.getPageAnnotations({
+      scriptId: multiScriptId,
+      pageIdentifier: ambiguousPageId,
+      userId: professorId,
+      userRole: 'PROFESSOR',
+    });
+    expect(getResult.naturalWidth).toBeUndefined();
+    expect(getResult.naturalHeight).toBeUndefined();
+
+    // Case 2: Saving annotations with omitted dimensions does NOT assign wrong dimensions
+    const saveResult = await annotationPersistenceService.savePageAnnotations({
+      scriptId: multiScriptId,
+      pageIdentifier: ambiguousPageId,
+      payload: {
+        annotations: [],
+        strokes: [],
+      },
+      userId: professorId,
+      userRole: 'PROFESSOR',
+      baseUpdatedAt: ambiguousPage.updatedAt,
+    });
+    expect(saveResult.naturalWidth).toBeUndefined();
+    expect(saveResult.naturalHeight).toBeUndefined();
+
+    const storedPage = await Page.findById(ambiguousPageId);
+    expect(storedPage?.annotations?.naturalWidth).toBeUndefined();
+    expect(storedPage?.annotations?.naturalHeight).toBeUndefined();
+
+    // Case 3: Verified 1-to-1 relationship disambiguates when Page.imagePath matches storageKey
+    // Note: Page has unique index { answerScript: 1, pageNumber: 1 }, so create verifiedPage under separate script
+    const verifiedScript = await AnswerScript.create({
+      exam: new mongoose.Types.ObjectId(),
+      student: new mongoose.Types.ObjectId(),
+      isActive: true,
+    });
+
+    await IngestionPage.create({
+      answerScript: verifiedScript._id,
+      pageNumber: 1,
+      batchId: new mongoose.Types.ObjectId().toString(),
+      fileId: new mongoose.Types.ObjectId().toString(),
+      fileIndex: 0,
+      storageKey: 'derived/batch/file0/page-1.png',
+      status: PageProcessingStatus.PROCESSED,
+      job: new mongoose.Types.ObjectId(),
+      width: 1654,
+      height: 2339,
+    });
+
+    await IngestionPage.create({
+      answerScript: verifiedScript._id,
+      pageNumber: 1,
+      batchId: new mongoose.Types.ObjectId().toString(),
+      fileId: new mongoose.Types.ObjectId().toString(),
+      fileIndex: 1,
+      storageKey: 'derived/batch/file1/page-1.png',
+      status: PageProcessingStatus.PROCESSED,
+      job: new mongoose.Types.ObjectId(),
+      width: 1200,
+      height: 800,
+    });
+
+    const verifiedPage = await Page.create({
+      answerScript: verifiedScript._id,
+      pageNumber: 1,
+      imagePath: 'derived/batch/file1/page-1.png', // Unambiguously matches IngestionPage fileIndex: 1
+      isActive: true,
+    });
+
+    const verifiedGet = await annotationPersistenceService.getPageAnnotations({
+      scriptId: verifiedScript._id.toString(),
+      pageIdentifier: verifiedPage._id.toString(),
+      userId: professorId,
+      userRole: 'PROFESSOR',
+    });
+    // Unambiguously attached 1200x800, NOT 1654x2339
+    expect(verifiedGet.naturalWidth).toBe(1200);
+    expect(verifiedGet.naturalHeight).toBe(800);
+  });
 });
