@@ -24,6 +24,7 @@ import { ReadOnlyScriptViewer } from '../components/student/ReadOnlyScriptViewer
 import { MarkLayer } from '../components/canvas/MarkLayer';
 import { NextRequest } from 'next/server';
 import mongoose from 'mongoose';
+import { createCanvas } from '@napi-rs/canvas';
 
 let mockSessionUser: any = null;
 
@@ -88,6 +89,7 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
     let pageA1: any;
     let pageA2: any;
     let pageB1: any;
+    let sampleImageBuffer: Buffer;
 
     beforeAll(async () => {
         if (typeof window !== 'undefined' && window.HTMLCanvasElement) {
@@ -268,7 +270,11 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         const jobId = new mongoose.Types.ObjectId();
 
         // Store sample derived page files for testing
-        const sampleImageBuffer = Buffer.from('fake-png-image-content-for-ae183');
+        const testCanvas = createCanvas(1200, 1600);
+        const testCtx = testCanvas.getContext('2d');
+        testCtx.fillStyle = '#ffffff';
+        testCtx.fillRect(0, 0, 1200, 1600);
+        sampleImageBuffer = testCanvas.toBuffer('image/png');
         const storedPageA1 = await DerivedStorageService.storeDerivedPage({
             batchId: 'batch-183',
             fileId: 'file-183-a',
@@ -430,13 +436,17 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         });
 
         expect(res.status).toBe(200);
-        expect(res.headers.get('Content-Type')).toContain('image/png');
+        expect(res.headers.get('Content-Type')).toContain('image/jpeg');
         expect(res.headers.get('Cache-Control')).toBe('private, no-store');
         expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
 
         const arrayBuf = await res.arrayBuffer();
-        const content = Buffer.from(arrayBuf).toString();
-        expect(content).toBe('fake-png-image-content-for-ae183');
+        const content = Buffer.from(arrayBuf);
+        // Returns valid watermarked JPEG bytes (JPEG magic numbers 0xFF, 0xD8, 0xFF)
+        expect(content[0]).toBe(0xff);
+        expect(content[1]).toBe(0xd8);
+        expect(content[2]).toBe(0xff);
+        expect(content.equals(sampleImageBuffer)).toBe(false);
     });
 
     // 4. Cross-student image access returns generic 404
