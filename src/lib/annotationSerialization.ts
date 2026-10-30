@@ -33,6 +33,8 @@ export const ANNOTATION_FORMAT_SCHEMA = 'urn:ae:vector-annotations:v1';
 export interface SerializedPageAnnotations {
   annotations: MarkAnnotation[];
   strokes: FreehandStroke[];
+  naturalWidth?: number;
+  naturalHeight?: number;
 }
 
 /**
@@ -62,6 +64,7 @@ export interface SerializeCanvasOptions {
   annotations?: MarkAnnotation[];
   strokes?: FreehandStroke[];
   pageKeys?: (string | number)[];
+  pageDimensions?: Record<string, { naturalWidth?: number; naturalHeight?: number }>;
   metadata?: Record<string, unknown>;
 }
 
@@ -166,15 +169,23 @@ export function cloneFreehandStroke(stroke: FreehandStroke): FreehandStroke {
 export function serializePageAnnotations(
   pageKey: string | number,
   annotations: MarkAnnotation[] = [],
-  strokes: FreehandStroke[] = []
+  strokes: FreehandStroke[] = [],
+  dimensions?: { naturalWidth?: number; naturalHeight?: number }
 ): SerializedPageAnnotations {
   const pageAnnotations = filterAnnotationsByPage(annotations, pageKey);
   const pageStrokes = filterStrokesByPage(strokes, pageKey);
 
-  return {
+  const res: SerializedPageAnnotations = {
     annotations: pageAnnotations.map(cloneMarkAnnotation),
     strokes: pageStrokes.map(cloneFreehandStroke),
   };
+  if (dimensions?.naturalWidth !== undefined) {
+    res.naturalWidth = Number(dimensions.naturalWidth);
+  }
+  if (dimensions?.naturalHeight !== undefined) {
+    res.naturalHeight = Number(dimensions.naturalHeight);
+  }
+  return res;
 }
 
 /**
@@ -215,7 +226,8 @@ export function serializeCanvasAnnotations(
   let totalStrokes = 0;
 
   for (const pageKey of sortedKeys) {
-    const pageData = serializePageAnnotations(pageKey, allAnnotations, allStrokes);
+    const pageDims = options.pageDimensions ? options.pageDimensions[pageKey] : undefined;
+    const pageData = serializePageAnnotations(pageKey, allAnnotations, allStrokes, pageDims);
     pages[pageKey] = pageData;
     totalAnnotations += pageData.annotations.length;
     totalStrokes += pageData.strokes.length;
@@ -406,6 +418,18 @@ export function validateAnnotationDocument(input: unknown): ValidationResult {
         pageObj.strokes.forEach((stroke, idx) => {
           errors.push(...validateFreehandStroke(stroke, idx, pageKey));
         });
+      }
+    }
+
+    if (pageObj.naturalWidth !== undefined) {
+      if (typeof pageObj.naturalWidth !== 'number' || !Number.isFinite(pageObj.naturalWidth) || pageObj.naturalWidth <= 0) {
+        errors.push(`Page "${pageKey}" "naturalWidth" must be a positive number if provided`);
+      }
+    }
+
+    if (pageObj.naturalHeight !== undefined) {
+      if (typeof pageObj.naturalHeight !== 'number' || !Number.isFinite(pageObj.naturalHeight) || pageObj.naturalHeight <= 0) {
+        errors.push(`Page "${pageKey}" "naturalHeight" must be a positive number if provided`);
       }
     }
   }
