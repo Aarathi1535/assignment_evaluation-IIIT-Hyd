@@ -5,6 +5,7 @@ import Exam, { ExamStatus, StudentDownloadPolicy } from '../models/Exam';
 import User, { UserRole } from '../models/User';
 import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
+import Page from '../models/Page';
 import Grade from '../models/Grade';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import Rubric from '../models/Rubric';
@@ -1160,6 +1161,221 @@ describe('AE-187: Student PDF Download Policy and Watermarked Export (#265)', ()
 
             auditSpy.mockRestore();
             watermarkSpy.mockRestore();
+        });
+    });
+
+    describe('6. Annotation Dimension Validation & Repair Protection', () => {
+        it('getStudentPageAnnotations returns stored naturalWidth and naturalHeight along with annotations and strokes', async () => {
+            // 1. IngestionPage target with stored natural dimensions
+            const dummyJobId = new mongoose.Types.ObjectId();
+            const batchId = new mongoose.Types.ObjectId().toString();
+            const fileId = new mongoose.Types.ObjectId().toString();
+
+            const testIngestionPage = await IngestionPage.create({
+                batchId,
+                job: dummyJobId,
+                fileId,
+                fileIndex: 0,
+                storageKey: 'derived/batch/test_dim_p1.png',
+                width: 1200,
+                height: 1600,
+                pageNumber: 1,
+                status: PageProcessingStatus.PROCESSED,
+                answerScript: scriptA._id,
+                metadata: {
+                    annotations: {
+                        annotations: [
+                            {
+                                id: 'check-dim-1',
+                                type: 'check',
+                                x: 150,
+                                y: 250,
+                                size: 24,
+                            },
+                        ],
+                        strokes: [],
+                        naturalWidth: 1200,
+                        naturalHeight: 1600,
+                    },
+                },
+            });
+
+            const resolved = await getStudentPageAnnotations(scriptA._id, testIngestionPage._id);
+            expect(resolved).not.toBeNull();
+            expect(resolved?.annotations).toHaveLength(1);
+            expect(resolved?.naturalWidth).toBe(1200);
+            expect(resolved?.naturalHeight).toBe(1600);
+
+            // 2. Standard Page target with stored natural dimensions
+            const testStandardPage = await Page.create({
+                answerScript: scriptA._id,
+                pageNumber: 99,
+                imagePath: 'pages/test_dim_p99.png',
+                width: 2048,
+                height: 1448,
+                isActive: true,
+                annotations: {
+                    annotations: [
+                        {
+                            id: 'cross-dim-1',
+                            pageKey: '99',
+                            type: 'cross',
+                            x: 300,
+                            y: 400,
+                            size: 24,
+                        },
+                    ],
+                    strokes: [],
+                    naturalWidth: 2048,
+                    naturalHeight: 1448,
+                },
+            });
+
+            const resolvedPage = await getStudentPageAnnotations(scriptA._id, testStandardPage._id);
+            expect(resolvedPage).not.toBeNull();
+            expect(resolvedPage?.annotations).toHaveLength(1);
+            expect(resolvedPage?.naturalWidth).toBe(2048);
+            expect(resolvedPage?.naturalHeight).toBe(1448);
+
+            // 3. Legacy page without dimensions preserves viewer behavior (natural dimensions undefined)
+            const legacyPage = await Page.create({
+                answerScript: scriptA._id,
+                pageNumber: 98,
+                imagePath: 'pages/test_legacy.png',
+                isActive: true,
+                annotations: {
+                    annotations: [
+                        {
+                            id: 'check-legacy-1',
+                            pageKey: '98',
+                            type: 'check',
+                            x: 50,
+                            y: 50,
+                            size: 20,
+                        },
+                    ],
+                    strokes: [],
+                },
+            });
+
+            const resolvedLegacy = await getStudentPageAnnotations(scriptA._id, legacyPage._id);
+            expect(resolvedLegacy).not.toBeNull();
+            expect(resolvedLegacy?.annotations).toHaveLength(1);
+            expect(resolvedLegacy?.naturalWidth).toBeUndefined();
+            expect(resolvedLegacy?.naturalHeight).toBeUndefined();
+        });
+
+        it('normal matching-dimensions case: export succeeds, produces valid PDF bytes, passes dimensions to compositor, and writes audit record', async () => {
+            // Attach matching annotations (1200 x 1600) to scriptA's pages
+            await IngestionPage.findByIdAndUpdate(pageA1._id, {
+                metadata: {
+                    annotations: {
+                        annotations: [
+                            {
+                                id: 'match-ann-1',
+                                type: 'check',
+                                x: 100,
+                                y: 200,
+                                size: 24,
+                            },
+                        ],
+                        strokes: [],
+                        naturalWidth: 1200,
+                        naturalHeight: 1600,
+                    },
+                },
+            });
+
+            await IngestionPage.findByIdAndUpdate(pageA2._id, {
+                metadata: {
+                    annotations: {
+                        annotations: [],
+                        strokes: [],
+                        naturalWidth: 1200,
+                        naturalHeight: 1600,
+                    },
+                },
+            });
+
+            const compositorSpy = vi.spyOn(compositorModule, 'compositePageAnnotations');
+            const auditSpy = vi.spyOn(auditModule, 'writeAuditLog');
+
+            const req = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const res = await exportGET(req, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+
+            expect(res.status).toBe(200);
+            expect(res.headers.get('content-type')).toBe('application/pdf');
+
+            const pdfBytes = await res.arrayBuffer();
+            expect(pdfBytes.byteLength).toBeGreaterThan(0);
+
+            // Compositor received naturalWidth & naturalHeight matching the source image
+            expect(compositorSpy).toHaveBeenCalledTimes(2);
+            const passedAnnotationsPage1 = compositorSpy.mock.calls[0][1];
+            expect(passedAnnotationsPage1?.naturalWidth).toBe(1200);
+            expect(passedAnnotationsPage1?.naturalHeight).toBe(1600);
+
+            // Successful audit record written
+            const successAudit = auditSpy.mock.calls.find(
+                (c) => c[0]?.action === 'STUDENT_PDF_EXPORT' && c[0]?.outcome === 'SUCCESS'
+            );
+            expect(successAudit).toBeDefined();
+
+            compositorSpy.mockRestore();
+            auditSpy.mockRestore();
+        });
+
+        it('regression: export fails closed (500 or 422) when stored annotation dimensions differ from current repaired page dimensions', async () => {
+            // Page image in storage has dimensions 1200 x 1600, but stored annotations
+            // record dimensions of 2048 x 1448 (e.g. authored before image was repaired)
+            await IngestionPage.findByIdAndUpdate(pageA1._id, {
+                metadata: {
+                    annotations: {
+                        annotations: [
+                            {
+                                id: 'mismatch-ann-1',
+                                type: 'check',
+                                x: 300,
+                                y: 400,
+                                size: 24,
+                            },
+                        ],
+                        strokes: [],
+                        naturalWidth: 2048,
+                        naturalHeight: 1448,
+                    },
+                },
+            });
+
+            const auditSpy = vi.spyOn(auditModule, 'writeAuditLog');
+
+            const req = new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/export`
+            );
+            const res = await exportGET(req, {
+                params: Promise.resolve({ scriptId: scriptA._id.toString() }),
+            });
+
+            // Must fail closed with HTTP 500 or 422
+            expect([500, 422]).toContain(res.status);
+
+            // No PDF bytes produced (returns JSON error)
+            expect(res.headers.get('content-type')).not.toBe('application/pdf');
+
+            const resJson = await res.json();
+            expect(resJson.success).toBe(false);
+
+            // No successful export audit record produced
+            const successAuditCalls = auditSpy.mock.calls.filter(
+                (c) => c[0]?.action === 'STUDENT_PDF_EXPORT' && c[0]?.outcome === 'SUCCESS'
+            );
+            expect(successAuditCalls).toHaveLength(0);
+
+            auditSpy.mockRestore();
         });
     });
 });

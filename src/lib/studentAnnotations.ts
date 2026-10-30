@@ -109,5 +109,23 @@ export async function getStudentPageAnnotations(
                 s.points.every((pt) => typeof pt === 'number' && !Number.isNaN(pt))
         );
 
-    return { annotations, strokes };
+    const result: SerializedPageAnnotations = { annotations, strokes };
+
+    if (
+        typeof rawAnnotations?.naturalWidth === 'number' &&
+        Number.isFinite(rawAnnotations.naturalWidth) &&
+        rawAnnotations.naturalWidth > 0
+    ) {
+        result.naturalWidth = rawAnnotations.naturalWidth;
+    }
+
+    if (
+        typeof rawAnnotations?.naturalHeight === 'number' &&
+        Number.isFinite(rawAnnotations.naturalHeight) &&
+        rawAnnotations.naturalHeight > 0
+    ) {
+        result.naturalHeight = rawAnnotations.naturalHeight;
+    }
+
+    return result;
 }
