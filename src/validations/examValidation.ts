@@ -88,6 +88,7 @@ export const createExamSchema = z.object({
     })
     .nullable()
     .optional(),
+  studentDownloadPolicy: z.enum(['DISABLED', 'WATERMARKED']).optional(),
 }).strict();
 
 export const updateExamSchema = createExamSchema.partial();

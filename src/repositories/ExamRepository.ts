@@ -11,6 +11,7 @@ export interface IStudentExamResponse {
     status: ExamStatus;
     numberOfQuestions: number;
     gradingDeadline?: Date | null;
+    canDownload?: boolean;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -29,6 +30,7 @@ export function shapeExamForStudent(exam: IExam | Record<string, unknown>): IStu
         status: doc.status as ExamStatus,
         numberOfQuestions: Number(doc.numberOfQuestions),
         gradingDeadline: (doc.gradingDeadline as Date) ?? null,
+        canDownload: doc.studentDownloadPolicy === 'WATERMARKED',
         createdAt: doc.createdAt as Date,
         updatedAt: doc.updatedAt as Date,
     };
