@@ -510,4 +510,58 @@ describe('AE-185: End-to-End Annotation Dimension Metadata & Repair Protection',
     expect(verifiedGet.naturalWidth).toBe(1200);
     expect(verifiedGet.naturalHeight).toBe(800);
   });
+
+  it('11. regression: preserves stored annotations, natural dimensions, and reports dimensionMismatch when page dimensions are updated', async () => {
+    const ingestion = await IngestionPage.findById(ingestionPageId);
+    const baseUpdatedAt = ingestion!.updatedAt;
+
+    // 1. Save an annotation on a page with dimensions 2048 × 1448
+    const check: CheckAnnotation = {
+      id: 'c-regression-1',
+      pageKey: ingestionPageId,
+      type: 'check',
+      x: 350,
+      y: 450,
+      size: 28,
+      color: '#16a34a',
+      createdAt: Date.now(),
+    };
+
+    const saveResult = await annotationPersistenceService.savePageAnnotations({
+      scriptId,
+      pageIdentifier: ingestionPageId,
+      payload: {
+        annotations: [check],
+        strokes: [],
+      },
+      userId: professorId,
+      userRole: 'PROFESSOR',
+      baseUpdatedAt,
+    });
+
+    expect(saveResult.naturalWidth).toBe(2048);
+    expect(saveResult.naturalHeight).toBe(1448);
+    expect(saveResult.annotations).toHaveLength(1);
+
+    // 2. Change its IngestionPage dimensions using IngestionPage.updateOne() to 1024 × 724
+    await IngestionPage.updateOne(
+      { _id: ingestionPageId },
+      { $set: { width: 1024, height: 724 } }
+    );
+
+    // 3. Call getPageAnnotations()
+    const getResult = await annotationPersistenceService.getPageAnnotations({
+      scriptId,
+      pageIdentifier: ingestionPageId,
+      userId: professorId,
+      userRole: 'PROFESSOR',
+    });
+
+    // 4. Verify the original annotation is still returned, stored natural dimensions are preserved, and dimensionMismatch is true
+    expect(getResult.annotations).toHaveLength(1);
+    expect(getResult.annotations[0].id).toBe('c-regression-1');
+    expect(getResult.naturalWidth).toBe(2048);
+    expect(getResult.naturalHeight).toBe(1448);
+    expect(getResult.dimensionMismatch).toBe(true);
+  });
 });

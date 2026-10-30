@@ -17,7 +17,11 @@ import type {
   HighlightAnnotation,
   TextNoteAnnotation,
 } from '../lib/stampTool';
-import type { FreehandStroke } from '../lib/penTool';
+import {
+  imageToScreenCoordinates,
+  screenToImageCoordinates,
+  type FreehandStroke,
+} from '../lib/penTool';
 import type {
   SerializedPageAnnotations,
   SerializedAnnotationDocument,
@@ -692,6 +696,68 @@ describe('AE-185: Server-side Annotation Compositor for PDF Export (#252)', () =
     expect(landscapeBounds.width).toBe(2048);
     expect(landscapeBounds.height).toBe(1448);
     expect(landscapeBounds.scale).toBe(1);
+  });
+
+  // 15b. Coordinate round-trip mapping with approximately 800 px-wide fit container
+  it('15b. accurately round-trips coordinates in an approximately 800 px-wide fit container back to natural coordinates', () => {
+    // Test with both canonical page aspect ratios: Portrait A4 (1654 x 2339) and Landscape (2048 x 1448)
+    const viewports = [
+      {
+        name: 'Portrait A4',
+        naturalWidth: 1654,
+        naturalHeight: 2339,
+        containerWidth: 800,
+        containerHeight: 1132,
+        points: [
+          { x: 100, y: 150 }, // Top-left margin
+          { x: 827, y: 1169.5 }, // Page center
+          { x: 1500, y: 2200 }, // Bottom-right margin
+          { x: 450, y: 900 }, // Interior body
+        ],
+      },
+      {
+        name: 'Landscape',
+        naturalWidth: 2048,
+        naturalHeight: 1448,
+        containerWidth: 800,
+        containerHeight: 566,
+        points: [
+          { x: 150, y: 100 },
+          { x: 1024, y: 724 },
+          { x: 1900, y: 1350 },
+          { x: 600, y: 400 },
+        ],
+      },
+    ];
+
+    for (const vp of viewports) {
+      const fitBounds = calculateImageFitBounds(
+        vp.containerWidth,
+        vp.containerHeight,
+        vp.naturalWidth,
+        vp.naturalHeight,
+        'contain'
+      );
+
+      const fitTransform = {
+        x: fitBounds.x,
+        y: fitBounds.y,
+        zoom: fitBounds.scale,
+        rotation: 0,
+      };
+
+      for (const original of vp.points) {
+        // 1. Map from original natural coordinates to viewport screen coordinates
+        const screenPt = imageToScreenCoordinates(original.x, original.y, fitTransform);
+
+        // 2. Map back from viewport screen coordinates to image coordinates
+        const recovered = screenToImageCoordinates(screenPt.x, screenPt.y, fitTransform);
+
+        // 3. Verify exact mapping back to original natural coordinates within subpixel precision
+        expect(recovered.x).toBeCloseTo(original.x, 1);
+        expect(recovered.y).toBeCloseTo(original.y, 1);
+      }
+    }
   });
 
   // 16. AE-179 repair dimension changes

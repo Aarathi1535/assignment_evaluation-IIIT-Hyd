@@ -92,6 +92,7 @@ export interface GetPageAnnotationsResult {
   updatedAt?: string;
   naturalWidth?: number;
   naturalHeight?: number;
+  dimensionMismatch?: boolean;
 }
 
 export class AnnotationPersistenceService {
@@ -322,9 +323,17 @@ export class AnnotationPersistenceService {
     try {
       const normalized = this.validateAndNormalizePayload(
         rawAnnotations,
-        targetPageId.toString(),
-        authoritativeDimensions
+        targetPageId.toString()
       );
+
+      const hasStoredWidth = typeof normalized.naturalWidth === 'number' && normalized.naturalWidth > 0;
+      const hasStoredHeight = typeof normalized.naturalHeight === 'number' && normalized.naturalHeight > 0;
+      const hasCurrentWidth = typeof authoritativeWidth === 'number' && authoritativeWidth > 0;
+      const hasCurrentHeight = typeof authoritativeHeight === 'number' && authoritativeHeight > 0;
+
+      const widthMismatch = hasStoredWidth && hasCurrentWidth && normalized.naturalWidth !== authoritativeWidth;
+      const heightMismatch = hasStoredHeight && hasCurrentHeight && normalized.naturalHeight !== authoritativeHeight;
+      const dimensionMismatch = Boolean(widthMismatch || heightMismatch);
 
       return {
         scriptId: script._id.toString(),
@@ -338,6 +347,7 @@ export class AnnotationPersistenceService {
         updatedAt,
         naturalWidth: normalized.naturalWidth,
         naturalHeight: normalized.naturalHeight,
+        ...(dimensionMismatch ? { dimensionMismatch: true } : {}),
       };
     } catch {
       // Corrupt or malformed payload in database falls back safely to empty state
@@ -868,10 +878,10 @@ export class AnnotationPersistenceService {
     } else if (pageDoc.imagePath) {
       const img = pageDoc.imagePath.trim();
       const verified = candidates.filter((c) => {
-        if (c.storageKey && (img === c.storageKey || img.endsWith(c.storageKey) || img.includes(c.storageKey))) {
+        if (c.storageKey && (img === c.storageKey || img.endsWith(c.storageKey))) {
           return true;
         }
-        if (c._id && img.includes(c._id.toString())) {
+        if (c._id && (img === c._id.toString() || img.endsWith(c._id.toString()))) {
           return true;
         }
         return false;
