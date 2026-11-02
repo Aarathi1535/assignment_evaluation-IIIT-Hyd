@@ -449,6 +449,38 @@ describe('AE-183: Student Read-Only Graded Script Viewer', () => {
         expect(content.equals(sampleImageBuffer)).toBe(false);
     });
 
+    it('AE-199 rejects original-file storage keys and never exposes storage references to students', async () => {
+        const sourceKey = 'batches/batch-183/original/file-183-a.pdf';
+        await IngestionPage.updateOne({ _id: pageA1._id }, { storageKey: sourceKey });
+
+        const pagesResponse = await pagesGET(
+            new NextRequest(`http://localhost:3000/api/student/results/${scriptA._id}/pages`),
+            { params: Promise.resolve({ scriptId: scriptA._id.toString() }) }
+        );
+        expect(pagesResponse.status).toBe(200);
+        const pagesText = await pagesResponse.text();
+        expect(pagesText).not.toContain(sourceKey);
+        expect(pagesText).not.toContain('storageKey');
+        expect(pagesText).not.toContain('batchId');
+        expect(pagesText).not.toContain('fileId');
+
+        const imageResponse = await imageGET(
+            new NextRequest(
+                `http://localhost:3000/api/student/results/${scriptA._id}/pages/${pageA1._id}/image`
+            ),
+            {
+                params: Promise.resolve({
+                    scriptId: scriptA._id.toString(),
+                    pageId: pageA1._id.toString(),
+                }),
+            }
+        );
+        expect(imageResponse.status).toBe(404);
+        const errorText = await imageResponse.text();
+        expect(errorText).not.toContain(sourceKey);
+        expect(errorText).not.toContain('file-183-a');
+    });
+
     // 4. Cross-student image access returns generic 404
     it("4. returns 404 when student attempts to stream another student's page image", async () => {
         const req = new NextRequest(
