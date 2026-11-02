@@ -767,6 +767,67 @@ class ExamService {
 
         return updatedExam;
     }
+
+    async unpublishExam(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string,
+        context?: { ipAddress?: string }
+    ): Promise<IExam> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const examBefore = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!examBefore) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        if (examBefore.status !== ExamStatus.PUBLISHED) {
+            return examBefore;
+        }
+
+        const unpublishedAt = new Date();
+        const unpublishedBy = new mongoose.Types.ObjectId(actingUserId);
+        const updatedExam = await Exam.findOneAndUpdate(
+            { _id: examBefore._id, status: ExamStatus.PUBLISHED },
+            {
+                $set: {
+                    status: ExamStatus.REVIEW_PENDING,
+                    unpublishedBy,
+                    unpublishedAt
+                }
+            },
+            { returnDocument: 'after' }
+        );
+
+        if (!updatedExam) {
+            const currentExam = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+            if (currentExam && currentExam.status !== ExamStatus.PUBLISHED) {
+                return currentExam;
+            }
+            throw new HttpError('Exam not found', 404);
+        }
+
+        await writeAuditLog({
+            user: unpublishedBy,
+            action: 'EXAM_UNPUBLISHED',
+            outcome: 'SUCCESS',
+            entityId: updatedExam._id as mongoose.Types.ObjectId,
+            entityType: 'Exam',
+            details: {
+                title: updatedExam.title,
+                course: updatedExam.course,
+                publishedBy: updatedExam.publishedBy,
+                publishedAt: updatedExam.publishedAt,
+                unpublishedBy,
+                unpublishedAt
+            },
+            ipAddress: context?.ipAddress
+        });
+
+        return updatedExam;
+    }
 }
 
 const examService = new ExamService();
