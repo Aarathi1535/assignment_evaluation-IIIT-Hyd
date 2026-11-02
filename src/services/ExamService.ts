@@ -689,6 +689,84 @@ class ExamService {
             return nameMatch || emailMatch;
         });
     }
+
+    async publishExam(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string,
+        context?: { ipAddress?: string }
+    ): Promise<IExam> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const examBefore = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!examBefore) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        if (!examBefore.isActive) {
+            throw new HttpError('Cannot publish inactive exam', 400);
+        }
+
+        if (examBefore.status === ExamStatus.ARCHIVED) {
+            throw new HttpError('Cannot publish archived exam', 400);
+        }
+
+        // Idempotent: If already published, return without duplicate side effects
+        if (examBefore.status === ExamStatus.PUBLISHED) {
+            return examBefore;
+        }
+
+        // AE-164: Check for OPEN flags that block publication
+        const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
+        const openFlagCount = await ScriptFlag.countDocuments({
+            exam: new mongoose.Types.ObjectId(id),
+            status: 'OPEN'
+        });
+        if (openFlagCount > 0) {
+            throw new HttpError(
+                `Cannot publish exam: There are ${openFlagCount} open flag(s) that must be resolved or escalated first`,
+                400
+            );
+        }
+
+        const publishedAt = new Date();
+        const publishedBy = new mongoose.Types.ObjectId(actingUserId);
+
+        const updatedExam = await Exam.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    status: ExamStatus.PUBLISHED,
+                    publishedBy,
+                    publishedAt
+                }
+            },
+            { returnDocument: 'after' }
+        );
+
+        if (!updatedExam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        await writeAuditLog({
+            user: new mongoose.Types.ObjectId(actingUserId),
+            action: 'EXAM_PUBLISHED',
+            outcome: 'SUCCESS',
+            entityId: updatedExam._id as mongoose.Types.ObjectId,
+            entityType: 'Exam',
+            details: {
+                title: updatedExam.title,
+                course: updatedExam.course,
+                publishedBy,
+                publishedAt
+            },
+            ipAddress: context?.ipAddress
+        });
+
+        return updatedExam;
+    }
 }
 
 const examService = new ExamService();
