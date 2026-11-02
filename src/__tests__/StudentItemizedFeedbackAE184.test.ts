@@ -98,6 +98,8 @@ describe('AE-184: Itemized Scores + Per-Question Feedback View', () => {
             numberOfQuestions: 3,
             status: ExamStatus.PUBLISHED,
             isActive: true,
+            regradeWindowOpensAt: new Date('2026-11-20T10:00:00.000Z'),
+            regradeWindowClosesAt: new Date('2026-11-27T10:00:00.000Z'),
             enrolledStudents: [studentA._id, studentB._id],
         });
 
@@ -255,6 +257,9 @@ describe('AE-184: Itemized Scores + Per-Question Feedback View', () => {
         expect(body.mode).toBe('QUESTION');
         expect(body.exam.title).toBe('Compilers Final Exam');
         expect(body.exam.totalMarks).toBe(75);
+        expect(body.exam.regradeWindowOpensAt).toBe(exam.regradeWindowOpensAt.toISOString());
+        expect(body.exam.regradeWindowClosesAt).toBe(exam.regradeWindowClosesAt.toISOString());
+        expect(body.eligibleQuestionNumbers).toEqual([1, 2, 3]);
         expect(body.total).toBe(66); // 24 + 20 + 22
         expect(body.maxTotal).toBe(75);
 
@@ -334,6 +339,7 @@ describe('AE-184: Itemized Scores + Per-Question Feedback View', () => {
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.mode).toBe('WHOLE');
+        expect(body.eligibleQuestionNumbers).toEqual([1]);
         expect(body.total).toBe(70);
         expect(body.maxTotal).toBe(75);
         expect(body.questions).toHaveLength(1);
