@@ -113,7 +113,6 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
             exam: exam._id,
             createdBy: prof._id,
             scoreStep: 0.5,
-            totalMarks: 50,
             questions: [
                 {
                     questionNumber: 1,
@@ -145,10 +144,9 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
         });
 
         await Grade.create({
-            exam: exam._id,
             answerScript: script._id,
             gradedBy: ta._id,
-            question: null,
+            question: undefined,
             totalScore: 45,
             isFinal: true,
             rubric: rubric._id,
@@ -278,7 +276,7 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
             raisedBy: ta._id,
             reason: FlagReason.ILLEGIBLE,
             status: FlagStatus.OPEN,
-            description: 'Cannot read page 2',
+            note: 'Cannot read page 2',
         });
 
         mockSessionUser = { id: prof._id.toString(), role: UserRole.PROFESSOR };
