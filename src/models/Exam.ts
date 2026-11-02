@@ -76,6 +76,10 @@ export interface IExam extends Document {
      * DISABLED means no official PDF download is available. It cannot prevent viewing, screenshots, screen capture, or saving visible images; that is why viewer images remain watermarked.
      */
     studentDownloadPolicy?: StudentDownloadPolicy;
+    publishedBy?: mongoose.Types.ObjectId | null;
+    publishedAt?: Date | null;
+    published_by?: mongoose.Types.ObjectId | null;
+    published_at?: Date | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -217,12 +221,31 @@ const ExamSchema = new Schema<IExam>(
             type: String,
             enum: Object.values(StudentDownloadPolicy),
             default: StudentDownloadPolicy.DISABLED
+        },
+        publishedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        },
+        publishedAt: {
+            type: Date,
+            default: null
         }
     },
     {
-        timestamps: true
+        timestamps: true,
+        toJSON: { virtuals: true },
+        toObject: { virtuals: true }
     }
 );
+
+ExamSchema.virtual('published_by')
+    .get(function () { return this.publishedBy; })
+    .set(function (v: mongoose.Types.ObjectId | null) { this.publishedBy = v; });
+
+ExamSchema.virtual('published_at')
+    .get(function () { return this.publishedAt; })
+    .set(function (v: Date | null) { this.publishedAt = v; });
 
 // Indexes for common query patterns
 ExamSchema.index({ course: 1, examDate: -1 });

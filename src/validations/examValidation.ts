@@ -99,9 +99,9 @@ const VALID_TRANSITIONS: Record<ExamStatus, ExamStatus[]> = {
     [ExamStatus.DRAFT]: [ExamStatus.SCHEDULED],
     [ExamStatus.SCHEDULED]: [ExamStatus.DRAFT, ExamStatus.SCANNING],
     [ExamStatus.SCANNING]: [ExamStatus.EVALUATING],
-    [ExamStatus.EVALUATING]: [ExamStatus.REVIEW_PENDING],
+    [ExamStatus.EVALUATING]: [ExamStatus.REVIEW_PENDING, ExamStatus.PUBLISHED],
     [ExamStatus.REVIEW_PENDING]: [ExamStatus.PUBLISHED],
-    [ExamStatus.PUBLISHED]: [ExamStatus.ARCHIVED],
+    [ExamStatus.PUBLISHED]: [ExamStatus.ARCHIVED, ExamStatus.REVIEW_PENDING],
     [ExamStatus.ARCHIVED]: []
 };
 
