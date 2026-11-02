@@ -28,7 +28,6 @@ vi.mock('next-auth', async (importOriginal) => {
 describe('AE-190: Professor Publish Action Per Exam', () => {
     let publishPOST: any;
     let prof: any;
-    let otherProf: any;
     let ta: any;
     let student: any;
     let course: any;
@@ -58,14 +57,6 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
         prof = await User.create({
             name: 'Prof Turing',
             email: 'turing@iiit.ac.in',
-            password: 'Password@123',
-            role: UserRole.PROFESSOR,
-            isActive: true,
-        });
-
-        otherProf = await User.create({
-            name: 'Prof Lovelace',
-            email: 'lovelace@iiit.ac.in',
             password: 'Password@123',
             role: UserRole.PROFESSOR,
             isActive: true,

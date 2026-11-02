@@ -719,10 +719,11 @@ class ExamService {
         }
 
         // AE-164: Check for OPEN flags that block publication
-        const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
+        const ScriptFlagModule = await import('../models/ScriptFlag');
+        const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
         const openFlagCount = await ScriptFlag.countDocuments({
             exam: new mongoose.Types.ObjectId(id),
-            status: 'OPEN' as any
+            status: ScriptFlagModule.FlagStatus.OPEN
         });
         if (openFlagCount > 0) {
             throw new HttpError(
