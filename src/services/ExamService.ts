@@ -722,7 +722,7 @@ class ExamService {
         const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
         const openFlagCount = await ScriptFlag.countDocuments({
             exam: new mongoose.Types.ObjectId(id),
-            status: 'OPEN'
+            status: 'OPEN' as any
         });
         if (openFlagCount > 0) {
             throw new HttpError(
