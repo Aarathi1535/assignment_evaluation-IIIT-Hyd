@@ -38,6 +38,7 @@ async function dropObsoleteIndex(collection: any, keys: Record<string, number>, 
  * Explicit migration for existing databases:
  * - drops the obsolete Allocation unique index on { ta: 1, answerScript: 1 }
  * - drops the obsolete Grade unique index on { answerScript: 1 }
+ * - drops the obsolete RegradeRequest unique index on { answerScript: 1 }
  * - ensures the new composite indexes exist
  */
 export async function migrateIndexes(): Promise<void> {
@@ -50,6 +51,7 @@ export async function migrateIndexes(): Promise<void> {
 
     const allocationsCol = db.collection('allocations');
     const gradesCol = db.collection('grades');
+    const regradeRequestsCol = db.collection('regraderequests');
 
     // 1. Drop obsolete Allocation unique index on (ta, answerScript)
     await dropObsoleteIndex(allocationsCol, { ta: 1, answerScript: 1 }, 'ta_1_answerScript_1');
@@ -57,10 +59,15 @@ export async function migrateIndexes(): Promise<void> {
     // 2. Drop obsolete Grade unique index on answerScript
     await dropObsoleteIndex(gradesCol, { answerScript: 1 }, 'answerScript_1');
 
-    // 3. Ensure the new composite indexes exist by calling createIndexes on models
+    // 3. Drop the obsolete RegradeRequest unique index that prevented multiple questions per script
+    await dropObsoleteIndex(regradeRequestsCol, { answerScript: 1 }, 'answerScript_1');
+
+    // 4. Ensure the new composite indexes exist by calling createIndexes on models
     const Allocation = (await import('../models/Allocation')).default;
     const Grade = (await import('../models/Grade')).default;
+    const RegradeRequest = (await import('../models/RegradeRequest')).default;
 
     await Allocation.createIndexes();
     await Grade.createIndexes();
+    await RegradeRequest.createIndexes();
 }
