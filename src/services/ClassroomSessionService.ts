@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import ClassroomSession, { IClassroomSession } from '../models/ClassroomSession';
@@ -7,6 +6,7 @@ import ClassroomParticipant, { IClassroomParticipant } from '../models/Classroom
 import ClassroomQuestion, { IClassroomQuestion } from '../models/ClassroomQuestion';
 import ClassroomSubmission, { IClassroomSubmission } from '../models/ClassroomSubmission';
 import ClassroomEventService from './ClassroomEventService';
+import classroomStorageService from './ClassroomStorageService';
 import { generateJoinCode, generateQRCodeSvg } from '../lib/classroomQr';
 import { HttpError } from '../lib/errors';
 
@@ -166,25 +166,34 @@ export class ClassroomSessionService {
             throw new HttpError('Join code is required', 400);
         }
 
+        const normalizedCode = joinCode.trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$/.test(normalizedCode)) {
+            throw new HttpError('Invalid join code format. Must be 6 alphanumeric characters', 400);
+        }
+
         if (!name || !name.trim()) {
             throw new HttpError('Participant name or roll number is required to join', 400);
         }
 
-        const normalizedCode = joinCode.trim().toUpperCase();
+        const cleanName = name.trim().slice(0, 100);
+        if (cleanName.length === 0) {
+            throw new HttpError('Participant name cannot be empty', 400);
+        }
+
         const session = await ClassroomSession.findOne({ joinCode: normalizedCode, status: 'ACTIVE' });
 
         if (!session) {
             throw new HttpError('Classroom session not found or is closed', 404);
         }
 
-        // Generate participant identity and secret session token
+        // Generate participant identity and secret session-scoped token
         const participantId = `part_${crypto.randomBytes(6).toString('hex')}`;
-        const token = `tok_${crypto.randomBytes(16).toString('hex')}`;
+        const token = `tok_${crypto.randomBytes(24).toString('hex')}`;
 
         const participant = await ClassroomParticipant.create({
             session: session._id,
             participantId,
-            name: name.trim(),
+            name: cleanName,
             token,
             userId: optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)
                 ? new mongoose.Types.ObjectId(optionalUserId)
@@ -299,7 +308,7 @@ export class ClassroomSessionService {
             throw new HttpError('Time expired for this activity. Submissions are closed.', 400);
         }
 
-        // Validate file buffer
+        // Validate file buffer existence
         if (!fileBuffer || fileBuffer.length === 0) {
             throw new HttpError('Image file is required for submission', 400);
         }
@@ -317,27 +326,40 @@ export class ClassroomSessionService {
             throw new HttpError('Invalid image format. Allowed formats: JPEG, PNG, WebP, HEIC', 400);
         }
 
+        // Validate minimum size for an actual image
+        if (fileBuffer.length < 50) {
+            throw new HttpError('Uploaded image is too small or corrupt', 400);
+        }
+
         // Verify image header magic bytes
-        const isJpeg = fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8;
-        const isPng = fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x4e && fileBuffer[3] === 0x47;
+        const isJpeg = fileBuffer.length >= 3 && fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff;
+        const isPng = fileBuffer.length >= 8 && fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && fileBuffer[2] === 0x4e && fileBuffer[3] === 0x47;
         const isWebp = fileBuffer.length > 12 && fileBuffer.toString('utf8', 0, 4) === 'RIFF' && fileBuffer.toString('utf8', 8, 12) === 'WEBP';
         const isHeic = fileBuffer.length > 12 && fileBuffer.toString('utf8', 4, 12).includes('ftyp');
 
         if (!isJpeg && !isPng && !isWebp && !isHeic) {
-            throw new HttpError('Uploaded file is not a valid image', 400);
+            throw new HttpError('Uploaded file content does not match a valid image format', 400);
         }
 
-        // Determine extension
+        // Determine extension and safe filename
         const ext = isPng ? '.png' : isWebp ? '.webp' : isHeic ? '.heic' : '.jpg';
-        const safeName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`;
+        const safeName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`;
+        const rawBase = path.basename(originalFilename || 'handwritten-answer.jpg');
+        const sanitizedOriginalName = rawBase
+            .replace(/\.{2,}/g, '.')
+            .replace(/[^a-zA-Z0-9._-]/g, '')
+            .slice(0, 100) || `answer${ext}`;
 
-        // Save image securely in data/classroom-uploads/[sessionId]/[activityId]/
-        const uploadsDir = path.join(process.cwd(), 'data', 'classroom-uploads', session._id.toString(), activity._id.toString());
-        await fs.promises.mkdir(uploadsDir, { recursive: true });
-        const filePath = path.join(uploadsDir, safeName);
-        await fs.promises.writeFile(filePath, fileBuffer);
+        // Save image securely via ClassroomStorageService (deployment-persistent)
+        const storageResult = await classroomStorageService.storeImage({
+            sessionId: session._id.toString(),
+            activityId: activity._id.toString(),
+            filename: safeName,
+            buffer: fileBuffer,
+            mimeType: normalizedMime
+        });
 
-        const relativeImagePath = `classroom-uploads/${session._id.toString()}/${activity._id.toString()}/${safeName}`;
+        const relativeImagePath = storageResult.storagePath;
 
         // Check if student already submitted (prevent duplicate or allow replace)
         let submission: IClassroomSubmission;
@@ -348,7 +370,7 @@ export class ClassroomSessionService {
 
         if (existing) {
             existing.imagePath = relativeImagePath;
-            existing.originalFilename = originalFilename || 'handwritten-answer.jpg';
+            existing.originalFilename = sanitizedOriginalName;
             existing.fileSize = fileBuffer.length;
             existing.mimeType = normalizedMime;
             existing.studentName = studentName;
@@ -365,7 +387,7 @@ export class ClassroomSessionService {
                     ? new mongoose.Types.ObjectId(studentUserId)
                     : null,
                 imagePath: relativeImagePath,
-                originalFilename: originalFilename || 'handwritten-answer.jpg',
+                originalFilename: sanitizedOriginalName,
                 fileSize: fileBuffer.length,
                 mimeType: normalizedMime,
                 status: 'SUBMITTED',
@@ -409,6 +431,10 @@ export class ClassroomSessionService {
             throw new HttpError('Active classroom activity not found', 404);
         }
 
+        if (session.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own this classroom session', 403);
+        }
+
         const activity = await ClassroomQuestion.findById(session.currentActivity);
         if (!activity) {
             throw new HttpError('Activity not found', 404);
@@ -449,6 +475,10 @@ export class ClassroomSessionService {
 
         if (!session || !session.currentActivity) {
             throw new HttpError('Active classroom activity not found', 404);
+        }
+
+        if (session.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own this classroom session', 403);
         }
 
         const activity = await ClassroomQuestion.findById(session.currentActivity);
@@ -494,6 +524,11 @@ export class ClassroomSessionService {
         const submission = await ClassroomSubmission.findById(submissionId);
         if (!submission) {
             throw new HttpError('Submission not found', 404);
+        }
+
+        const session = await ClassroomSession.findById(submission.session);
+        if (!session || session.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own the session for this submission', 403);
         }
 
         submission.isCorrect = isCorrect;
@@ -545,6 +580,10 @@ export class ClassroomSessionService {
 
         if (!session || !session.currentActivity) {
             throw new HttpError('Active classroom activity not found', 404);
+        }
+
+        if (session.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own this classroom session', 403);
         }
 
         const activity = await ClassroomQuestion.findById(session.currentActivity);
@@ -608,6 +647,16 @@ export class ClassroomSessionService {
     async getActivitySubmissions(activityId: string, context: ClassroomAuditContext): Promise<IClassroomSubmission[]> {
         if (!context.actingUserId || context.actingUserRole !== 'PROFESSOR') {
             throw new HttpError('Forbidden: Only professors can view all submissions', 403);
+        }
+
+        const activity = await ClassroomQuestion.findById(activityId);
+        if (!activity) {
+            throw new HttpError('Activity not found', 404);
+        }
+
+        const session = await ClassroomSession.findById(activity.session);
+        if (!session || session.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own this classroom session', 403);
         }
 
         return ClassroomSubmission.find({ question: activityId }).sort({ submittedAt: 1 });

@@ -185,7 +185,11 @@ export default function MobileStudentClassroomSessionPage() {
   useEffect(() => {
     if (!sessionCode) return;
 
-    const sse = new EventSource(`/api/classroom/sessions/${sessionCode}/stream`);
+    const sseUrl = participantToken
+      ? `/api/classroom/sessions/${sessionCode}/stream?token=${encodeURIComponent(participantToken)}`
+      : `/api/classroom/sessions/${sessionCode}/stream`;
+
+    const sse = new EventSource(sseUrl);
     eventSourceRef.current = sse;
 
     sse.addEventListener('initial', (e) => {
@@ -233,7 +237,7 @@ export default function MobileStudentClassroomSessionPage() {
       sse.close();
       eventSourceRef.current = null;
     };
-  }, [sessionCode, fetchSessionData, fetchResults, fetchMySubmission]);
+  }, [sessionCode, participantToken, fetchSessionData, fetchResults, fetchMySubmission]);
 
   // Timer countdown calculation
   useEffect(() => {

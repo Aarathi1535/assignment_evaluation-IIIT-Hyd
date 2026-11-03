@@ -51,6 +51,7 @@ interface MySubmission {
 
 export default function StudentClassroomPage() {
   const [sessionCode, setSessionCode] = useState('');
+  const [participantToken, setParticipantToken] = useState('');
   const [joined, setJoined] = useState(false);
   const [sessionTitle, setSessionTitle] = useState('');
   const [activity, setActivity] = useState<ActiveActivity | null>(null);
@@ -125,7 +126,11 @@ export default function StudentClassroomPage() {
   useEffect(() => {
     if (!joined || !sessionCode) return;
 
-    const sse = new EventSource(`/api/classroom/sessions/${sessionCode}/stream`);
+    const sseUrl = participantToken
+      ? `/api/classroom/sessions/${sessionCode}/stream?token=${encodeURIComponent(participantToken)}`
+      : `/api/classroom/sessions/${sessionCode}/stream`;
+
+    const sse = new EventSource(sseUrl);
     eventSourceRef.current = sse;
 
     sse.addEventListener('initial', (e) => {
@@ -173,7 +178,7 @@ export default function StudentClassroomPage() {
       sse.close();
       eventSourceRef.current = null;
     };
-  }, [joined, sessionCode, fetchSession, fetchResults, fetchMySubmission]);
+  }, [joined, sessionCode, participantToken, fetchSession, fetchResults, fetchMySubmission]);
 
   // Countdown timer
   useEffect(() => {
@@ -212,6 +217,9 @@ export default function StudentClassroomPage() {
       const data = await res.json();
       if (data.success) {
         setSessionCode(code);
+        if (data.data?.participant?.token) {
+          setParticipantToken(data.data.participant.token);
+        }
         setJoined(true);
         if (data.data.session) {
           setSessionTitle(data.data.session.title);
@@ -253,6 +261,9 @@ export default function StudentClassroomPage() {
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
+      if (participantToken) {
+        formData.append('participantToken', participantToken);
+      }
 
       const res = await fetch(`/api/classroom/sessions/${sessionCode}/submit`, {
         method: 'POST',

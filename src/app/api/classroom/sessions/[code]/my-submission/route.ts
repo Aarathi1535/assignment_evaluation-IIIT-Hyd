@@ -25,7 +25,7 @@ export async function GET(
       }, { status: 404 });
     }
 
-    const participantToken = req.headers.get('x-participant-token');
+    const participantToken = req.headers.get('x-participant-token') || req.nextUrl.searchParams.get('token');
     let participantId: string | null = null;
     let studentUserId: string | null = null;
 

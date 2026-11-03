@@ -36,6 +36,14 @@ export async function GET(
       }, { status: 404 });
     }
 
+    if (session.createdBy.toString() !== auth.user.id) {
+      return NextResponse.json({
+        success: false,
+        message: 'Forbidden: You do not own this classroom session',
+        data: null
+      }, { status: 403 });
+    }
+
     const context = {
       actingUserId: auth.user.id,
       actingUserRole: auth.user.role

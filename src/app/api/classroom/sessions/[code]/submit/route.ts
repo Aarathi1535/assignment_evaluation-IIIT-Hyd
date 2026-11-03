@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
+import ClassroomSession from '@/models/ClassroomSession';
 import classroomSessionService from '@/services/ClassroomSessionService';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
@@ -14,8 +15,32 @@ export async function POST(
     const resolvedParams = await params;
     const sessionCode = resolvedParams.code.trim().toUpperCase();
 
+    const session = await ClassroomSession.findOne({ joinCode: sessionCode });
+    if (!session) {
+      return NextResponse.json({
+        success: false,
+        message: 'Active classroom session not found',
+        data: null
+      }, { status: 404 });
+    }
+
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.includes('multipart/form-data')) {
+      return NextResponse.json({
+        success: false,
+        message: 'Expected multipart/form-data with handwritten image file',
+        data: null
+      }, { status: 400 });
+    }
+
+    const formData = await req.formData();
+    const file = formData.get('file') as File | null;
+    const formToken = formData.get('participantToken') as string | null;
+    const formParticipantId = formData.get('participantId') as string | null;
+    const formStudentName = formData.get('studentName') as string | null;
+
     // Check participant authentication
-    const participantToken = req.headers.get('x-participant-token');
+    const participantToken = req.headers.get('x-participant-token') || formToken;
     let participantId: string | null = null;
     let studentName: string | null = null;
     let studentUserId: string | undefined = undefined;
@@ -23,6 +48,13 @@ export async function POST(
     if (participantToken) {
       const participant = await classroomSessionService.getParticipantByToken(participantToken);
       if (participant) {
+        if (participant.session.toString() !== session._id.toString()) {
+          return NextResponse.json({
+            success: false,
+            message: 'Forbidden: Participant token does not belong to this session',
+            data: null
+          }, { status: 403 });
+        }
         participantId = participant.participantId;
         studentName = participant.name;
         if (participant.userId) {
@@ -45,20 +77,6 @@ export async function POST(
       }
     }
 
-    const contentType = req.headers.get('content-type') || '';
-    if (!contentType.includes('multipart/form-data')) {
-      return NextResponse.json({
-        success: false,
-        message: 'Expected multipart/form-data with handwritten image file',
-        data: null
-      }, { status: 400 });
-    }
-
-    const formData = await req.formData();
-    const file = formData.get('file') as File | null;
-    const formParticipantId = formData.get('participantId') as string | null;
-    const formStudentName = formData.get('studentName') as string | null;
-
     if (formParticipantId && !participantId) {
       participantId = formParticipantId;
     }
@@ -69,7 +87,7 @@ export async function POST(
     if (!participantId || !studentName) {
       return NextResponse.json({
         success: false,
-        message: 'Unauthorized: Classroom participant token or identity is required',
+        message: 'Unauthorized: Valid classroom participant token is required to submit',
         data: null
       }, { status: 401 });
     }

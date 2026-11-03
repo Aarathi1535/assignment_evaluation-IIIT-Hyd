@@ -14,6 +14,14 @@ export async function POST(
     const resolvedParams = await params;
     const code = resolvedParams.code.trim().toUpperCase();
 
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      return NextResponse.json({
+        success: false,
+        message: 'Invalid join code format. Must be 6 alphanumeric characters',
+        data: null
+      }, { status: 400 });
+    }
+
     let body: { name?: string } = {};
     try {
       body = await req.json();
@@ -21,7 +29,7 @@ export async function POST(
       // Body may be empty if student just scans
     }
 
-    // Check if user is logged into the platform as a student
+    // Classroom joining is purely lightweight: no Assignment Evaluation account is required
     let optionalUserId: string | undefined;
     let participantName = body.name?.trim();
 
@@ -34,7 +42,7 @@ export async function POST(
         }
       }
     } catch {
-      // Non-blocking if session auth is not available
+      // Non-blocking: student account is purely optional
     }
 
     if (!participantName) {

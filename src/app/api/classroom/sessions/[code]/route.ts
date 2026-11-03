@@ -26,6 +26,13 @@ export async function GET(
     if (session.currentActivity) {
       const act = await ClassroomQuestion.findById(session.currentActivity);
       if (act) {
+        if (act.status === 'ACTIVE' && act.expiresAt && new Date() > act.expiresAt) {
+          act.status = 'CLOSED';
+          act.isActive = false;
+          act.closedAt = act.expiresAt;
+          await act.save();
+        }
+
         activeActivity = {
           id: act._id.toString(),
           title: act.title,
