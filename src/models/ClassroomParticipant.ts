@@ -63,3 +63,4 @@ const ClassroomParticipant: Model<IClassroomParticipant> =
     mongoose.model<IClassroomParticipant>('ClassroomParticipant', ClassroomParticipantSchema);
 
 export default ClassroomParticipant;
+

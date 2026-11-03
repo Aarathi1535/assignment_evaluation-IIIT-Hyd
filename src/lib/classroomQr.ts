@@ -51,3 +51,4 @@ export function generateJoinCode(): string {
     }
     return code;
 }
+

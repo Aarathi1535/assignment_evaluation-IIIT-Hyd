@@ -342,9 +342,8 @@ export default function StudentClassroomPage() {
                   </span>
 
                   {timeLeft !== null && activity.status === 'ACTIVE' && (
-                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
-                      timeLeft < 30 ? 'bg-red-50 text-red-600 border-red-300 dark:bg-red-950/60 dark:text-red-300' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                    }`}>
+                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${timeLeft < 30 ? 'bg-red-50 text-red-600 border-red-300 dark:bg-red-950/60 dark:text-red-300' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                      }`}>
                       <Clock className="w-4 h-4" />
                       <span>{formatTimer(timeLeft)}</span>
                     </div>
@@ -372,13 +371,12 @@ export default function StudentClassroomPage() {
                 </div>
 
                 {mySubmission && (
-                  <div className={`p-4 rounded-xl border flex items-center gap-3 ${
-                    mySubmission.isCorrect === true
+                  <div className={`p-4 rounded-xl border flex items-center gap-3 ${mySubmission.isCorrect === true
                       ? 'bg-emerald-100/60 border-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-700'
                       : mySubmission.isCorrect === false
-                      ? 'bg-red-100/60 border-red-300 dark:bg-red-950/60 dark:border-red-700'
-                      : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-                  }`}>
+                        ? 'bg-red-100/60 border-red-300 dark:bg-red-950/60 dark:border-red-700'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                    }`}>
                     {mySubmission.isCorrect === true ? (
                       <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
                     ) : mySubmission.isCorrect === false ? (
@@ -392,8 +390,8 @@ export default function StudentClassroomPage() {
                         {mySubmission.isCorrect === true
                           ? 'Marked Correct ✓'
                           : mySubmission.isCorrect === false
-                          ? 'Marked Incorrect ✗'
-                          : 'Under Review'}
+                            ? 'Marked Incorrect ✗'
+                            : 'Under Review'}
                       </span>
                     </div>
                   </div>
