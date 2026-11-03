@@ -1,1286 +1,1030 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Sparkles,
   Plus,
-  Radio,
-  X,
   Play,
-  Lock,
-  Eye,
-  SkipForward,
-  PowerOff,
-  Trash2,
+  Clock,
+  QrCode,
   Users,
   CheckCircle2,
-  Lightbulb,
-  Layers,
-  BarChart2
+  XCircle,
+  Send,
+  RefreshCw,
+  AlertCircle,
+  Tv,
+  Minimize2,
+  ThumbsUp,
+  ThumbsDown,
+  X,
+  ChevronRight,
+  Layers
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 
-interface OptionResult {
-  optionIndex: number;
-  optionText: string;
-  count: number;
-  percentage: number;
-  isCorrect?: boolean;
-}
-
-interface StudentResponseHistoryItem {
-  submissionId: string;
-  studentName: string;
-  studentEmail?: string;
-  selectedOption?: number | null;
-  selectedOptionText?: string | null;
-  textResponse?: string | null;
-  isCorrect?: boolean | null;
-  submittedAt: string;
-}
-
-interface AggregatedResults {
-  questionId: string;
-  totalResponses: number;
-  options: OptionResult[];
-  textResponses?: Array<{ text: string; submittedAt: string }>;
-  correctOptionIndex?: number | null;
-  explanation?: string;
-  isRevealed: boolean;
-  status: string;
-  responseHistory?: StudentResponseHistoryItem[];
-}
-
-interface ClassroomQuestion {
+interface ClassroomSession {
   _id: string;
+  id?: string;
+  title: string;
+  joinCode: string;
+  qrCodeSvg: string;
+  status: 'ACTIVE' | 'CLOSED';
+  participantCount: number;
+  currentActivity?: ClassroomActivity | null;
+  createdAt: string;
+}
+
+interface ClassroomActivity {
+  _id: string;
+  id?: string;
   title: string;
   questionPrompt: string;
-  type: 'MULTIPLE_CHOICE' | 'SHORT_ANSWER' | 'POLL';
-  options: string[];
-  correctOptionIndex?: number | null;
-  explanation?: string;
-  isActive: boolean;
-  isRevealed?: boolean;
-  status: 'ACTIVE' | 'CLOSED' | 'REVEALED' | 'DRAFT';
-  order: number;
-  createdAt: string;
-  results?: AggregatedResults;
+  referenceAnswer?: string | null;
+  timeLimit: number;
+  expiresAt?: string | null;
+  totalSubmissions: number;
+  correctCount: number;
+  incorrectCount: number;
+  status: 'ACTIVE' | 'CLOSED' | 'PUBLISHED' | 'DRAFT';
+  isPublished?: boolean;
 }
 
-export default function ProfessorClassroomAssessmentPage() {
-  const [questions, setQuestions] = useState<ClassroomQuestion[]>([]);
-  const [activeQuestion, setActiveQuestion] = useState<ClassroomQuestion | null>(null);
-  const [loading, setLoading] = useState(true);
+interface ClassroomSubmission {
+  _id: string;
+  id?: string;
+  participantId?: string;
+  studentName: string;
+  imagePath: string;
+  isCorrect?: boolean | null;
+  status: string;
+  submittedAt: string;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+}
+
+export default function ProfessorClassroomPage() {
+  const [, setSessions] = useState<ClassroomSession[]>([]);
+  const [currentSession, setCurrentSession] = useState<ClassroomSession | null>(null);
+  const [currentActivity, setCurrentActivity] = useState<ClassroomActivity | null>(null);
+  const [submissions, setSubmissions] = useState<ClassroomSubmission[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Modal State
+  // Create Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [newPrompt, setNewPrompt] = useState('');
-  const [newType, setNewType] = useState<'MULTIPLE_CHOICE' | 'SHORT_ANSWER' | 'POLL'>('MULTIPLE_CHOICE');
-  const [newOptions, setNewOptions] = useState<string[]>(['', '', '', '']);
-  const [newCorrectOption, setNewCorrectOption] = useState<number | null>(0);
-  const [newExplanation, setNewExplanation] = useState('');
-  const [activateNow, setActivateNow] = useState(true);
-  const [creating, setCreating] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [questionPrompt, setQuestionPrompt] = useState('');
+  const [referenceAnswer, setReferenceAnswer] = useState('');
+  const [timeLimit, setTimeLimit] = useState(180); // 3 mins default
 
-  // Completed Session / Results & History View State
-  const [historyQuestion, setHistoryQuestion] = useState<{
-    question: ClassroomQuestion;
-    results: AggregatedResults | null;
-    loading: boolean;
-  } | null>(null);
+  // Review Modal State
+  const [reviewIndex, setReviewIndex] = useState<number | null>(null);
+  const [reviewNote, setReviewNote] = useState('');
 
-  // SSE event source ref
+  // UI Modes
+  const [presenterMode, setPresenterMode] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+
+  // Timer Countdown State
+  const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
+
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  const handleViewResultsAndHistory = async (q: ClassroomQuestion) => {
-    setHistoryQuestion({ question: q, results: null, loading: true });
-    try {
-      const res = await fetch(`/api/classroom/questions/${q._id}/results`);
-      const json = await res.json();
-      if (json.success && json.data) {
-        setHistoryQuestion({ question: q, results: json.data, loading: false });
-      } else {
-        setHistoryQuestion({ question: q, results: null, loading: false });
-      }
-    } catch {
-      setHistoryQuestion({ question: q, results: null, loading: false });
-    }
-  };
-
-  const fetchQuestions = useCallback(async () => {
-    try {
-      const res = await fetch('/api/classroom/questions');
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
-        setQuestions(json.data);
-      }
-    } catch (err) {
-      console.error('Failed to load questions:', err);
-    }
-  }, []);
-
-  const fetchActiveQuestion = useCallback(async () => {
-    try {
-      const res = await fetch('/api/classroom/questions/active');
-      const json = await res.json();
-      if (json.success && json.data) {
-        setActiveQuestion(json.data);
-      } else {
-        setActiveQuestion(null);
-      }
-    } catch (err) {
-      console.error('Failed to load active question:', err);
-    }
-  }, []);
-
-  // Setup Real-time SSE listener with polling fallback
+  // Load Sessions
   useEffect(() => {
-    async function loadData() {
+    let active = true;
+    const loadSessions = async () => {
       try {
-        await Promise.all([fetchQuestions(), fetchActiveQuestion()]);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-
-    // SSE connection
-    try {
-      const sse = new EventSource('/api/classroom/stream');
-      eventSourceRef.current = sse;
-
-      sse.addEventListener('initial', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.activeQuestion) {
-            setActiveQuestion(data.activeQuestion);
+        const res = await fetch('/api/classroom/sessions');
+        const data = await res.json();
+        if (!active) return;
+        if (data.success && Array.isArray(data.data)) {
+          setSessions(data.data);
+          if (data.data.length > 0) {
+            const first = data.data[0];
+            setCurrentSession((prev) => prev || first);
+            if (first.currentActivity) {
+              setCurrentActivity((prev) => prev || first.currentActivity);
+            }
           }
-        } catch {
-          // ignore parse error
         }
-      });
-
-      sse.addEventListener('classroom_update', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.activeQuestion !== undefined) {
-            setActiveQuestion(data.activeQuestion);
-          }
-          fetchQuestions();
-        } catch {
-          // ignore parse error
-        }
-      });
-
-      sse.onerror = () => {
-        // SSE will attempt auto-reconnect
-      };
-    } catch (err) {
-      console.warn('SSE not supported or failed to connect:', err);
-    }
-
-    // Interval fallback to keep counts fresh
-    const interval = setInterval(() => {
-      fetchActiveQuestion();
-    }, 4000);
-
-    return () => {
-      clearInterval(interval);
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
+      } catch {
+        if (active) setErrorMessage('Failed to load classroom sessions');
       }
     };
-  }, [fetchQuestions, fetchActiveQuestion]);
+    loadSessions();
+    return () => { active = false; };
+  }, []);
 
-  // Actions
-  const handleLaunchQuestion = async (questionId: string) => {
-    setActionLoading(true);
-    setErrorMessage('');
+  // Fetch Submissions for Current Activity
+  const fetchSubmissions = useCallback(async (sessionCode: string) => {
+    if (!sessionCode) return;
     try {
-      const res = await fetch(`/api/classroom/questions/${questionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'activate' })
-      });
-      const json = await res.json();
-      if (json.success) {
-        setSuccessMessage('Question launched live!');
-        await Promise.all([fetchActiveQuestion(), fetchQuestions()]);
-      } else {
-        setErrorMessage(json.message || 'Failed to activate question');
+      const res = await fetch(`/api/classroom/sessions/${sessionCode}/submissions`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setSubmissions(data.data);
       }
     } catch {
-      setErrorMessage('Network error activating question');
-    } finally {
-      setActionLoading(false);
+      // Non-blocking
     }
-  };
+  }, []);
 
-  const handleCloseVoting = async () => {
-    if (!activeQuestion) return;
-    setActionLoading(true);
-    setErrorMessage('');
-    try {
-      const res = await fetch(`/api/classroom/questions/${activeQuestion._id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'close' })
-      });
-      const json = await res.json();
-      if (json.success) {
-        setSuccessMessage('Voting closed. Student responses locked.');
-        await Promise.all([fetchActiveQuestion(), fetchQuestions()]);
-      } else {
-        setErrorMessage(json.message || 'Failed to close question');
-      }
-    } catch {
-      setErrorMessage('Network error closing question');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleRevealResults = async () => {
-    if (!activeQuestion) return;
-    setActionLoading(true);
-    setErrorMessage('');
-    try {
-      const res = await fetch(`/api/classroom/questions/${activeQuestion._id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reveal' })
-      });
-      const json = await res.json();
-      if (json.success) {
-        setSuccessMessage('Results and explanation revealed to students!');
-        await Promise.all([fetchActiveQuestion(), fetchQuestions()]);
-      } else {
-        setErrorMessage(json.message || 'Failed to reveal results');
-      }
-    } catch {
-      setErrorMessage('Network error revealing results');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleNextQuestion = async () => {
-    if (!activeQuestion) return;
-    setActionLoading(true);
-    setErrorMessage('');
-    try {
-      const res = await fetch('/api/classroom/questions/next', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentQuestionId: activeQuestion._id })
-      });
-      const json = await res.json();
-      if (json.success) {
-        if (json.data) {
-          setSuccessMessage('Moved to next question!');
-        } else {
-          setSuccessMessage('All questions in deck presented.');
+  useEffect(() => {
+    if (!currentSession?.joinCode || !currentActivity) return;
+    let active = true;
+    const loadSubs = async () => {
+      try {
+        const res = await fetch(`/api/classroom/sessions/${currentSession.joinCode}/submissions`);
+        const data = await res.json();
+        if (active && data.success && Array.isArray(data.data)) {
+          setSubmissions(data.data);
         }
-        await Promise.all([fetchActiveQuestion(), fetchQuestions()]);
-      } else {
-        setErrorMessage(json.message || 'Failed to move to next question');
+      } catch {
+        // Non-blocking
+      }
+    };
+    loadSubs();
+    return () => { active = false; };
+  }, [currentSession?.joinCode, currentActivity]);
+
+  // Real-time SSE Connection
+  useEffect(() => {
+    if (!currentSession?.joinCode) return;
+
+    const sse = new EventSource(`/api/classroom/sessions/${currentSession.joinCode}/stream`);
+    eventSourceRef.current = sse;
+
+    sse.addEventListener('initial', (e) => {
+      try {
+        const snap = JSON.parse(e.data);
+        if (snap.activity) {
+          setCurrentActivity(snap.activity);
+        }
+        if (typeof snap.participantCount === 'number') {
+          setCurrentSession((prev) => prev ? { ...prev, participantCount: snap.participantCount } : null);
+        }
+      } catch {
+        // Ignore
+      }
+    });
+
+    sse.addEventListener('classroom_event', (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        if (event.type === 'SESSION_JOINED') {
+          if (typeof event.payload?.participantCount === 'number') {
+            setCurrentSession((prev) => prev ? { ...prev, participantCount: event.payload.participantCount } : null);
+          }
+        } else if (event.type === 'SUBMISSION_RECEIVED') {
+          if (currentSession?.joinCode) {
+            fetchSubmissions(currentSession.joinCode);
+          }
+          if (typeof event.payload?.totalSubmissions === 'number') {
+            setCurrentActivity((prev) => prev ? { ...prev, totalSubmissions: event.payload.totalSubmissions } : null);
+          }
+        } else if (event.type === 'ACTIVITY_CLOSED' || event.type === 'QUESTION_CLOSED') {
+          setCurrentActivity((prev) => prev ? { ...prev, status: 'CLOSED' } : null);
+        } else if (event.type === 'TIMER_EXTENDED') {
+          if (event.payload?.expiresAt) {
+            setCurrentActivity((prev) => prev ? { ...prev, expiresAt: event.payload.expiresAt, status: 'ACTIVE' } : null);
+          }
+        } else if (event.type === 'SUBMISSION_REVIEWED') {
+          if (currentSession?.joinCode) {
+            fetchSubmissions(currentSession.joinCode);
+          }
+          if (typeof event.payload?.correctCount === 'number' && typeof event.payload?.incorrectCount === 'number') {
+            setCurrentActivity((prev) => prev ? {
+              ...prev,
+              correctCount: event.payload.correctCount,
+              incorrectCount: event.payload.incorrectCount
+            } : null);
+          }
+        } else if (event.type === 'ACTIVITY_PUBLISHED') {
+          if (currentSession?.joinCode) {
+            fetchSubmissions(currentSession.joinCode);
+          }
+          setCurrentActivity((prev) => prev ? {
+            ...prev,
+            status: 'PUBLISHED',
+            isPublished: true,
+            referenceAnswer: event.payload?.referenceAnswer || prev.referenceAnswer,
+            totalSubmissions: event.payload?.totalSubmissions ?? prev.totalSubmissions,
+            correctCount: event.payload?.correctCount ?? prev.correctCount,
+            incorrectCount: event.payload?.incorrectCount ?? prev.incorrectCount
+          } : null);
+        }
+      } catch {
+        // Ignore
+      }
+    });
+
+    return () => {
+      sse.close();
+      eventSourceRef.current = null;
+    };
+  }, [currentSession?.joinCode, fetchSubmissions]);
+
+  // Countdown Timer
+  useEffect(() => {
+    if (!currentActivity?.expiresAt || currentActivity.status !== 'ACTIVE') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const end = new Date(currentActivity.expiresAt!).getTime();
+      const diff = Math.max(0, Math.floor((end - now) / 1000));
+      setSecondsRemaining(diff);
+
+      if (diff <= 0) {
+        clearInterval(interval);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [currentActivity?.expiresAt, currentActivity?.status]);
+
+  // Action: Review Submission defined before keydown effect
+  const handleMarkReview = useCallback(async (isCorrect: boolean) => {
+    if (reviewIndex === null || !submissions[reviewIndex]) return;
+    const sub = submissions[reviewIndex];
+
+    try {
+      const res = await fetch(`/api/classroom/submissions/${sub._id}/review`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isCorrect, note: reviewNote || undefined })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setSubmissions((prev) => {
+          const next = [...prev];
+          next[reviewIndex] = { ...next[reviewIndex], isCorrect, status: 'REVIEWED' };
+          return next;
+        });
+
+        if (reviewIndex + 1 < submissions.length) {
+          setReviewIndex(reviewIndex + 1);
+          setReviewNote('');
+        } else {
+          setReviewIndex(null);
+        }
       }
     } catch {
-      setErrorMessage('Network error moving to next question');
-    } finally {
-      setActionLoading(false);
+      setErrorMessage('Failed to save review status');
     }
-  };
+  }, [reviewIndex, submissions, reviewNote]);
 
-  const handleDeactivate = async () => {
-    if (!activeQuestion) return;
+  // Keyboard navigation in review modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (reviewIndex === null) return;
+      if (e.key === '1' || e.key === 'ArrowRight') {
+        handleMarkReview(true);
+      } else if (e.key === '0' || e.key === 'ArrowLeft') {
+        handleMarkReview(false);
+      } else if (e.key === 'Escape') {
+        setReviewIndex(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [reviewIndex, handleMarkReview]);
+
+  // Action: Create Session and Activity
+  const handleCreateSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionTitle.trim() || !questionPrompt.trim()) return;
+
     setActionLoading(true);
     setErrorMessage('');
     try {
-      const res = await fetch(`/api/classroom/questions/${activeQuestion._id}`, {
-        method: 'PATCH',
+      const res = await fetch('/api/classroom/sessions', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'deactivate' })
+        body: JSON.stringify({
+          title: sessionTitle.trim(),
+          questionPrompt: questionPrompt.trim(),
+          referenceAnswer: referenceAnswer.trim() || undefined,
+          timeLimit
+        })
       });
-      const json = await res.json();
-      if (json.success) {
-        setSuccessMessage('Session ended. Question returned to deck.');
-        await Promise.all([fetchActiveQuestion(), fetchQuestions()]);
+
+      const data = await res.json();
+      if (data.success && data.data) {
+        setSuccessMessage('Classroom activity created successfully!');
+        setCurrentSession(data.data.session);
+        setCurrentActivity(data.data.activity);
+        setShowCreateModal(false);
+        setSubmissions([]);
+        setSessions((prev) => [data.data.session, ...prev]);
       } else {
-        setErrorMessage(json.message || 'Failed to deactivate');
+        setErrorMessage(data.message || 'Failed to create classroom session');
       }
     } catch {
-      setErrorMessage('Network error deactivating question');
+      setErrorMessage('Network error while creating session');
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleDeleteQuestion = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this question and its responses?')) return;
+  // Action: Close Submissions Manually
+  const handleCloseSubmissions = async () => {
+    if (!currentSession?.joinCode) return;
+    setActionLoading(true);
     try {
-      const res = await fetch(`/api/classroom/questions/${id}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (json.success) {
-        setSuccessMessage('Question deleted successfully');
-        await Promise.all([fetchQuestions(), fetchActiveQuestion()]);
-      }
-    } catch {
-      setErrorMessage('Failed to delete question');
-    }
-  };
-
-  const handleCreateQuestion = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreating(true);
-    setErrorMessage('');
-    try {
-      const filteredOptions = newOptions.map((o) => o.trim()).filter(Boolean);
-      if (newType === 'MULTIPLE_CHOICE' && filteredOptions.length < 2) {
-        setErrorMessage('Multiple choice questions require at least 2 options.');
-        setCreating(false);
-        return;
-      }
-
-      const payload = {
-        title: newTitle.trim(),
-        questionPrompt: newPrompt.trim(),
-        type: newType,
-        options: filteredOptions,
-        correctOptionIndex: newType === 'MULTIPLE_CHOICE' ? newCorrectOption : null,
-        explanation: newExplanation.trim(),
-        isActive: activateNow,
-        order: questions.length + 1
-      };
-
-      const res = await fetch('/api/classroom/questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const res = await fetch(`/api/classroom/sessions/${currentSession.joinCode}/close`, {
+        method: 'PATCH'
       });
-      const json = await res.json();
-      if (json.success) {
-        setShowCreateModal(false);
-        setNewTitle('');
-        setNewPrompt('');
-        setNewOptions(['', '', '', '']);
-        setNewCorrectOption(0);
-        setNewExplanation('');
-        setSuccessMessage(activateNow ? 'Question created and launched live!' : 'Question saved to deck!');
-        await Promise.all([fetchQuestions(), fetchActiveQuestion()]);
+      const data = await res.json();
+      if (data.success) {
+        setCurrentActivity((prev) => prev ? { ...prev, status: 'CLOSED' } : null);
+        setSuccessMessage('Submissions closed for review');
       } else {
-        setErrorMessage(json.message || 'Failed to create question');
+        setErrorMessage(data.message || 'Failed to close submissions');
       }
     } catch {
-      setErrorMessage('Network error while creating question');
+      setErrorMessage('Network error');
     } finally {
-      setCreating(false);
+      setActionLoading(false);
     }
   };
 
-  const totalVotes = activeQuestion?.results?.totalResponses || 0;
-  const isQuestionRevealed = activeQuestion?.isRevealed || activeQuestion?.status === 'REVEALED';
-  const isQuestionClosed = activeQuestion?.status === 'CLOSED';
-  const isQuestionActive = activeQuestion?.status === 'ACTIVE';
+  // Action: Extend Timer (+60s)
+  const handleExtendTimer = async (seconds = 60) => {
+    if (!currentSession?.joinCode) return;
+    try {
+      const res = await fetch(`/api/classroom/sessions/${currentSession.joinCode}/extend`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ additionalSeconds: seconds })
+      });
+      const data = await res.json();
+      if (data.success && data.data?.expiresAt) {
+        setCurrentActivity((prev) => prev ? { ...prev, expiresAt: data.data.expiresAt, status: 'ACTIVE' } : null);
+        setSuccessMessage(`Timer extended by ${seconds}s`);
+      }
+    } catch {
+      // Ignore
+    }
+  };
 
-  const optionLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  // Action: Publish Results
+  const handlePublishResults = async () => {
+    if (!currentSession?.joinCode) return;
+    setActionLoading(true);
+    setErrorMessage('');
+
+    try {
+      const res = await fetch(`/api/classroom/sessions/${currentSession.joinCode}/publish`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setCurrentActivity((prev) => prev ? {
+          ...prev,
+          status: 'PUBLISHED',
+          isPublished: true,
+          referenceAnswer: data.data.referenceAnswer,
+          totalSubmissions: data.data.totalSubmissions,
+          correctCount: data.data.correctCount,
+          incorrectCount: data.data.incorrectCount
+        } : null);
+        setSuccessMessage('Results and reference answer published to all students!');
+      } else {
+        setErrorMessage(data.message || 'Failed to publish results');
+      }
+    } catch {
+      setErrorMessage('Network error while publishing results');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const formatTimer = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  // Full-Screen Presenter / Projector Mode
+  if (presenterMode && currentSession && currentActivity) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-950 text-white flex flex-col p-6 sm:p-10 select-none overflow-y-auto">
+        {/* Presenter Top Bar */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-5">
+          <div className="flex items-center gap-4">
+            <span className="px-3 py-1 bg-blue-600 font-bold rounded-lg text-xs uppercase tracking-wider">
+              Presenter Mode
+            </span>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">{currentSession.title}</h1>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setPresenterMode(false)}
+              className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors flex items-center gap-2 text-xs font-semibold"
+            >
+              <Minimize2 className="w-4 h-4" />
+              <span>Exit Presenter</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Presenter Main Content */}
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center py-6">
+          {/* Left: Join Info & QR Code */}
+          <div className="lg:col-span-4 flex flex-col items-center justify-center p-6 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl text-center">
+            <span className="text-xs uppercase tracking-widest text-slate-400 font-bold mb-2">Scan with Phone Camera</span>
+            
+            {/* Scannable QR Code */}
+            {currentSession.qrCodeSvg && (
+              <div
+                className="bg-white p-4 rounded-2xl shadow-inner mb-4 flex items-center justify-center"
+                dangerouslySetInnerHTML={{ __html: currentSession.qrCodeSvg }}
+              />
+            )}
+
+            <div className="mt-1">
+              <span className="text-xs text-slate-400 block mb-1">Or enter join code:</span>
+              <span className="text-4xl font-extrabold tracking-widest font-mono text-blue-400 bg-slate-950 px-5 py-2 rounded-xl border border-blue-500/40 inline-block shadow-inner">
+                {currentSession.joinCode}
+              </span>
+            </div>
+
+            <div className="mt-4 flex items-center gap-4 text-xs text-slate-400">
+              <span className="flex items-center gap-1.5 font-semibold text-slate-300">
+                <Users className="w-4 h-4 text-blue-400" />
+                {currentSession.participantCount} Joined
+              </span>
+              <span>&bull;</span>
+              <span className="flex items-center gap-1.5 font-semibold text-slate-300">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                {currentActivity.totalSubmissions} Submitted
+              </span>
+            </div>
+          </div>
+
+          {/* Right: Question Prompt, Timer, & Live Stats */}
+          <div className="lg:col-span-8 flex flex-col gap-6">
+            {/* Status and Timer */}
+            <div className="flex items-center justify-between">
+              <span className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border ${
+                currentActivity.status === 'ACTIVE'
+                  ? 'bg-blue-950/80 border-blue-700 text-blue-300'
+                  : currentActivity.status === 'PUBLISHED'
+                  ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                  : 'bg-amber-950/80 border-amber-700 text-amber-300'
+              }`}>
+                {currentActivity.status === 'ACTIVE' ? 'Submissions Open' : currentActivity.status === 'PUBLISHED' ? 'Results Published' : 'Submissions Closed'}
+              </span>
+
+              {secondsRemaining !== null && currentActivity.status === 'ACTIVE' && (
+                <div className={`flex items-center gap-2 px-5 py-2 rounded-2xl text-2xl font-black font-mono border ${
+                  secondsRemaining < 30
+                    ? 'bg-red-950 border-red-700 text-red-300 animate-pulse'
+                    : 'bg-slate-900 border-slate-800 text-slate-200'
+                }`}>
+                  <Clock className="w-6 h-6" />
+                  <span>{formatTimer(secondsRemaining)}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Question Text */}
+            <div className="bg-slate-900/90 border border-slate-800 p-8 rounded-3xl shadow-xl">
+              <span className="text-xs uppercase tracking-widest text-blue-400 font-bold block mb-2">Classroom Question</span>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white leading-relaxed">
+                {currentActivity.questionPrompt}
+              </h2>
+            </div>
+
+            {/* Published Results View */}
+            {currentActivity.isPublished && (
+              <div className="bg-emerald-950/40 border border-emerald-700/60 p-6 rounded-3xl shadow-2xl flex flex-col gap-4">
+                <span className="text-xs font-bold uppercase tracking-widest text-emerald-400">Reference Solution</span>
+                <p className="text-lg text-emerald-100 font-medium whitespace-pre-wrap leading-relaxed">
+                  {currentActivity.referenceAnswer || 'Correct solution demonstrated by professor.'}
+                </p>
+
+                <div className="grid grid-cols-3 gap-4 pt-2">
+                  <div className="bg-slate-900/80 p-4 rounded-2xl text-center border border-slate-800">
+                    <span className="text-xs text-slate-400 block">Total Answers</span>
+                    <span className="text-3xl font-extrabold text-white">{currentActivity.totalSubmissions}</span>
+                  </div>
+                  <div className="bg-emerald-900/40 p-4 rounded-2xl text-center border border-emerald-800/60">
+                    <span className="text-xs text-emerald-400 block">Correct Answers</span>
+                    <span className="text-3xl font-extrabold text-emerald-300">{currentActivity.correctCount}</span>
+                  </div>
+                  <div className="bg-red-900/40 p-4 rounded-2xl text-center border border-red-800/60">
+                    <span className="text-xs text-red-400 block">Incorrect Answers</span>
+                    <span className="text-3xl font-extrabold text-red-300">{currentActivity.incorrectCount}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <DashboardLayout
-      title="Interactive Classroom Assessment"
-      description="Live Mentimeter-style student polling, instant formative checks, and real-time comprehension insights."
-      quickActions={
-        <div className="flex items-center gap-3">
-          <Button
-            variant="primary"
-            onClick={() => {
-              setShowCreateModal(true);
-              setErrorMessage('');
-              setSuccessMessage('');
-            }}
-            className="flex items-center gap-2"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Create Question</span>
-          </Button>
-        </div>
-      }
+      title="Classroom Activity"
+      description="Live handwritten question sessions with QR codes, rapid review, and instant results."
     >
-      {/* Messages */}
-      {errorMessage && (
-        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-brand text-sm flex items-center justify-between">
-          <span>{errorMessage}</span>
-          <button onClick={() => setErrorMessage('')} className="text-rose-500 hover:text-rose-700">
-            <X className="h-4 w-4" />
-          </button>
+      <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6">
+        {/* Header Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                Independent MVP
+              </span>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Classroom Activity</h1>
+            </div>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+              Live handwritten question sessions with QR codes, rapid review, and instant results.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={() => setShowCreateModal(true)}
+              className="bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create Activity</span>
+            </Button>
+          </div>
         </div>
-      )}
-      {successMessage && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-brand text-sm flex items-center justify-between">
-          <span>{successMessage}</span>
-          <button onClick={() => setSuccessMessage('')} className="text-emerald-500 hover:text-emerald-700">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
 
-      {loading ? (
-        <div className="py-20 flex justify-center items-center">
-          <LoadingSpinner size="lg" />
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {/* LIVE PRESENTATION STAGE */}
-          {activeQuestion ? (
-            <div className="bg-white border-2 border-indigo-500/30 rounded-2xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
-              {/* Top Accent Strip */}
-              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
+        {/* Notifications */}
+        {errorMessage && (
+          <div className="p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-sm flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <button onClick={() => setErrorMessage('')} className="p-1 hover:bg-red-200/50 rounded-lg">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
-              {/* Status Header */}
-              <div className="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-3 w-3 relative">
-                    {isQuestionActive && (
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                    )}
-                    <span
-                      className={`relative inline-flex rounded-full h-3 w-3 ${
-                        isQuestionActive
-                          ? 'bg-emerald-500'
-                          : isQuestionClosed
-                          ? 'bg-amber-500'
-                          : 'bg-indigo-500'
-                      }`}
-                    />
-                  </span>
-                  <span className="text-xs font-black uppercase tracking-wider text-slate-700">
-                    {isQuestionActive
-                      ? 'Live Voting Open'
-                      : isQuestionClosed
-                      ? 'Voting Closed'
-                      : 'Results Revealed'}
-                  </span>
-                  <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-slate-100 text-slate-600">
-                    {activeQuestion.type.replace('_', ' ')}
-                  </span>
-                </div>
+        {successMessage && (
+          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-700 dark:text-emerald-300 text-sm flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 shrink-0" />
+              <span>{successMessage}</span>
+            </div>
+            <button onClick={() => setSuccessMessage('')} className="p-1 hover:bg-emerald-200/50 rounded-lg">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
-                <div className="flex items-center gap-2 bg-indigo-50 px-4 py-1.5 rounded-full border border-indigo-100 text-indigo-700 font-bold text-sm">
-                  <Users className="h-4 w-4" />
-                  <span>{totalVotes} {totalVotes === 1 ? 'Response' : 'Responses'}</span>
-                </div>
-              </div>
-
-              {/* Question Body */}
-              <div className="py-6 space-y-3">
-                <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest">
-                  {activeQuestion.title}
-                </p>
-                <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 leading-tight">
-                  {activeQuestion.questionPrompt}
-                </h2>
-              </div>
-
-              {/* Professor Results Dashboard Banner (When Voting Closed or Results Revealed) */}
-              {(isQuestionClosed || isQuestionRevealed) && (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 my-4 flex flex-wrap items-center justify-between gap-4">
+        {/* Active Session View */}
+        {currentSession && currentActivity ? (
+          <div className="flex flex-col gap-6">
+            {/* Session Controller Header */}
+            <Card className="p-5 sm:p-6 border-slate-200 dark:border-slate-800 shadow-sm flex flex-col gap-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+                <div>
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 shrink-0">
-                      <BarChart2 className="h-5 w-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">
-                        {isQuestionClosed
-                          ? 'Voting Closed — Professor Results Dashboard'
-                          : 'Classroom Results Dashboard (Revealed to Class)'}
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        {isQuestionClosed
-                          ? 'Review student response distribution and correct answer before revealing to students.'
-                          : 'Distribution, correct answer, and teaching takeaway are currently visible to students.'}
-                      </p>
-                    </div>
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">{currentSession.title}</h2>
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                      currentActivity.status === 'ACTIVE'
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                        : currentActivity.status === 'PUBLISHED'
+                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300'
+                        : 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                    }`}>
+                      {currentActivity.status}
+                    </span>
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <div className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 shadow-sm">
-                      Total Responses: <strong className="text-slate-900">{totalVotes}</strong>
-                    </div>
-                    {activeQuestion.type === 'MULTIPLE_CHOICE' &&
-                      activeQuestion.correctOptionIndex !== null &&
-                      activeQuestion.correctOptionIndex !== undefined && (
-                        <div className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-center gap-1.5 shadow-sm">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                          <span>
-                            Correct Answer: <strong>Option {optionLetters[activeQuestion.correctOptionIndex] || activeQuestion.correctOptionIndex + 1}</strong>
-                          </span>
-                        </div>
-                      )}
+                  <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                    <span>Join Code: <strong className="font-mono text-blue-600 dark:text-blue-400 text-sm">{currentSession.joinCode}</strong></span>
+                    <span>&bull;</span>
+                    <span className="flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-slate-400" />
+                      {currentSession.participantCount} Joined
+                    </span>
+                    <span>&bull;</span>
+                    <span className="flex items-center gap-1 font-semibold text-slate-700 dark:text-slate-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                      {submissions.length} Submissions
+                    </span>
                   </div>
                 </div>
-              )}
 
-              {/* Option Distribution Bars */}
-              {activeQuestion.type === 'MULTIPLE_CHOICE' && (
-                <div className="space-y-4 py-4">
-                  {(activeQuestion.options || []).map((optText, idx) => {
-                    const result = activeQuestion.results?.options?.find((o) => o.optionIndex === idx);
-                    const count = result?.count || 0;
-                    const pct = result?.percentage || 0;
-                    const isCorrect = (isQuestionClosed || isQuestionRevealed) && activeQuestion.correctOptionIndex === idx;
-
-                    return (
-                      <div
-                        key={idx}
-                        className={`relative rounded-xl border p-4 transition-all duration-300 ${
-                          isCorrect
-                            ? 'border-emerald-500 bg-emerald-50/50 shadow-md ring-2 ring-emerald-400/20'
-                            : 'border-slate-200 bg-slate-50/50'
-                        }`}
-                      >
-                        {/* Progress Fill Bar */}
-                        <div
-                          className={`absolute top-0 bottom-0 left-0 rounded-xl transition-all duration-700 ${
-                            isCorrect ? 'bg-emerald-100' : 'bg-indigo-50'
-                          }`}
-                          style={{ width: `${pct}%`, zIndex: 0 }}
-                        />
-
-                        {/* Content */}
-                        <div className="relative z-10 flex items-center justify-between gap-4">
-                          <div className="flex items-center gap-3">
-                            <span
-                              className={`flex h-8 w-8 items-center justify-center rounded-lg font-black text-sm ${
-                                isCorrect
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-slate-200 text-slate-800'
-                              }`}
-                            >
-                              {optionLetters[idx] || idx + 1}
-                            </span>
-                            <span className="font-semibold text-slate-900 text-base sm:text-lg">
-                              {optText}
-                            </span>
-                            {isCorrect && (
-                              <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                Correct Answer
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="text-right flex items-baseline gap-2">
-                            <span className="text-xl font-black text-slate-900">{count}</span>
-                            <span className="text-xs font-bold text-slate-500">({pct}%)</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Short Answer Responses Display */}
-              {activeQuestion.type === 'SHORT_ANSWER' && (
-                <div className="py-4 space-y-3">
-                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Student Submissions ({totalVotes})
-                  </h4>
-                  {activeQuestion.results?.textResponses && activeQuestion.results.textResponses.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {activeQuestion.results.textResponses.map((res, i) => (
-                        <div key={i} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800">
-                          &ldquo;{res.text}&rdquo;
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-slate-400 italic">No responses received yet.</p>
-                  )}
-                </div>
-              )}
-
-              {/* Explanation Note (When Closed or Revealed) */}
-              {(isQuestionClosed || isQuestionRevealed) && activeQuestion.explanation && (
-                <div className="mt-4 p-5 bg-amber-50/80 border border-amber-200/80 rounded-xl flex items-start gap-3">
-                  <Lightbulb className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">
-                      Teaching Takeaway & Explanation
-                    </p>
-                    <p className="text-sm text-slate-800 font-medium">
-                      {activeQuestion.explanation}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Student Response History (When Closed or Revealed) */}
-              {(isQuestionClosed || isQuestionRevealed) && (
-                <div className="mt-6 pt-5 border-t border-slate-100 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                      <Users className="h-4 w-4 text-indigo-600" />
-                      <span>Student Response History ({activeQuestion.results?.responseHistory?.length || 0})</span>
-                    </h4>
-                    <span className="text-[11px] text-slate-400">Preserved indefinitely for completed review</span>
-                  </div>
-
-                  {activeQuestion.results?.responseHistory && activeQuestion.results.responseHistory.length > 0 ? (
-                    <div className="overflow-x-auto rounded-xl border border-slate-200">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                            <th className="py-2.5 px-4">Student</th>
-                            <th className="py-2.5 px-4">Submitted Answer</th>
-                            <th className="py-2.5 px-4 text-center">Outcome</th>
-                            <th className="py-2.5 px-4 text-right">Time</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {activeQuestion.results.responseHistory.map((item) => (
-                            <tr key={item.submissionId} className="hover:bg-slate-50/60 transition-colors">
-                              <td className="py-2.5 px-4">
-                                <span className="font-semibold text-slate-900 block">{item.studentName}</span>
-                                {item.studentEmail && (
-                                  <span className="text-[11px] text-slate-400">{item.studentEmail}</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-slate-700">
-                                {activeQuestion.type === 'MULTIPLE_CHOICE' && typeof item.selectedOption === 'number' ? (
-                                  <span className="font-medium">
-                                    Option {optionLetters[item.selectedOption] || item.selectedOption + 1}: {item.selectedOptionText || activeQuestion.options[item.selectedOption]}
-                                  </span>
-                                ) : (
-                                  <span className="italic">{item.textResponse || '—'}</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-center">
-                                {item.isCorrect === true ? (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
-                                    Correct
-                                  </span>
-                                ) : item.isCorrect === false ? (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800">
-                                    Incorrect
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600">
-                                    Submitted
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-right text-slate-400">
-                                {new Date(item.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="p-4 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
-                      No student responses received yet.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Presentation Controls */}
-              <div className="mt-8 pt-6 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  {isQuestionActive && (
-                    <Button
-                      variant="secondary"
-                      onClick={handleCloseVoting}
-                      disabled={actionLoading}
-                      className="flex items-center gap-2 border-amber-300 text-amber-800 hover:bg-amber-50"
-                    >
-                      <Lock className="h-4 w-4" />
-                      <span>Close Voting</span>
-                    </Button>
-                  )}
-
-                  {!isQuestionRevealed && (
-                    <Button
-                      variant="primary"
-                      onClick={handleRevealResults}
-                      disabled={actionLoading}
-                      className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
-                    >
-                      <Eye className="h-4 w-4" />
-                      <span>Reveal Results & Answer</span>
-                    </Button>
-                  )}
+                {/* Top Action Buttons */}
+                <div className="flex items-center flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowQrModal(true)}
+                    className="flex items-center gap-1.5 text-xs"
+                  >
+                    <QrCode className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+                    <span>Show QR</span>
+                  </Button>
 
                   <Button
-                    variant={isQuestionRevealed ? 'primary' : 'outline'}
-                    onClick={handleNextQuestion}
-                    disabled={actionLoading}
-                    className="flex items-center gap-2"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPresenterMode(true)}
+                    className="flex items-center gap-1.5 text-xs bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-800"
                   >
-                    <SkipForward className="h-4 w-4" />
-                    <span>Next Question</span>
+                    <Tv className="w-4 h-4 text-blue-400" />
+                    <span>Presenter View</span>
                   </Button>
+
+                  {currentActivity.status === 'ACTIVE' && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleExtendTimer(60)}
+                        className="flex items-center gap-1 text-xs"
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>+1 Min</span>
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        onClick={handleCloseSubmissions}
+                        disabled={actionLoading}
+                        className="bg-amber-600 hover:bg-amber-500 text-white text-xs"
+                      >
+                        Close Submissions
+                      </Button>
+                    </>
+                  )}
+
+                  {currentActivity.status === 'CLOSED' && !currentActivity.isPublished && (
+                    <Button
+                      size="sm"
+                      onClick={handlePublishResults}
+                      disabled={actionLoading}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs flex items-center gap-1.5 font-bold"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Publish Results</span>
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {/* Question & Live Timer Bar */}
+              <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex-1">
+                  <span className="text-xs uppercase tracking-wider text-slate-400 font-bold block mb-1">Current Question</span>
+                  <p className="text-base font-semibold text-slate-800 dark:text-slate-100">{currentActivity.questionPrompt}</p>
                 </div>
 
-                <Button
-                  variant="outline"
-                  onClick={handleDeactivate}
-                  disabled={actionLoading}
-                  className="flex items-center gap-2 text-rose-600 border-rose-200 hover:bg-rose-50"
-                >
-                  <PowerOff className="h-4 w-4" />
-                  <span>End Live Session</span>
-                </Button>
+                {secondsRemaining !== null && currentActivity.status === 'ACTIVE' && (
+                  <div className={`px-4 py-2 rounded-xl text-lg font-black font-mono border flex items-center gap-2 self-start md:self-center shrink-0 ${
+                    secondsRemaining < 30
+                      ? 'bg-red-50 border-red-300 text-red-600 dark:bg-red-950/60 dark:border-red-800 dark:text-red-300 animate-pulse'
+                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200'
+                  }`}>
+                    <Clock className="w-5 h-5 text-slate-500" />
+                    <span>{formatTimer(secondsRemaining)}</span>
+                  </div>
+                )}
               </div>
-            </div>
-          ) : (
-            <Card className="text-center py-12 px-6 border-dashed border-2 border-slate-200 bg-slate-50/50">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 mb-4">
-                <Radio className="h-7 w-7" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-1">No Active Question Live</h3>
-              <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
-                Launch a question from your question deck below to begin receiving live student answers on their devices.
-              </p>
-              {questions.length > 0 && (
-                <Button
-                  variant="primary"
-                  onClick={() => handleLaunchQuestion(questions[0]._id)}
-                  className="flex items-center gap-2 mx-auto"
-                >
-                  <Play className="h-4 w-4" />
-                  <span>Launch First Question ({questions[0].title})</span>
-                </Button>
+
+              {/* Published Results Summary Bar */}
+              {currentActivity.isPublished && (
+                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs uppercase tracking-wider">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>Published Reference Answer & Aggregate Stats</span>
+                  </div>
+                  <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">
+                    {currentActivity.referenceAnswer || 'Reference solution recorded.'}
+                  </p>
+                  <div className="grid grid-cols-3 gap-3 text-center pt-1">
+                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
+                      <span className="text-xs text-slate-500 block">Total</span>
+                      <span className="text-lg font-bold text-slate-900 dark:text-white">{currentActivity.totalSubmissions}</span>
+                    </div>
+                    <div className="bg-emerald-100/60 dark:bg-emerald-900/30 p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                      <span className="text-xs text-emerald-700 dark:text-emerald-400 block">Correct</span>
+                      <span className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{currentActivity.correctCount}</span>
+                    </div>
+                    <div className="bg-red-100/60 dark:bg-red-900/30 p-2.5 rounded-lg border border-red-200 dark:border-red-800">
+                      <span className="text-xs text-red-700 dark:text-red-400 block">Incorrect</span>
+                      <span className="text-lg font-bold text-red-700 dark:text-red-300">{currentActivity.incorrectCount}</span>
+                    </div>
+                  </div>
+                </div>
               )}
             </Card>
-          )}
 
-          {/* QUESTION DECK / BANK */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Layers className="h-5 w-5 text-slate-700" />
-                <h3 className="text-lg font-bold text-slate-900">Question Deck ({questions.length})</h3>
+            {/* Live Submissions Gallery & Review Feed */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-blue-500" />
+                  <span>Student Submissions ({submissions.length})</span>
+                </h3>
+
+                {submissions.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const firstUnreviewed = submissions.findIndex(s => s.isCorrect === null || s.isCorrect === undefined);
+                      setReviewIndex(firstUnreviewed >= 0 ? firstUnreviewed : 0);
+                    }}
+                    className="text-xs font-semibold"
+                  >
+                    Launch Fast Reviewer
+                  </Button>
+                )}
               </div>
-              <span className="text-xs text-slate-500">Only one question is active live at any moment.</span>
-            </div>
 
-            {questions.length === 0 ? (
-              <Card className="text-center py-8 text-slate-400 text-sm">
-                No questions created yet. Click &ldquo;Create Question&rdquo; to add your first interactive prompt.
-              </Card>
-            ) : (
-              <div className="grid grid-cols-1 gap-4">
-                {questions.map((q, idx) => {
-                  const isCurrentActive = activeQuestion?._id === q._id;
-
-                  return (
+              {submissions.length === 0 ? (
+                <Card className="p-12 text-center border-dashed border-slate-300 dark:border-slate-800">
+                  <Clock className="w-10 h-10 mx-auto text-slate-400 dark:text-slate-600 mb-3 animate-pulse" />
+                  <h4 className="text-base font-semibold text-slate-700 dark:text-slate-300">Waiting for handwritten submissions...</h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-sm mx-auto">
+                    Students can scan the QR code or enter code <strong className="font-mono text-blue-600">{currentSession.joinCode}</strong> to upload their answers.
+                  </p>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {submissions.map((sub, idx) => (
                     <div
-                      key={q._id}
-                      className={`p-5 rounded-xl border bg-white transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                        isCurrentActive
-                          ? 'border-indigo-500 shadow-md ring-2 ring-indigo-400/20'
-                          : 'border-slate-200 hover:border-slate-300'
+                      key={sub._id || idx}
+                      onClick={() => setReviewIndex(idx)}
+                      className={`group relative rounded-2xl border bg-white dark:bg-slate-900 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ${
+                        sub.isCorrect === true
+                          ? 'border-emerald-500/80 ring-2 ring-emerald-500/20'
+                          : sub.isCorrect === false
+                          ? 'border-red-500/80 ring-2 ring-red-500/20'
+                          : 'border-slate-200 dark:border-slate-800'
                       }`}
                     >
-                      <div className="space-y-1.5 flex-1">
-                        <div className="flex items-center gap-2.5">
-                          <span className="text-xs font-black text-slate-400">#{idx + 1}</span>
-                          <h4 className="font-bold text-slate-900 text-base">{q.title}</h4>
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                            {q.type.replace('_', ' ')}
-                          </span>
-                          {isCurrentActive && (
-                            <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                              ACTIVE LIVE
+                      {/* Image Thumbnail */}
+                      <div className="relative aspect-4/3 bg-slate-950 flex items-center justify-center overflow-hidden">
+                        <img
+                          src={`/api/classroom/image?path=${encodeURIComponent(sub.imagePath)}`}
+                          alt={`Submission by ${sub.studentName}`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                          loading="lazy"
+                        />
+
+                        {/* Review Status Badge */}
+                        <div className="absolute top-2 right-2">
+                          {sub.isCorrect === true ? (
+                            <span className="p-1 rounded-full bg-emerald-600 text-white shadow-md flex items-center justify-center">
+                              <CheckCircle2 className="w-4 h-4" />
+                            </span>
+                          ) : sub.isCorrect === false ? (
+                            <span className="p-1 rounded-full bg-red-600 text-white shadow-md flex items-center justify-center">
+                              <XCircle className="w-4 h-4" />
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-900/80 text-slate-300 backdrop-blur-sm border border-slate-700">
+                              Unreviewed
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-slate-600 line-clamp-1">{q.questionPrompt}</p>
-                        {q.options && q.options.length > 0 && (
-                          <p className="text-xs text-slate-400">
-                            {q.options.length} options: {q.options.join(', ')}
-                          </p>
-                        )}
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        {!isCurrentActive && (
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={() => handleLaunchQuestion(q._id)}
-                            disabled={actionLoading}
-                            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
-                          >
-                            <Play className="h-3.5 w-3.5" />
-                            <span>Present Live</span>
-                          </Button>
-                        )}
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleViewResultsAndHistory(q)}
-                          disabled={actionLoading}
-                          className="flex items-center gap-1.5 text-indigo-700 border-indigo-200 hover:bg-indigo-50"
-                        >
-                          <BarChart2 className="h-3.5 w-3.5" />
-                          <span>Results & History</span>
-                        </Button>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDeleteQuestion(q._id)}
-                          className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                      {/* Card Meta */}
+                      <div className="p-3 flex items-center justify-between">
+                        <div className="truncate">
+                          <span className="text-xs font-bold text-slate-900 dark:text-white truncate block">
+                            {sub.studentName}
+                          </span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                            {new Date(sub.submittedAt).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* CREATE QUESTION MODAL */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-indigo-600" />
-                <h3 className="text-lg font-bold text-slate-900">Create Classroom Question</h3>
-              </div>
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateQuestion} className="space-y-5 pt-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Question Title / Topic *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Cache Memory Check, Quiz Q1"
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-slate-900 text-sm focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Question Prompt *
-                </label>
-                <textarea
-                  required
-                  rows={3}
-                  placeholder="e.g. Which of the following is true regarding cache write-through policy?"
-                  value={newPrompt}
-                  onChange={(e) => setNewPrompt(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-slate-900 text-sm focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Question Type
-                </label>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-800 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="qtype"
-                      checked={newType === 'MULTIPLE_CHOICE'}
-                      onChange={() => setNewType('MULTIPLE_CHOICE')}
-                    />
-                    <span>Multiple Choice (MCQ)</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-800 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="qtype"
-                      checked={newType === 'SHORT_ANSWER'}
-                      onChange={() => setNewType('SHORT_ANSWER')}
-                    />
-                    <span>Short Answer / Open Text</span>
-                  </label>
-                </div>
-              </div>
-
-              {/* Options for MCQ */}
-              {newType === 'MULTIPLE_CHOICE' && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Options & Correct Answer
-                    </label>
-                    <span className="text-xs text-slate-400">Mark the correct answer button</span>
-                  </div>
-
-                  {newOptions.map((opt, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setNewCorrectOption(i)}
-                        className={`h-7 w-7 rounded-full text-xs font-bold flex items-center justify-center border transition-all ${
-                          newCorrectOption === i
-                            ? 'bg-emerald-600 text-white border-emerald-600 ring-2 ring-emerald-300'
-                            : 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'
-                        }`}
-                        title="Mark as correct answer"
-                      >
-                        {optionLetters[i] || i + 1}
-                      </button>
-                      <input
-                        type="text"
-                        placeholder={`Option ${optionLetters[i] || i + 1}`}
-                        value={opt}
-                        onChange={(e) => {
-                          const updated = [...newOptions];
-                          updated[i] = e.target.value;
-                          setNewOptions(updated);
-                        }}
-                        className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-slate-900 text-sm focus:ring-2 focus:ring-indigo-500"
-                      />
-                      {newOptions.length > 2 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const updated = newOptions.filter((_, idx) => idx !== i);
-                            setNewOptions(updated);
-                            if (newCorrectOption === i) setNewCorrectOption(0);
-                          }}
-                          className="text-slate-400 hover:text-rose-500 p-1"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      )}
                     </div>
                   ))}
-
-                  {newOptions.length < 6 && (
-                    <button
-                      type="button"
-                      onClick={() => setNewOptions([...newOptions, ''])}
-                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800"
-                    >
-                      + Add Option
-                    </button>
-                  )}
                 </div>
               )}
-
-              {/* Explanation Note */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Teaching Takeaway / Explanation (Revealed after closing)
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Write-through guarantees consistency immediately, whereas write-back delays until replacement."
-                  value={newExplanation}
-                  onChange={(e) => setNewExplanation(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-200 text-slate-900 text-sm focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              {/* Immediate Launch Checkbox */}
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="activateNow"
-                  checked={activateNow}
-                  onChange={(e) => setActivateNow(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                <label htmlFor="activateNow" className="text-sm font-semibold text-slate-800 cursor-pointer">
-                  Launch this question live to students immediately
-                </label>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowCreateModal(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  disabled={creating}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                >
-                  {creating ? 'Creating...' : 'Save Question'}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* COMPLETED SESSION / RESULTS & HISTORY MODAL */}
-      {historyQuestion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl max-h-[90vh] overflow-y-auto space-y-6">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-                  <BarChart2 className="h-5 w-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-lg font-bold text-slate-900">
-                      {historyQuestion.question.title}
-                    </h3>
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                      {historyQuestion.question.type.replace('_', ' ')}
-                    </span>
-                    <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">
-                      {historyQuestion.question.status}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500">
-                    Completed Classroom Session Results & Response History (Preserved Indefinitely)
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setHistoryQuestion(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
             </div>
+          </div>
+        ) : (
+          <Card className="p-12 text-center border-dashed border-slate-300 dark:border-slate-800">
+            <Sparkles className="w-12 h-12 mx-auto text-blue-500 mb-4" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">No active classroom session</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 mb-6">
+              Launch a live activity to display a QR code for students to upload handwritten answers in class.
+            </p>
+            <Button
+              onClick={() => setShowCreateModal(true)}
+              className="bg-blue-600 hover:bg-blue-500 text-white inline-flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create New Activity</span>
+            </Button>
+          </Card>
+        )}
 
-            {historyQuestion.loading ? (
-              <div className="py-16 flex justify-center items-center">
-                <LoadingSpinner size="lg" />
+        {/* Modal: Create Activity */}
+        {showCreateModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create Classroom Activity</h3>
+                </div>
+                <button onClick={() => setShowCreateModal(false)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl">
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
               </div>
-            ) : (
-              <div className="space-y-6">
-                {/* Prompt */}
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                    Question Prompt
-                  </span>
-                  <p className="text-base font-bold text-slate-900">
-                    {historyQuestion.question.questionPrompt}
-                  </p>
+
+              <form onSubmit={handleCreateSession} className="space-y-4 mt-5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Session Title *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={sessionTitle}
+                    onChange={(e) => setSessionTitle(e.target.value)}
+                    placeholder="e.g. Lecture 8: AVL Tree Rotations"
+                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
                 </div>
 
-                {/* Summary Metrics */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-sm flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Total Responses
-                    </span>
-                    <span className="text-2xl font-black text-slate-900">
-                      {historyQuestion.results?.totalResponses ?? 0}
-                    </span>
-                  </div>
-
-                  {historyQuestion.question.type === 'MULTIPLE_CHOICE' &&
-                    historyQuestion.question.correctOptionIndex !== null &&
-                    historyQuestion.question.correctOptionIndex !== undefined && (
-                      <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/60 shadow-sm flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 uppercase tracking-wider">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                          <span>Correct Answer</span>
-                        </div>
-                        <span className="text-sm font-black text-emerald-900">
-                          Option {optionLetters[historyQuestion.question.correctOptionIndex] || historyQuestion.question.correctOptionIndex + 1}
-                        </span>
-                      </div>
-                    )}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Question Prompt (Displayed to Students) *
+                  </label>
+                  <textarea
+                    required
+                    rows={3}
+                    value={questionPrompt}
+                    onChange={(e) => setQuestionPrompt(e.target.value)}
+                    placeholder="e.g. Insert key 45 into the AVL tree shown and sketch the resulting tree after balancing."
+                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-none"
+                  />
                 </div>
 
-                {/* Response Distribution Bars (MCQ) */}
-                {historyQuestion.question.type === 'MULTIPLE_CHOICE' && (
-                  <div className="space-y-3 pt-1">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Response Distribution
-                    </h4>
-                    <div className="space-y-2.5">
-                      {(historyQuestion.question.options || []).map((optText, idx) => {
-                        const result = historyQuestion.results?.options?.find((o) => o.optionIndex === idx);
-                        const count = result?.count || 0;
-                        const pct = result?.percentage || 0;
-                        const isCorrect = historyQuestion.question.correctOptionIndex === idx;
-
-                        return (
-                          <div
-                            key={idx}
-                            className={`relative rounded-xl border p-3.5 transition-all ${
-                              isCorrect
-                                ? 'border-emerald-500 bg-emerald-50/40 shadow-sm ring-1 ring-emerald-400'
-                                : 'border-slate-200 bg-slate-50/40'
-                            }`}
-                          >
-                            <div
-                              className={`absolute top-0 bottom-0 left-0 rounded-xl transition-all duration-500 ${
-                                isCorrect ? 'bg-emerald-100' : 'bg-indigo-50'
-                              }`}
-                              style={{ width: `${pct}%`, zIndex: 0 }}
-                            />
-
-                            <div className="relative z-10 flex items-center justify-between gap-3">
-                              <div className="flex items-center gap-2.5">
-                                <span
-                                  className={`flex h-7 w-7 items-center justify-center rounded-lg font-black text-xs ${
-                                    isCorrect
-                                      ? 'bg-emerald-600 text-white'
-                                      : 'bg-slate-200 text-slate-800'
-                                  }`}
-                                >
-                                  {optionLetters[idx] || idx + 1}
-                                </span>
-                                <span className="font-semibold text-slate-900 text-sm">
-                                  {optText}
-                                </span>
-                                {isCorrect && (
-                                  <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                                    <CheckCircle2 className="h-3 w-3" />
-                                    Correct Answer
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="text-right flex items-baseline gap-1.5">
-                                <span className="text-base font-black text-slate-900">{count}</span>
-                                <span className="text-xs font-bold text-slate-500">({pct}%)</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Explanation / Teaching Takeaway */}
-                {historyQuestion.question.explanation && (
-                  <div className="p-4 bg-amber-50/80 border border-amber-200/80 rounded-xl flex items-start gap-3">
-                    <Lightbulb className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5">
-                      <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">
-                        Teaching Takeaway & Explanation
-                      </p>
-                      <p className="text-sm text-slate-800 font-medium">
-                        {historyQuestion.question.explanation}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Concise Response History */}
-                <div className="space-y-3 pt-2">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                      <Users className="h-4 w-4 text-indigo-600" />
-                      <span>Student Response History ({historyQuestion.results?.responseHistory?.length || 0})</span>
-                    </h4>
-                    <span className="text-[11px] text-slate-400">Preserved indefinitely</span>
-                  </div>
-
-                  {historyQuestion.results?.responseHistory && historyQuestion.results.responseHistory.length > 0 ? (
-                    <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-60 overflow-y-auto">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead className="sticky top-0 bg-slate-50 z-10">
-                          <tr className="border-b border-slate-200 text-slate-500 font-bold">
-                            <th className="py-2.5 px-4">Student</th>
-                            <th className="py-2.5 px-4">Submitted Answer</th>
-                            <th className="py-2.5 px-4 text-center">Outcome</th>
-                            <th className="py-2.5 px-4 text-right">Time</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {historyQuestion.results.responseHistory.map((item) => (
-                            <tr key={item.submissionId} className="hover:bg-slate-50/60 transition-colors">
-                              <td className="py-2.5 px-4">
-                                <span className="font-semibold text-slate-900 block">{item.studentName}</span>
-                                {item.studentEmail && (
-                                  <span className="text-[11px] text-slate-400">{item.studentEmail}</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-slate-700">
-                                {historyQuestion.question.type === 'MULTIPLE_CHOICE' && typeof item.selectedOption === 'number' ? (
-                                  <span className="font-medium">
-                                    Option {optionLetters[item.selectedOption] || item.selectedOption + 1}: {item.selectedOptionText || historyQuestion.question.options[item.selectedOption]}
-                                  </span>
-                                ) : (
-                                  <span className="italic">{item.textResponse || '—'}</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-center">
-                                {item.isCorrect === true ? (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
-                                    Correct
-                                  </span>
-                                ) : item.isCorrect === false ? (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800">
-                                    Incorrect
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600">
-                                    Submitted
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-4 text-right text-slate-400">
-                                {new Date(item.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="p-4 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
-                      No student responses submitted for this question yet.
-                    </div>
-                  )}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Reference Answer (Revealed upon publication)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={referenceAnswer}
+                    onChange={(e) => setReferenceAnswer(e.target.value)}
+                    placeholder="e.g. Root 30, Left child 20, Right child 45 after right-left rotation."
+                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-none"
+                  />
                 </div>
 
-                {/* Modal Footer */}
-                <div className="pt-4 border-t border-slate-100 flex justify-end">
-                  <Button
-                    variant="primary"
-                    onClick={() => setHistoryQuestion(null)}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                    Time Limit
+                  </label>
+                  <select
+                    value={timeLimit}
+                    onChange={(e) => setTimeLimit(parseInt(e.target.value, 10))}
+                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
                   >
-                    Close Results & History
+                    <option value={60}>1 Minute (Quick check)</option>
+                    <option value={120}>2 Minutes</option>
+                    <option value={180}>3 Minutes (Standard)</option>
+                    <option value={300}>5 Minutes</option>
+                    <option value={600}>10 Minutes</option>
+                    <option value={0}>Untimed (Manual close)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowCreateModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={actionLoading || !sessionTitle.trim() || !questionPrompt.trim()}
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center gap-1.5"
+                  >
+                    {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    <span>Launch Activity & QR</span>
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: QR Code Enlarge */}
+        {showQrModal && currentSession && (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 text-center shadow-2xl">
+              <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Student Join Code</h4>
+              <p className="text-xs text-slate-500 mb-4">Scan with mobile camera to submit answer</p>
+
+              {currentSession.qrCodeSvg && (
+                <div
+                  className="bg-white p-4 rounded-2xl border shadow-inner flex items-center justify-center mx-auto"
+                  dangerouslySetInnerHTML={{ __html: currentSession.qrCodeSvg }}
+                />
+              )}
+
+              <div className="mt-4">
+                <span className="text-3xl font-extrabold font-mono text-blue-600 tracking-widest bg-blue-50 dark:bg-slate-800 px-4 py-1.5 rounded-xl border border-blue-200 dark:border-blue-900">
+                  {currentSession.joinCode}
+                </span>
+              </div>
+
+              <div className="mt-6 flex justify-center">
+                <Button variant="outline" onClick={() => setShowQrModal(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Fast Submission Reviewer */}
+        {reviewIndex !== null && submissions[reviewIndex] && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+            <div className="bg-slate-950 border border-slate-800 rounded-3xl max-w-4xl w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl text-white">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800">
+                <div>
+                  <span className="text-xs text-slate-400">Reviewing ({reviewIndex + 1} of {submissions.length})</span>
+                  <h3 className="text-base font-bold text-white truncate">{submissions[reviewIndex].studentName}</h3>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setReviewIndex(null)}
+                    className="p-1.5 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Image Canvas Container */}
+              <div className="flex-1 bg-black/90 p-4 flex items-center justify-center overflow-auto relative">
+                <img
+                  src={`/api/classroom/image?path=${encodeURIComponent(submissions[reviewIndex].imagePath)}`}
+                  alt="Student handwritten submission"
+                  className="max-h-full max-w-full object-contain rounded-lg"
+                />
+              </div>
+
+              {/* Review Actions Footer */}
+              <div className="p-4 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="text-xs text-slate-400 hidden sm:block">
+                  Keyboard shortcuts: <strong className="text-slate-300">1 or &rarr;</strong> for Correct, <strong className="text-slate-300">0 or &larr;</strong> for Incorrect
+                </div>
+
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <Button
+                    onClick={() => handleMarkReview(false)}
+                    className="flex-1 sm:flex-initial py-3 px-6 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
+                  >
+                    <ThumbsDown className="w-4 h-4" />
+                    <span>Incorrect (0)</span>
+                  </Button>
+
+                  <Button
+                    onClick={() => handleMarkReview(true)}
+                    className="flex-1 sm:flex-initial py-3 px-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
+                  >
+                    <ThumbsUp className="w-4 h-4" />
+                    <span>Correct (1)</span>
                   </Button>
                 </div>
               </div>
-            )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </DashboardLayout>
   );
 }

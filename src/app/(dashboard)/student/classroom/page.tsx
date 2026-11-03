@@ -1,543 +1,548 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Radio,
+  Camera,
+  Upload,
   CheckCircle2,
   XCircle,
+  Clock,
   Send,
-  Lightbulb,
-  Check,
-  Lock
+  Sparkles,
+  RefreshCw,
+  AlertCircle,
+  ArrowRight
 } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 
-interface OptionResult {
-  optionIndex: number;
-  optionText: string;
-  count: number;
-  percentage: number;
-  isCorrect?: boolean;
-}
-
-interface AggregatedResults {
-  questionId: string;
-  totalResponses: number;
-  options: OptionResult[];
-  textResponses?: Array<{ text: string; submittedAt: string }>;
-  correctOptionIndex?: number | null;
-  explanation?: string;
-  isRevealed: boolean;
-  status: string;
-}
-
-interface ActiveClassroomQuestion {
-  _id: string;
+interface ActiveActivity {
+  id: string;
   title: string;
   questionPrompt: string;
-  type: 'MULTIPLE_CHOICE' | 'SHORT_ANSWER' | 'POLL';
-  options: string[];
-  correctOptionIndex?: number | null;
-  explanation?: string;
-  status: 'ACTIVE' | 'CLOSED' | 'REVEALED' | 'DRAFT';
-  isRevealed?: boolean;
-  hasSubmitted?: boolean;
-  mySubmission?: {
-    selectedOption?: number | null;
-    textResponse?: string | null;
-    isCorrect?: boolean | null;
-    score?: number;
-    submittedAt?: string;
-  } | null;
-  results?: AggregatedResults | null;
+  timeLimit: number;
+  expiresAt: string | null;
+  status: string;
+  isPublished?: boolean;
+  referenceAnswer?: string | null;
 }
 
-export default function StudentClassroomAssessmentPage() {
-  const [question, setQuestion] = useState<ActiveClassroomQuestion | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [textResponse, setTextResponse] = useState('');
+interface PublishedResults {
+  activityId: string;
+  title: string;
+  questionPrompt: string;
+  referenceAnswer: string;
+  totalSubmissions: number;
+  correctCount: number;
+  incorrectCount: number;
+  successRate: number;
+}
+
+interface MySubmission {
+  id: string;
+  studentName: string;
+  imagePath: string;
+  status: string;
+  isCorrect: boolean | null;
+  submittedAt: string;
+}
+
+export default function StudentClassroomPage() {
+  const [sessionCode, setSessionCode] = useState('');
+  const [joined, setJoined] = useState(false);
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [activity, setActivity] = useState<ActiveActivity | null>(null);
+  const [mySubmission, setMySubmission] = useState<MySubmission | null>(null);
+  const [publishedResults, setPublishedResults] = useState<PublishedResults | null>(null);
+
+  // File upload state
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+
+  // Timer state
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [isConnected, setIsConnected] = useState(true);
 
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const optionLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
-  const updateQuestionState = useCallback((data: ActiveClassroomQuestion | null) => {
-    setQuestion((prev) => {
-      // If question ID changes or becomes null, reset unsubmitted inputs
-      if (!data || prev?._id !== data._id) {
-        if (data?.mySubmission) {
-          if (typeof data.mySubmission.selectedOption === 'number') {
-            setSelectedOption(data.mySubmission.selectedOption);
-          }
-          if (data.mySubmission.textResponse) {
-            setTextResponse(data.mySubmission.textResponse);
-          }
-        } else {
-          setSelectedOption(null);
-          setTextResponse('');
-        }
-      } else {
-        // Same question: sync submission if newly recorded
-        if (data.mySubmission) {
-          if (typeof data.mySubmission.selectedOption === 'number') {
-            setSelectedOption(data.mySubmission.selectedOption);
-          }
-          if (data.mySubmission.textResponse) {
-            setTextResponse(data.mySubmission.textResponse);
-          }
-        }
-      }
-      return data;
-    });
-  }, []);
-
-  const fetchActiveQuestion = useCallback(async () => {
+  // Fetch session data
+  const fetchSession = useCallback(async (code: string) => {
+    if (!code) return;
+    setLoading(true);
+    setErrorMessage('');
     try {
-      const res = await fetch('/api/classroom/questions/active');
-      const json = await res.json();
-      if (json.success && json.data) {
-        updateQuestionState(json.data);
+      const res = await fetch(`/api/classroom/sessions/${code}`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        setSessionTitle(data.data.session.title);
+        setActivity(data.data.activeActivity);
+        setJoined(true);
       } else {
-        updateQuestionState(null);
+        setErrorMessage(data.message || 'Session not found');
       }
-    } catch (err) {
-      console.error('Failed to load active question:', err);
+    } catch {
+      setErrorMessage('Failed to connect to classroom session');
     } finally {
       setLoading(false);
     }
-  }, [updateQuestionState]);
+  }, []);
 
-  useEffect(() => {
-    async function init() {
-      await fetchActiveQuestion();
-    }
-    init();
-
-    // Setup SSE connection
+  // Fetch my submission
+  const fetchMySubmission = useCallback(async (code: string) => {
+    if (!code) return;
     try {
-      const sse = new EventSource('/api/classroom/stream');
-      eventSourceRef.current = sse;
-
-      sse.addEventListener('initial', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          updateQuestionState(data.activeQuestion || null);
-          setIsConnected(true);
-        } catch {
-          // ignore
-        }
-      });
-
-      sse.addEventListener('classroom_update', (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.activeQuestion !== undefined) {
-            updateQuestionState(data.activeQuestion || null);
-          }
-          setIsConnected(true);
-        } catch {
-          // ignore
-        }
-      });
-
-      sse.onerror = () => {
-        setIsConnected(false);
-      };
+      const res = await fetch(`/api/classroom/sessions/${code}/my-submission`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        setMySubmission(data.data);
+      }
     } catch {
-      // SSE creation error or unsupported
+      // Ignore
     }
+  }, []);
 
-    // Interval fallback to keep question state synced
-    const interval = setInterval(() => {
-      fetchActiveQuestion();
-    }, 4000);
+  // Fetch published results
+  const fetchResults = useCallback(async (code: string) => {
+    if (!code) return;
+    try {
+      const res = await fetch(`/api/classroom/sessions/${code}/results`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        setPublishedResults(data.data);
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  // SSE Stream
+  useEffect(() => {
+    if (!joined || !sessionCode) return;
+
+    const sse = new EventSource(`/api/classroom/sessions/${sessionCode}/stream`);
+    eventSourceRef.current = sse;
+
+    sse.addEventListener('initial', (e) => {
+      try {
+        const snap = JSON.parse(e.data);
+        if (snap.activity) {
+          setActivity(snap.activity);
+          if (snap.activity.isPublished) {
+            fetchResults(sessionCode);
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    });
+
+    sse.addEventListener('classroom_event', (e) => {
+      try {
+        const parsed = JSON.parse(e.data);
+        if (parsed.type === 'ACTIVITY_STARTED' || parsed.type === 'QUESTION_ACTIVATED') {
+          fetchSession(sessionCode);
+          setMySubmission(null);
+          setSelectedFile(null);
+          setPreviewUrl(null);
+          setPublishedResults(null);
+        } else if (parsed.type === 'TIMER_EXTENDED') {
+          if (parsed.payload?.expiresAt) {
+            setActivity((prev) => prev ? { ...prev, expiresAt: parsed.payload.expiresAt, status: 'ACTIVE' } : null);
+          }
+        } else if (parsed.type === 'ACTIVITY_CLOSED' || parsed.type === 'QUESTION_CLOSED') {
+          setActivity((prev) => prev ? { ...prev, status: 'CLOSED' } : null);
+        } else if (parsed.type === 'SUBMISSION_REVIEWED') {
+          fetchMySubmission(sessionCode);
+        } else if (parsed.type === 'ACTIVITY_PUBLISHED') {
+          fetchSession(sessionCode);
+          fetchResults(sessionCode);
+          fetchMySubmission(sessionCode);
+        }
+      } catch {
+        // Ignore
+      }
+    });
 
     return () => {
-      clearInterval(interval);
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+      sse.close();
+      eventSourceRef.current = null;
     };
-  }, [fetchActiveQuestion, updateQuestionState]);
+  }, [joined, sessionCode, fetchSession, fetchResults, fetchMySubmission]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Countdown timer
+  useEffect(() => {
+    if (!activity?.expiresAt || activity.status !== 'ACTIVE') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const end = new Date(activity.expiresAt!).getTime();
+      const diffSeconds = Math.max(0, Math.floor((end - now) / 1000));
+      setTimeLeft(diffSeconds);
+
+      if (diffSeconds <= 0) {
+        clearInterval(interval);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activity?.expiresAt, activity?.status]);
+
+  const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!question) return;
+    if (!sessionCode.trim()) return;
+    const code = sessionCode.trim().toUpperCase();
 
-    if (question.type === 'MULTIPLE_CHOICE' && selectedOption === null) {
-      setErrorMessage('Please select an option before submitting.');
-      return;
-    }
-
-    if (question.type === 'SHORT_ANSWER' && !textResponse.trim()) {
-      setErrorMessage('Please enter your response before submitting.');
-      return;
-    }
-
-    setSubmitting(true);
+    setLoading(true);
     setErrorMessage('');
-
     try {
-      const res = await fetch('/api/classroom/submit', {
+      const res = await fetch(`/api/classroom/sessions/${code}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questionId: question._id,
-          selectedOption,
-          textResponse: textResponse.trim()
-        })
+        body: JSON.stringify({})
       });
 
-      const json = await res.json();
-      if (json.success) {
-        // Immediately record submission state locally
-        setQuestion((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            hasSubmitted: true,
-            mySubmission: json.data || {
-              selectedOption,
-              textResponse: textResponse.trim(),
-              submittedAt: new Date().toISOString()
-            }
-          };
-        });
-        await fetchActiveQuestion();
+      const data = await res.json();
+      if (data.success) {
+        setSessionCode(code);
+        setJoined(true);
+        if (data.data.session) {
+          setSessionTitle(data.data.session.title);
+        }
+        if (data.data.activeActivity) {
+          setActivity(data.data.activeActivity);
+        }
+        fetchMySubmission(code);
       } else {
-        setErrorMessage(json.message || 'Failed to submit response.');
+        setErrorMessage(data.message || 'Failed to join session');
       }
     } catch {
-      setErrorMessage('Network error while submitting response.');
+      setErrorMessage('Network error while joining session');
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
   };
 
-  const hasSubmitted = question?.hasSubmitted || !!question?.mySubmission;
-  const isRevealed = question?.isRevealed || question?.status === 'REVEALED';
-  const isVotingClosed = question?.status === 'CLOSED';
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please select an image file');
+      return;
+    }
+
+    setUploadError('');
+    setSelectedFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedFile || !sessionCode) return;
+
+    setUploading(true);
+    setUploadError('');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const res = await fetch(`/api/classroom/sessions/${sessionCode}/submit`, {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await res.json();
+      if (data.success && data.data) {
+        setMySubmission(data.data);
+      } else {
+        setUploadError(data.message || 'Failed to upload answer image');
+      }
+    } catch {
+      setUploadError('Network error while submitting answer');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const formatTimer = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
 
   return (
     <DashboardLayout
-      title="Classroom Participation"
-      description="Interactive real-time learning: submit responses to live classroom questions and view class distribution."
+      title="Classroom Activity"
+      description="Participate in live class exercises and upload handwritten answers."
     >
-      {/* Live Status Bar */}
-      <div className="flex items-center justify-between bg-white px-4 py-2.5 rounded-xl border border-slate-200 shadow-sm text-xs font-semibold text-slate-600">
-        <div className="flex items-center gap-2">
-          <span className="flex h-2.5 w-2.5 relative">
-            {isConnected && (
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            )}
-            <span
-              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                isConnected ? 'bg-emerald-500' : 'bg-amber-500'
-              }`}
-            />
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto flex flex-col gap-6">
+        <div>
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+            Interactive Classroom
           </span>
-          <span>{isConnected ? 'Connected to Live Session' : 'Reconnecting...'}</span>
-        </div>
-        <span className="text-slate-400">Updates live automatically</span>
-      </div>
-
-      {/* Error Message */}
-      {errorMessage && (
-        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-brand text-sm">
-          {errorMessage}
-        </div>
-      )}
-
-      {loading ? (
-        <div className="py-20 flex justify-center items-center">
-          <LoadingSpinner size="lg" />
-        </div>
-      ) : !question ? (
-        /* STATE 1: WAITING FOR PROFESSOR */
-        <Card className="text-center py-16 px-6 border-dashed border-2 border-slate-200 bg-white">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 mb-4 animate-pulse">
-            <Radio className="h-8 w-8" />
-          </div>
-          <h3 className="text-xl font-bold text-slate-900 mb-2">
-            Waiting for the professor...
-          </h3>
-          <p className="text-sm text-slate-500 max-w-md mx-auto">
-            The professor has not launched a question yet. As soon as a question goes live, it will appear here instantly on your screen.
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white mt-1">{sessionTitle || 'Classroom Activity'}</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Participate in live class exercises and upload handwritten answers.
           </p>
-        </Card>
-      ) : isRevealed ? (
-        /* STATE 4: REVEALED RESULTS & FEEDBACK */
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-            <span className="text-xs font-black uppercase tracking-wider text-indigo-600">
-              {question.title}
-            </span>
-            <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-700">
-              Results Revealed
-            </span>
+        </div>
+
+        {errorMessage && (
+          <div className="p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-sm flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span>{errorMessage}</span>
           </div>
+        )}
 
-          <div>
-            <h2 className="text-2xl font-extrabold text-slate-900 mb-4">
-              {question.questionPrompt}
-            </h2>
+        {!joined ? (
+          <Card className="p-8 text-center max-w-md mx-auto w-full border-slate-200 dark:border-slate-800">
+            <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 mx-auto flex items-center justify-center mb-4">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Enter Classroom Join Code</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-6">
+              Enter the 6-character code shown on the classroom screen.
+            </p>
 
-            {/* Student Result Banner */}
-            {question.mySubmission && typeof question.mySubmission.isCorrect === 'boolean' && (
-              <div
-                className={`p-4 rounded-xl border flex items-center gap-3 mb-6 ${
-                  question.mySubmission.isCorrect
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    : 'bg-rose-50 border-rose-200 text-rose-800'
-                }`}
+            <form onSubmit={handleJoin} className="space-y-4">
+              <input
+                type="text"
+                required
+                maxLength={6}
+                value={sessionCode}
+                onChange={(e) => setSessionCode(e.target.value.toUpperCase())}
+                placeholder="e.g. B7K9X2"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono text-center tracking-widest text-2xl uppercase focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+
+              <Button
+                type="submit"
+                disabled={loading || sessionCode.trim().length < 3}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center justify-center gap-2 py-3"
               >
-                {question.mySubmission.isCorrect ? (
-                  <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-                ) : (
-                  <XCircle className="h-5 w-5 text-rose-600 shrink-0" />
-                )}
-                <div className="text-sm font-semibold">
-                  {question.mySubmission.isCorrect
-                    ? '🎉 Excellent! Your answer was correct.'
-                    : question.correctOptionIndex !== undefined && question.correctOptionIndex !== null
-                    ? `Not quite. The correct answer was Option ${
-                        optionLetters[question.correctOptionIndex]
-                      }: ${question.options[question.correctOptionIndex]}`
-                    : 'Your response was submitted.'}
+                {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>Join Session</span>}
+                <ArrowRight className="w-4 h-4" />
+              </Button>
+            </form>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-6">
+            {activity ? (
+              <Card className="p-6 border-slate-200 dark:border-slate-800 flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                    {activity.status === 'ACTIVE' ? 'Submissions Open' : activity.status === 'PUBLISHED' ? 'Results Published' : 'Submissions Closed'}
+                  </span>
+
+                  {timeLeft !== null && activity.status === 'ACTIVE' && (
+                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+                      timeLeft < 30 ? 'bg-red-50 text-red-600 border-red-300 dark:bg-red-950/60 dark:text-red-300' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                    }`}>
+                      <Clock className="w-4 h-4" />
+                      <span>{formatTimer(timeLeft)}</span>
+                    </div>
+                  )}
                 </div>
-              </div>
+
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">{activity.title}</h3>
+                  <p className="text-base text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed">{activity.questionPrompt}</p>
+                </div>
+              </Card>
+            ) : (
+              <Card className="p-8 text-center text-slate-500">
+                <Clock className="w-8 h-8 mx-auto mb-2 text-slate-400 animate-pulse" />
+                <h4 className="font-semibold">Waiting for professor to activate a question...</h4>
+              </Card>
             )}
-          </div>
 
-          {/* Aggregated Option Distribution */}
-          {question.type === 'MULTIPLE_CHOICE' && question.results && (
-            <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Class Distribution ({question.results.totalResponses} Votes)
-              </h4>
+            {/* Published Results View */}
+            {publishedResults && (
+              <Card className="p-6 border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col gap-4">
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold text-sm">
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>Classroom Results & Reference Answer</span>
+                </div>
 
-              {question.results.options.map((opt, idx) => {
-                const isSelectedByStudent = question.mySubmission?.selectedOption === idx;
-                const isCorrectAnswer = question.correctOptionIndex === idx;
-
-                return (
-                  <div
-                    key={idx}
-                    className={`relative rounded-xl border p-4 transition-all ${
-                      isCorrectAnswer
-                        ? 'border-emerald-500 bg-emerald-50/40 ring-1 ring-emerald-400'
-                        : isSelectedByStudent
-                        ? 'border-indigo-400 bg-indigo-50/40'
-                        : 'border-slate-200 bg-slate-50/30'
-                    }`}
-                  >
-                    {/* Fill */}
-                    <div
-                      className={`absolute top-0 bottom-0 left-0 rounded-xl ${
-                        isCorrectAnswer ? 'bg-emerald-100' : 'bg-indigo-50'
-                      }`}
-                      style={{ width: `${opt.percentage}%`, zIndex: 0 }}
-                    />
-
-                    <div className="relative z-10 flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className={`flex h-8 w-8 items-center justify-center rounded-lg font-black text-sm ${
-                            isCorrectAnswer
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-slate-200 text-slate-800'
-                          }`}
-                        >
-                          {optionLetters[idx] || idx + 1}
-                        </span>
-                        <span className="font-semibold text-slate-900 text-base">
-                          {opt.optionText}
-                        </span>
-                        {isCorrectAnswer && (
-                          <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                            Correct
-                          </span>
-                        )}
-                        {isSelectedByStudent && (
-                          <span className="text-xs font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
-                            Your Choice
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="text-right">
-                        <span className="text-base font-black text-slate-900">{opt.percentage}%</span>
-                        <span className="text-xs text-slate-500 ml-1">({opt.count})</span>
-                      </div>
+                {mySubmission && (
+                  <div className={`p-4 rounded-xl border flex items-center gap-3 ${
+                    mySubmission.isCorrect === true
+                      ? 'bg-emerald-100/60 border-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-700'
+                      : mySubmission.isCorrect === false
+                      ? 'bg-red-100/60 border-red-300 dark:bg-red-950/60 dark:border-red-700'
+                      : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                  }`}>
+                    {mySubmission.isCorrect === true ? (
+                      <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                    ) : mySubmission.isCorrect === false ? (
+                      <XCircle className="w-6 h-6 text-red-600 shrink-0" />
+                    ) : (
+                      <Clock className="w-6 h-6 text-slate-500 shrink-0" />
+                    )}
+                    <div>
+                      <span className="text-xs uppercase tracking-wider font-bold block text-slate-500">Your Answer</span>
+                      <span className="text-base font-bold text-slate-900 dark:text-white">
+                        {mySubmission.isCorrect === true
+                          ? 'Marked Correct ✓'
+                          : mySubmission.isCorrect === false
+                          ? 'Marked Incorrect ✗'
+                          : 'Under Review'}
+                      </span>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                )}
 
-          {/* Explanation Box */}
-          {question.explanation && (
-            <div className="p-5 bg-amber-50/80 border border-amber-200 rounded-xl flex items-start gap-3 mt-4">
-              <Lightbulb className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">
-                  Teaching Takeaway & Explanation
-                </p>
-                <p className="text-sm text-slate-800 font-medium">
-                  {question.explanation}
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : hasSubmitted ? (
-        /* STATE 3: SUBMITTED, WAITING FOR REVEAL */
-        <Card className="text-center py-12 px-6 bg-white border border-slate-200">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 mb-4">
-            <CheckCircle2 className="h-8 w-8" />
-          </div>
-          <h3 className="text-xl font-bold text-slate-900 mb-1">
-            Response submitted — waiting for results
-          </h3>
-          <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
-            Your response has been recorded. The results and explanation will appear here as soon as the professor reveals them.
-          </p>
+                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 block mb-1">
+                    Reference Solution
+                  </span>
+                  <p className="text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap leading-relaxed">
+                    {publishedResults.referenceAnswer}
+                  </p>
+                </div>
 
-          <div className="max-w-md mx-auto bg-slate-50 border border-slate-200 rounded-xl p-4 text-left space-y-1">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Your Answer</span>
-            <p className="text-base font-bold text-slate-800">
-              {question.type === 'MULTIPLE_CHOICE' &&
-              typeof (question.mySubmission?.selectedOption ?? selectedOption) === 'number'
-                ? `Option ${optionLetters[(question.mySubmission?.selectedOption ?? selectedOption)!]}: ${
-                    question.options[(question.mySubmission?.selectedOption ?? selectedOption)!]
-                  }`
-                : question.mySubmission?.textResponse || textResponse || 'Submitted'}
-            </p>
-          </div>
-        </Card>
-      ) : isVotingClosed ? (
-        /* STATE 3B: VOTING CLOSED BEFORE SUBMISSION */
-        <Card className="text-center py-12 px-6 bg-white border border-slate-200">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 mb-4">
-            <Lock className="h-8 w-8" />
-          </div>
-          <h3 className="text-xl font-bold text-slate-900 mb-1">
-            Voting Closed — waiting for results
-          </h3>
-          <p className="text-sm text-slate-500 max-w-md mx-auto">
-            The professor has closed submissions for this question. Results will appear as soon as the professor reveals them.
-          </p>
-        </Card>
-      ) : (
-        /* STATE 2: ACTIVE QUESTION - STUDENT SELECTS AND EXPLICITLY SUBMITS */
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-            <span className="text-xs font-black uppercase tracking-wider text-indigo-600">
-              {question.title}
-            </span>
-            <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
-              <span>Voting Open</span>
-            </span>
-          </div>
+                <div className="grid grid-cols-3 gap-3 text-center pt-2">
+                  <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <span className="text-xs text-slate-500 block">Class Total</span>
+                    <span className="text-lg font-bold text-slate-900 dark:text-white">{publishedResults.totalSubmissions}</span>
+                  </div>
+                  <div className="bg-emerald-50 dark:bg-emerald-900/30 p-3 rounded-xl border border-emerald-200 dark:border-emerald-800">
+                    <span className="text-xs text-emerald-700 dark:text-emerald-400 block">Correct</span>
+                    <span className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{publishedResults.correctCount}</span>
+                  </div>
+                  <div className="bg-red-50 dark:bg-red-900/30 p-3 rounded-xl border border-red-200 dark:border-red-800">
+                    <span className="text-xs text-red-700 dark:text-red-400 block">Incorrect</span>
+                    <span className="text-lg font-bold text-red-700 dark:text-red-300">{publishedResults.incorrectCount}</span>
+                  </div>
+                </div>
+              </Card>
+            )}
 
-          <div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 leading-tight">
-              {question.questionPrompt}
-            </h2>
-          </div>
+            {/* Handwritten Image Upload Card */}
+            {activity && activity.status !== 'PUBLISHED' && (
+              <Card className="p-6 border-slate-200 dark:border-slate-800 flex flex-col gap-4">
+                <h4 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Upload className="w-4 h-4 text-blue-500" />
+                  <span>Upload Handwritten Answer</span>
+                </h4>
 
-          {/* Options for MCQ: Click selects option, does NOT submit */}
-          {question.type === 'MULTIPLE_CHOICE' && (
-            <div className="space-y-3 pt-2">
-              {(question.options || []).map((optText, idx) => {
-                const isSelected = selectedOption === idx;
+                {uploadError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                    <span>{uploadError}</span>
+                  </div>
+                )}
 
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setSelectedOption(idx);
-                    }}
-                    className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center justify-between gap-4 ${
-                      isSelected
-                        ? 'border-indigo-600 bg-indigo-50/50 shadow-md ring-2 ring-indigo-400/20'
-                        : 'border-slate-200 hover:border-slate-300 bg-white'
-                    }`}
-                  >
+                {mySubmission && !selectedFile && (
+                  <div className="p-4 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <span
-                        className={`flex h-9 w-9 items-center justify-center rounded-lg font-black text-sm transition-colors ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {optionLetters[idx] || idx + 1}
-                      </span>
-                      <span className="font-semibold text-slate-900 text-base sm:text-lg">
-                        {optText}
-                      </span>
+                      <CheckCircle2 className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                      <div>
+                        <span className="text-xs font-bold text-blue-800 dark:text-blue-300 block">Answer Submitted</span>
+                        <span className="text-xs text-slate-500">
+                          {new Date(mySubmission.submittedAt).toLocaleTimeString()}
+                        </span>
+                      </div>
                     </div>
 
-                    <div
-                      className={`h-5 w-5 rounded-full border-2 flex items-center justify-center ${
-                        isSelected
-                          ? 'border-indigo-600 bg-indigo-600 text-white'
-                          : 'border-slate-300'
-                      }`}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={activity.status === 'CLOSED'}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 disabled:opacity-40"
                     >
-                      {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                      Replace Photo
+                    </button>
+                  </div>
+                )}
+
+                {previewUrl && (
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="relative w-full max-h-72 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black flex items-center justify-center">
+                      <img
+                        src={previewUrl}
+                        alt="Handwritten answer preview"
+                        className="max-h-72 w-auto object-contain rounded-lg"
+                      />
                     </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
 
-          {/* Short Answer Input */}
-          {question.type === 'SHORT_ANSWER' && (
-            <div className="space-y-2 pt-2">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Type your answer
-              </label>
-              <textarea
-                rows={3}
-                placeholder="Type your response here..."
-                value={textResponse}
-                onChange={(e) => setTextResponse(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 text-base focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
-          )}
+                    <div className="flex items-center gap-2 w-full">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setSelectedFile(null);
+                          setPreviewUrl(null);
+                        }}
+                        className="flex-1 text-xs"
+                      >
+                        Retake Photo
+                      </Button>
 
-          {/* Explicit Submit Button */}
-          <div className="pt-4 border-t border-slate-100 flex items-center justify-end">
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={
-                submitting ||
-                (question.type === 'MULTIPLE_CHOICE' && selectedOption === null) ||
-                (question.type === 'SHORT_ANSWER' && !textResponse.trim())
-              }
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-base px-6 py-2.5 rounded-xl shadow-md"
-            >
-              <Send className="h-4 w-4" />
-              <span>{submitting ? 'Submitting...' : 'Submit Response'}</span>
-            </Button>
+                      <Button
+                        onClick={handleSubmit}
+                        disabled={uploading || activity.status === 'CLOSED'}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                      >
+                        {uploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                        <span>Confirm & Submit</span>
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {!previewUrl && (!mySubmission || activity.status === 'ACTIVE') && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      disabled={activity.status === 'CLOSED'}
+                      onClick={() => {
+                        if (fileInputRef.current) {
+                          fileInputRef.current.setAttribute('capture', 'environment');
+                          fileInputRef.current.click();
+                        }
+                      }}
+                      className="py-4 px-4 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-xl text-blue-700 dark:text-blue-300 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                    >
+                      <Camera className="w-7 h-7 text-blue-600 dark:text-blue-400" />
+                      <span className="text-xs font-bold">Take Photo of Paper</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={activity.status === 'CLOSED'}
+                      onClick={() => {
+                        if (fileInputRef.current) {
+                          fileInputRef.current.removeAttribute('capture');
+                          fileInputRef.current.click();
+                        }
+                      }}
+                      className="py-4 px-4 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-750 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                    >
+                      <Upload className="w-7 h-7 text-slate-500" />
+                      <span className="text-xs font-bold">Upload Image File</span>
+                    </button>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/heic"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                  </div>
+                )}
+              </Card>
+            )}
           </div>
-        </form>
-      )}
+        )}
+      </div>
     </DashboardLayout>
   );
 }

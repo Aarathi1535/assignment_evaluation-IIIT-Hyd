@@ -8,11 +8,14 @@ export interface IClassroomCriterionScore {
     evidence?: string;
 }
 
-export type ClassroomSubmissionStatus = 'SUBMITTED' | 'EVALUATING' | 'EVALUATED' | 'FAILED';
+export type ClassroomSubmissionStatus = 'SUBMITTED' | 'EVALUATING' | 'EVALUATED' | 'REVIEWED' | 'FAILED';
 
 export interface IClassroomSubmission extends Document {
     question: mongoose.Types.ObjectId;
-    student: mongoose.Types.ObjectId;
+    session?: mongoose.Types.ObjectId | null;
+    student?: mongoose.Types.ObjectId | null;
+    participantId?: string | null;
+    studentName?: string;
     selectedOption?: number | null;
     textResponse?: string | null;
     isCorrect?: boolean | null;
@@ -20,15 +23,18 @@ export interface IClassroomSubmission extends Document {
     maxMarks: number;
     status: ClassroomSubmissionStatus;
     feedback?: string;
-    imagePath?: string;
-    originalFilename?: string;
-    fileSize?: number;
-    mimeType?: string;
+    reviewNote?: string | null;
+    reviewedBy?: mongoose.Types.ObjectId | null;
+    imagePath?: string | null;
+    originalFilename?: string | null;
+    fileSize?: number | null;
+    mimeType?: string | null;
     criterionScores?: IClassroomCriterionScore[];
-    confidence?: number;
+    confidence?: number | null;
     submittedAt: Date;
-    evaluatedAt?: Date;
-    errorMessage?: string;
+    evaluatedAt?: Date | null;
+    reviewedAt?: Date | null;
+    errorMessage?: string | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -70,11 +76,27 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
             required: true,
             index: true
         },
+        session: {
+            type: Schema.Types.ObjectId,
+            ref: 'ClassroomSession',
+            default: null,
+            index: true
+        },
         student: {
             type: Schema.Types.ObjectId,
             ref: 'User',
-            required: true,
+            default: null,
             index: true
+        },
+        participantId: {
+            type: String,
+            trim: true,
+            index: true
+        },
+        studentName: {
+            type: String,
+            default: '',
+            trim: true
         },
         selectedOption: {
             type: Number,
@@ -101,7 +123,7 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
         },
         status: {
             type: String,
-            enum: ['SUBMITTED', 'EVALUATING', 'EVALUATED', 'FAILED'],
+            enum: ['SUBMITTED', 'EVALUATING', 'EVALUATED', 'REVIEWED', 'FAILED'],
             default: 'SUBMITTED',
             index: true
         },
@@ -109,6 +131,16 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
             type: String,
             default: '',
             trim: true
+        },
+        reviewNote: {
+            type: String,
+            default: null,
+            trim: true
+        },
+        reviewedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
         },
         imagePath: {
             type: String,
@@ -145,6 +177,10 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
             type: Date,
             default: null
         },
+        reviewedAt: {
+            type: Date,
+            default: null
+        },
         errorMessage: {
             type: String,
             default: null
@@ -155,8 +191,16 @@ const ClassroomSubmissionSchema = new Schema<IClassroomSubmission>(
     }
 );
 
-// Compound index to quickly query or prevent accidental duplicate submissions per student per question
-ClassroomSubmissionSchema.index({ question: 1, student: 1 }, { unique: true });
+// Compound indices with partial filter expressions to support both logged-in students and classroom-specific participant identities
+ClassroomSubmissionSchema.index(
+    { question: 1, student: 1 },
+    { unique: true, partialFilterExpression: { student: { $type: 'objectId' } } }
+);
+ClassroomSubmissionSchema.index(
+    { question: 1, participantId: 1 },
+    { unique: true, partialFilterExpression: { participantId: { $type: 'string' } } }
+);
+ClassroomSubmissionSchema.index({ session: 1, submittedAt: -1 });
 
 const ClassroomSubmission: Model<IClassroomSubmission> =
     mongoose.models.ClassroomSubmission ||

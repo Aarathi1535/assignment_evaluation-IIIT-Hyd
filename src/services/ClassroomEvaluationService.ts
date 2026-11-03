@@ -1,7 +1,8 @@
 import { HttpError } from '../lib/errors';
 import { IClassroomCriterion } from '../models/ClassroomQuestion';
 import { IClassroomCriterionScore } from '../models/ClassroomSubmission';
-import { isValidScoreStep, DEFAULT_SCORE_STEP } from './GradingService';
+export const DEFAULT_SCORE_STEP = 0.5;
+export function isValidScoreStep(score: number, step: number = DEFAULT_SCORE_STEP): boolean { if (step <= 0) return true; const factor = 1 / step; return Math.abs(Math.round(score * factor) - (score * factor)) < 1e-5; }
 import { geminiAIService, GeminiAIService } from './ai/GeminiAIService';
 
 export interface EvaluateClassroomAnswerInput {
