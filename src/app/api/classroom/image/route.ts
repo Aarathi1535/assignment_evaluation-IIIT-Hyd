@@ -1,30 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
-import path from 'path';
+import mongoose from 'mongoose';
 import { requireAuth } from '@/lib/apiAuth';
 import ClassroomParticipant from '@/models/ClassroomParticipant';
 import ClassroomSubmission from '@/models/ClassroomSubmission';
 import ClassroomSession from '@/models/ClassroomSession';
+import ClassroomQuestion from '@/models/ClassroomQuestion';
 import classroomStorageService from '@/services/ClassroomStorageService';
 import { connectDB } from '@/lib/db';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const imagePath = searchParams.get('path');
+  const submissionId = searchParams.get('submissionId');
+  const rawPath = searchParams.get('path');
 
-  if (!imagePath) {
-    return new NextResponse('Missing path parameter', { status: 400 });
+  if (!rawPath && !submissionId) {
+    return new NextResponse('Missing path or submissionId parameter', { status: 400 });
   }
 
   // Prevent directory traversal
-  const normalized = path.normalize(imagePath).replace(/^(\.\.(\/|\\|$))+/, '');
-  if (normalized.includes('..') || !normalized.startsWith('classroom-uploads')) {
+  const cleanPath = (rawPath || '').replace(/\\/g, '/').replace(/^(\.\.(\/|\\|$))+/, '');
+  if (cleanPath.includes('..') || (rawPath && !cleanPath.startsWith('classroom-uploads/'))) {
     return new NextResponse('Invalid or forbidden path', { status: 400 });
   }
 
   await connectDB();
 
-  // Find the submission associated with this image to enforce fine-grained access control
-  const submission = await ClassroomSubmission.findOne({ imagePath: normalized });
+  // Find the submission to enforce fine-grained access control
+  let submission = null;
+  if (submissionId && mongoose.Types.ObjectId.isValid(submissionId)) {
+    submission = await ClassroomSubmission.findById(submissionId);
+  }
+
+  if (!submission && cleanPath) {
+    const forwardPath = cleanPath;
+    const backwardPath = cleanPath.replace(/\//g, '\\');
+    submission = await ClassroomSubmission.findOne({
+      $or: [
+        { imagePath: forwardPath },
+        { imagePath: backwardPath },
+        { imagePath: rawPath }
+      ]
+    });
+  }
+
   if (!submission) {
     return new NextResponse('Image submission not found', { status: 404 });
   }
@@ -34,9 +52,15 @@ export async function GET(req: NextRequest) {
 
   // 1. Check if authenticated as a Professor owning this session
   const auth = await requireAuth();
-  if (auth.authorized) {
-    if (auth.user.role === 'PROFESSOR') {
-      const session = await ClassroomSession.findById(submission.session);
+  if (auth.authorized && auth.user.role === 'PROFESSOR') {
+    let sessionId = submission.session;
+    if (!sessionId && submission.question) {
+      const q = await ClassroomQuestion.findById(submission.question);
+      if (q) sessionId = q.session;
+    }
+
+    if (sessionId) {
+      const session = await ClassroomSession.findById(sessionId);
       if (session && session.createdBy.toString() === auth.user.id) {
         isAuthorized = true;
       } else {
@@ -65,12 +89,13 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { buffer, contentType } = await classroomStorageService.readImage(normalized);
+    const targetStoragePath = cleanPath || submission.imagePath || '';
+    const { buffer, contentType } = await classroomStorageService.readImage(targetStoragePath);
 
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'private, no-transform, max-age=300',
+        'Cache-Control': 'private, no-transform, max-age=3600',
         'X-Content-Type-Options': 'nosniff',
       },
     });

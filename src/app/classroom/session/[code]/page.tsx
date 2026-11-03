@@ -43,6 +43,9 @@ interface MySubmission {
   imagePath: string;
   status: string;
   isCorrect: boolean | null;
+  score?: number | null;
+  feedback?: string | null;
+  textResponse?: string | null;
   submittedAt: string;
   reviewedAt: string | null;
 }
@@ -73,9 +76,10 @@ export default function MobileStudentClassroomSessionPage() {
   const [publishedResults, setPublishedResults] = useState<PublishedResults | null>(null);
   const [mySubmission, setMySubmission] = useState<MySubmission | null>(null);
 
-  // File upload state
+  // File upload & answer state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
 
@@ -214,6 +218,7 @@ export default function MobileStudentClassroomSessionPage() {
           setMySubmission(null);
           setSelectedFile(null);
           setPreviewUrl(null);
+          setAnswerText('');
           setPublishedResults(null);
         } else if (parsed.type === 'TIMER_EXTENDED') {
           if (parsed.payload?.expiresAt) {
@@ -336,6 +341,9 @@ export default function MobileStudentClassroomSessionPage() {
       formData.append('file', selectedFile);
       formData.append('participantId', participantId);
       formData.append('studentName', participantName);
+      if (answerText.trim()) {
+        formData.append('answerText', answerText.trim());
+      }
 
       const res = await fetch(`/api/classroom/sessions/${sessionCode}/submit`, {
         method: 'POST',
@@ -541,13 +549,98 @@ export default function MobileStudentClassroomSessionPage() {
           </div>
         )}
 
+        {/* Instant Automated Verification Status (shown whenever student has submitted) */}
+        {mySubmission && !publishedResults && (
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                Your Answer Verification
+              </span>
+              <span className="text-xs text-slate-400">
+                {new Date(mySubmission.submittedAt).toLocaleTimeString()}
+              </span>
+            </div>
+
+            {mySubmission.isCorrect === true ? (
+              <div className="p-4 bg-emerald-950/70 border border-emerald-600 rounded-xl flex items-start gap-3">
+                <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-base font-bold text-emerald-300">
+                    ✓ Verified Correct
+                  </div>
+                  <p className="text-xs text-emerald-200 mt-1 leading-relaxed">
+                    {mySubmission.feedback || 'Your answer matches the professor\'s reference solution!'}
+                  </p>
+                </div>
+              </div>
+            ) : mySubmission.isCorrect === false ? (
+              <div className="p-4 bg-red-950/70 border border-red-700 rounded-xl flex items-start gap-3">
+                <XCircle className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-base font-bold text-red-300">
+                    ✗ Verified Incorrect
+                  </div>
+                  <p className="text-xs text-red-200 mt-1 leading-relaxed">
+                    {mySubmission.feedback || 'Your answer does not match the professor\'s reference solution.'}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 bg-blue-950/70 border border-blue-700 rounded-xl flex items-start gap-3">
+                <Clock className="w-6 h-6 text-blue-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-base font-bold text-blue-300">
+                    Submission Received
+                  </div>
+                  <p className="text-xs text-blue-200 mt-1 leading-relaxed">
+                    Your handwritten answer is recorded.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {mySubmission.textResponse && (
+              <div className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-xs flex flex-col gap-1">
+                <span className="text-slate-400 font-medium">Your Submitted Value:</span>
+                <span className="text-white font-mono font-bold text-sm">{mySubmission.textResponse}</span>
+              </div>
+            )}
+
+            {mySubmission.imagePath && (
+              <div className="flex items-center gap-3 pt-1">
+                <img
+                  src={`/api/classroom/image?submissionId=${mySubmission.id}&path=${encodeURIComponent(mySubmission.imagePath)}&token=${encodeURIComponent(participantToken)}`}
+                  alt="Uploaded answer paper"
+                  className="w-16 h-16 object-cover rounded-lg border border-slate-700 bg-black"
+                />
+                <div className="flex-1">
+                  <span className="text-xs text-slate-300 block font-medium">Uploaded Handwritten Paper</span>
+                  <a
+                    href={`/api/classroom/image?submissionId=${mySubmission.id}&path=${encodeURIComponent(mySubmission.imagePath)}&token=${encodeURIComponent(participantToken)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold mt-0.5 inline-block"
+                  >
+                    View Full Image ↗
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Submission / Photo Upload Section */}
         {activity && activity.status !== 'PUBLISHED' && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
-            <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Upload className="w-4 h-4 text-blue-400" />
-              <span>Handwritten Answer Upload</span>
-            </h4>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Upload className="w-4 h-4 text-blue-400" />
+                <span>{mySubmission ? 'Resubmit Answer' : 'Submit Your Answer'}</span>
+              </h4>
+              {mySubmission && (
+                <span className="text-xs text-emerald-400 font-medium">Already Submitted (Can Update)</span>
+              )}
+            </div>
 
             {uploadError && (
               <div className="p-3 bg-red-950/60 border border-red-800/80 rounded-xl text-red-200 text-xs flex items-center gap-2">
@@ -555,6 +648,21 @@ export default function MobileStudentClassroomSessionPage() {
                 <span>{uploadError}</span>
               </div>
             )}
+
+            {/* Answer Text Value Input */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-200 mb-1.5">
+                Answer / Final Value <span className="text-slate-400 font-normal">(Automatically verified against professor solution)</span>
+              </label>
+              <input
+                type="text"
+                value={answerText}
+                onChange={(e) => setAnswerText(e.target.value)}
+                placeholder="e.g. 42, TCP SYN, x = 5, etc."
+                disabled={activity.status === 'CLOSED'}
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm disabled:opacity-50"
+              />
+            </div>
 
             {/* Already Submitted Status */}
             {mySubmission && !selectedFile && (

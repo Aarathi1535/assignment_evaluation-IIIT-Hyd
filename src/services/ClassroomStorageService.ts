@@ -94,20 +94,20 @@ export class ClassroomStorageService {
      * Reads an image buffer and MIME type from storage.
      */
     async readImage(storagePath: string): Promise<{ buffer: Buffer; contentType: string }> {
-        // Enforce path safety
-        const normalized = path.normalize(storagePath).replace(/^(\.\.(\/|\\|$))+/, '');
-        if (normalized.includes('..') || !normalized.startsWith('classroom-uploads')) {
+        // Enforce path safety with normalized POSIX forward slashes
+        const cleanPath = (storagePath || '').replace(/\\/g, '/').replace(/^(\.\.(\/|\\|$))+/, '');
+        if (cleanPath.includes('..') || !cleanPath.startsWith('classroom-uploads/')) {
             throw new Error('Invalid or forbidden storage path');
         }
 
         const bucket = this.getStorageBucket();
         if (bucket) {
             try {
-                const file = bucket.file(normalized);
+                const file = bucket.file(cleanPath);
                 const [exists] = await file.exists();
                 if (exists) {
                     const [content] = await file.download();
-                    const ext = path.extname(normalized).toLowerCase();
+                    const ext = path.extname(cleanPath).toLowerCase();
                     const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.heic' ? 'image/heic' : 'image/jpeg';
                     return { buffer: content, contentType };
                 }
@@ -116,16 +116,27 @@ export class ClassroomStorageService {
             }
         }
 
-        // Local persistent disk fallback
-        const localRoot = this.getLocalRoot();
-        const absoluteFilePath = path.join(localRoot, normalized);
+        // Local persistent disk fallback: check both configured root and data/ fallback
+        const parts = cleanPath.split('/').filter(p => p && p !== '..');
+        const candidatePaths = [
+            path.join(this.getLocalRoot(), ...parts),
+            path.join(process.cwd(), 'data', ...parts)
+        ];
 
-        if (!fs.existsSync(absoluteFilePath)) {
+        let targetPath: string | null = null;
+        for (const candidate of candidatePaths) {
+            if (fs.existsSync(candidate)) {
+                targetPath = candidate;
+                break;
+            }
+        }
+
+        if (!targetPath) {
             throw new Error('Image file not found in storage');
         }
 
-        const buffer = await fs.promises.readFile(absoluteFilePath);
-        const ext = path.extname(absoluteFilePath).toLowerCase();
+        const buffer = await fs.promises.readFile(targetPath);
+        const ext = path.extname(targetPath).toLowerCase();
         const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.heic' ? 'image/heic' : 'image/jpeg';
 
         return { buffer, contentType };
@@ -135,15 +146,15 @@ export class ClassroomStorageService {
      * Checks if an image exists in storage.
      */
     async imageExists(storagePath: string): Promise<boolean> {
-        const normalized = path.normalize(storagePath).replace(/^(\.\.(\/|\\|$))+/, '');
-        if (normalized.includes('..') || !normalized.startsWith('classroom-uploads')) {
+        const cleanPath = (storagePath || '').replace(/\\/g, '/').replace(/^(\.\.(\/|\\|$))+/, '');
+        if (cleanPath.includes('..') || !cleanPath.startsWith('classroom-uploads/')) {
             return false;
         }
 
         const bucket = this.getStorageBucket();
         if (bucket) {
             try {
-                const file = bucket.file(normalized);
+                const file = bucket.file(cleanPath);
                 const [exists] = await file.exists();
                 if (exists) return true;
             } catch {
@@ -151,9 +162,9 @@ export class ClassroomStorageService {
             }
         }
 
-        const localRoot = this.getLocalRoot();
-        const absoluteFilePath = path.join(localRoot, normalized);
-        return fs.existsSync(absoluteFilePath);
+        const parts = cleanPath.split('/').filter(p => p && p !== '..');
+        return fs.existsSync(path.join(this.getLocalRoot(), ...parts)) ||
+               fs.existsSync(path.join(process.cwd(), 'data', ...parts));
     }
 }
 

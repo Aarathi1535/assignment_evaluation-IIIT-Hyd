@@ -80,8 +80,11 @@ export async function GET(
         id: submission._id.toString(),
         studentName: submission.studentName,
         imagePath: submission.imagePath,
+        textResponse: submission.textResponse || null,
         status: submission.status,
         isCorrect: submission.isCorrect,
+        score: submission.score,
+        feedback: submission.feedback || null,
         submittedAt: submission.submittedAt.toISOString(),
         reviewedAt: submission.reviewedAt ? submission.reviewedAt.toISOString() : null
       } : null

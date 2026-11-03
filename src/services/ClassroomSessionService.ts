@@ -7,6 +7,7 @@ import ClassroomQuestion, { IClassroomQuestion } from '../models/ClassroomQuesti
 import ClassroomSubmission, { IClassroomSubmission } from '../models/ClassroomSubmission';
 import ClassroomEventService from './ClassroomEventService';
 import classroomStorageService from './ClassroomStorageService';
+import { verifyClassroomAnswer } from '../lib/classroomVerification';
 import { generateJoinCode, generateQRCodeSvg } from '../lib/classroomQr';
 import { HttpError } from '../lib/errors';
 
@@ -272,8 +273,9 @@ export class ClassroomSessionService {
         fileBuffer: Buffer;
         originalFilename?: string;
         mimeType?: string;
+        answerText?: string;
     }): Promise<IClassroomSubmission> {
-        const { sessionCode, participantId, studentName, studentUserId, fileBuffer, originalFilename, mimeType } = options;
+        const { sessionCode, participantId, studentName, studentUserId, fileBuffer, originalFilename, mimeType, answerText } = options;
 
         if (!sessionCode || !sessionCode.trim()) {
             throw new HttpError('Session code is required', 400);
@@ -361,6 +363,17 @@ export class ClassroomSessionService {
 
         const relativeImagePath = storageResult.storagePath;
 
+        // Perform Automated Answer Verification against activity reference answer
+        const refAnswer = activity.referenceAnswer || activity.correctAnswerText || activity.sampleSolution;
+        let isCorrect: boolean | null = null;
+        let feedback: string | undefined = undefined;
+
+        if (refAnswer && refAnswer.trim()) {
+            const verification = verifyClassroomAnswer(answerText || '', refAnswer);
+            isCorrect = verification.isCorrect;
+            feedback = verification.feedback;
+        }
+
         // Check if student already submitted (prevent duplicate or allow replace)
         let submission: IClassroomSubmission;
         const existing = await ClassroomSubmission.findOne({
@@ -374,7 +387,16 @@ export class ClassroomSessionService {
             existing.fileSize = fileBuffer.length;
             existing.mimeType = normalizedMime;
             existing.studentName = studentName;
-            existing.status = 'SUBMITTED';
+            existing.textResponse = answerText ? answerText.trim() : null;
+            if (isCorrect !== null) {
+                existing.isCorrect = isCorrect;
+                existing.score = isCorrect ? 1 : 0;
+                existing.status = 'EVALUATED';
+                existing.feedback = feedback;
+                existing.evaluatedAt = new Date();
+            } else {
+                existing.status = 'SUBMITTED';
+            }
             existing.submittedAt = new Date();
             submission = await existing.save();
         } else {
@@ -386,18 +408,37 @@ export class ClassroomSessionService {
                 student: studentUserId && mongoose.Types.ObjectId.isValid(studentUserId)
                     ? new mongoose.Types.ObjectId(studentUserId)
                     : null,
+                textResponse: answerText ? answerText.trim() : null,
                 imagePath: relativeImagePath,
                 originalFilename: sanitizedOriginalName,
                 fileSize: fileBuffer.length,
                 mimeType: normalizedMime,
-                status: 'SUBMITTED',
-                score: 0,
+                status: isCorrect !== null ? 'EVALUATED' : 'SUBMITTED',
+                isCorrect,
+                score: isCorrect ? 1 : 0,
+                feedback,
                 maxMarks: 1,
-                submittedAt: new Date()
+                submittedAt: new Date(),
+                evaluatedAt: isCorrect !== null ? new Date() : undefined
             });
 
             await ClassroomQuestion.findByIdAndUpdate(activity._id, { $inc: { totalSubmissions: 1 } });
         }
+
+        // Automatically update aggregate counts on the question immediately
+        const correctCount = await ClassroomSubmission.countDocuments({
+            question: activity._id,
+            isCorrect: true
+        });
+        const incorrectCount = await ClassroomSubmission.countDocuments({
+            question: activity._id,
+            isCorrect: false
+        });
+
+        await ClassroomQuestion.findByIdAndUpdate(activity._id, {
+            correctCount,
+            incorrectCount
+        });
 
         const freshActivity = await ClassroomQuestion.findById(activity._id);
         const totalSubs = freshActivity?.totalSubmissions || 1;
@@ -409,7 +450,11 @@ export class ClassroomSessionService {
             studentName,
             submittedAt: submission.submittedAt.toISOString(),
             imagePath: relativeImagePath,
-            totalSubmissions: totalSubs
+            answerText: submission.textResponse,
+            isCorrect: submission.isCorrect,
+            totalSubmissions: totalSubs,
+            correctCount,
+            incorrectCount
         });
 
         return submission;

@@ -38,6 +38,7 @@ export async function POST(
     const formToken = formData.get('participantToken') as string | null;
     const formParticipantId = formData.get('participantId') as string | null;
     const formStudentName = formData.get('studentName') as string | null;
+    const answerText = (formData.get('answerText') as string | null) || (formData.get('textResponse') as string | null) || undefined;
 
     // Check participant authentication
     const participantToken = req.headers.get('x-participant-token') || formToken;
@@ -110,7 +111,8 @@ export async function POST(
       studentUserId,
       fileBuffer,
       originalFilename: file.name || 'handwritten-answer.jpg',
-      mimeType: file.type || 'image/jpeg'
+      mimeType: file.type || 'image/jpeg',
+      answerText
     });
 
     return NextResponse.json({
@@ -122,7 +124,11 @@ export async function POST(
         studentName: submission.studentName,
         submittedAt: submission.submittedAt.toISOString(),
         imagePath: submission.imagePath,
-        status: submission.status
+        textResponse: submission.textResponse,
+        isCorrect: submission.isCorrect,
+        score: submission.score,
+        status: submission.status,
+        feedback: submission.feedback
       }
     }, { status: 201 });
   } catch (error: unknown) {

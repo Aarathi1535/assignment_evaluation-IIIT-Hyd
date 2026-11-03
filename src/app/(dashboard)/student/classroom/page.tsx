@@ -44,6 +44,8 @@ interface MySubmission {
   id: string;
   studentName: string;
   imagePath: string;
+  textResponse?: string | null;
+  feedback?: string | null;
   status: string;
   isCorrect: boolean | null;
   submittedAt: string;
@@ -58,7 +60,8 @@ export default function StudentClassroomPage() {
   const [mySubmission, setMySubmission] = useState<MySubmission | null>(null);
   const [publishedResults, setPublishedResults] = useState<PublishedResults | null>(null);
 
-  // File upload state
+  // Form & upload state
+  const [answerText, setAnswerText] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -261,6 +264,9 @@ export default function StudentClassroomPage() {
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
+      if (answerText.trim()) {
+        formData.append('answerText', answerText.trim());
+      }
       if (participantToken) {
         formData.append('participantToken', participantToken);
       }
@@ -449,26 +455,84 @@ export default function StudentClassroomPage() {
                   </div>
                 )}
 
+                {/* Answer Text Input for Automatic Verification */}
+                {activity.status === 'ACTIVE' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider mb-1.5">
+                      Your Answer / Solution Value
+                    </label>
+                    <input
+                      type="text"
+                      value={answerText}
+                      onChange={(e) => setAnswerText(e.target.value)}
+                      placeholder="e.g. 42, SYN, SYN-ACK, ACK, O(n log n)"
+                      className="w-full px-4 py-2.5 bg-white dark:bg-slate-800 border-2 border-slate-300 dark:border-slate-600 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                    />
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">
+                      Your answer will be automatically verified against the reference solution upon submission.
+                    </p>
+                  </div>
+                )}
+
                 {mySubmission && !selectedFile && (
-                  <div className="p-4 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <CheckCircle2 className="w-6 h-6 text-blue-600 dark:text-blue-400" />
-                      <div>
-                        <span className="text-xs font-bold text-blue-800 dark:text-blue-300 block">Answer Submitted</span>
-                        <span className="text-xs text-slate-500">
-                          {new Date(mySubmission.submittedAt).toLocaleTimeString()}
-                        </span>
+                  <div className={`p-4 rounded-xl border flex flex-col gap-3 ${
+                    mySubmission.isCorrect === true
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800'
+                      : mySubmission.isCorrect === false
+                      ? 'bg-red-50 dark:bg-red-950/40 border-red-300 dark:border-red-800'
+                      : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        {mySubmission.isCorrect === true ? (
+                          <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                        ) : mySubmission.isCorrect === false ? (
+                          <XCircle className="w-6 h-6 text-red-600 shrink-0" />
+                        ) : (
+                          <CheckCircle2 className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                        )}
+                        <div>
+                          <span className={`text-xs font-bold block ${
+                            mySubmission.isCorrect === true
+                              ? 'text-emerald-800 dark:text-emerald-300'
+                              : mySubmission.isCorrect === false
+                              ? 'text-red-800 dark:text-red-300'
+                              : 'text-blue-800 dark:text-blue-300'
+                          }`}>
+                            {mySubmission.isCorrect === true
+                              ? '✓ Verified Correct'
+                              : mySubmission.isCorrect === false
+                              ? '✗ Verified Incorrect'
+                              : 'Answer Submitted'}
+                          </span>
+                          <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+                            {new Date(mySubmission.submittedAt).toLocaleTimeString()}
+                          </span>
+                        </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={activity.status === 'CLOSED'}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                      >
+                        Replace Photo
+                      </button>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={activity.status === 'CLOSED'}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                    >
-                      Replace Photo
-                    </button>
+                    {mySubmission.textResponse && (
+                      <div className="text-xs pt-1.5 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
+                        <span className="text-slate-600 dark:text-slate-400 font-semibold">Submitted Answer:</span>
+                        <strong className="text-slate-900 dark:text-white font-mono">{mySubmission.textResponse}</strong>
+                      </div>
+                    )}
+
+                    {mySubmission.feedback && (
+                      <p className="text-xs text-slate-600 dark:text-slate-300 italic">
+                        {mySubmission.feedback}
+                      </p>
+                    )}
                   </div>
                 )}
 

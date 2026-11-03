@@ -16,8 +16,6 @@ import {
   AlertCircle,
   Tv,
   Minimize2,
-  ThumbsUp,
-  ThumbsDown,
   X,
   ChevronRight,
   Layers
@@ -59,6 +57,8 @@ interface ClassroomSubmission {
   participantId?: string;
   studentName: string;
   imagePath: string;
+  textResponse?: string | null;
+  feedback?: string | null;
   isCorrect?: boolean | null;
   status: string;
   submittedAt: string;
@@ -84,7 +84,6 @@ export default function ProfessorClassroomPage() {
 
   // Review Modal State
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
-  const [reviewNote, setReviewNote] = useState('');
 
   // UI Modes
   const [presenterMode, setPresenterMode] = useState(false);
@@ -250,46 +249,14 @@ export default function ProfessorClassroomPage() {
     return () => clearInterval(interval);
   }, [currentActivity?.expiresAt, currentActivity?.status]);
 
-  // Action: Review Submission defined before keydown effect
-  const handleMarkReview = useCallback(async (isCorrect: boolean) => {
-    if (reviewIndex === null || !submissions[reviewIndex]) return;
-    const sub = submissions[reviewIndex];
-
-    try {
-      const res = await fetch(`/api/classroom/submissions/${sub._id}/review`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isCorrect, note: reviewNote || undefined })
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setSubmissions((prev) => {
-          const next = [...prev];
-          next[reviewIndex] = { ...next[reviewIndex], isCorrect, status: 'REVIEWED' };
-          return next;
-        });
-
-        if (reviewIndex + 1 < submissions.length) {
-          setReviewIndex(reviewIndex + 1);
-          setReviewNote('');
-        } else {
-          setReviewIndex(null);
-        }
-      }
-    } catch {
-      setErrorMessage('Failed to save review status');
-    }
-  }, [reviewIndex, submissions, reviewNote]);
-
   // Keyboard navigation in review modal
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (reviewIndex === null) return;
-      if (e.key === '1' || e.key === 'ArrowRight') {
-        handleMarkReview(true);
-      } else if (e.key === '0' || e.key === 'ArrowLeft') {
-        handleMarkReview(false);
+      if (e.key === 'ArrowRight') {
+        setReviewIndex(prev => prev !== null && prev < submissions.length - 1 ? prev + 1 : prev);
+      } else if (e.key === 'ArrowLeft') {
+        setReviewIndex(prev => prev !== null && prev > 0 ? prev - 1 : prev);
       } else if (e.key === 'Escape') {
         setReviewIndex(null);
       }
@@ -297,7 +264,7 @@ export default function ProfessorClassroomPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [reviewIndex, handleMarkReview]);
+  }, [reviewIndex, submissions.length]);
 
   // Action: Create Session and Activity
   const handleCreateSession = async (e: React.FormEvent) => {
@@ -746,12 +713,11 @@ export default function ProfessorClassroomPage() {
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      const firstUnreviewed = submissions.findIndex(s => s.isCorrect === null || s.isCorrect === undefined);
-                      setReviewIndex(firstUnreviewed >= 0 ? firstUnreviewed : 0);
+                      setReviewIndex(0);
                     }}
                     className="text-xs font-semibold"
                   >
-                    Launch Fast Reviewer
+                    Inspect Submissions
                   </Button>
                 )}
               </div>
@@ -781,25 +747,27 @@ export default function ProfessorClassroomPage() {
                       {/* Image Thumbnail */}
                       <div className="relative aspect-4/3 bg-slate-950 flex items-center justify-center overflow-hidden">
                         <img
-                          src={`/api/classroom/image?path=${encodeURIComponent(sub.imagePath)}`}
+                          src={`/api/classroom/image?submissionId=${sub.id || sub._id}&path=${encodeURIComponent(sub.imagePath || '')}`}
                           alt={`Submission by ${sub.studentName}`}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                           loading="lazy"
                         />
 
-                        {/* Review Status Badge */}
+                        {/* Automated Verification Status Badge */}
                         <div className="absolute top-2 right-2">
                           {sub.isCorrect === true ? (
-                            <span className="p-1 rounded-full bg-emerald-600 text-white shadow-md flex items-center justify-center">
-                              <CheckCircle2 className="w-4 h-4" />
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white shadow-md flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Correct</span>
                             </span>
                           ) : sub.isCorrect === false ? (
-                            <span className="p-1 rounded-full bg-red-600 text-white shadow-md flex items-center justify-center">
-                              <XCircle className="w-4 h-4" />
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white shadow-md flex items-center gap-1">
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Incorrect</span>
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-900/80 text-slate-300 backdrop-blur-sm border border-slate-700">
-                              Unreviewed
+                              Submitted
                             </span>
                           )}
                         </div>
@@ -811,6 +779,11 @@ export default function ProfessorClassroomPage() {
                           <span className="text-xs font-bold text-slate-900 dark:text-white truncate block">
                             {sub.studentName}
                           </span>
+                          {sub.textResponse && (
+                            <span className="text-[11px] font-mono text-slate-600 dark:text-slate-300 truncate block">
+                              &ldquo;{sub.textResponse}&rdquo;
+                            </span>
+                          )}
                           <span className="text-[10px] text-slate-500 dark:text-slate-400">
                             {new Date(sub.submittedAt).toLocaleTimeString()}
                           </span>
@@ -967,59 +940,93 @@ export default function ProfessorClassroomPage() {
           </div>
         )}
 
-        {/* Modal: Fast Submission Reviewer */}
+        {/* Modal: Submission Inspector */}
         {reviewIndex !== null && submissions[reviewIndex] && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
             <div className="bg-slate-950 border border-slate-800 rounded-3xl max-w-4xl w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl text-white">
               {/* Modal Header */}
               <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800">
-                <div>
-                  <span className="text-xs text-slate-400">Reviewing ({reviewIndex + 1} of {submissions.length})</span>
-                  <h3 className="text-base font-bold text-white truncate">{submissions[reviewIndex].studentName}</h3>
+                <div className="flex items-center gap-3">
+                  <div>
+                    <span className="text-xs text-slate-300 font-medium">Submission ({reviewIndex + 1} of {submissions.length})</span>
+                    <h3 className="text-base font-bold text-white truncate">{submissions[reviewIndex].studentName}</h3>
+                  </div>
+
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
+                    submissions[reviewIndex].isCorrect === true
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                      : submissions[reviewIndex].isCorrect === false
+                      ? 'bg-red-950 text-red-300 border-red-700'
+                      : 'bg-slate-800 text-slate-300 border-slate-700'
+                  }`}>
+                    {submissions[reviewIndex].isCorrect === true
+                      ? '✓ Verified Correct'
+                      : submissions[reviewIndex].isCorrect === false
+                      ? '✗ Verified Incorrect'
+                      : 'Pending'}
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setReviewIndex(null)}
-                    className="p-1.5 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-white"
+                    className="p-1.5 hover:bg-slate-800 rounded-xl text-slate-300 hover:text-white"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
               </div>
 
+              {/* Automated Comparison Banner */}
+              <div className="px-5 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                {submissions[reviewIndex].textResponse && (
+                  <div>
+                    <span className="text-slate-400 font-semibold">Student Answer: </span>
+                    <strong className="text-slate-100 font-mono">{submissions[reviewIndex].textResponse}</strong>
+                  </div>
+                )}
+                {currentActivity?.referenceAnswer && (
+                  <div>
+                    <span className="text-slate-400 font-semibold">Reference Solution: </span>
+                    <strong className="text-emerald-300 font-mono">{currentActivity.referenceAnswer}</strong>
+                  </div>
+                )}
+              </div>
+
               {/* Image Canvas Container */}
               <div className="flex-1 bg-black/90 p-4 flex items-center justify-center overflow-auto relative">
                 <img
-                  src={`/api/classroom/image?path=${encodeURIComponent(submissions[reviewIndex].imagePath)}`}
-                  alt="Student handwritten submission"
+                  src={`/api/classroom/image?submissionId=${submissions[reviewIndex].id || submissions[reviewIndex]._id}&path=${encodeURIComponent(submissions[reviewIndex].imagePath || '')}`}
+                  alt={`Submission by ${submissions[reviewIndex].studentName}`}
                   className="max-h-full max-w-full object-contain rounded-lg"
                 />
               </div>
 
-              {/* Review Actions Footer */}
-              <div className="p-4 bg-slate-900 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="text-xs text-slate-400 hidden sm:block">
-                  Keyboard shortcuts: <strong className="text-slate-300">1 or &rarr;</strong> for Correct, <strong className="text-slate-300">0 or &larr;</strong> for Incorrect
+              {/* Navigation Footer */}
+              <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={reviewIndex <= 0}
+                  onClick={() => setReviewIndex(prev => prev !== null && prev > 0 ? prev - 1 : prev)}
+                  className="text-xs font-semibold"
+                >
+                  &larr; Previous Submission
+                </Button>
+
+                <div className="text-xs text-slate-300 font-medium hidden sm:block">
+                  Automated answer verification active &bull; Arrow keys &larr; / &rarr; to navigate
                 </div>
 
-                <div className="flex items-center gap-3 w-full sm:w-auto">
-                  <Button
-                    onClick={() => handleMarkReview(false)}
-                    className="flex-1 sm:flex-initial py-3 px-6 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <ThumbsDown className="w-4 h-4" />
-                    <span>Incorrect (0)</span>
-                  </Button>
-
-                  <Button
-                    onClick={() => handleMarkReview(true)}
-                    className="flex-1 sm:flex-initial py-3 px-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <ThumbsUp className="w-4 h-4" />
-                    <span>Correct (1)</span>
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={reviewIndex >= submissions.length - 1}
+                  onClick={() => setReviewIndex(prev => prev !== null && prev < submissions.length - 1 ? prev + 1 : prev)}
+                  className="text-xs font-semibold"
+                >
+                  Next Submission &rarr;
+                </Button>
               </div>
             </div>
           </div>

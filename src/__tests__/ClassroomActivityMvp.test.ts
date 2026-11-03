@@ -172,7 +172,7 @@ describe('Classroom Activity MVP - Complete Workflow', () => {
 
         expect(submission).toBeDefined();
         expect(submission.imagePath).toContain('classroom-uploads');
-        expect(submission.status).toBe('SUBMITTED');
+        expect(['SUBMITTED', 'EVALUATED']).toContain(submission.status);
         expect(submission.studentName).toBe('Student Bob');
 
         // Verify totalSubmissions count incremented
@@ -389,5 +389,57 @@ describe('Classroom Activity MVP - Complete Workflow', () => {
         expect(receivedEvents.some(e => e.type === 'ACTIVITY_PUBLISHED')).toBe(true);
 
         unsubscribe();
+    });
+
+    it('10. Automatically verifies student answers against professor reference solution upon submission', async () => {
+        const profContext = {
+            actingUserId: professorId.toString(),
+            actingUserRole: 'PROFESSOR'
+        };
+
+        const { joinCode } = await classroomSessionService.createSessionAndActivity(
+            {
+                title: 'Automated Math & Concept Check',
+                questionPrompt: 'Calculate the value of x if 2x + 6 = 90.',
+                referenceAnswer: '42'
+            },
+            profContext
+        );
+
+        // Student 1 submits correct numeric answer with handwritten image
+        const s1 = await classroomSessionService.joinSession(joinCode, 'Student 1');
+        const sub1 = await classroomSessionService.submitHandwrittenAnswer({
+            sessionCode: joinCode,
+            participantId: s1.participant.id,
+            studentName: s1.participant.name,
+            fileBuffer: validPngBuffer,
+            mimeType: 'image/png',
+            answerText: '42'
+        });
+
+        expect(sub1.status).toBe('EVALUATED');
+        expect(sub1.isCorrect).toBe(true);
+        expect(sub1.feedback).toContain('matches');
+
+        // Student 2 submits wrong answer
+        const s2 = await classroomSessionService.joinSession(joinCode, 'Student 2');
+        const sub2 = await classroomSessionService.submitHandwrittenAnswer({
+            sessionCode: joinCode,
+            participantId: s2.participant.id,
+            studentName: s2.participant.name,
+            fileBuffer: validPngBuffer,
+            mimeType: 'image/png',
+            answerText: '99'
+        });
+
+        expect(sub2.status).toBe('EVALUATED');
+        expect(sub2.isCorrect).toBe(false);
+
+        // Verify activity counters were updated automatically without professor manual review
+        const session = await ClassroomSession.findOne({ joinCode });
+        const activity = await ClassroomQuestion.findById(session?.currentActivity);
+        expect(activity?.totalSubmissions).toBe(2);
+        expect(activity?.correctCount).toBe(1);
+        expect(activity?.incorrectCount).toBe(1);
     });
 });
