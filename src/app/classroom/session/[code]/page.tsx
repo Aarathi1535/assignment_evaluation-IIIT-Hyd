@@ -375,18 +375,18 @@ export default function MobileStudentClassroomSessionPage() {
   // Join Screen
   if (!joined) {
     return (
-      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col justify-center px-4 py-8">
-        <div className="max-w-md w-full mx-auto bg-slate-800/90 border border-slate-700/80 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-md">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center px-4 py-8">
+        <div className="max-w-md w-full mx-auto bg-slate-900 border-2 border-slate-700 rounded-3xl p-6 sm:p-8 shadow-2xl">
           <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-blue-600/20 text-blue-400 mb-3 border border-blue-500/30">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-blue-600/20 text-blue-400 mb-3 border-2 border-blue-500/40">
               <Sparkles className="w-7 h-7" />
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-white">Join Classroom Session</h1>
-            <p className="text-sm text-slate-400 mt-1">Code: <span className="font-mono font-bold text-blue-400 tracking-wider text-base">{sessionCode}</span></p>
+            <p className="text-sm text-slate-300 mt-1">Code: <span className="font-mono font-bold text-blue-300 tracking-wider text-base">{sessionCode}</span></p>
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-red-950/60 border border-red-800/80 rounded-xl text-red-200 text-sm flex items-start gap-2">
+            <div className="mb-4 p-3 bg-red-950/80 border-2 border-red-700 rounded-xl text-red-200 text-sm flex items-start gap-2">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-400" />
               <span>{error}</span>
             </div>
@@ -394,7 +394,7 @@ export default function MobileStudentClassroomSessionPage() {
 
           <form onSubmit={handleJoin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-200 mb-1.5">
                 Your Full Name or Roll Number
               </label>
               <input
@@ -403,7 +403,7 @@ export default function MobileStudentClassroomSessionPage() {
                 value={participantName}
                 onChange={(e) => setParticipantName(e.target.value)}
                 placeholder="e.g. 20261042 - Aarathi Sree"
-                className="w-full px-4 py-3 bg-slate-900/90 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                className="w-full px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-xl text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-400 text-base font-medium"
                 autoFocus
               />
             </div>
@@ -411,7 +411,7 @@ export default function MobileStudentClassroomSessionPage() {
             <button
               type="submit"
               disabled={loading || !participantName.trim()}
-              className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer text-base"
             >
               {loading ? (
                 <>
@@ -426,7 +426,7 @@ export default function MobileStudentClassroomSessionPage() {
             </button>
           </form>
 
-          <div className="mt-6 text-center text-xs text-slate-500">
+          <div className="mt-6 text-center text-xs text-slate-400 font-medium">
             IIIT Hyderabad Classroom Assessment Platform
           </div>
         </div>
@@ -445,8 +445,8 @@ export default function MobileStudentClassroomSessionPage() {
         </div>
         <div className="flex items-center gap-2">
           <div className="text-right">
-            <span className="text-[11px] text-slate-400 block">Participant</span>
-            <span className="text-xs font-medium text-slate-200 truncate max-w-[120px] block">{participantName}</span>
+            <span className="text-[11px] text-slate-300 font-semibold block">Participant</span>
+            <span className="text-xs font-bold text-white truncate max-w-[120px] block">{participantName}</span>
           </div>
         </div>
       </header>
@@ -457,13 +457,13 @@ export default function MobileStudentClassroomSessionPage() {
         {activity ? (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-900/60 text-blue-300 border border-blue-700/50">
+              <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-blue-900 text-blue-200 border border-blue-600">
                 {activity.status === 'ACTIVE' ? 'Active Question' : activity.status === 'PUBLISHED' ? 'Results Published' : 'Submissions Closed'}
               </span>
 
               {timeLeft !== null && activity.status === 'ACTIVE' && (
-                <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
-                  timeLeft < 30 ? 'bg-red-950/80 border-red-800 text-red-300 animate-pulse' : 'bg-slate-800 border-slate-700 text-slate-300'
+                <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border-2 ${
+                  timeLeft < 30 ? 'bg-red-950 border-red-700 text-red-200 animate-pulse' : 'bg-slate-800 border-slate-600 text-slate-100'
                 }`}>
                   <Clock className="w-3.5 h-3.5" />
                   <span>{formatTimer(timeLeft)}</span>
@@ -473,43 +473,43 @@ export default function MobileStudentClassroomSessionPage() {
 
             <div>
               <h3 className="text-lg font-bold text-white mb-2">{activity.title}</h3>
-              <p className="text-base text-slate-200 whitespace-pre-wrap leading-relaxed">{activity.questionPrompt}</p>
+              <p className="text-base text-slate-100 whitespace-pre-wrap leading-relaxed">{activity.questionPrompt}</p>
             </div>
           </div>
         ) : (
-          <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-8 text-center text-slate-400">
-            <Clock className="w-10 h-10 mx-auto mb-3 text-slate-500 animate-pulse" />
-            <h3 className="text-base font-semibold text-slate-300">Waiting for next activity...</h3>
-            <p className="text-xs text-slate-500 mt-1">The professor will activate a question shortly.</p>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-300">
+            <Clock className="w-10 h-10 mx-auto mb-3 text-slate-400 animate-pulse" />
+            <h3 className="text-base font-bold text-slate-200">Waiting for next activity...</h3>
+            <p className="text-xs text-slate-400 mt-1">The professor will activate a question shortly.</p>
           </div>
         )}
 
         {/* Published Results View */}
         {publishedResults && (
-          <div className="bg-slate-900 border border-emerald-800/60 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
-            <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
+          <div className="bg-slate-900 border-2 border-emerald-700 rounded-2xl p-5 shadow-xl flex flex-col gap-4">
+            <div className="flex items-center gap-2 text-emerald-300 font-bold text-sm">
               <CheckCircle2 className="w-5 h-5 text-emerald-400" />
               <span>Results & Reference Answer</span>
             </div>
 
             {/* Student's Personal Outcome */}
             {mySubmission && (
-              <div className={`p-4 rounded-xl border flex items-center gap-3 ${
+              <div className={`p-4 rounded-xl border-2 flex items-center gap-3 ${
                 mySubmission.isCorrect === true
-                  ? 'bg-emerald-950/60 border-emerald-700/80 text-emerald-200'
+                  ? 'bg-emerald-950/80 border-emerald-600 text-emerald-100'
                   : mySubmission.isCorrect === false
-                  ? 'bg-red-950/60 border-red-800/80 text-red-200'
-                  : 'bg-slate-800/80 border-slate-700 text-slate-300'
+                  ? 'bg-red-950/80 border-red-600 text-red-100'
+                  : 'bg-slate-800 border-slate-600 text-slate-100'
               }`}>
                 {mySubmission.isCorrect === true ? (
                   <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
                 ) : mySubmission.isCorrect === false ? (
                   <XCircle className="w-6 h-6 text-red-400 shrink-0" />
                 ) : (
-                  <Clock className="w-6 h-6 text-slate-400 shrink-0" />
+                  <Clock className="w-6 h-6 text-slate-300 shrink-0" />
                 )}
                 <div>
-                  <span className="text-xs uppercase tracking-wider font-bold block">Your Answer Evaluation</span>
+                  <span className="text-xs uppercase tracking-wider font-bold block text-slate-300">Your Answer Evaluation</span>
                   <span className="text-base font-bold">
                     {mySubmission.isCorrect === true
                       ? 'Marked Correct ✓'
@@ -522,28 +522,28 @@ export default function MobileStudentClassroomSessionPage() {
             )}
 
             {/* Reference Solution */}
-            <div className="p-4 bg-slate-800/90 border border-slate-700 rounded-xl">
+            <div className="p-4 bg-slate-950 border border-slate-700 rounded-xl">
               <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 block mb-1">
                 Reference Solution
               </span>
-              <p className="text-sm text-slate-100 whitespace-pre-wrap leading-relaxed">
+              <p className="text-sm text-slate-100 whitespace-pre-wrap leading-relaxed font-semibold">
                 {publishedResults.referenceAnswer || 'Correct solution demonstrated by professor.'}
               </p>
             </div>
 
             {/* Aggregate Class Statistics */}
             <div className="grid grid-cols-3 gap-2 text-center pt-2">
-              <div className="bg-slate-800/60 border border-slate-700/60 p-3 rounded-xl">
-                <span className="text-xs text-slate-400 block">Class Total</span>
+              <div className="bg-slate-800/90 border border-slate-700 p-3 rounded-xl">
+                <span className="text-xs text-slate-300 font-semibold block">Class Total</span>
                 <span className="text-lg font-bold text-white">{publishedResults.totalSubmissions}</span>
               </div>
-              <div className="bg-emerald-950/40 border border-emerald-800/60 p-3 rounded-xl">
-                <span className="text-xs text-emerald-400 block">Correct</span>
-                <span className="text-lg font-bold text-emerald-300">{publishedResults.correctCount}</span>
+              <div className="bg-emerald-950/80 border border-emerald-700 p-3 rounded-xl">
+                <span className="text-xs text-emerald-300 font-semibold block">Correct</span>
+                <span className="text-lg font-bold text-emerald-200">{publishedResults.correctCount}</span>
               </div>
-              <div className="bg-red-950/40 border border-red-800/60 p-3 rounded-xl">
-                <span className="text-xs text-red-400 block">Incorrect</span>
-                <span className="text-lg font-bold text-red-300">{publishedResults.incorrectCount}</span>
+              <div className="bg-red-950/80 border border-red-700 p-3 rounded-xl">
+                <span className="text-xs text-red-300 font-semibold block">Incorrect</span>
+                <span className="text-lg font-bold text-red-200">{publishedResults.incorrectCount}</span>
               </div>
             </div>
           </div>
@@ -551,48 +551,48 @@ export default function MobileStudentClassroomSessionPage() {
 
         {/* Instant Automated Verification Status (shown whenever student has submitted) */}
         {mySubmission && !publishedResults && (
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
+          <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl p-5 shadow-xl flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
                 Your Answer Verification
               </span>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-slate-300 font-medium">
                 {new Date(mySubmission.submittedAt).toLocaleTimeString()}
               </span>
             </div>
 
             {mySubmission.isCorrect === true ? (
-              <div className="p-4 bg-emerald-950/70 border border-emerald-600 rounded-xl flex items-start gap-3">
+              <div className="p-4 bg-emerald-950/90 border-2 border-emerald-600 rounded-xl flex items-start gap-3">
                 <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="text-base font-bold text-emerald-300">
                     ✓ Verified Correct
                   </div>
-                  <p className="text-xs text-emerald-200 mt-1 leading-relaxed">
+                  <p className="text-xs text-emerald-100 mt-1 leading-relaxed font-medium">
                     {mySubmission.feedback || 'Your answer matches the professor\'s reference solution!'}
                   </p>
                 </div>
               </div>
             ) : mySubmission.isCorrect === false ? (
-              <div className="p-4 bg-red-950/70 border border-red-700 rounded-xl flex items-start gap-3">
+              <div className="p-4 bg-red-950/90 border-2 border-red-600 rounded-xl flex items-start gap-3">
                 <XCircle className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="text-base font-bold text-red-300">
                     ✗ Verified Incorrect
                   </div>
-                  <p className="text-xs text-red-200 mt-1 leading-relaxed">
+                  <p className="text-xs text-red-100 mt-1 leading-relaxed font-medium">
                     {mySubmission.feedback || 'Your answer does not match the professor\'s reference solution.'}
                   </p>
                 </div>
               </div>
             ) : (
-              <div className="p-4 bg-blue-950/70 border border-blue-700 rounded-xl flex items-start gap-3">
+              <div className="p-4 bg-blue-950/90 border-2 border-blue-600 rounded-xl flex items-start gap-3">
                 <Clock className="w-6 h-6 text-blue-400 shrink-0 mt-0.5" />
                 <div>
                   <div className="text-base font-bold text-blue-300">
                     Submission Received
                   </div>
-                  <p className="text-xs text-blue-200 mt-1 leading-relaxed">
+                  <p className="text-xs text-blue-100 mt-1 leading-relaxed font-medium">
                     Your handwritten answer is recorded.
                   </p>
                 </div>
@@ -600,8 +600,8 @@ export default function MobileStudentClassroomSessionPage() {
             )}
 
             {mySubmission.textResponse && (
-              <div className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-xs flex flex-col gap-1">
-                <span className="text-slate-400 font-medium">Your Submitted Value:</span>
+              <div className="p-3 bg-slate-950 border border-slate-700 rounded-xl text-xs flex flex-col gap-1">
+                <span className="text-slate-300 font-bold">Your Submitted Value:</span>
                 <span className="text-white font-mono font-bold text-sm">{mySubmission.textResponse}</span>
               </div>
             )}
@@ -611,15 +611,15 @@ export default function MobileStudentClassroomSessionPage() {
                 <img
                   src={`/api/classroom/image?submissionId=${mySubmission.id}&path=${encodeURIComponent(mySubmission.imagePath)}&token=${encodeURIComponent(participantToken)}`}
                   alt="Uploaded answer paper"
-                  className="w-16 h-16 object-cover rounded-lg border border-slate-700 bg-black"
+                  className="w-16 h-16 object-cover rounded-lg border-2 border-slate-700 bg-black"
                 />
                 <div className="flex-1">
-                  <span className="text-xs text-slate-300 block font-medium">Uploaded Handwritten Paper</span>
+                  <span className="text-xs text-slate-200 block font-semibold">Uploaded Handwritten Paper</span>
                   <a
                     href={`/api/classroom/image?submissionId=${mySubmission.id}&path=${encodeURIComponent(mySubmission.imagePath)}&token=${encodeURIComponent(participantToken)}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-xs text-blue-400 hover:text-blue-300 underline font-semibold mt-0.5 inline-block"
+                    className="text-xs text-blue-400 hover:text-blue-300 underline font-bold mt-0.5 inline-block"
                   >
                     View Full Image ↗
                   </a>
@@ -631,19 +631,19 @@ export default function MobileStudentClassroomSessionPage() {
 
         {/* Submission / Photo Upload Section */}
         {activity && activity.status !== 'PUBLISHED' && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
+          <div className="bg-slate-900 border-2 border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
                 <Upload className="w-4 h-4 text-blue-400" />
                 <span>{mySubmission ? 'Resubmit Answer' : 'Submit Your Answer'}</span>
               </h4>
               {mySubmission && (
-                <span className="text-xs text-emerald-400 font-medium">Already Submitted (Can Update)</span>
+                <span className="text-xs text-emerald-400 font-bold">Already Submitted (Can Update)</span>
               )}
             </div>
 
             {uploadError && (
-              <div className="p-3 bg-red-950/60 border border-red-800/80 rounded-xl text-red-200 text-xs flex items-center gap-2">
+              <div className="p-3 bg-red-950/80 border-2 border-red-700 rounded-xl text-red-200 text-xs flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
                 <span>{uploadError}</span>
               </div>
@@ -651,8 +651,8 @@ export default function MobileStudentClassroomSessionPage() {
 
             {/* Answer Text Value Input */}
             <div>
-              <label className="block text-xs font-semibold text-slate-200 mb-1.5">
-                Answer / Final Value <span className="text-slate-400 font-normal">(Automatically verified against professor solution)</span>
+              <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider mb-1.5">
+                Answer / Final Value <span className="text-slate-300 font-normal">(Automatically verified against professor solution)</span>
               </label>
               <input
                 type="text"
@@ -660,18 +660,18 @@ export default function MobileStudentClassroomSessionPage() {
                 onChange={(e) => setAnswerText(e.target.value)}
                 placeholder="e.g. 42, TCP SYN, x = 5, etc."
                 disabled={activity.status === 'CLOSED'}
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm disabled:opacity-50"
+                className="w-full px-3.5 py-2.5 bg-slate-950 border-2 border-slate-600 rounded-xl text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-400 text-sm font-semibold disabled:opacity-50"
               />
             </div>
 
             {/* Already Submitted Status */}
             {mySubmission && !selectedFile && (
-              <div className="p-4 bg-blue-950/40 border border-blue-800/60 rounded-xl flex items-center justify-between">
+              <div className="p-4 bg-blue-950/60 border-2 border-blue-700 rounded-xl flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CheckCircle2 className="w-6 h-6 text-blue-400" />
                   <div>
-                    <span className="text-xs font-bold text-blue-300 block">Answer Submitted</span>
-                    <span className="text-xs text-slate-400">
+                    <span className="text-xs font-bold text-blue-200 block">Answer Submitted</span>
+                    <span className="text-xs text-slate-300 font-medium">
                       {new Date(mySubmission.submittedAt).toLocaleTimeString()}
                     </span>
                   </div>
@@ -681,7 +681,7 @@ export default function MobileStudentClassroomSessionPage() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={activity.status === 'CLOSED'}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40"
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-slate-800 hover:bg-slate-700 text-white border-2 border-slate-600 disabled:opacity-40"
                 >
                   Replace Photo
                 </button>
@@ -691,7 +691,7 @@ export default function MobileStudentClassroomSessionPage() {
             {/* Selected Photo Preview */}
             {previewUrl && (
               <div className="flex flex-col items-center gap-3">
-                <div className="relative w-full max-h-72 rounded-xl overflow-hidden border border-slate-700 bg-black flex items-center justify-center">
+                <div className="relative w-full max-h-72 rounded-xl overflow-hidden border-2 border-slate-600 bg-black flex items-center justify-center">
                   <img
                     src={previewUrl}
                     alt="Handwritten answer preview"
@@ -706,7 +706,7 @@ export default function MobileStudentClassroomSessionPage() {
                       setSelectedFile(null);
                       setPreviewUrl(null);
                     }}
-                    className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700"
+                    className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-750 text-white rounded-xl text-xs font-bold border-2 border-slate-600"
                   >
                     Retake Photo
                   </button>
@@ -746,9 +746,9 @@ export default function MobileStudentClassroomSessionPage() {
                       fileInputRef.current.click();
                     }
                   }}
-                  className="py-4 px-4 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 rounded-xl text-blue-300 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                  className="py-4 px-4 bg-blue-900/40 hover:bg-blue-900/60 border-2 border-blue-500/60 rounded-xl text-blue-200 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
                 >
-                  <Camera className="w-7 h-7 text-blue-400" />
+                  <Camera className="w-7 h-7 text-blue-300" />
                   <span className="text-xs font-bold">Take Photo of Paper</span>
                 </button>
 
@@ -762,9 +762,9 @@ export default function MobileStudentClassroomSessionPage() {
                       fileInputRef.current.click();
                     }
                   }}
-                  className="py-4 px-4 bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-xl text-slate-300 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                  className="py-4 px-4 bg-slate-800 hover:bg-slate-750 border-2 border-slate-600 rounded-xl text-white flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
                 >
-                  <Upload className="w-7 h-7 text-slate-400" />
+                  <Upload className="w-7 h-7 text-slate-300" />
                   <span className="text-xs font-bold">Choose from Gallery</span>
                 </button>
 
@@ -780,7 +780,7 @@ export default function MobileStudentClassroomSessionPage() {
             )}
 
             {activity.status === 'CLOSED' && !publishedResults && (
-              <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-xl text-amber-200 text-xs text-center">
+              <div className="p-3 bg-amber-950/70 border-2 border-amber-600 rounded-xl text-amber-200 text-xs text-center font-bold">
                 Submissions are closed. The professor is reviewing answers.
               </div>
             )}

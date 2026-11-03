@@ -302,29 +302,29 @@ export default function StudentClassroomPage() {
     >
       <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto flex flex-col gap-6">
         <div>
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-900 border border-blue-300">
             Interactive Classroom
           </span>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white mt-1">{sessionTitle || 'Classroom Activity'}</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
+          <h1 className="text-2xl font-black tracking-tight text-slate-900 mt-1">{sessionTitle || 'Classroom Activity'}</h1>
+          <p className="text-sm text-slate-700 font-medium">
             Participate in live class exercises and upload handwritten answers.
           </p>
         </div>
 
         {errorMessage && (
-          <div className="p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-sm flex items-center gap-2">
-            <AlertCircle className="w-5 h-5 shrink-0" />
+          <div className="p-4 bg-red-50 border-2 border-red-300 rounded-xl text-red-900 font-semibold text-sm flex items-center gap-2 shadow-sm">
+            <AlertCircle className="w-5 h-5 shrink-0 text-red-700" />
             <span>{errorMessage}</span>
           </div>
         )}
 
         {!joined ? (
-          <Card className="p-8 text-center max-w-md mx-auto w-full border-slate-200 dark:border-slate-800">
-            <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 mx-auto flex items-center justify-center mb-4">
+          <Card className="p-8 text-center max-w-md mx-auto w-full border-2 border-slate-200 bg-white shadow-sm">
+            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 mx-auto flex items-center justify-center mb-4">
               <Sparkles className="w-6 h-6" />
             </div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Enter Classroom Join Code</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-6">
+            <h2 className="text-xl font-black text-slate-900">Enter Classroom Join Code</h2>
+            <p className="text-sm text-slate-600 font-medium mt-1 mb-6">
               Enter the 6-character code shown on the classroom screen.
             </p>
 
@@ -336,13 +336,13 @@ export default function StudentClassroomPage() {
                 value={sessionCode}
                 onChange={(e) => setSessionCode(e.target.value.toUpperCase())}
                 placeholder="e.g. B7K9X2"
-                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono text-center tracking-widest text-2xl uppercase focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-3 bg-white border-2 border-slate-300 rounded-xl text-slate-900 font-mono text-center tracking-widest text-3xl font-black uppercase focus:outline-none focus:border-blue-600 placeholder:text-slate-400"
               />
 
               <Button
                 type="submit"
                 disabled={loading || sessionCode.trim().length < 3}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center justify-center gap-2 py-3"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center justify-center gap-2 py-3 text-base shadow-sm"
               >
                 {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>Join Session</span>}
                 <ArrowRight className="w-4 h-4" />
@@ -352,89 +352,97 @@ export default function StudentClassroomPage() {
         ) : (
           <div className="flex flex-col gap-6">
             {activity ? (
-              <Card className="p-6 border-slate-200 dark:border-slate-800 flex flex-col gap-4">
+              <Card className="p-6 border-2 border-slate-200 bg-white shadow-sm flex flex-col gap-4">
                 <div className="flex items-center justify-between">
-                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                    activity.status === 'ACTIVE'
+                      ? 'bg-blue-100 text-blue-900 border-blue-300'
+                      : activity.status === 'PUBLISHED'
+                      ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                      : 'bg-amber-100 text-amber-900 border-amber-300'
+                  }`}>
                     {activity.status === 'ACTIVE' ? 'Submissions Open' : activity.status === 'PUBLISHED' ? 'Results Published' : 'Submissions Closed'}
                   </span>
 
                   {timeLeft !== null && activity.status === 'ACTIVE' && (
-                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${timeLeft < 30 ? 'bg-red-50 text-red-600 border-red-300 dark:bg-red-950/60 dark:text-red-300' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                      }`}>
-                      <Clock className="w-4 h-4" />
+                    <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border-2 ${
+                      timeLeft < 30 ? 'bg-red-100 text-red-900 border-red-300 animate-pulse' : 'bg-slate-100 text-slate-800 border-slate-300'
+                    }`}>
+                      <Clock className="w-4 h-4 text-slate-700" />
                       <span>{formatTimer(timeLeft)}</span>
                     </div>
                   )}
                 </div>
 
                 <div>
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">{activity.title}</h3>
-                  <p className="text-base text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed">{activity.questionPrompt}</p>
+                  <h3 className="text-xl font-black text-slate-900 mb-2">{activity.title}</h3>
+                  <p className="text-base text-slate-800 font-medium whitespace-pre-wrap leading-relaxed">{activity.questionPrompt}</p>
                 </div>
               </Card>
             ) : (
-              <Card className="p-8 text-center text-slate-500">
+              <Card className="p-8 text-center border-2 border-slate-200 bg-white text-slate-700">
                 <Clock className="w-8 h-8 mx-auto mb-2 text-slate-400 animate-pulse" />
-                <h4 className="font-semibold">Waiting for professor to activate a question...</h4>
+                <h4 className="font-bold text-slate-800">Waiting for professor to activate a question...</h4>
               </Card>
             )}
 
             {/* Published Results View */}
             {publishedResults && (
-              <Card className="p-6 border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/20 flex flex-col gap-4">
-                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold text-sm">
-                  <CheckCircle2 className="w-5 h-5" />
+              <Card className="p-6 border-2 border-emerald-300 bg-emerald-50/60 shadow-sm flex flex-col gap-4">
+                <div className="flex items-center gap-2 text-emerald-950 font-black text-sm">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-700" />
                   <span>Classroom Results & Reference Answer</span>
                 </div>
 
                 {mySubmission && (
-                  <div className={`p-4 rounded-xl border flex items-center gap-3 ${mySubmission.isCorrect === true
-                      ? 'bg-emerald-100/60 border-emerald-300 dark:bg-emerald-950/60 dark:border-emerald-700'
+                  <div className={`p-4 rounded-xl border-2 flex items-center gap-3 ${
+                    mySubmission.isCorrect === true
+                      ? 'bg-emerald-100 border-emerald-400 text-emerald-950'
                       : mySubmission.isCorrect === false
-                        ? 'bg-red-100/60 border-red-300 dark:bg-red-950/60 dark:border-red-700'
-                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-                    }`}>
+                      ? 'bg-red-100 border-red-400 text-red-950'
+                      : 'bg-white border-slate-300 text-slate-900'
+                  }`}>
                     {mySubmission.isCorrect === true ? (
-                      <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                      <CheckCircle2 className="w-6 h-6 text-emerald-700 shrink-0" />
                     ) : mySubmission.isCorrect === false ? (
-                      <XCircle className="w-6 h-6 text-red-600 shrink-0" />
+                      <XCircle className="w-6 h-6 text-red-700 shrink-0" />
                     ) : (
-                      <Clock className="w-6 h-6 text-slate-500 shrink-0" />
+                      <Clock className="w-6 h-6 text-slate-600 shrink-0" />
                     )}
                     <div>
-                      <span className="text-xs uppercase tracking-wider font-bold block text-slate-500">Your Answer</span>
-                      <span className="text-base font-bold text-slate-900 dark:text-white">
+                      <span className="text-xs uppercase tracking-wider font-bold block text-slate-700">Your Answer</span>
+                      <span className="text-base font-black text-slate-900">
                         {mySubmission.isCorrect === true
                           ? 'Marked Correct ✓'
                           : mySubmission.isCorrect === false
-                            ? 'Marked Incorrect ✗'
-                            : 'Under Review'}
+                          ? 'Marked Incorrect ✗'
+                          : 'Under Review'}
                       </span>
                     </div>
                   </div>
                 )}
 
-                <div className="p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl">
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 block mb-1">
+                <div className="p-4 bg-white border-2 border-emerald-200 rounded-xl">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-900 block mb-1">
                     Reference Solution
                   </span>
-                  <p className="text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap leading-relaxed">
+                  <p className="text-sm text-slate-900 font-semibold whitespace-pre-wrap leading-relaxed">
                     {publishedResults.referenceAnswer}
                   </p>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3 text-center pt-2">
-                  <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-                    <span className="text-xs text-slate-500 block">Class Total</span>
-                    <span className="text-lg font-bold text-slate-900 dark:text-white">{publishedResults.totalSubmissions}</span>
+                  <div className="bg-white p-3 rounded-xl border-2 border-slate-200">
+                    <span className="text-xs text-slate-600 font-bold block">Class Total</span>
+                    <span className="text-lg font-black text-slate-900">{publishedResults.totalSubmissions}</span>
                   </div>
-                  <div className="bg-emerald-50 dark:bg-emerald-900/30 p-3 rounded-xl border border-emerald-200 dark:border-emerald-800">
-                    <span className="text-xs text-emerald-700 dark:text-emerald-400 block">Correct</span>
-                    <span className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{publishedResults.correctCount}</span>
+                  <div className="bg-emerald-100 p-3 rounded-xl border-2 border-emerald-300">
+                    <span className="text-xs text-emerald-900 font-bold block">Correct</span>
+                    <span className="text-lg font-black text-emerald-900">{publishedResults.correctCount}</span>
                   </div>
-                  <div className="bg-red-50 dark:bg-red-900/30 p-3 rounded-xl border border-red-200 dark:border-red-800">
-                    <span className="text-xs text-red-700 dark:text-red-400 block">Incorrect</span>
-                    <span className="text-lg font-bold text-red-700 dark:text-red-300">{publishedResults.incorrectCount}</span>
+                  <div className="bg-red-100 p-3 rounded-xl border-2 border-red-300">
+                    <span className="text-xs text-red-900 font-bold block">Incorrect</span>
+                    <span className="text-lg font-black text-red-900">{publishedResults.incorrectCount}</span>
                   </div>
                 </div>
               </Card>
@@ -442,15 +450,15 @@ export default function StudentClassroomPage() {
 
             {/* Handwritten Image Upload Card */}
             {activity && activity.status !== 'PUBLISHED' && (
-              <Card className="p-6 border-slate-200 dark:border-slate-800 flex flex-col gap-4">
-                <h4 className="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Upload className="w-4 h-4 text-blue-500" />
+              <Card className="p-6 border-2 border-slate-200 bg-white shadow-sm flex flex-col gap-4">
+                <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Upload className="w-5 h-5 text-blue-600" />
                   <span>Upload Handwritten Answer</span>
                 </h4>
 
                 {uploadError && (
-                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                  <div className="p-3 bg-red-50 border-2 border-red-300 rounded-xl text-red-900 font-semibold text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
                     <span>{uploadError}</span>
                   </div>
                 )}
@@ -458,7 +466,7 @@ export default function StudentClassroomPage() {
                 {/* Answer Text Input for Automatic Verification */}
                 {activity.status === 'ACTIVE' && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
                       Your Answer / Solution Value
                     </label>
                     <input
@@ -466,38 +474,38 @@ export default function StudentClassroomPage() {
                       value={answerText}
                       onChange={(e) => setAnswerText(e.target.value)}
                       placeholder="e.g. 42, SYN, SYN-ACK, ACK, O(n log n)"
-                      className="w-full px-4 py-2.5 bg-white dark:bg-slate-800 border-2 border-slate-300 dark:border-slate-600 rounded-xl text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm font-medium"
+                      className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 text-sm font-semibold"
                     />
-                    <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1">
+                    <p className="text-xs text-slate-600 font-medium mt-1">
                       Your answer will be automatically verified against the reference solution upon submission.
                     </p>
                   </div>
                 )}
 
                 {mySubmission && !selectedFile && (
-                  <div className={`p-4 rounded-xl border flex flex-col gap-3 ${
+                  <div className={`p-4 rounded-xl border-2 flex flex-col gap-3 ${
                     mySubmission.isCorrect === true
-                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800'
+                      ? 'bg-emerald-50 border-emerald-300'
                       : mySubmission.isCorrect === false
-                      ? 'bg-red-50 dark:bg-red-950/40 border-red-300 dark:border-red-800'
-                      : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800'
+                      ? 'bg-red-50 border-red-300'
+                      : 'bg-blue-50 border-blue-200'
                   }`}>
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         {mySubmission.isCorrect === true ? (
-                          <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                          <CheckCircle2 className="w-6 h-6 text-emerald-700 shrink-0" />
                         ) : mySubmission.isCorrect === false ? (
-                          <XCircle className="w-6 h-6 text-red-600 shrink-0" />
+                          <XCircle className="w-6 h-6 text-red-700 shrink-0" />
                         ) : (
-                          <CheckCircle2 className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                          <CheckCircle2 className="w-6 h-6 text-blue-700" />
                         )}
                         <div>
-                          <span className={`text-xs font-bold block ${
+                          <span className={`text-xs font-black block ${
                             mySubmission.isCorrect === true
-                              ? 'text-emerald-800 dark:text-emerald-300'
+                              ? 'text-emerald-950'
                               : mySubmission.isCorrect === false
-                              ? 'text-red-800 dark:text-red-300'
-                              : 'text-blue-800 dark:text-blue-300'
+                              ? 'text-red-950'
+                              : 'text-blue-950'
                           }`}>
                             {mySubmission.isCorrect === true
                               ? '✓ Verified Correct'
@@ -505,7 +513,7 @@ export default function StudentClassroomPage() {
                               ? '✗ Verified Incorrect'
                               : 'Answer Submitted'}
                           </span>
-                          <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+                          <span className="text-xs text-slate-600 font-semibold">
                             {new Date(mySubmission.submittedAt).toLocaleTimeString()}
                           </span>
                         </div>
@@ -515,21 +523,21 @@ export default function StudentClassroomPage() {
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
                         disabled={activity.status === 'CLOSED'}
-                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                        className="px-3 py-1.5 text-xs font-bold rounded-lg bg-white text-slate-800 border-2 border-slate-300 hover:bg-slate-100 disabled:opacity-40"
                       >
                         Replace Photo
                       </button>
                     </div>
 
                     {mySubmission.textResponse && (
-                      <div className="text-xs pt-1.5 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2">
-                        <span className="text-slate-600 dark:text-slate-400 font-semibold">Submitted Answer:</span>
-                        <strong className="text-slate-900 dark:text-white font-mono">{mySubmission.textResponse}</strong>
+                      <div className="text-xs pt-1.5 border-t border-slate-200 flex items-center gap-2">
+                        <span className="text-slate-700 font-bold">Submitted Answer:</span>
+                        <strong className="text-slate-900 font-mono font-bold">{mySubmission.textResponse}</strong>
                       </div>
                     )}
 
                     {mySubmission.feedback && (
-                      <p className="text-xs text-slate-600 dark:text-slate-300 italic">
+                      <p className="text-xs text-slate-800 font-semibold italic">
                         {mySubmission.feedback}
                       </p>
                     )}
@@ -538,7 +546,7 @@ export default function StudentClassroomPage() {
 
                 {previewUrl && (
                   <div className="flex flex-col items-center gap-3">
-                    <div className="relative w-full max-h-72 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black flex items-center justify-center">
+                    <div className="relative w-full max-h-72 rounded-xl overflow-hidden border-2 border-slate-300 bg-black flex items-center justify-center">
                       <img
                         src={previewUrl}
                         alt="Handwritten answer preview"
@@ -553,7 +561,7 @@ export default function StudentClassroomPage() {
                           setSelectedFile(null);
                           setPreviewUrl(null);
                         }}
-                        className="flex-1 text-xs"
+                        className="flex-1 text-xs border-2 border-slate-300 text-slate-800 hover:bg-slate-100 font-bold bg-white"
                       >
                         Retake Photo
                       </Button>
@@ -561,7 +569,7 @@ export default function StudentClassroomPage() {
                       <Button
                         onClick={handleSubmit}
                         disabled={uploading || activity.status === 'CLOSED'}
-                        className="flex-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm"
                       >
                         {uploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                         <span>Confirm & Submit</span>
@@ -581,9 +589,9 @@ export default function StudentClassroomPage() {
                           fileInputRef.current.click();
                         }
                       }}
-                      className="py-4 px-4 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-xl text-blue-700 dark:text-blue-300 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                      className="py-4 px-4 bg-blue-50 hover:bg-blue-100 border-2 border-blue-300 rounded-xl text-blue-900 font-bold flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
                     >
-                      <Camera className="w-7 h-7 text-blue-600 dark:text-blue-400" />
+                      <Camera className="w-7 h-7 text-blue-700" />
                       <span className="text-xs font-bold">Take Photo of Paper</span>
                     </button>
 
@@ -596,9 +604,9 @@ export default function StudentClassroomPage() {
                           fileInputRef.current.click();
                         }
                       }}
-                      className="py-4 px-4 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-750 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-300 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                      className="py-4 px-4 bg-slate-50 hover:bg-slate-100 border-2 border-slate-300 rounded-xl text-slate-800 font-bold flex flex-col items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40"
                     >
-                      <Upload className="w-7 h-7 text-slate-500" />
+                      <Upload className="w-7 h-7 text-slate-700" />
                       <span className="text-xs font-bold">Upload Image File</span>
                     </button>
 

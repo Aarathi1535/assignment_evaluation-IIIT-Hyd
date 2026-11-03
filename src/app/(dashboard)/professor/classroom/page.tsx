@@ -410,7 +410,7 @@ export default function ProfessorClassroomPage() {
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center py-6">
           {/* Left: Join Info & QR Code */}
           <div className="lg:col-span-4 flex flex-col items-center justify-center p-6 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl text-center">
-            <span className="text-xs uppercase tracking-widest text-slate-400 font-bold mb-2">Scan with Phone Camera</span>
+            <span className="text-xs uppercase tracking-widest text-slate-300 font-bold mb-2">Scan with Phone Camera</span>
             
             {/* Scannable QR Code */}
             {currentSession.qrCodeSvg && (
@@ -421,19 +421,19 @@ export default function ProfessorClassroomPage() {
             )}
 
             <div className="mt-1">
-              <span className="text-xs text-slate-400 block mb-1">Or enter join code:</span>
-              <span className="text-4xl font-extrabold tracking-widest font-mono text-blue-400 bg-slate-950 px-5 py-2 rounded-xl border border-blue-500/40 inline-block shadow-inner">
+              <span className="text-xs text-slate-300 font-medium block mb-1">Or enter join code:</span>
+              <span className="text-4xl font-black tracking-widest font-mono text-blue-300 bg-slate-950 px-5 py-2 rounded-xl border-2 border-blue-500 inline-block shadow-inner">
                 {currentSession.joinCode}
               </span>
             </div>
 
-            <div className="mt-4 flex items-center gap-4 text-xs text-slate-400">
-              <span className="flex items-center gap-1.5 font-semibold text-slate-300">
+            <div className="mt-4 flex items-center gap-4 text-xs text-slate-300">
+              <span className="flex items-center gap-1.5 font-semibold text-slate-200">
                 <Users className="w-4 h-4 text-blue-400" />
                 {currentSession.participantCount} Joined
               </span>
               <span>&bull;</span>
-              <span className="flex items-center gap-1.5 font-semibold text-slate-300">
+              <span className="flex items-center gap-1.5 font-semibold text-slate-200">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                 {currentActivity.totalSubmissions} Submitted
               </span>
@@ -483,17 +483,17 @@ export default function ProfessorClassroomPage() {
                 </p>
 
                 <div className="grid grid-cols-3 gap-4 pt-2">
-                  <div className="bg-slate-900/80 p-4 rounded-2xl text-center border border-slate-800">
-                    <span className="text-xs text-slate-400 block">Total Answers</span>
-                    <span className="text-3xl font-extrabold text-white">{currentActivity.totalSubmissions}</span>
+                  <div className="bg-slate-900/90 p-4 rounded-2xl text-center border border-slate-800">
+                    <span className="text-xs text-slate-300 font-semibold block">Total Answers</span>
+                    <span className="text-3xl font-black text-white">{currentActivity.totalSubmissions}</span>
                   </div>
-                  <div className="bg-emerald-900/40 p-4 rounded-2xl text-center border border-emerald-800/60">
-                    <span className="text-xs text-emerald-400 block">Correct Answers</span>
-                    <span className="text-3xl font-extrabold text-emerald-300">{currentActivity.correctCount}</span>
+                  <div className="bg-emerald-950 p-4 rounded-2xl text-center border border-emerald-700">
+                    <span className="text-xs text-emerald-300 font-semibold block">Correct Answers</span>
+                    <span className="text-3xl font-black text-emerald-300">{currentActivity.correctCount}</span>
                   </div>
-                  <div className="bg-red-900/40 p-4 rounded-2xl text-center border border-red-800/60">
-                    <span className="text-xs text-red-400 block">Incorrect Answers</span>
-                    <span className="text-3xl font-extrabold text-red-300">{currentActivity.incorrectCount}</span>
+                  <div className="bg-red-950 p-4 rounded-2xl text-center border border-red-700">
+                    <span className="text-xs text-red-300 font-semibold block">Incorrect Answers</span>
+                    <span className="text-3xl font-black text-red-300">{currentActivity.incorrectCount}</span>
                   </div>
                 </div>
               </div>
@@ -514,12 +514,12 @@ export default function ProfessorClassroomPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
           <div>
             <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-900 border border-blue-300">
                 Independent MVP
               </span>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Classroom Activity</h1>
+              <h1 className="text-2xl font-black tracking-tight text-slate-900">Classroom Activity</h1>
             </div>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+            <p className="text-sm text-slate-700 font-medium mt-1">
               Live handwritten question sessions with QR codes, rapid review, and instant results.
             </p>
           </div>
@@ -527,7 +527,7 @@ export default function ProfessorClassroomPage() {
           <div className="flex items-center gap-3">
             <Button
               onClick={() => setShowCreateModal(true)}
-              className="bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-2"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-2 shadow-sm"
             >
               <Plus className="w-4 h-4" />
               <span>Create Activity</span>
@@ -537,24 +537,24 @@ export default function ProfessorClassroomPage() {
 
         {/* Notifications */}
         {errorMessage && (
-          <div className="p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-sm flex items-center justify-between">
+          <div className="p-4 bg-red-50 border-2 border-red-300 rounded-xl text-red-900 font-semibold text-sm flex items-center justify-between shadow-sm">
             <div className="flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 shrink-0" />
+              <AlertCircle className="w-5 h-5 shrink-0 text-red-700" />
               <span>{errorMessage}</span>
             </div>
-            <button onClick={() => setErrorMessage('')} className="p-1 hover:bg-red-200/50 rounded-lg">
+            <button onClick={() => setErrorMessage('')} className="p-1 hover:bg-red-200 rounded-lg text-red-800">
               <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
         {successMessage && (
-          <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-700 dark:text-emerald-300 text-sm flex items-center justify-between">
+          <div className="p-4 bg-emerald-50 border-2 border-emerald-300 rounded-xl text-emerald-950 font-semibold text-sm flex items-center justify-between shadow-sm">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 shrink-0" />
+              <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-700" />
               <span>{successMessage}</span>
             </div>
-            <button onClick={() => setSuccessMessage('')} className="p-1 hover:bg-emerald-200/50 rounded-lg">
+            <button onClick={() => setSuccessMessage('')} className="p-1 hover:bg-emerald-200 rounded-lg text-emerald-900">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -564,31 +564,31 @@ export default function ProfessorClassroomPage() {
         {currentSession && currentActivity ? (
           <div className="flex flex-col gap-6">
             {/* Session Controller Header */}
-            <Card className="p-5 sm:p-6 border-slate-200 dark:border-slate-800 shadow-sm flex flex-col gap-4">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4">
+            <Card className="p-5 sm:p-6 border-2 border-slate-200 bg-white shadow-sm flex flex-col gap-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b-2 border-slate-200 pb-4">
                 <div>
                   <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">{currentSession.title}</h2>
-                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                    <h2 className="text-xl font-black text-slate-900">{currentSession.title}</h2>
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
                       currentActivity.status === 'ACTIVE'
-                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                        ? 'bg-blue-100 text-blue-900 border-blue-300'
                         : currentActivity.status === 'PUBLISHED'
-                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300'
-                        : 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300'
+                        ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                        : 'bg-amber-100 text-amber-900 border-amber-300'
                     }`}>
                       {currentActivity.status}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-500 dark:text-slate-400">
-                    <span>Join Code: <strong className="font-mono text-blue-600 dark:text-blue-400 text-sm">{currentSession.joinCode}</strong></span>
+                  <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-700 font-medium">
+                    <span>Join Code: <strong className="font-mono text-blue-700 font-bold text-sm">{currentSession.joinCode}</strong></span>
                     <span>&bull;</span>
-                    <span className="flex items-center gap-1">
-                      <Users className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="flex items-center gap-1 font-semibold text-slate-800">
+                      <Users className="w-3.5 h-3.5 text-slate-600" />
                       {currentSession.participantCount} Joined
                     </span>
                     <span>&bull;</span>
-                    <span className="flex items-center gap-1 font-semibold text-slate-700 dark:text-slate-300">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                    <span className="flex items-center gap-1 font-semibold text-slate-800">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                       {submissions.length} Submissions
                     </span>
                   </div>
@@ -600,17 +600,16 @@ export default function ProfessorClassroomPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => setShowQrModal(true)}
-                    className="flex items-center gap-1.5 text-xs"
+                    className="flex items-center gap-1.5 text-xs border-2 border-slate-300 bg-white text-slate-800 hover:bg-slate-100 font-bold"
                   >
-                    <QrCode className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+                    <QrCode className="w-4 h-4 text-slate-700" />
                     <span>Show QR</span>
                   </Button>
 
                   <Button
-                    variant="outline"
                     size="sm"
                     onClick={() => setPresenterMode(true)}
-                    className="flex items-center gap-1.5 text-xs bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-800"
+                    className="flex items-center gap-1.5 text-xs bg-slate-900 text-white hover:bg-slate-800 font-bold shadow-sm"
                   >
                     <Tv className="w-4 h-4 text-blue-400" />
                     <span>Presenter View</span>
@@ -622,9 +621,9 @@ export default function ProfessorClassroomPage() {
                         variant="outline"
                         size="sm"
                         onClick={() => handleExtendTimer(60)}
-                        className="flex items-center gap-1 text-xs"
+                        className="flex items-center gap-1 text-xs border-2 border-slate-300 bg-white text-slate-800 hover:bg-slate-100 font-bold"
                       >
-                        <Clock className="w-3.5 h-3.5" />
+                        <Clock className="w-3.5 h-3.5 text-slate-700" />
                         <span>+1 Min</span>
                       </Button>
 
@@ -632,7 +631,7 @@ export default function ProfessorClassroomPage() {
                         size="sm"
                         onClick={handleCloseSubmissions}
                         disabled={actionLoading}
-                        className="bg-amber-600 hover:bg-amber-500 text-white text-xs"
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-sm"
                       >
                         Close Submissions
                       </Button>
@@ -644,7 +643,7 @@ export default function ProfessorClassroomPage() {
                       size="sm"
                       onClick={handlePublishResults}
                       disabled={actionLoading}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs flex items-center gap-1.5 font-bold"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs flex items-center gap-1.5 font-bold shadow-sm"
                     >
                       <Send className="w-3.5 h-3.5" />
                       <span>Publish Results</span>
@@ -654,19 +653,19 @@ export default function ProfessorClassroomPage() {
               </div>
 
               {/* Question & Live Timer Bar */}
-              <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="bg-slate-100 p-4 rounded-xl border-2 border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex-1">
-                  <span className="text-xs uppercase tracking-wider text-slate-400 font-bold block mb-1">Current Question</span>
-                  <p className="text-base font-semibold text-slate-800 dark:text-slate-100">{currentActivity.questionPrompt}</p>
+                  <span className="text-xs uppercase tracking-wider text-slate-600 font-bold block mb-1">Current Question</span>
+                  <p className="text-base font-bold text-slate-900">{currentActivity.questionPrompt}</p>
                 </div>
 
                 {secondsRemaining !== null && currentActivity.status === 'ACTIVE' && (
-                  <div className={`px-4 py-2 rounded-xl text-lg font-black font-mono border flex items-center gap-2 self-start md:self-center shrink-0 ${
+                  <div className={`px-4 py-2 rounded-xl text-lg font-black font-mono border-2 flex items-center gap-2 self-start md:self-center shrink-0 ${
                     secondsRemaining < 30
-                      ? 'bg-red-50 border-red-300 text-red-600 dark:bg-red-950/60 dark:border-red-800 dark:text-red-300 animate-pulse'
-                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200'
+                      ? 'bg-red-100 border-red-400 text-red-900 animate-pulse'
+                      : 'bg-white border-slate-300 text-slate-900'
                   }`}>
-                    <Clock className="w-5 h-5 text-slate-500" />
+                    <Clock className="w-5 h-5 text-slate-700" />
                     <span>{formatTimer(secondsRemaining)}</span>
                   </div>
                 )}
@@ -674,26 +673,26 @@ export default function ProfessorClassroomPage() {
 
               {/* Published Results Summary Bar */}
               {currentActivity.isPublished && (
-                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl flex flex-col gap-3">
-                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs uppercase tracking-wider">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <div className="p-4 bg-emerald-50 border-2 border-emerald-300 rounded-xl flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-emerald-950 font-bold text-xs uppercase tracking-wider">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
                     <span>Published Reference Answer & Aggregate Stats</span>
                   </div>
-                  <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">
+                  <p className="text-sm text-slate-900 font-semibold">
                     {currentActivity.referenceAnswer || 'Reference solution recorded.'}
                   </p>
                   <div className="grid grid-cols-3 gap-3 text-center pt-1">
-                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
-                      <span className="text-xs text-slate-500 block">Total</span>
-                      <span className="text-lg font-bold text-slate-900 dark:text-white">{currentActivity.totalSubmissions}</span>
+                    <div className="bg-white p-2.5 rounded-lg border-2 border-slate-200">
+                      <span className="text-xs text-slate-600 font-bold block">Total</span>
+                      <span className="text-lg font-black text-slate-900">{currentActivity.totalSubmissions}</span>
                     </div>
-                    <div className="bg-emerald-100/60 dark:bg-emerald-900/30 p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                      <span className="text-xs text-emerald-700 dark:text-emerald-400 block">Correct</span>
-                      <span className="text-lg font-bold text-emerald-700 dark:text-emerald-300">{currentActivity.correctCount}</span>
+                    <div className="bg-emerald-100 p-2.5 rounded-lg border-2 border-emerald-300">
+                      <span className="text-xs text-emerald-900 font-bold block">Correct</span>
+                      <span className="text-lg font-black text-emerald-900">{currentActivity.correctCount}</span>
                     </div>
-                    <div className="bg-red-100/60 dark:bg-red-900/30 p-2.5 rounded-lg border border-red-200 dark:border-red-800">
-                      <span className="text-xs text-red-700 dark:text-red-400 block">Incorrect</span>
-                      <span className="text-lg font-bold text-red-700 dark:text-red-300">{currentActivity.incorrectCount}</span>
+                    <div className="bg-red-100 p-2.5 rounded-lg border-2 border-red-300">
+                      <span className="text-xs text-red-900 font-bold block">Incorrect</span>
+                      <span className="text-lg font-black text-red-900">{currentActivity.incorrectCount}</span>
                     </div>
                   </div>
                 </div>
@@ -703,8 +702,8 @@ export default function ProfessorClassroomPage() {
             {/* Live Submissions Gallery & Review Feed */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-blue-500" />
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-blue-600" />
                   <span>Student Submissions ({submissions.length})</span>
                 </h3>
 
@@ -715,7 +714,7 @@ export default function ProfessorClassroomPage() {
                     onClick={() => {
                       setReviewIndex(0);
                     }}
-                    className="text-xs font-semibold"
+                    className="text-xs font-bold border-2 border-slate-300 text-slate-800 bg-white hover:bg-slate-100"
                   >
                     Inspect Submissions
                   </Button>
@@ -723,11 +722,11 @@ export default function ProfessorClassroomPage() {
               </div>
 
               {submissions.length === 0 ? (
-                <Card className="p-12 text-center border-dashed border-slate-300 dark:border-slate-800">
-                  <Clock className="w-10 h-10 mx-auto text-slate-400 dark:text-slate-600 mb-3 animate-pulse" />
-                  <h4 className="text-base font-semibold text-slate-700 dark:text-slate-300">Waiting for handwritten submissions...</h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-sm mx-auto">
-                    Students can scan the QR code or enter code <strong className="font-mono text-blue-600">{currentSession.joinCode}</strong> to upload their answers.
+                <Card className="p-12 text-center border-2 border-dashed border-slate-300 bg-white">
+                  <Clock className="w-10 h-10 mx-auto text-slate-400 mb-3 animate-pulse" />
+                  <h4 className="text-base font-bold text-slate-800">Waiting for handwritten submissions...</h4>
+                  <p className="text-xs text-slate-600 font-medium mt-1 max-w-sm mx-auto">
+                    Students can scan the QR code or enter code <strong className="font-mono text-blue-700 font-bold">{currentSession.joinCode}</strong> to upload their answers.
                   </p>
                 </Card>
               ) : (
@@ -736,12 +735,12 @@ export default function ProfessorClassroomPage() {
                     <div
                       key={sub._id || idx}
                       onClick={() => setReviewIndex(idx)}
-                      className={`group relative rounded-2xl border bg-white dark:bg-slate-900 overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ${
+                      className={`group relative rounded-2xl border-2 bg-white overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer ${
                         sub.isCorrect === true
-                          ? 'border-emerald-500/80 ring-2 ring-emerald-500/20'
+                          ? 'border-emerald-500 ring-2 ring-emerald-500/30'
                           : sub.isCorrect === false
-                          ? 'border-red-500/80 ring-2 ring-red-500/20'
-                          : 'border-slate-200 dark:border-slate-800'
+                          ? 'border-red-500 ring-2 ring-red-500/30'
+                          : 'border-slate-300'
                       }`}
                     >
                       {/* Image Thumbnail */}
@@ -766,7 +765,7 @@ export default function ProfessorClassroomPage() {
                               <span>Incorrect</span>
                             </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-900/80 text-slate-300 backdrop-blur-sm border border-slate-700">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-900 text-white border border-slate-700">
                               Submitted
                             </span>
                           )}
@@ -774,21 +773,21 @@ export default function ProfessorClassroomPage() {
                       </div>
 
                       {/* Card Meta */}
-                      <div className="p-3 flex items-center justify-between">
+                      <div className="p-3 flex items-center justify-between bg-white border-t border-slate-200">
                         <div className="truncate">
-                          <span className="text-xs font-bold text-slate-900 dark:text-white truncate block">
+                          <span className="text-xs font-bold text-slate-900 truncate block">
                             {sub.studentName}
                           </span>
                           {sub.textResponse && (
-                            <span className="text-[11px] font-mono text-slate-600 dark:text-slate-300 truncate block">
+                            <span className="text-[11px] font-mono text-slate-800 font-bold truncate block">
                               &ldquo;{sub.textResponse}&rdquo;
                             </span>
                           )}
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                          <span className="text-[10px] text-slate-600 font-semibold">
                             {new Date(sub.submittedAt).toLocaleTimeString()}
                           </span>
                         </div>
-                        <ChevronRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
+                        <ChevronRight className="w-4 h-4 text-slate-600 group-hover:translate-x-1 transition-transform shrink-0" />
                       </div>
                     </div>
                   ))}
@@ -797,15 +796,15 @@ export default function ProfessorClassroomPage() {
             </div>
           </div>
         ) : (
-          <Card className="p-12 text-center border-dashed border-slate-300 dark:border-slate-800">
-            <Sparkles className="w-12 h-12 mx-auto text-blue-500 mb-4" />
-            <h3 className="text-lg font-bold text-slate-900 dark:text-white">No active classroom session</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 mb-6">
+          <Card className="p-12 text-center border-2 border-dashed border-slate-300 bg-white">
+            <Sparkles className="w-12 h-12 mx-auto text-blue-600 mb-4" />
+            <h3 className="text-lg font-black text-slate-900">No active classroom session</h3>
+            <p className="text-sm text-slate-600 font-medium max-w-md mx-auto mt-1 mb-6">
               Launch a live activity to display a QR code for students to upload handwritten answers in class.
             </p>
             <Button
               onClick={() => setShowCreateModal(true)}
-              className="bg-blue-600 hover:bg-blue-500 text-white inline-flex items-center gap-2"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold inline-flex items-center gap-2 shadow-sm"
             >
               <Plus className="w-4 h-4" />
               <span>Create New Activity</span>
@@ -816,22 +815,22 @@ export default function ProfessorClassroomPage() {
         {/* Modal: Create Activity */}
         {showCreateModal && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+            <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl text-slate-900 animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center justify-between pb-4 border-b-2 border-slate-200">
                 <div className="flex items-center gap-2">
-                  <div className="p-2 rounded-xl bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400">
+                  <div className="p-2 rounded-xl bg-blue-100 text-blue-700">
                     <Sparkles className="w-5 h-5" />
                   </div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create Classroom Activity</h3>
+                  <h3 className="text-lg font-bold text-slate-900">Create Classroom Activity</h3>
                 </div>
-                <button onClick={() => setShowCreateModal(false)} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl">
-                  <X className="w-5 h-5 text-slate-500" />
+                <button onClick={() => setShowCreateModal(false)} className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-600 hover:text-slate-900">
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
               <form onSubmit={handleCreateSession} className="space-y-4 mt-5">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
                     Session Title *
                   </label>
                   <input
@@ -840,12 +839,12 @@ export default function ProfessorClassroomPage() {
                     value={sessionTitle}
                     onChange={(e) => setSessionTitle(e.target.value)}
                     placeholder="e.g. Lecture 8: AVL Tree Rotations"
-                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 font-semibold focus:outline-none focus:border-blue-600 text-sm"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
                     Question Prompt (Displayed to Students) *
                   </label>
                   <textarea
@@ -854,31 +853,31 @@ export default function ProfessorClassroomPage() {
                     value={questionPrompt}
                     onChange={(e) => setQuestionPrompt(e.target.value)}
                     placeholder="e.g. Insert key 45 into the AVL tree shown and sketch the resulting tree after balancing."
-                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-none"
+                    className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 font-semibold focus:outline-none focus:border-blue-600 text-sm resize-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                    Reference Answer (Revealed upon publication)
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
+                    Reference Answer (Used for Automated Verification)
                   </label>
                   <textarea
                     rows={2}
                     value={referenceAnswer}
                     onChange={(e) => setReferenceAnswer(e.target.value)}
                     placeholder="e.g. Root 30, Left child 20, Right child 45 after right-left rotation."
-                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm resize-none"
+                    className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 font-semibold focus:outline-none focus:border-blue-600 text-sm resize-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1.5">
                     Time Limit
                   </label>
                   <select
                     value={timeLimit}
                     onChange={(e) => setTimeLimit(parseInt(e.target.value, 10))}
-                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 font-bold focus:outline-none focus:border-blue-600 text-sm"
                   >
                     <option value={60}>1 Minute (Quick check)</option>
                     <option value={120}>2 Minutes</option>
@@ -889,18 +888,19 @@ export default function ProfessorClassroomPage() {
                   </select>
                 </div>
 
-                <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex items-center justify-end gap-3 pt-4 border-t-2 border-slate-200">
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => setShowCreateModal(false)}
+                    className="border-2 border-slate-300 text-slate-800 hover:bg-slate-100 font-bold bg-white"
                   >
                     Cancel
                   </Button>
                   <Button
                     type="submit"
                     disabled={actionLoading || !sessionTitle.trim() || !questionPrompt.trim()}
-                    className="bg-blue-600 hover:bg-blue-500 text-white font-semibold flex items-center gap-1.5"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-1.5 shadow-sm"
                   >
                     {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                     <span>Launch Activity & QR</span>
@@ -914,25 +914,29 @@ export default function ProfessorClassroomPage() {
         {/* Modal: QR Code Enlarge */}
         {showQrModal && currentSession && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 text-center shadow-2xl">
-              <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-1">Student Join Code</h4>
-              <p className="text-xs text-slate-500 mb-4">Scan with mobile camera to submit answer</p>
+            <div className="bg-white border-2 border-slate-200 rounded-3xl max-w-sm w-full p-6 text-center shadow-2xl text-slate-900">
+              <h4 className="text-xl font-black text-slate-900 mb-1">Student Join Code</h4>
+              <p className="text-xs text-slate-600 font-semibold mb-4">Scan with mobile camera to submit answer</p>
 
               {currentSession.qrCodeSvg && (
                 <div
-                  className="bg-white p-4 rounded-2xl border shadow-inner flex items-center justify-center mx-auto"
+                  className="bg-white p-4 rounded-2xl border-2 border-slate-200 shadow-inner flex items-center justify-center mx-auto"
                   dangerouslySetInnerHTML={{ __html: currentSession.qrCodeSvg }}
                 />
               )}
 
               <div className="mt-4">
-                <span className="text-3xl font-extrabold font-mono text-blue-600 tracking-widest bg-blue-50 dark:bg-slate-800 px-4 py-1.5 rounded-xl border border-blue-200 dark:border-blue-900">
+                <span className="text-3xl font-black font-mono text-blue-900 tracking-widest bg-blue-50 px-5 py-2 rounded-xl border-2 border-blue-300 inline-block">
                   {currentSession.joinCode}
                 </span>
               </div>
 
               <div className="mt-6 flex justify-center">
-                <Button variant="outline" onClick={() => setShowQrModal(false)}>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowQrModal(false)}
+                  className="border-2 border-slate-300 bg-white text-slate-800 hover:bg-slate-100 font-bold"
+                >
                   Close
                 </Button>
               </div>
@@ -943,21 +947,21 @@ export default function ProfessorClassroomPage() {
         {/* Modal: Submission Inspector */}
         {reviewIndex !== null && submissions[reviewIndex] && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
-            <div className="bg-slate-950 border border-slate-800 rounded-3xl max-w-4xl w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl text-white">
+            <div className="bg-slate-950 border-2 border-slate-800 rounded-3xl max-w-4xl w-full h-[90vh] flex flex-col overflow-hidden shadow-2xl text-white">
               {/* Modal Header */}
-              <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800">
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900">
                 <div className="flex items-center gap-3">
                   <div>
-                    <span className="text-xs text-slate-300 font-medium">Submission ({reviewIndex + 1} of {submissions.length})</span>
+                    <span className="text-xs text-slate-300 font-semibold">Submission ({reviewIndex + 1} of {submissions.length})</span>
                     <h3 className="text-base font-bold text-white truncate">{submissions[reviewIndex].studentName}</h3>
                   </div>
 
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
                     submissions[reviewIndex].isCorrect === true
-                      ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-600'
                       : submissions[reviewIndex].isCorrect === false
-                      ? 'bg-red-950 text-red-300 border-red-700'
-                      : 'bg-slate-800 text-slate-300 border-slate-700'
+                      ? 'bg-red-950 text-red-300 border-red-600'
+                      : 'bg-slate-800 text-slate-200 border-slate-700'
                   }`}>
                     {submissions[reviewIndex].isCorrect === true
                       ? '✓ Verified Correct'
@@ -981,14 +985,14 @@ export default function ProfessorClassroomPage() {
               <div className="px-5 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                 {submissions[reviewIndex].textResponse && (
                   <div>
-                    <span className="text-slate-400 font-semibold">Student Answer: </span>
-                    <strong className="text-slate-100 font-mono">{submissions[reviewIndex].textResponse}</strong>
+                    <span className="text-slate-300 font-bold">Student Answer: </span>
+                    <strong className="text-white font-mono font-bold">{submissions[reviewIndex].textResponse}</strong>
                   </div>
                 )}
                 {currentActivity?.referenceAnswer && (
                   <div>
-                    <span className="text-slate-400 font-semibold">Reference Solution: </span>
-                    <strong className="text-emerald-300 font-mono">{currentActivity.referenceAnswer}</strong>
+                    <span className="text-slate-300 font-bold">Reference Solution: </span>
+                    <strong className="text-emerald-300 font-mono font-bold">{currentActivity.referenceAnswer}</strong>
                   </div>
                 )}
               </div>
@@ -1004,29 +1008,27 @@ export default function ProfessorClassroomPage() {
 
               {/* Navigation Footer */}
               <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-4">
-                <Button
-                  variant="outline"
-                  size="sm"
+                <button
+                  type="button"
                   disabled={reviewIndex <= 0}
                   onClick={() => setReviewIndex(prev => prev !== null && prev > 0 ? prev - 1 : prev)}
-                  className="text-xs font-semibold"
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg border-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700 disabled:opacity-40"
                 >
                   &larr; Previous Submission
-                </Button>
+                </button>
 
                 <div className="text-xs text-slate-300 font-medium hidden sm:block">
                   Automated answer verification active &bull; Arrow keys &larr; / &rarr; to navigate
                 </div>
 
-                <Button
-                  variant="outline"
-                  size="sm"
+                <button
+                  type="button"
                   disabled={reviewIndex >= submissions.length - 1}
                   onClick={() => setReviewIndex(prev => prev !== null && prev < submissions.length - 1 ? prev + 1 : prev)}
-                  className="text-xs font-semibold"
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg border-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700 disabled:opacity-40"
                 >
                   Next Submission &rarr;
-                </Button>
+                </button>
               </div>
             </div>
           </div>
