@@ -5,6 +5,21 @@ export interface DescriptiveStatistics {
     standardDeviation: number | null;
 }
 
+export interface GraderScoreObservation {
+    graderId: string;
+    comparableGroup: string;
+    scorePercentage: number;
+}
+
+export interface GraderConsistencyMetric {
+    graderId: string;
+    comparisonCount: number;
+    meanAbsoluteDeviationPercentagePoints: number;
+    sampleSizeStatus: 'SUFFICIENT' | 'INSUFFICIENT';
+}
+
+export const MIN_GRADER_CONSISTENCY_SAMPLE_SIZE = 5;
+
 export function calculateDescriptiveStatistics(values: readonly number[]): DescriptiveStatistics {
     const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
     if (sorted.length === 0) {
@@ -28,4 +43,54 @@ export function calculateDescriptiveStatistics(values: readonly number[]): Descr
         median,
         standardDeviation: Math.sqrt(populationVariance)
     };
+}
+
+/**
+ * Measures each TA's mean absolute distance from the pooled percentage score
+ * within comparable rubric-question groups. Groups with only one TA are omitted.
+ * Fewer than five comparable scores are marked insufficient; this cohort proxy
+ * is not formal inter-rater reliability because students are not double-graded.
+ */
+export function calculateGraderConsistency(
+    observations: readonly GraderScoreObservation[],
+    minimumSampleSize = MIN_GRADER_CONSISTENCY_SAMPLE_SIZE
+): GraderConsistencyMetric[] {
+    if (!Number.isSafeInteger(minimumSampleSize) || minimumSampleSize < 1) {
+        throw new Error('Minimum sample size must be a positive integer');
+    }
+
+    const groups = new Map<string, GraderScoreObservation[]>();
+    for (const observation of observations) {
+        if (!observation.graderId || !observation.comparableGroup ||
+            !Number.isFinite(observation.scorePercentage) ||
+            observation.scorePercentage < 0 || observation.scorePercentage > 100) {
+            continue;
+        }
+        const group = groups.get(observation.comparableGroup) || [];
+        group.push(observation);
+        groups.set(observation.comparableGroup, group);
+    }
+
+    const deviationsByGrader = new Map<string, number[]>();
+    for (const group of groups.values()) {
+        if (new Set(group.map(observation => observation.graderId)).size < 2) {
+            continue;
+        }
+        const groupMean = group.reduce((sum, observation) => sum + observation.scorePercentage, 0) / group.length;
+        for (const observation of group) {
+            const deviations = deviationsByGrader.get(observation.graderId) || [];
+            deviations.push(Math.abs(observation.scorePercentage - groupMean));
+            deviationsByGrader.set(observation.graderId, deviations);
+        }
+    }
+
+    return Array.from(deviationsByGrader, ([graderId, deviations]): GraderConsistencyMetric => ({
+        graderId,
+        comparisonCount: deviations.length,
+        meanAbsoluteDeviationPercentagePoints:
+            deviations.reduce((sum, deviation) => sum + deviation, 0) / deviations.length,
+        sampleSizeStatus: deviations.length >= minimumSampleSize
+            ? 'SUFFICIENT'
+            : 'INSUFFICIENT'
+    })).sort((left, right) => left.graderId.localeCompare(right.graderId));
 }

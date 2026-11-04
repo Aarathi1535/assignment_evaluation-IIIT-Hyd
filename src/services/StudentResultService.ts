@@ -30,6 +30,13 @@ export interface ReleasedExamScoreDto {
     maxMarks: number;
 }
 
+export interface ReleasedExamGradeObservationDto {
+    graderId: string;
+    graderName: string;
+    comparableGroup: string;
+    scorePercentage: number;
+}
+
 export interface ReleasedStudentResultDto {
     examId: string;
     examTitle: string;
@@ -459,6 +466,61 @@ export class StudentResultService {
         }
 
         return releasedScores;
+    }
+
+    async getPublishedExamGradeObservations(exam: IExam): Promise<ReleasedExamGradeObservationDto[]> {
+        const releasedScripts = await this.getPublishedExamScores(exam);
+        if (releasedScripts.length === 0) {
+            return [];
+        }
+
+        const scriptIds = releasedScripts.map(result => new mongoose.Types.ObjectId(result.scriptId));
+        const grades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        }).select('rubric gradedBy question totalScore').lean();
+        const rubricIds = Array.from(new Set(grades.map(grade => grade.rubric.toString())));
+        const rubrics = await Rubric.find({ _id: { $in: rubricIds } }).select('questions').lean();
+        const rubricById = new Map(rubrics.map(rubric => [rubric._id.toString(), rubric]));
+        const taIds = Array.from(new Set(grades.map(grade => grade.gradedBy.toString())));
+        const graders = await User.find({
+            _id: { $in: taIds },
+            role: UserRole.TA,
+            isActive: true
+        }).select('_id name').lean();
+        const graderById = new Map(graders.map(grader => [grader._id.toString(), grader]));
+        const observations: ReleasedExamGradeObservationDto[] = [];
+
+        for (const grade of grades) {
+            const rubric = rubricById.get(grade.rubric.toString());
+            const grader = graderById.get(grade.gradedBy.toString());
+            if (!rubric || !grader || !Number.isFinite(grade.totalScore) || grade.totalScore < 0) {
+                continue;
+            }
+
+            const isWholeScriptGrade = grade.question === undefined || grade.question === null;
+            const question = isWholeScriptGrade
+                ? undefined
+                : rubric.questions.find(item => item.questionNumber === grade.question);
+            if (!isWholeScriptGrade && !question) {
+                continue;
+            }
+            const maxMarks = isWholeScriptGrade
+                ? rubric.questions.reduce((sum, item) => sum + (Number(item.maxMarks) || 0), 0)
+                : Number(question?.maxMarks);
+            if (!Number.isFinite(maxMarks) || maxMarks <= 0 || grade.totalScore > maxMarks) {
+                continue;
+            }
+
+            observations.push({
+                graderId: grader._id.toString(),
+                graderName: grader.name,
+                comparableGroup: `${grade.rubric.toString()}:${isWholeScriptGrade ? 'whole' : grade.question}`,
+                scorePercentage: (grade.totalScore / maxMarks) * 100
+            });
+        }
+
+        return observations;
     }
 
     /**
