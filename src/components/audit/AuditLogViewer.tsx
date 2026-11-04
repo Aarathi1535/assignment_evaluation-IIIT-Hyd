@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 
@@ -27,6 +27,23 @@ interface AuditLogResponse {
     limit: number;
     total: number;
     totalPages: number;
+}
+
+interface IntegrityDiagnostic {
+    code: string;
+    sequence?: number;
+    count?: number;
+}
+
+interface AuditIntegrityResult {
+    status: 'INTACT' | 'MISMATCH' | 'UNSEALED';
+    checkedRecords: number;
+    sealedRecords: number;
+    unsealedRecords: number;
+    invalidSeals: number;
+    missingSequences: number;
+    diagnostics: IntegrityDiagnostic[];
+    omittedDiagnostics: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,6 +73,19 @@ function isAuditLogResponse(value: unknown): value is AuditLogResponse {
         Number.isInteger(value.totalPages);
 }
 
+function isIntegrityResult(value: unknown): value is AuditIntegrityResult {
+    return isRecord(value) &&
+        (value.status === 'INTACT' || value.status === 'MISMATCH' || value.status === 'UNSEALED') &&
+        Number.isInteger(value.checkedRecords) &&
+        Number.isInteger(value.sealedRecords) &&
+        Number.isInteger(value.unsealedRecords) &&
+        Number.isInteger(value.invalidSeals) &&
+        Number.isInteger(value.missingSequences) &&
+        Array.isArray(value.diagnostics) &&
+        value.diagnostics.every(item => isRecord(item) && typeof item.code === 'string') &&
+        Number.isInteger(value.omittedDiagnostics);
+}
+
 function detailValue(details: unknown, key: 'before' | 'after'): unknown {
     return isRecord(details) ? details[key] : undefined;
 }
@@ -74,8 +104,11 @@ export default function AuditLogViewer({ isAdmin }: { isAdmin: boolean }) {
     const [page, setPage] = useState(1);
     const [loadingExams, setLoadingExams] = useState(!isAdmin);
     const [loading, setLoading] = useState(false);
+    const [verifying, setVerifying] = useState(false);
     const [error, setError] = useState('');
     const [examError, setExamError] = useState('');
+    const [integrityError, setIntegrityError] = useState('');
+    const [integrityResult, setIntegrityResult] = useState<AuditIntegrityResult | null>(null);
 
     const loadExams = useCallback(async () => {
         setLoadingExams(true);
@@ -146,6 +179,26 @@ export default function AuditLogViewer({ isAdmin }: { isAdmin: boolean }) {
         else void loadLogs(page, examId, appliedActorId);
     };
 
+    const verifyIntegrity = async () => {
+        setVerifying(true);
+        setIntegrityError('');
+        try {
+            const response = await fetch('/api/audit-logs/verify', { method: 'POST' });
+            const payload: unknown = await response.json();
+            if (!response.ok || !isRecord(payload) || payload.success !== true ||
+                !isIntegrityResult(payload.data)) {
+                throw new Error(isRecord(payload) && typeof payload.message === 'string'
+                    ? payload.message : 'Could not verify audit trail integrity.');
+            }
+            setIntegrityResult(payload.data);
+        } catch (cause) {
+            setIntegrityResult(null);
+            setIntegrityError(cause instanceof Error ? cause.message : 'Could not verify audit trail integrity.');
+        } finally {
+            setVerifying(false);
+        }
+    };
+
     return (
         <DashboardLayout
             title="Audit history"
@@ -188,16 +241,56 @@ export default function AuditLogViewer({ isAdmin }: { isAdmin: boolean }) {
                             className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                         />
                     </label>
-                    <div className="flex items-end gap-2">
+                    <div className="flex flex-wrap items-end gap-2">
                         <Button variant="primary" size="md" type="submit" disabled={loading || loadingExams}>
                             Apply filters
                         </Button>
                         <Button variant="outline" size="md" type="button" onClick={retry} disabled={loading}>
                             <RefreshCw className="h-4 w-4" />Refresh
                         </Button>
+                        <Button variant="secondary" size="md" type="button" onClick={() => void verifyIntegrity()} disabled={verifying}>
+                            <ShieldCheck className="h-4 w-4" />{verifying ? 'Verifying…' : 'Verify integrity'}
+                        </Button>
                     </div>
                 </form>
 
+                {integrityError && (
+                    <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-800">
+                        {integrityError}
+                    </div>
+                )}
+                {integrityResult && (
+                    <section
+                        aria-label="Audit trail integrity result"
+                        className={`rounded-lg border p-4 ${
+                            integrityResult.status === 'INTACT'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                                : integrityResult.status === 'UNSEALED'
+                                    ? 'border-amber-200 bg-amber-50 text-amber-900'
+                                    : 'border-rose-200 bg-rose-50 text-rose-900'
+                        }`}
+                    >
+                        <h2 className="font-semibold">Audit trail integrity: {integrityResult.status}</h2>
+                        <p className="mt-1 text-sm">
+                            Checked {integrityResult.checkedRecords} records; {integrityResult.sealedRecords} sealed,
+                            {' '}{integrityResult.unsealedRecords} unsealed, {integrityResult.invalidSeals} invalid seals,
+                            {' '}{integrityResult.missingSequences} missing sequence(s).
+                        </p>
+                        {integrityResult.diagnostics.length > 0 && (
+                            <ul className="mt-2 list-disc pl-5 text-sm">
+                                {integrityResult.diagnostics.map((item, index) => (
+                                    <li key={`${item.code}-${item.sequence ?? 'none'}-${index}`}>
+                                        {item.code}{item.sequence === undefined ? '' : ` at sequence ${item.sequence}`}
+                                        {item.count === undefined ? '' : ` (${item.count})`}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        {integrityResult.omittedDiagnostics > 0 && (
+                            <p className="mt-2 text-sm">{integrityResult.omittedDiagnostics} additional diagnostics omitted.</p>
+                        )}
+                    </section>
+                )}
                 {examError && (
                     <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-800">
                         <span className="flex items-center gap-2"><AlertCircle className="h-4 w-4" />{examError}</span>

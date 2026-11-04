@@ -129,6 +129,7 @@ export async function writeAuditLog(params: AuditLogParams): Promise<boolean> {
 
         if (params.session) {
             const entry = new AuditLog(auditDoc);
+            entry.$session(params.session);
             await entry.save({ session: params.session });
         } else {
             await AuditLog.create(auditDoc);
