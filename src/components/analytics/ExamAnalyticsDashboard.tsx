@@ -15,6 +15,21 @@ interface ScoreDistributionBin {
     count: number;
 }
 
+interface QuestionPerformanceStatistic {
+    questionNumber: number;
+    maxMarks: number;
+    gradedCount: number;
+    meanScorePercentage: number | null;
+    standardDeviationPercentagePoints: number | null;
+    difficultyIndexPercentage: number | null;
+}
+
+interface QuestionMetric {
+    scoreNormalization: string;
+    spread: string;
+    difficultyFormula: string;
+}
+
 interface ClassStatistics {
     count: number;
     mean: number | null;
@@ -27,6 +42,8 @@ interface ExamAnalyticsResponse {
     exam: { id: string; title: string; maxMarks: number };
     classStatistics: ClassStatistics;
     scoreDistribution: ScoreDistributionBin[];
+    questionStatistics: QuestionPerformanceStatistic[];
+    questionMetric: QuestionMetric;
 }
 
 interface GraderMetric {
@@ -148,6 +165,66 @@ function GraderConsistencyChart({
                     )}
                 </div>
             ))}
+        </div>
+    );
+}
+
+function QuestionPerformanceTable({
+    questions
+}: {
+    questions: QuestionPerformanceStatistic[];
+}) {
+    if (questions.length === 0) {
+        return (
+            <p className="rounded-brand bg-slate-50 p-4 text-sm text-slate-700" role="status">
+                No rubric questions are configured for this exam.
+            </p>
+        );
+    }
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-sm">
+                <caption className="sr-only">Question-level mean score, spread, difficulty and valid grade count</caption>
+                <thead>
+                    <tr className="border-b border-slate-300 text-xs font-bold uppercase tracking-wide text-slate-700">
+                        <th scope="col" className="px-3 py-3">Question</th>
+                        <th scope="col" className="px-3 py-3">Maximum marks</th>
+                        <th scope="col" className="px-3 py-3">Mean score</th>
+                        <th scope="col" className="px-3 py-3">Score spread</th>
+                        <th scope="col" className="px-3 py-3">Difficulty index</th>
+                        <th scope="col" className="px-3 py-3">Valid grades</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {questions.map(question => (
+                        <tr key={question.questionNumber} className="border-b border-slate-200 text-slate-800">
+                            <th scope="row" className="whitespace-nowrap px-3 py-3 font-semibold">
+                                Question {question.questionNumber}
+                            </th>
+                            <td className="whitespace-nowrap px-3 py-3 tabular-nums">
+                                {question.maxMarks.toLocaleString()} marks
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-3 tabular-nums">
+                                {question.meanScorePercentage === null
+                                    ? '—'
+                                    : `${question.meanScorePercentage.toFixed(1)}%`}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-3 tabular-nums">
+                                {question.standardDeviationPercentagePoints === null
+                                    ? '—'
+                                    : `${question.standardDeviationPercentagePoints.toFixed(1)} percentage points`}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-3 tabular-nums">
+                                {question.difficultyIndexPercentage === null
+                                    ? 'No valid final question-level grades'
+                                    : `${question.difficultyIndexPercentage.toFixed(1)}% (higher is harder)`}
+                            </td>
+                            <td className="px-3 py-3 tabular-nums">{question.gradedCount.toLocaleString()}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 }
@@ -297,6 +374,15 @@ export default function ExamAnalyticsDashboard({ examId }: { examId: string }) {
                                 </p>
                             </Card>
                         </div>
+
+                        <Card>
+                            <h2 className="mb-2 text-lg font-bold text-slate-950">Question-level performance</h2>
+                            <p className="mb-5 text-sm leading-relaxed text-slate-700">
+                                {payload.exam.questionMetric.scoreNormalization} {payload.exam.questionMetric.spread}{' '}
+                                {payload.exam.questionMetric.difficultyFormula}
+                            </p>
+                            <QuestionPerformanceTable questions={payload.exam.questionStatistics} />
+                        </Card>
                     </>
                 )}
             </div>

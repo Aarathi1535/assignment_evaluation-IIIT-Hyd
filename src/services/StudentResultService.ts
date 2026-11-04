@@ -37,6 +37,11 @@ export interface ReleasedExamGradeObservationDto {
     scorePercentage: number;
 }
 
+export interface ReleasedExamQuestionScoresDto {
+    questions: Array<{ questionNumber: number; maxMarks: number }>;
+    observations: Array<{ questionNumber: number; score: number; maxMarks: number }>;
+}
+
 export interface ReleasedStudentResultDto {
     examId: string;
     examTitle: string;
@@ -466,6 +471,80 @@ export class StudentResultService {
         }
 
         return releasedScores;
+    }
+
+    async getPublishedExamQuestionScores(
+        exam: IExam,
+        releasedScriptIds: readonly string[]
+    ): Promise<ReleasedExamQuestionScoresDto> {
+        if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
+            return { questions: [], observations: [] };
+        }
+
+        const rubrics = await Rubric.find({ exam: exam._id })
+            .select('questions version isActive')
+            .sort({ version: -1, createdAt: -1 })
+            .lean();
+        const currentRubricId = exam.rubric?.toString();
+        const currentRubric = rubrics.find(rubric =>
+            currentRubricId && rubric._id.toString() === currentRubricId
+        ) || rubrics.find(rubric => rubric.isActive) || rubrics[0];
+        const orderedRubrics = currentRubric
+            ? [currentRubric, ...rubrics.filter(rubric => rubric._id.toString() !== currentRubric._id.toString())]
+            : rubrics;
+        const rubricById = new Map(orderedRubrics.map(rubric => [rubric._id.toString(), rubric]));
+        const questionsByNumber = new Map<number, { questionNumber: number; maxMarks: number }>();
+
+        for (const question of currentRubric?.questions || []) {
+            if (!Number.isSafeInteger(question.questionNumber) ||
+                !Number.isFinite(question.maxMarks) || question.maxMarks < 0 ||
+                questionsByNumber.has(question.questionNumber)) {
+                continue;
+            }
+            questionsByNumber.set(question.questionNumber, {
+                questionNumber: question.questionNumber,
+                maxMarks: question.maxMarks
+            });
+        }
+
+        const scriptIds = releasedScriptIds.map(id => new mongoose.Types.ObjectId(id));
+        const grades = scriptIds.length > 0
+            ? await Grade.find({
+                answerScript: { $in: scriptIds },
+                isFinal: true
+            }).select('rubric question totalScore').lean()
+            : [];
+        const observations: ReleasedExamQuestionScoresDto['observations'] = [];
+
+        for (const grade of grades) {
+            if (typeof grade.question !== 'number' || !grade.rubric) {
+                continue;
+            }
+            const rubric = rubricById.get(grade.rubric.toString());
+            const question = rubric?.questions.find(item => item.questionNumber === grade.question);
+            if (!question || !Number.isFinite(question.maxMarks) ||
+                question.maxMarks <= 0 || !Number.isFinite(grade.totalScore) ||
+                grade.totalScore < 0 || grade.totalScore > question.maxMarks) {
+                continue;
+            }
+
+            if (!questionsByNumber.has(question.questionNumber)) {
+                questionsByNumber.set(question.questionNumber, {
+                    questionNumber: question.questionNumber,
+                    maxMarks: question.maxMarks
+                });
+            }
+            observations.push({
+                questionNumber: question.questionNumber,
+                score: grade.totalScore,
+                maxMarks: question.maxMarks
+            });
+        }
+
+        return {
+            questions: Array.from(questionsByNumber.values()),
+            observations
+        };
     }
 
     async getPublishedExamGradeObservations(exam: IExam): Promise<ReleasedExamGradeObservationDto[]> {

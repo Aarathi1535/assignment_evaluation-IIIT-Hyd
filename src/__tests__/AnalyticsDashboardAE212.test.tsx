@@ -33,7 +33,30 @@ function analyticsResponse(count = 2) {
                 endPercentage: (index + 1) * 10,
                 label: `${index * 10}-${(index + 1) * 10}%`,
                 count: index === 7 ? count : 0
-            }))
+            })),
+            questionStatistics: [
+                {
+                    questionNumber: 1,
+                    maxMarks: 10,
+                    gradedCount: count,
+                    meanScorePercentage: count ? 75 : null,
+                    standardDeviationPercentagePoints: count ? 25 : null,
+                    difficultyIndexPercentage: count ? 25 : null
+                },
+                {
+                    questionNumber: 2,
+                    maxMarks: 20,
+                    gradedCount: 0,
+                    meanScorePercentage: null,
+                    standardDeviationPercentagePoints: null,
+                    difficultyIndexPercentage: null
+                }
+            ],
+            questionMetric: {
+                scoreNormalization: 'Each final score is divided by the question maximum from the rubric version used for that grade.',
+                spread: 'Population standard deviation of normalized scores, in percentage points.',
+                difficultyFormula: 'Difficulty index = 100 - mean score percentage; higher values indicate a harder question.'
+            }
         }
     };
 }
@@ -79,6 +102,10 @@ describe('AE-212 analytics dashboard', () => {
         expect(screen.getByRole('img', { name: /Score distribution by percentage/ })).toBeTruthy();
         expect(screen.getByRole('img', { name: /Tess Adams: 8.0 percentage points/ })).toBeTruthy();
         expect(screen.getByText(/at least 5 comparable scores/)).toBeTruthy();
+        expect(screen.getByText('Question 1')).toBeTruthy();
+        expect(screen.getByText('75.0%')).toBeTruthy();
+        expect(screen.getByText(/Difficulty index = 100 - mean score percentage/)).toBeTruthy();
+        expect(screen.getByText('No valid final question-level grades')).toBeTruthy();
         expect(fetchMock).toHaveBeenCalledWith(
             '/api/analytics/exams/exam-1',
             expect.objectContaining({ cache: 'no-store' })

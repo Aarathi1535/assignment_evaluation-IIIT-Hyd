@@ -127,6 +127,14 @@ describe('AE-210 exam statistics', () => {
             standardDeviationMethod: 'population'
         });
         expect(body.data.classStatistics.standardDeviation).toBeCloseTo(Math.sqrt(8 / 3), 10);
+        expect(body.data.questionStatistics).toEqual([{
+            questionNumber: 1,
+            maxMarks: 10,
+            gradedCount: 0,
+            meanScorePercentage: null,
+            standardDeviationPercentagePoints: null,
+            difficultyIndexPercentage: null
+        }]);
     });
 
     it('returns null metrics for an empty cohort and restricts access to authorized owners', async () => {
@@ -164,6 +172,16 @@ describe('AE-210 exam statistics', () => {
             status: ExamStatus.PUBLISHED,
             isActive: true
         });
+        await Rubric.create({
+            exam: exam._id,
+            createdBy: owner._id,
+            scoreStep: 0.5,
+            questions: [
+                { questionNumber: 1, maxMarks: 10, criteria: [{ criterionName: 'Q1', points: 10 }] },
+                { questionNumber: 2, maxMarks: 20, criteria: [{ criterionName: 'Q2', points: 20 }] }
+            ],
+            isActive: true
+        });
         const authorized = vi.spyOn(apiAuth, 'requirePermission').mockResolvedValue({
             authorized: true,
             response: null,
@@ -189,6 +207,24 @@ describe('AE-210 exam statistics', () => {
             standardDeviation: null,
             standardDeviationMethod: 'population'
         });
+        expect(body.data.questionStatistics).toEqual([
+            {
+                questionNumber: 1,
+                maxMarks: 10,
+                gradedCount: 0,
+                meanScorePercentage: null,
+                standardDeviationPercentagePoints: null,
+                difficultyIndexPercentage: null
+            },
+            {
+                questionNumber: 2,
+                maxMarks: 20,
+                gradedCount: 0,
+                meanScorePercentage: null,
+                standardDeviationPercentagePoints: null,
+                difficultyIndexPercentage: null
+            }
+        ]);
 
         authorized.mockResolvedValue({
             authorized: true,

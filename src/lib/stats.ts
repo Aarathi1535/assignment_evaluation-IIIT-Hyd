@@ -12,6 +12,26 @@ export interface ScoreDistributionBin {
     count: number;
 }
 
+export interface QuestionScoreDefinition {
+    questionNumber: number;
+    maxMarks: number;
+}
+
+export interface QuestionScoreObservation {
+    questionNumber: number;
+    score: number;
+    maxMarks: number;
+}
+
+export interface QuestionPerformanceStatistic {
+    questionNumber: number;
+    maxMarks: number;
+    gradedCount: number;
+    meanScorePercentage: number | null;
+    standardDeviationPercentagePoints: number | null;
+    difficultyIndexPercentage: number | null;
+}
+
 export interface GraderScoreObservation {
     graderId: string;
     comparableGroup: string;
@@ -82,6 +102,53 @@ export function calculateScoreDistribution(
     }
 
     return bins;
+}
+
+export function calculateQuestionPerformance(
+    questions: readonly QuestionScoreDefinition[],
+    observations: readonly QuestionScoreObservation[]
+): QuestionPerformanceStatistic[] {
+    const definitions = new Map<number, QuestionScoreDefinition>();
+    for (const question of questions) {
+        if (!Number.isSafeInteger(question.questionNumber) ||
+            !Number.isFinite(question.maxMarks) || question.maxMarks < 0 ||
+            definitions.has(question.questionNumber)) {
+            continue;
+        }
+        definitions.set(question.questionNumber, question);
+    }
+
+    const percentagesByQuestion = new Map<number, number[]>();
+    for (const observation of observations) {
+        if (!definitions.has(observation.questionNumber) ||
+            !Number.isFinite(observation.score) ||
+            !Number.isFinite(observation.maxMarks) ||
+            observation.maxMarks <= 0 ||
+            observation.score < 0 || observation.score > observation.maxMarks) {
+            continue;
+        }
+        const percentages = percentagesByQuestion.get(observation.questionNumber) || [];
+        percentages.push((observation.score / observation.maxMarks) * 100);
+        percentagesByQuestion.set(observation.questionNumber, percentages);
+    }
+
+    return Array.from(definitions.values())
+        .sort((left, right) => left.questionNumber - right.questionNumber)
+        .map(question => {
+            const statistics = calculateDescriptiveStatistics(
+                percentagesByQuestion.get(question.questionNumber) || []
+            );
+            return {
+                questionNumber: question.questionNumber,
+                maxMarks: question.maxMarks,
+                gradedCount: statistics.count,
+                meanScorePercentage: statistics.mean,
+                standardDeviationPercentagePoints: statistics.standardDeviation,
+                difficultyIndexPercentage: statistics.mean === null
+                    ? null
+                    : 100 - statistics.mean
+            };
+        });
 }
 
 /**

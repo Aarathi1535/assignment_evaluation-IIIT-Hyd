@@ -5,6 +5,7 @@ import { requirePermission } from '../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../lib/db';
 import {
     calculateDescriptiveStatistics,
+    calculateQuestionPerformance,
     calculateScoreDistribution
 } from '../../../../../lib/stats';
 import { ExamStatus } from '../../../../../models/Exam';
@@ -54,6 +55,10 @@ export async function GET(
 
         const releasedScores = await StudentResultService.getPublishedExamScores(exam);
         const statistics = calculateDescriptiveStatistics(releasedScores.map(result => result.score));
+        const questionScores = await StudentResultService.getPublishedExamQuestionScores(
+            exam,
+            releasedScores.map(result => result.scriptId)
+        );
 
         return NextResponse.json(
             {
@@ -71,7 +76,16 @@ export async function GET(
                         standardDeviation: statistics.standardDeviation,
                         standardDeviationMethod: 'population'
                     },
-                    scoreDistribution: calculateScoreDistribution(releasedScores)
+                    scoreDistribution: calculateScoreDistribution(releasedScores),
+                    questionStatistics: calculateQuestionPerformance(
+                        questionScores.questions,
+                        questionScores.observations
+                    ),
+                    questionMetric: {
+                        scoreNormalization: 'Each final score is divided by the question maximum from the rubric version used for that grade.',
+                        spread: 'Population standard deviation of normalized scores, in percentage points.',
+                        difficultyFormula: 'Difficulty index = 100 - mean score percentage; higher values indicate a harder question.'
+                    }
                 }
             },
             { status: 200, headers: { 'Cache-Control': 'private, no-store' } }
