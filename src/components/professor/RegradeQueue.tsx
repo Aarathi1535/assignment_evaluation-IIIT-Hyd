@@ -19,6 +19,9 @@ interface QueueItem {
     reason: string;
     status: RequestStatus;
     createdAt: string;
+    assignedTo: null | { id: string; name: string; email: string };
+    canManageAssignment: boolean;
+    reviewers: Array<{ _id: string; name: string; email: string; role: string }>;
     decision: null | {
         outcome: DecisionOutcome;
         reason: string;
@@ -53,7 +56,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
 
-export default function RegradeQueue() {
+export default function RegradeQueue({ reviewerOnly = false }: { reviewerOnly?: boolean }) {
     const [result, setResult] = useState<QueueResponse | null>(null);
     const [status, setStatus] = useState<'ALL' | RequestStatus>('ALL');
     const [page, setPage] = useState(1);
@@ -67,6 +70,9 @@ export default function RegradeQueue() {
     const [revisedScore, setRevisedScore] = useState('');
     const [decisionError, setDecisionError] = useState('');
     const [savingDecision, setSavingDecision] = useState(false);
+    const [selectedAssignments, setSelectedAssignments] = useState<Record<string, string>>({});
+    const [assignmentErrors, setAssignmentErrors] = useState<Record<string, string>>({});
+    const [savingAssignment, setSavingAssignment] = useState('');
 
     const loadRequests = useCallback(async () => {
         setLoading(true);
@@ -160,12 +166,42 @@ export default function RegradeQueue() {
         }
     };
 
+    const assignReviewer = async (item: QueueItem) => {
+        setSavingAssignment(item.id);
+        setAssignmentErrors(current => ({ ...current, [item.id]: '' }));
+        try {
+            const response = await fetch(`/api/professor/regrade-requests/${item.id}/assignment`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reviewerId: selectedAssignments[item.id] ?? item.assignedTo?.id ?? '' })
+            });
+            const payload: unknown = await response.json();
+            if (!response.ok || !isRecord(payload) || payload.success !== true) {
+                throw new Error(isRecord(payload) && typeof payload.message === 'string'
+                    ? payload.message : 'Could not assign the reviewer.');
+            }
+            setSelectedAssignments(current => {
+                const next = { ...current };
+                delete next[item.id];
+                return next;
+            });
+            await loadRequests();
+        } catch (cause) {
+            setAssignmentErrors(current => ({
+                ...current,
+                [item.id]: cause instanceof Error ? cause.message : 'Could not assign the reviewer.'
+            }));
+        } finally {
+            setSavingAssignment('');
+        }
+    };
+
     return (
         <DashboardLayout
             title="Regrade requests"
-            description="Review student requests for exams you own."
+            description={reviewerOnly ? 'Review regrade requests assigned to you.' : 'Review student requests for exams you own.'}
             quickActions={
-                <Link href="/professor">
+                <Link href={reviewerOnly ? '/ta' : '/professor'}>
                     <Button variant="outline" size="md"><ArrowLeft className="h-4 w-4" />Dashboard</Button>
                 </Link>
             }
@@ -221,6 +257,38 @@ export default function RegradeQueue() {
                                             {expandedId === item.id ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
                                         </span>
                                     </button>
+                                    {item.canManageAssignment && item.status !== 'RESOLVED' && (
+                                        <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3">
+                                            <label className="min-w-60 text-sm font-medium text-slate-700">
+                                                Reviewer
+                                                <select
+                                                    aria-label={`Reviewer for ${item.exam.title}, question ${item.questionNumber}`}
+                                                    value={selectedAssignments[item.id] ?? item.assignedTo?.id ?? ''}
+                                                    onChange={event => setSelectedAssignments(current => ({
+                                                        ...current,
+                                                        [item.id]: event.target.value
+                                                    }))}
+                                                    className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+                                                >
+                                                    <option value="">Unassigned</option>
+                                                    {item.reviewers.map(reviewer => (
+                                                        <option key={reviewer._id} value={reviewer._id}>
+                                                            {reviewer.name} ({reviewer.role})
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                disabled={savingAssignment === item.id}
+                                                onClick={() => void assignReviewer(item)}
+                                            >
+                                                {savingAssignment === item.id ? 'Saving…' : 'Assign reviewer'}
+                                            </Button>
+                                            {assignmentErrors[item.id] && <p role="alert" className="basis-full text-sm text-rose-700">{assignmentErrors[item.id]}</p>}
+                                        </div>
+                                    )}
                                     {expandedId === item.id && (
                                         <div className="mt-4 border-t border-slate-200 pt-4">
                                             <h2 className="font-semibold text-slate-900">Existing evaluation</h2>

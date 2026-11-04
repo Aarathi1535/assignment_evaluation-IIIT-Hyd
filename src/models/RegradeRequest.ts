@@ -21,6 +21,12 @@ export interface IRegradeDecision {
     gradeAppliedAt?: Date;
 }
 
+export interface IRegradeAssignmentEvent {
+    assignee: mongoose.Types.ObjectId | null;
+    assignedBy: mongoose.Types.ObjectId;
+    assignedAt: Date;
+}
+
 export interface IRegradeRequest extends Document {
     exam: mongoose.Types.ObjectId;
     answerScript: mongoose.Types.ObjectId;
@@ -32,6 +38,10 @@ export interface IRegradeRequest extends Document {
     handledBy?: mongoose.Types.ObjectId;
     resolutionNotes?: string;
     decision?: IRegradeDecision;
+    assignedTo?: mongoose.Types.ObjectId | null;
+    assignedBy?: mongoose.Types.ObjectId;
+    assignedAt?: Date;
+    assignmentHistory: IRegradeAssignmentEvent[];
     createdAt: Date;
     updatedAt: Date;
 }
@@ -70,6 +80,15 @@ const RegradeDecisionSchema = new Schema<IRegradeDecision>(
         gradeAppliedAt: {
             type: Date
         }
+    },
+    { _id: false }
+);
+
+const RegradeAssignmentEventSchema = new Schema<IRegradeAssignmentEvent>(
+    {
+        assignee: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+        assignedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+        assignedAt: { type: Date, required: true }
     },
     { _id: false }
 );
@@ -126,6 +145,23 @@ const RegradeRequestSchema = new Schema<IRegradeRequest>(
         decision: {
             type: RegradeDecisionSchema,
             default: undefined
+        },
+        assignedTo: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            default: null,
+            index: true
+        },
+        assignedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        assignedAt: {
+            type: Date
+        },
+        assignmentHistory: {
+            type: [RegradeAssignmentEventSchema],
+            default: []
         }
     },
     {

@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { UserRole } from '../../../../constants/permissions';
 import { connectDB } from '../../../../lib/db';
-import { requirePermission } from '../../../../lib/apiAuth';
-import { Permission } from '../../../../constants/permissions';
+import { requireAuth } from '../../../../lib/apiAuth';
+import Course from '../../../../models/Course';
 import Exam from '../../../../models/Exam';
 import Grade from '../../../../models/Grade';
 import RegradeRequest, { RegradeStatus } from '../../../../models/RegradeRequest';
@@ -15,12 +15,12 @@ export const dynamic = 'force-dynamic';
 const MAX_PAGE_SIZE = 50;
 
 export async function GET(request: NextRequest) {
-    const auth = await requirePermission(Permission.VIEW_ALL_SUBMISSIONS);
+    const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
     }
 
-    if (auth.user.role !== UserRole.PROFESSOR && auth.user.role !== UserRole.ADMIN) {
+    if (![UserRole.PROFESSOR, UserRole.ADMIN, UserRole.TA].includes(auth.user.role)) {
         return NextResponse.json(
             { success: false, message: 'Forbidden', data: null },
             { status: 403, headers: { 'Cache-Control': 'private, no-store' } }
@@ -46,22 +46,29 @@ export async function GET(request: NextRequest) {
     try {
         await connectDB();
 
-        const ownedExams = await Exam.find(
-            auth.user.role === UserRole.ADMIN
-                ? (examId ? { _id: examId } : {})
-                : { createdBy: auth.user.id, ...(examId ? { _id: examId } : {}) }
-        ).select('_id title rubric').lean();
-        const examIds = ownedExams.map(exam => exam._id);
-
-        if (examId && examIds.length === 0) {
-            return NextResponse.json(
-                { success: false, message: 'Exam not found', data: null },
-                { status: 404, headers: { 'Cache-Control': 'private, no-store' } }
-            );
-        }
-
+        const ownedExams = auth.user.role === UserRole.ADMIN
+            ? await Exam.find(examId ? { _id: examId } : {}).select('_id').lean()
+            : auth.user.role === UserRole.PROFESSOR
+                ? await Exam.find({
+                    createdBy: auth.user.id,
+                    ...(examId ? { _id: examId } : {})
+                }).select('_id').lean()
+                : [];
+        const ownedExamIds = ownedExams.map(exam => exam._id);
+        const baseFilter = examId ? { exam: new mongoose.Types.ObjectId(examId) } : {};
+        const accessFilter = auth.user.role === UserRole.ADMIN
+            ? baseFilter
+            : auth.user.role === UserRole.TA
+                ? { ...baseFilter, assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
+                : {
+                    ...baseFilter,
+                    $or: [
+                        { exam: { $in: ownedExamIds } },
+                        { assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
+                    ]
+                };
         const query = {
-            exam: { $in: examIds },
+            ...accessFilter,
             ...(rawStatus ? { status: rawStatus as RegradeStatus } : {})
         };
         const safeLimit = Math.min(limit, MAX_PAGE_SIZE);
@@ -70,33 +77,53 @@ export async function GET(request: NextRequest) {
                 .sort({ createdAt: -1, _id: -1 })
                 .skip((page - 1) * safeLimit)
                 .limit(safeLimit)
-                .select('_id exam answerScript questionNumber student reason status createdAt updatedAt decision')
+                .select('_id exam answerScript questionNumber student reason status createdAt updatedAt decision assignedTo')
                 .lean(),
             RegradeRequest.countDocuments(query)
         ]);
 
         const scriptIds = [...new Set(requests.map(item => item.answerScript.toString()))];
         const studentIds = [...new Set(requests.map(item => item.student.toString()))];
-        const [students, grades, rubrics] = await Promise.all([
+        const examIds = [...new Set(requests.map(item => item.exam.toString()))];
+        const [students, grades, exams] = await Promise.all([
             User.find({ _id: { $in: studentIds } }).select('_id name email').lean(),
             Grade.find({
                 answerScript: { $in: scriptIds },
                 isFinal: true
             }).select('answerScript question totalScore marksAwarded feedback rubric').lean(),
-            Rubric.find({
-                _id: {
-                    $in: ownedExams
-                        .map(exam => exam.rubric)
-                        .filter((rubric): rubric is mongoose.Types.ObjectId => rubric !== undefined && rubric !== null)
-                }
-            })
-                .select('exam questions')
-                .lean()
+            Exam.find({ _id: { $in: examIds } }).select('_id title rubric createdBy course').lean()
+        ]);
+        if (examId && requests.length === 0 && ownedExamIds.length === 0) {
+            return NextResponse.json(
+                { success: false, message: 'Exam not found', data: null },
+                { status: 404, headers: { 'Cache-Control': 'private, no-store' } }
+            );
+        }
+
+        const rubricIds = [
+            ...new Set(exams.map(exam => exam.rubric?.toString()).filter((value): value is string => Boolean(value))),
+            ...new Set(grades.map(grade => grade.rubric.toString()))
+        ];
+        const [rubrics, courses] = await Promise.all([
+            Rubric.find({ _id: { $in: rubricIds } }).select('exam questions').lean(),
+            Course.find({ _id: { $in: exams.map(exam => exam.course) } })
+                .select('_id professor teachingAssistants').lean()
         ]);
 
-        const examById = new Map(ownedExams.map(exam => [exam._id.toString(), exam]));
+        const examById = new Map(exams.map(exam => [exam._id.toString(), exam]));
         const studentById = new Map(students.map(student => [student._id.toString(), student]));
         const rubricByExam = new Map(rubrics.map(rubric => [rubric.exam.toString(), rubric]));
+        const candidateIds = [...new Set(courses.flatMap(course => [
+            course.professor.toString(),
+            ...course.teachingAssistants.map(ta => ta.toString())
+        ]))];
+        const candidates = await User.find({
+            _id: { $in: candidateIds },
+            isActive: true,
+            role: { $in: [UserRole.TA, UserRole.PROFESSOR] }
+        }).select('_id name email role').lean();
+        const candidateById = new Map(candidates.map(candidate => [candidate._id.toString(), candidate]));
+        const courseById = new Map(courses.map(course => [course._id.toString(), course]));
 
         const data = requests.map(item => {
             const exam = examById.get(item.exam.toString());
@@ -109,6 +136,17 @@ export async function GET(request: NextRequest) {
                 : rubricByExam.get(item.exam.toString());
             const question = rubric?.questions.find(candidate => candidate.questionNumber === item.questionNumber);
             const student = studentById.get(item.student.toString());
+            const course = exam ? courseById.get(exam.course.toString()) : undefined;
+            const isExamOwner = auth.user.role === UserRole.ADMIN ||
+                (auth.user.role === UserRole.PROFESSOR && exam?.createdBy.toString() === auth.user.id);
+            const assignedTo = item.assignedTo ? candidateById.get(item.assignedTo.toString()) : undefined;
+            const reviewers = course
+                ? [...new Set([
+                    course.professor.toString(),
+                    ...course.teachingAssistants.map(ta => ta.toString())
+                ])].map(candidateId => candidateById.get(candidateId))
+                    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+                : [];
 
             return {
                 id: item._id.toString(),
@@ -124,6 +162,13 @@ export async function GET(request: NextRequest) {
                 status: item.status,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
+                assignedTo: assignedTo ? {
+                    id: assignedTo._id.toString(),
+                    name: assignedTo.name,
+                    email: assignedTo.email
+                } : null,
+                canManageAssignment: isExamOwner,
+                reviewers,
                 decision: item.decision ? {
                     outcome: item.decision.outcome,
                     reason: item.decision.reason,

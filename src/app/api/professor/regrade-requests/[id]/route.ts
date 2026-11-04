@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { z } from 'zod';
-import { Permission, UserRole } from '../../../../../constants/permissions';
-import { requirePermission } from '../../../../../lib/apiAuth';
+import { UserRole } from '../../../../../constants/permissions';
+import { requireAuth } from '../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../lib/db';
 import { writeAuditLog } from '../../../../../lib/audit';
 import Exam from '../../../../../models/Exam';
@@ -59,12 +59,12 @@ export async function PATCH(
     request: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
-    const auth = await requirePermission(Permission.VIEW_ALL_SUBMISSIONS);
+    const auth = await requireAuth();
     if (!auth.authorized) {
         return auth.response;
     }
 
-    if (auth.user.role !== UserRole.PROFESSOR && auth.user.role !== UserRole.ADMIN) {
+    if (![UserRole.PROFESSOR, UserRole.ADMIN, UserRole.TA].includes(auth.user.role)) {
         return NextResponse.json(
             { success: false, message: 'Forbidden', data: null },
             { status: 403 }
@@ -99,7 +99,7 @@ export async function PATCH(
     try {
         await connectDB();
         const regrade = await RegradeRequest.findById(id).select(
-            '_id exam answerScript questionNumber student status decision'
+            '_id exam answerScript questionNumber student status decision assignedTo'
         );
         if (!regrade) {
             return NextResponse.json(
@@ -108,10 +108,17 @@ export async function PATCH(
             );
         }
 
-        const exam = auth.user.role === UserRole.ADMIN
-            ? await Exam.findById(regrade.exam).select('_id createdBy totalMarks rubric')
+        const isAssignedReviewer = regrade.assignedTo?.toString() === auth.user.id;
+        if (auth.user.role === UserRole.TA && !isAssignedReviewer) {
+            return NextResponse.json(
+                { success: false, message: 'Regrade request not found', data: null },
+                { status: 404 }
+            );
+        }
+        const exam = auth.user.role === UserRole.ADMIN || isAssignedReviewer
+            ? await Exam.findById(regrade.exam).select('_id createdBy totalMarks rubric title')
             : await Exam.findOne({ _id: regrade.exam, createdBy: auth.user.id })
-                .select('_id createdBy totalMarks rubric');
+                .select('_id createdBy totalMarks rubric title');
         if (!exam) {
             return NextResponse.json(
                 { success: false, message: 'Regrade request not found', data: null },
