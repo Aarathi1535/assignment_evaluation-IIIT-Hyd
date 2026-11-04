@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { BookOpen, FileText, Users, Clock, Plus, FolderOpen, ClipboardList } from 'lucide-react';
+import { BookOpen, FileText, Users, Clock, Plus, FolderOpen, ClipboardList, BarChart3 } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -259,6 +259,14 @@ export default function ProfessorDashboardPage() {
                               Edit
                             </Button>
                           </Link>
+                          {e.status === 'PUBLISHED' && (
+                            <Link href={`/professor/exams/${e._id}/analytics`}>
+                              <Button variant="outline" size="sm">
+                                <BarChart3 className="h-4 w-4" />
+                                Analytics
+                              </Button>
+                            </Link>
+                          )}
                         </div>
                       </div>
                     </Card>

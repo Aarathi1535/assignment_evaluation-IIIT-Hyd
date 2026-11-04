@@ -3,7 +3,10 @@ import mongoose from 'mongoose';
 import { Permission, UserRole } from '../../../../../constants/permissions';
 import { requirePermission } from '../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../lib/db';
-import { calculateDescriptiveStatistics } from '../../../../../lib/stats';
+import {
+    calculateDescriptiveStatistics,
+    calculateScoreDistribution
+} from '../../../../../lib/stats';
 import { ExamStatus } from '../../../../../models/Exam';
 import ExamRepository from '../../../../../repositories/ExamRepository';
 import StudentResultService from '../../../../../services/StudentResultService';
@@ -67,7 +70,8 @@ export async function GET(
                         median: statistics.median,
                         standardDeviation: statistics.standardDeviation,
                         standardDeviationMethod: 'population'
-                    }
+                    },
+                    scoreDistribution: calculateScoreDistribution(releasedScores)
                 }
             },
             { status: 200, headers: { 'Cache-Control': 'private, no-store' } }

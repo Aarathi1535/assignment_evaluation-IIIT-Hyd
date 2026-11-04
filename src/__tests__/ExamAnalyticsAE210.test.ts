@@ -8,7 +8,10 @@ import User from '../models/User';
 import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
-import { calculateDescriptiveStatistics } from '../lib/stats';
+import {
+    calculateDescriptiveStatistics,
+    calculateScoreDistribution
+} from '../lib/stats';
 import { GET } from '../app/api/analytics/exams/[id]/route';
 
 describe('AE-210 exam statistics', () => {
@@ -217,5 +220,20 @@ describe('AE-210 exam statistics', () => {
             median: null,
             standardDeviation: null
         });
+    });
+
+    it('builds normalized histogram bins and includes the 100% boundary', () => {
+        const bins = calculateScoreDistribution([
+            { score: 0, maxMarks: 100 },
+            { score: 10, maxMarks: 100 },
+            { score: 100, maxMarks: 100 },
+            { score: 101, maxMarks: 100 },
+            { score: Number.NaN, maxMarks: 100 }
+        ]);
+
+        expect(bins).toHaveLength(10);
+        expect(bins[0]).toMatchObject({ label: '0-10%', count: 1 });
+        expect(bins[1]).toMatchObject({ label: '10-20%', count: 1 });
+        expect(bins[9]).toMatchObject({ label: '90-100%', count: 1 });
     });
 });

@@ -5,6 +5,13 @@ export interface DescriptiveStatistics {
     standardDeviation: number | null;
 }
 
+export interface ScoreDistributionBin {
+    startPercentage: number;
+    endPercentage: number;
+    label: string;
+    count: number;
+}
+
 export interface GraderScoreObservation {
     graderId: string;
     comparableGroup: string;
@@ -43,6 +50,38 @@ export function calculateDescriptiveStatistics(values: readonly number[]): Descr
         median,
         standardDeviation: Math.sqrt(populationVariance)
     };
+}
+
+export function calculateScoreDistribution(
+    scores: readonly { score: number; maxMarks: number }[],
+    binCount = 10
+): ScoreDistributionBin[] {
+    if (!Number.isSafeInteger(binCount) || binCount < 1 || binCount > 100) {
+        throw new Error('Histogram bin count must be an integer between 1 and 100');
+    }
+
+    const bins = Array.from({ length: binCount }, (_, index) => {
+        const startPercentage = (index / binCount) * 100;
+        const endPercentage = ((index + 1) / binCount) * 100;
+        return {
+            startPercentage,
+            endPercentage,
+            label: `${Math.round(startPercentage)}-${Math.round(endPercentage)}%`,
+            count: 0
+        };
+    });
+
+    for (const { score, maxMarks } of scores) {
+        if (!Number.isFinite(score) || !Number.isFinite(maxMarks) ||
+            maxMarks <= 0 || score < 0 || score > maxMarks) {
+            continue;
+        }
+        const percentage = (score / maxMarks) * 100;
+        const index = Math.min(Math.floor(percentage / (100 / binCount)), binCount - 1);
+        bins[index].count += 1;
+    }
+
+    return bins;
 }
 
 /**
