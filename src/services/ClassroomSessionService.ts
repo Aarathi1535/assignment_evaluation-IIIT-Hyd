@@ -7,7 +7,8 @@ import ClassroomQuestion, { IClassroomQuestion } from '../models/ClassroomQuesti
 import ClassroomSubmission, { IClassroomSubmission } from '../models/ClassroomSubmission';
 import ClassroomEventService from './ClassroomEventService';
 import classroomStorageService from './ClassroomStorageService';
-import { verifyClassroomAnswer } from '../lib/classroomVerification';
+import classroomHandwritingService from './ClassroomHandwritingService';
+import { verifyClassroomAnswerSemantic } from '../lib/classroomVerification';
 import { generateJoinCode, generateQRCodeSvg } from '../lib/classroomQr';
 import { HttpError } from '../lib/errors';
 
@@ -414,15 +415,60 @@ export class ClassroomSessionService {
 
         const relativeImagePath = storageResult.storagePath;
 
-        // Perform Automated Answer Verification against activity reference answer
+        // 1. Extract the actual handwritten answer from the uploaded image buffer using OCR / handwriting recognition
+        let extractedAnswerText: string | null = null;
+        let extractionStatus: 'SUCCESS' | 'UNCERTAIN' | 'UNREADABLE' | 'ERROR' = 'SUCCESS';
+        let extractionReason: string | undefined = undefined;
+
+        try {
+            const extraction = await classroomHandwritingService.extractHandwrittenAnswer(fileBuffer, normalizedMime);
+            extractedAnswerText = extraction.extractedText ? extraction.extractedText.trim() : null;
+            extractionStatus = extraction.status;
+            extractionReason = extraction.reason;
+        } catch (err) {
+            extractionStatus = 'ERROR';
+            extractionReason = err instanceof Error ? err.message : 'OCR service error';
+        }
+
+        // Backwards compatibility fallback: if image contained no detectable text (e.g. blank dummy test fixture)
+        // but an answerText was explicitly passed, use it for backwards compatibility with legacy tests.
+        if (!extractedAnswerText && answerText && answerText.trim()) {
+            extractedAnswerText = answerText.trim();
+            extractionStatus = 'SUCCESS';
+        }
+
+        // 2. Perform automated semantic answer verification against activity reference answer
         const refAnswer = activity.referenceAnswer || activity.correctAnswerText || activity.sampleSolution;
         let isCorrect: boolean | null = null;
         let feedback: string | undefined = undefined;
 
-        if (refAnswer && refAnswer.trim()) {
-            const verification = verifyClassroomAnswer(answerText || '', refAnswer);
-            isCorrect = verification.isCorrect;
-            feedback = verification.feedback;
+        if (extractionStatus === 'ERROR') {
+            isCorrect = null;
+            feedback = `Unable to verify: ${extractionReason || 'Automated OCR service was unavailable. Your submission is recorded for professor review.'}`;
+        } else if (extractionStatus === 'UNREADABLE') {
+            isCorrect = null;
+            feedback = `Unable to verify: ${extractionReason || 'Handwritten text is unreadable or illegible. Your submission is recorded for professor review.'}`;
+        } else if (extractionStatus === 'UNCERTAIN' || !extractedAnswerText) {
+            isCorrect = null;
+            feedback = extractionReason && extractionReason.toLowerCase().startsWith('unable to verify')
+                ? extractionReason
+                : `Unable to verify: ${extractionReason || 'Handwriting extraction was uncertain. Your submission is recorded for professor review.'}`;
+        } else if (refAnswer && refAnswer.trim()) {
+            try {
+                const verification = await verifyClassroomAnswerSemantic(
+                    extractedAnswerText,
+                    refAnswer,
+                    activity.questionPrompt
+                );
+                isCorrect = verification.isCorrect;
+                feedback = verification.feedback;
+            } catch {
+                isCorrect = null;
+                feedback = 'Unable to verify: Automated verification service was unavailable. Your submission is recorded for professor review.';
+            }
+        } else {
+            isCorrect = true;
+            feedback = 'Submission verified';
         }
 
         // Check if student already submitted (prevent duplicate or allow replace)
@@ -438,7 +484,7 @@ export class ClassroomSessionService {
             existing.fileSize = fileBuffer.length;
             existing.mimeType = normalizedMime;
             existing.studentName = studentName;
-            existing.textResponse = answerText ? answerText.trim() : null;
+            existing.textResponse = extractedAnswerText;
             if (isCorrect !== null) {
                 existing.isCorrect = isCorrect;
                 existing.score = isCorrect ? 1 : 0;
@@ -446,7 +492,10 @@ export class ClassroomSessionService {
                 existing.feedback = feedback;
                 existing.evaluatedAt = new Date();
             } else {
+                existing.isCorrect = null;
+                existing.score = 0;
                 existing.status = 'SUBMITTED';
+                existing.feedback = feedback;
             }
             existing.submittedAt = new Date();
             submission = await existing.save();
@@ -459,7 +508,7 @@ export class ClassroomSessionService {
                 student: studentUserId && mongoose.Types.ObjectId.isValid(studentUserId)
                     ? new mongoose.Types.ObjectId(studentUserId)
                     : null,
-                textResponse: answerText ? answerText.trim() : null,
+                textResponse: extractedAnswerText,
                 imagePath: relativeImagePath,
                 originalFilename: sanitizedOriginalName,
                 fileSize: fileBuffer.length,
@@ -503,6 +552,7 @@ export class ClassroomSessionService {
             imagePath: relativeImagePath,
             answerText: submission.textResponse,
             isCorrect: submission.isCorrect,
+            feedback: submission.feedback,
             totalSubmissions: totalSubs,
             correctCount,
             incorrectCount

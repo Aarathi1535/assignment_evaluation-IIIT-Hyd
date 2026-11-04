@@ -765,8 +765,9 @@ export default function ProfessorClassroomPage() {
                               <span>Incorrect</span>
                             </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-900 text-white border border-slate-700">
-                              Submitted
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-600 text-white shadow-md flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Unable to Verify</span>
                             </span>
                           )}
                         </div>
@@ -982,11 +983,21 @@ export default function ProfessorClassroomPage() {
               </div>
 
               {/* Automated Comparison Banner */}
-              <div className="px-5 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                {submissions[reviewIndex].textResponse && (
+              <div className="px-5 py-2.5 bg-slate-900 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                {submissions[reviewIndex].textResponse ? (
                   <div>
-                    <span className="text-slate-300 font-bold">Student Answer: </span>
+                    <span className="text-slate-300 font-bold">Extracted Handwritten Answer: </span>
                     <strong className="text-white font-mono font-bold">{submissions[reviewIndex].textResponse}</strong>
+                  </div>
+                ) : (
+                  <div>
+                    <span className="text-amber-300 font-semibold italic">No text extracted from handwriting</span>
+                  </div>
+                )}
+                {submissions[reviewIndex].feedback && (
+                  <div>
+                    <span className="text-slate-300 font-bold">Verification: </span>
+                    <span className="text-slate-200">{submissions[reviewIndex].feedback}</span>
                   </div>
                 )}
                 {currentActivity?.referenceAnswer && (

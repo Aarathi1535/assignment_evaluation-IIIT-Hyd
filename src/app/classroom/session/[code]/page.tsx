@@ -499,14 +499,14 @@ export default function MobileStudentClassroomSessionPage() {
                   ? 'bg-emerald-950/80 border-emerald-600 text-emerald-100'
                   : mySubmission.isCorrect === false
                   ? 'bg-red-950/80 border-red-600 text-red-100'
-                  : 'bg-slate-800 border-slate-600 text-slate-100'
+                  : 'bg-amber-950/80 border-amber-600 text-amber-100'
               }`}>
                 {mySubmission.isCorrect === true ? (
                   <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
                 ) : mySubmission.isCorrect === false ? (
                   <XCircle className="w-6 h-6 text-red-400 shrink-0" />
                 ) : (
-                  <Clock className="w-6 h-6 text-slate-300 shrink-0" />
+                  <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
                 )}
                 <div>
                   <span className="text-xs uppercase tracking-wider font-bold block text-slate-300">Your Answer Evaluation</span>
@@ -515,7 +515,7 @@ export default function MobileStudentClassroomSessionPage() {
                       ? 'Marked Correct ✓'
                       : mySubmission.isCorrect === false
                       ? 'Marked Incorrect ✗'
-                      : 'Submitted (Review Pending)'}
+                      : 'Unable to Verify (Pending Review)'}
                   </span>
                 </div>
               </div>
@@ -586,23 +586,27 @@ export default function MobileStudentClassroomSessionPage() {
                 </div>
               </div>
             ) : (
-              <div className="p-4 bg-blue-950/90 border-2 border-blue-600 rounded-xl flex items-start gap-3">
-                <Clock className="w-6 h-6 text-blue-400 shrink-0 mt-0.5" />
+              <div className="p-4 bg-amber-950/90 border-2 border-amber-600 rounded-xl flex items-start gap-3">
+                <AlertCircle className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
                 <div>
-                  <div className="text-base font-bold text-blue-300">
-                    Submission Received
+                  <div className="text-base font-bold text-amber-300">
+                    Unable to Verify
                   </div>
-                  <p className="text-xs text-blue-100 mt-1 leading-relaxed font-medium">
-                    Your handwritten answer is recorded.
+                  <p className="text-xs text-amber-100 mt-1 leading-relaxed font-medium">
+                    {mySubmission.feedback || 'Handwriting extraction was uncertain. Your answer is recorded for professor review.'}
                   </p>
                 </div>
               </div>
             )}
 
-            {mySubmission.textResponse && (
+            {mySubmission.textResponse ? (
               <div className="p-3 bg-slate-950 border border-slate-700 rounded-xl text-xs flex flex-col gap-1">
-                <span className="text-slate-300 font-bold">Your Submitted Value:</span>
-                <span className="text-white font-mono font-bold text-sm">{mySubmission.textResponse}</span>
+                <span className="text-slate-300 font-bold">Extracted Handwritten Answer:</span>
+                <span className="text-white font-mono font-bold text-sm whitespace-pre-wrap">{mySubmission.textResponse}</span>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl text-xs flex flex-col gap-1 text-slate-300">
+                <span className="font-semibold italic">Handwritten answer image recorded</span>
               </div>
             )}
 

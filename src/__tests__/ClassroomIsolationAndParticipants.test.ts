@@ -290,7 +290,7 @@ describe('Classroom Activity Regression Suite: Professor Isolation & Accurate Pa
                 actingUserId: profAId,
                 actingUserRole: 'PROFESSOR'
             });
-            expect(activeForA?._id.toString()).toBe(qA._id.toString());
+            expect(String(activeForA?._id)).toBe(qA._id.toString());
             expect(activeForA?.title).toBe('Active Question Prof A');
 
             // Professor B gets only Question B
@@ -298,7 +298,7 @@ describe('Classroom Activity Regression Suite: Professor Isolation & Accurate Pa
                 actingUserId: profBId,
                 actingUserRole: 'PROFESSOR'
             });
-            expect(activeForB?._id.toString()).toBe(qB._id.toString());
+            expect(String(activeForB?._id)).toBe(qB._id.toString());
             expect(activeForB?.title).toBe('Active Question Prof B');
 
             // Question deck listing is also strictly isolated
