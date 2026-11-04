@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { Permission, UserRole } from '../../../constants/permissions';
 import { requirePermission } from '../../../lib/apiAuth';
+import { buildExamAuditLogFilter } from '../../../lib/auditQueries';
 import { connectDB } from '../../../lib/db';
 import AuditLog from '../../../models/AuditLog';
 import Exam from '../../../models/Exam';
@@ -92,16 +93,8 @@ export async function GET(request: NextRequest) {
         }
 
         const filters: Record<string, unknown>[] = [];
-        if (examObjectId && examId) {
-            filters.push({
-                $or: [
-                    { entityId: examObjectId },
-                    { 'details.examId': examId },
-                    { 'details.examId': examObjectId },
-                    { 'details.exam': examId },
-                    { 'details.exam': examObjectId }
-                ]
-            });
+        if (examId) {
+            filters.push(buildExamAuditLogFilter(examId));
         }
         if (userId) {
             filters.push({ user: new mongoose.Types.ObjectId(userId) });
