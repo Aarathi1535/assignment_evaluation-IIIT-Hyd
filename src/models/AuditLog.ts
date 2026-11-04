@@ -53,6 +53,10 @@ const AuditLogSchema = new Schema<IAuditLog>(
 
 // Index for query sorting logs chronologically
 AuditLogSchema.index({ createdAt: -1 });
+AuditLogSchema.index({ user: 1, createdAt: -1 });
+AuditLogSchema.index({ entityId: 1, createdAt: -1 });
+AuditLogSchema.index({ 'details.examId': 1, createdAt: -1 });
+AuditLogSchema.index({ 'details.exam': 1, createdAt: -1 });
 
 // Safeguards: Reject application-level updates and deletes (AE-179)
 AuditLogSchema.pre(['updateOne', 'updateMany', 'replaceOne', 'findOneAndUpdate', 'findOneAndReplace'], function () {
