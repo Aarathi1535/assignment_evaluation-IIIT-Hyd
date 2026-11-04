@@ -6,6 +6,20 @@ export enum RegradeStatus {
     RESOLVED = 'RESOLVED'
 }
 
+export enum RegradeDecisionOutcome {
+    APPROVED = 'APPROVED',
+    REJECTED = 'REJECTED'
+}
+
+export interface IRegradeDecision {
+    outcome: RegradeDecisionOutcome;
+    reason: string;
+    reviewer: mongoose.Types.ObjectId;
+    decidedAt: Date;
+    originalScore: number;
+    revisedScore?: number;
+}
+
 export interface IRegradeRequest extends Document {
     exam: mongoose.Types.ObjectId;
     answerScript: mongoose.Types.ObjectId;
@@ -16,9 +30,45 @@ export interface IRegradeRequest extends Document {
     isOpen: boolean;
     handledBy?: mongoose.Types.ObjectId;
     resolutionNotes?: string;
+    decision?: IRegradeDecision;
     createdAt: Date;
     updatedAt: Date;
 }
+
+const RegradeDecisionSchema = new Schema<IRegradeDecision>(
+    {
+        outcome: {
+            type: String,
+            enum: Object.values(RegradeDecisionOutcome),
+            required: true
+        },
+        reason: {
+            type: String,
+            required: true,
+            trim: true,
+            maxlength: 2000
+        },
+        reviewer: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        decidedAt: {
+            type: Date,
+            required: true
+        },
+        originalScore: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        revisedScore: {
+            type: Number,
+            min: 0
+        }
+    },
+    { _id: false }
+);
 
 const RegradeRequestSchema = new Schema<IRegradeRequest>(
     {
@@ -68,6 +118,10 @@ const RegradeRequestSchema = new Schema<IRegradeRequest>(
         resolutionNotes: {
             type: String,
             trim: true
+        },
+        decision: {
+            type: RegradeDecisionSchema,
+            default: undefined
         }
     },
     {

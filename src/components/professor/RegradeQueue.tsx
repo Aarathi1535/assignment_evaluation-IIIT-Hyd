@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 
 type RequestStatus = 'OPEN' | 'REVIEWING' | 'RESOLVED';
+type DecisionOutcome = 'APPROVED' | 'REJECTED';
 
 interface QueueItem {
     id: string;
@@ -18,6 +19,13 @@ interface QueueItem {
     reason: string;
     status: RequestStatus;
     createdAt: string;
+    decision: null | {
+        outcome: DecisionOutcome;
+        reason: string;
+        originalScore: number;
+        revisedScore?: number;
+        decidedAt: string;
+    };
     evaluation: null | {
         score: number;
         maxMarks: number | null;
@@ -55,6 +63,10 @@ export default function RegradeQueue() {
     const [scriptPages, setScriptPages] = useState<Record<string, ScriptPage[]>>({});
     const [pageErrors, setPageErrors] = useState<Record<string, string>>({});
     const [loadingPages, setLoadingPages] = useState('');
+    const [decisionReason, setDecisionReason] = useState('');
+    const [revisedScore, setRevisedScore] = useState('');
+    const [decisionError, setDecisionError] = useState('');
+    const [savingDecision, setSavingDecision] = useState(false);
 
     const loadRequests = useCallback(async () => {
         setLoading(true);
@@ -86,6 +98,9 @@ export default function RegradeQueue() {
             return;
         }
         setExpandedId(item.id);
+        setDecisionReason('');
+        setRevisedScore('');
+        setDecisionError('');
         if (scriptPages[item.answerScriptId]) return;
 
         setLoadingPages(item.id);
@@ -106,6 +121,42 @@ export default function RegradeQueue() {
             }));
         } finally {
             setLoadingPages('');
+        }
+    };
+
+    const decide = async (item: QueueItem, outcome: DecisionOutcome) => {
+        if (!decisionReason.trim()) {
+            setDecisionError('A decision reason is required.');
+            return;
+        }
+        const score = revisedScore.trim() === '' ? undefined : Number(revisedScore);
+        if (outcome === 'APPROVED' && score !== undefined && !Number.isFinite(score)) {
+            setDecisionError('Enter a valid revised score.');
+            return;
+        }
+
+        setSavingDecision(true);
+        setDecisionError('');
+        try {
+            const response = await fetch(`/api/professor/regrade-requests/${item.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    outcome,
+                    reason: decisionReason,
+                    ...(outcome === 'APPROVED' && score !== undefined ? { revisedScore: score } : {})
+                })
+            });
+            const payload: unknown = await response.json();
+            if (!response.ok || !isRecord(payload) || payload.success !== true) {
+                throw new Error(isRecord(payload) && typeof payload.message === 'string'
+                    ? payload.message : 'Could not save the decision.');
+            }
+            await loadRequests();
+        } catch (cause) {
+            setDecisionError(cause instanceof Error ? cause.message : 'Could not save the decision.');
+        } finally {
+            setSavingDecision(false);
         }
     };
 
@@ -186,6 +237,49 @@ export default function RegradeQueue() {
                                                     )}
                                                 </div>
                                             ) : <p className="mt-2 text-sm text-slate-600">No finalized evaluation is available.</p>}
+
+                                            {item.decision ? (
+                                                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                                                    <p className="font-semibold">{item.decision.outcome} · {item.decision.originalScore} → {item.decision.revisedScore ?? item.decision.originalScore}</p>
+                                                    <p className="mt-1">{item.decision.reason}</p>
+                                                </div>
+                                            ) : (
+                                                <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                    <h2 className="font-semibold text-slate-900">Record a decision</h2>
+                                                    <label className="block text-sm font-medium text-slate-700">
+                                                        Decision reason
+                                                        <textarea
+                                                            required
+                                                            maxLength={2000}
+                                                            value={decisionReason}
+                                                            onChange={event => setDecisionReason(event.target.value)}
+                                                            className="mt-1 block w-full rounded-md border border-slate-300 bg-white p-2"
+                                                            rows={3}
+                                                        />
+                                                    </label>
+                                                    <label className="block text-sm font-medium text-slate-700">
+                                                        Revised score (optional)
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            max={item.evaluation?.maxMarks ?? undefined}
+                                                            step="any"
+                                                            value={revisedScore}
+                                                            onChange={event => setRevisedScore(event.target.value)}
+                                                            className="mt-1 block w-full rounded-md border border-slate-300 bg-white p-2"
+                                                        />
+                                                    </label>
+                                                    {decisionError && <p role="alert" className="text-sm text-rose-700">{decisionError}</p>}
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <Button variant="primary" size="sm" disabled={savingDecision} onClick={() => void decide(item, 'APPROVED')}>
+                                                            {savingDecision ? 'Saving…' : 'Approve'}
+                                                        </Button>
+                                                        <Button variant="outline" size="sm" disabled={savingDecision} onClick={() => void decide(item, 'REJECTED')}>
+                                                            Reject
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             <h2 className="mt-5 font-semibold text-slate-900">Original submitted answer</h2>
                                             {loadingPages === item.id && <p role="status" className="mt-2 text-sm text-slate-600">Loading answer pages…</p>}

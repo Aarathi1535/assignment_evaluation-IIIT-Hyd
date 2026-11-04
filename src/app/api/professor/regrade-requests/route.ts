@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
                 .sort({ createdAt: -1, _id: -1 })
                 .skip((page - 1) * safeLimit)
                 .limit(safeLimit)
-                .select('_id exam answerScript questionNumber student reason status createdAt updatedAt')
+                .select('_id exam answerScript questionNumber student reason status createdAt updatedAt decision')
                 .lean(),
             RegradeRequest.countDocuments(query)
         ]);
@@ -124,6 +124,13 @@ export async function GET(request: NextRequest) {
                 status: item.status,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
+                decision: item.decision ? {
+                    outcome: item.decision.outcome,
+                    reason: item.decision.reason,
+                    originalScore: item.decision.originalScore,
+                    revisedScore: item.decision.revisedScore,
+                    decidedAt: item.decision.decidedAt
+                } : null,
                 evaluation: grade ? {
                     score: grade.totalScore,
                     maxMarks: question?.maxMarks ?? null,
