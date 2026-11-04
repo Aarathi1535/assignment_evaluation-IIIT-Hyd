@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import ClassroomSession from '@/models/ClassroomSession';
 import ClassroomQuestion from '@/models/ClassroomQuestion';
+import ClassroomParticipant from '@/models/ClassroomParticipant';
+import { requireAuth } from '@/lib/apiAuth';
 import { HttpError } from '@/lib/errors';
 
 export async function GET(
@@ -20,6 +22,22 @@ export async function GET(
         message: 'Classroom session not found',
         data: null
       }, { status: 404 });
+    }
+
+    // Professor session isolation: Professor B cannot inspect Professor A's session
+    const auth = await requireAuth();
+    if (auth.authorized && auth.user.role === 'PROFESSOR' && session.createdBy.toString() !== auth.user.id) {
+      return NextResponse.json({
+        success: false,
+        message: 'Forbidden: You do not own this classroom session',
+        data: null
+      }, { status: 403 });
+    }
+
+    // Compute accurate unique participant count for this session
+    const participantCount = await ClassroomParticipant.countDocuments({ session: session._id });
+    if (session.participantCount !== participantCount) {
+      await ClassroomSession.findByIdAndUpdate(session._id, { participantCount });
     }
 
     let activeActivity = null;
@@ -59,7 +77,7 @@ export async function GET(
           title: session.title,
           joinCode: session.joinCode,
           status: session.status,
-          participantCount: session.participantCount || 0,
+          participantCount,
           qrCodeSvg: session.qrCodeSvg
         },
         activeActivity

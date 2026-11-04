@@ -161,8 +161,14 @@ export class ClassroomSessionService {
 
     /**
      * Allows a student to join a classroom session using a join code and classroom-specific identity.
+     * Accurately tracks unique participants and prevents duplicate joins/reconnects from inflating count.
      */
-    async joinSession(joinCode: string, name: string, optionalUserId?: string): Promise<JoinSessionResponse> {
+    async joinSession(
+        joinCode: string,
+        name: string,
+        optionalUserId?: string,
+        optionalToken?: string
+    ): Promise<JoinSessionResponse> {
         if (!joinCode || !joinCode.trim()) {
             throw new HttpError('Join code is required', 400);
         }
@@ -187,34 +193,79 @@ export class ClassroomSessionService {
             throw new HttpError('Classroom session not found or is closed', 404);
         }
 
-        // Generate participant identity and secret session-scoped token
-        const participantId = `part_${crypto.randomBytes(6).toString('hex')}`;
-        const token = `tok_${crypto.randomBytes(24).toString('hex')}`;
+        // Check if participant already joined this specific session
+        let existingParticipant: IClassroomParticipant | null = null;
 
-        const participant = await ClassroomParticipant.create({
-            session: session._id,
-            participantId,
-            name: cleanName,
-            token,
-            userId: optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)
-                ? new mongoose.Types.ObjectId(optionalUserId)
-                : null,
-            joinedAt: new Date(),
-            lastActiveAt: new Date()
-        });
+        // 1. By existing token if provided
+        if (optionalToken && optionalToken.trim()) {
+            existingParticipant = await ClassroomParticipant.findOne({
+                session: session._id,
+                token: optionalToken.trim()
+            });
+        }
 
-        // Increment participant counter
-        const updatedSession = await ClassroomSession.findByIdAndUpdate(
-            session._id,
-            { $inc: { participantCount: 1 } },
-            { returnDocument: 'after' }
-        );
+        // 2. By student user ID if authenticated
+        if (!existingParticipant && optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)) {
+            existingParticipant = await ClassroomParticipant.findOne({
+                session: session._id,
+                userId: new mongoose.Types.ObjectId(optionalUserId)
+            });
+        }
 
-        // Notify presenter/professor screen of new participant
-        ClassroomEventService.notifyParticipantJoined(session._id.toString(), {
-            participantCount: updatedSession?.participantCount || 1,
-            participantName: participant.name
-        });
+        // 3. By exact name (case-insensitive) in this specific session
+        if (!existingParticipant) {
+            const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            existingParticipant = await ClassroomParticipant.findOne({
+                session: session._id,
+                name: { $regex: new RegExp(`^${escapedName}$`, 'i') }
+            });
+        }
+
+        let participant: IClassroomParticipant;
+        let isNewParticipant = false;
+
+        if (existingParticipant) {
+            // Reconnect existing participant - update last active timestamp
+            participant = existingParticipant;
+            participant.lastActiveAt = new Date();
+            if (optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId) && !participant.userId) {
+                participant.userId = new mongoose.Types.ObjectId(optionalUserId);
+            }
+            await participant.save();
+        } else {
+            // New unique participant
+            isNewParticipant = true;
+            const participantId = `part_${crypto.randomBytes(6).toString('hex')}`;
+            const token = `tok_${crypto.randomBytes(24).toString('hex')}`;
+
+            participant = await ClassroomParticipant.create({
+                session: session._id,
+                participantId,
+                name: cleanName,
+                token,
+                userId: optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)
+                    ? new mongoose.Types.ObjectId(optionalUserId)
+                    : null,
+                joinedAt: new Date(),
+                lastActiveAt: new Date()
+            });
+        }
+
+        // Calculate accurate unique participant count for this session
+        const accurateCount = await ClassroomParticipant.countDocuments({ session: session._id });
+
+        if (session.participantCount !== accurateCount) {
+            session.participantCount = accurateCount;
+            await ClassroomSession.findByIdAndUpdate(session._id, { participantCount: accurateCount });
+        }
+
+        // Notify presenter/professor screen of new participant only on new join
+        if (isNewParticipant) {
+            ClassroomEventService.notifyParticipantJoined(session._id.toString(), {
+                participantCount: accurateCount,
+                participantName: participant.name
+            });
+        }
 
         // Fetch active activity if available (without exposing referenceAnswer before publication)
         let activeActivity = null;
@@ -243,7 +294,7 @@ export class ClassroomSessionService {
                 title: session.title,
                 joinCode: session.joinCode,
                 status: session.status,
-                participantCount: updatedSession?.participantCount || 1
+                participantCount: accurateCount
             },
             activeActivity
         };
@@ -681,9 +732,19 @@ export class ClassroomSessionService {
 
     /**
      * Retrieves session details by join code.
+     * Enforces ownership isolation if called by a professor.
      */
-    async getSessionByCode(joinCode: string): Promise<IClassroomSession | null> {
-        return ClassroomSession.findOne({ joinCode: joinCode.trim().toUpperCase() });
+    async getSessionByCode(joinCode: string, context?: ClassroomAuditContext): Promise<IClassroomSession | null> {
+        const session = await ClassroomSession.findOne({ joinCode: joinCode.trim().toUpperCase() });
+        if (!session) return null;
+
+        if (context?.actingUserRole === 'PROFESSOR' && context?.actingUserId) {
+            if (session.createdBy.toString() !== context.actingUserId) {
+                throw new HttpError('Forbidden: You do not own this classroom session', 403);
+            }
+        }
+
+        return session;
     }
 
     /**

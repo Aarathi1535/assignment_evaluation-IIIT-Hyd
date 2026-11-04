@@ -22,6 +22,16 @@ export async function GET(
       }, { status: 404 });
     }
 
+    const { requireAuth } = await import('@/lib/apiAuth');
+    const auth = await requireAuth();
+    if (auth.authorized && auth.user.role === 'PROFESSOR' && session.createdBy.toString() !== auth.user.id) {
+      return NextResponse.json({
+        success: false,
+        message: 'Forbidden: You do not own this classroom session',
+        data: null
+      }, { status: 403 });
+    }
+
     const results = await classroomSessionService.getPublishedResults(session.currentActivity.toString());
     if (!results) {
       return NextResponse.json({

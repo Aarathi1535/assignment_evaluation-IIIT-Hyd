@@ -22,12 +22,14 @@ export async function POST(
       }, { status: 400 });
     }
 
-    let body: { name?: string } = {};
+    let body: { name?: string; token?: string } = {};
     try {
       body = await req.json();
     } catch {
       // Body may be empty if student just scans
     }
+
+    const participantToken = req.headers.get('x-participant-token') || body.token;
 
     // Classroom joining is purely lightweight: no Assignment Evaluation account is required
     let optionalUserId: string | undefined;
@@ -45,7 +47,7 @@ export async function POST(
       // Non-blocking: student account is purely optional
     }
 
-    if (!participantName) {
+    if (!participantName && !participantToken) {
       return NextResponse.json({
         success: false,
         message: 'Name or roll number is required to join classroom session',
@@ -55,8 +57,9 @@ export async function POST(
 
     const joinResult = await classroomSessionService.joinSession(
       code,
-      participantName,
-      optionalUserId
+      participantName || 'Student',
+      optionalUserId,
+      participantToken || undefined
     );
 
     return NextResponse.json({

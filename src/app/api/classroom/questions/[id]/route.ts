@@ -118,8 +118,7 @@ export async function PATCH(
     } else if (typeof isActive === 'boolean') {
       updated = await ClassroomAssessmentService.setQuestionStatus(resolvedParams.id, isActive ? 'ACTIVE' : 'DRAFT', context);
     } else {
-      const repo = (await import('@/repositories/ClassroomAssessmentRepository')).default;
-      updated = await repo.updateQuestion(resolvedParams.id, otherFields);
+      updated = await ClassroomAssessmentService.updateQuestion(resolvedParams.id, otherFields, context);
     }
 
     return NextResponse.json({

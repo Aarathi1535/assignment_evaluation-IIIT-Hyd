@@ -45,6 +45,12 @@ export async function GET(
     if (auth.authorized && auth.user.role === 'PROFESSOR') {
       if (session.createdBy.toString() === auth.user.id) {
         clientRole = 'PROFESSOR_OWNER';
+      } else {
+        return NextResponse.json({
+          success: false,
+          message: 'Forbidden: You do not own this classroom session',
+          data: null
+        }, { status: 403 });
       }
     }
 
@@ -113,10 +119,12 @@ export async function GET(
             }
           }
 
+          const accurateCount = await ClassroomParticipant.countDocuments({ session: session._id });
+
           const snapshot = {
             sessionId: sessionIdStr,
             joinCode: session.joinCode,
-            participantCount: session.participantCount || 0,
+            participantCount: accurateCount,
             activity: initialActivity ? {
               id: initialActivity._id.toString(),
               title: initialActivity.title,

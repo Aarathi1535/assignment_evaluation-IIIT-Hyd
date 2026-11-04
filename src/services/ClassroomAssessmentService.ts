@@ -102,7 +102,7 @@ export class ClassroomAssessmentService {
 
         // If marked active, ensure it is the only active question
         if (data.isActive) {
-            await ClassroomAssessmentRepository.setActiveQuestion(newQuestion._id.toString());
+            await ClassroomAssessmentRepository.setActiveQuestion(newQuestion._id.toString(), context.actingUserId);
             ClassroomEventService.notifyQuestionActivated(newQuestion._id.toString(), {
                 title: newQuestion.title,
                 questionPrompt: newQuestion.questionPrompt,
@@ -131,9 +131,14 @@ export class ClassroomAssessmentService {
     /**
      * Retrieves the currently active classroom question.
      * Sanitizes correct answers for students unless results are revealed.
+     * Enforces professor isolation so professors only see their own active question.
      */
     async getActiveQuestion(context?: ClassroomAuditContext): Promise<Record<string, unknown> | null> {
-        const active = await ClassroomAssessmentRepository.getActiveQuestion();
+        const filter: mongoose.QueryFilter<IClassroomQuestion> = {};
+        if (context?.actingUserRole === 'PROFESSOR' && context?.actingUserId && mongoose.Types.ObjectId.isValid(context.actingUserId)) {
+            filter.createdBy = new mongoose.Types.ObjectId(context.actingUserId);
+        }
+        const active = await ClassroomAssessmentRepository.getActiveQuestion(filter);
         if (!active) return null;
 
         const isStudent = context?.actingUserRole === 'STUDENT';
@@ -221,6 +226,10 @@ export class ClassroomAssessmentService {
             throw new HttpError('Classroom question is not active', 403);
         }
 
+        if (context.actingUserRole === 'PROFESSOR' && question.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own this question', 403);
+        }
+
         return question;
     }
 
@@ -267,7 +276,7 @@ export class ClassroomAssessmentService {
         let updated: IClassroomQuestion | null = null;
 
         if (status === 'ACTIVE') {
-            updated = await ClassroomAssessmentRepository.setActiveQuestion(id);
+            updated = await ClassroomAssessmentRepository.setActiveQuestion(id, context.actingUserId);
             if (updated) {
                 ClassroomEventService.notifyQuestionActivated(id, {
                     title: updated.title,
@@ -614,6 +623,39 @@ export class ClassroomAssessmentService {
         return await ClassroomAssessmentRepository.deleteQuestion(id);
     }
 
+    /**
+     * Updates an existing question (Professor only, must own the question).
+     */
+    async updateQuestion(
+        id: string,
+        data: Partial<IClassroomQuestion>,
+        context: ClassroomAuditContext
+    ): Promise<IClassroomQuestion> {
+        if (!context.actingUserId || !context.actingUserRole) {
+            throw new HttpError('Unauthorized', 401);
+        }
+
+        if (context.actingUserRole !== 'PROFESSOR') {
+            throw new HttpError('Forbidden: Only professors can update questions', 403);
+        }
+
+        const question = await ClassroomAssessmentRepository.getQuestionById(id);
+        if (!question) {
+            throw new HttpError('Classroom question not found', 404);
+        }
+
+        if (question.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You do not own this question', 403);
+        }
+
+        const updated = await ClassroomAssessmentRepository.updateQuestion(id, data);
+        if (!updated) {
+            throw new HttpError('Failed to update question', 500);
+        }
+
+        return updated;
+    }
+
     async getQuestionSubmissions(
         questionId: string,
         context: ClassroomAuditContext
@@ -624,6 +666,15 @@ export class ClassroomAssessmentService {
 
         if (context.actingUserRole !== 'PROFESSOR' && context.actingUserRole !== 'ADMIN') {
             throw new HttpError('Forbidden: Only professors or admins can view all submissions for a question', 403);
+        }
+
+        const question = await ClassroomAssessmentRepository.getQuestionById(questionId);
+        if (!question) {
+            throw new HttpError('Classroom question not found', 404);
+        }
+
+        if (context.actingUserRole === 'PROFESSOR' && question.createdBy.toString() !== context.actingUserId) {
+            throw new HttpError('Forbidden: You can only view submissions for your own questions', 403);
         }
 
         return await ClassroomAssessmentRepository.getSubmissionsByQuestion(questionId);
@@ -663,6 +714,26 @@ export class ClassroomAssessmentService {
 
             if (studentId !== context.actingUserId) {
                 throw new HttpError('Forbidden: Access denied to this submission', 403);
+            }
+        }
+
+        if (context.actingUserRole === 'PROFESSOR') {
+            let isOwner = false;
+            if (submission.session) {
+                const ClassroomSession = (await import('../models/ClassroomSession')).default;
+                const session = await ClassroomSession.findById(submission.session);
+                if (session && session.createdBy.toString() === context.actingUserId) {
+                    isOwner = true;
+                }
+            }
+            if (!isOwner && submission.question) {
+                const question = await ClassroomAssessmentRepository.getQuestionById(submission.question.toString());
+                if (question && question.createdBy.toString() === context.actingUserId) {
+                    isOwner = true;
+                }
+            }
+            if (!isOwner) {
+                throw new HttpError('Forbidden: You do not own the session or question for this submission', 403);
             }
         }
 

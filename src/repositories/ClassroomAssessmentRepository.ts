@@ -51,8 +51,9 @@ class ClassroomAssessmentRepository {
         return await ClassroomQuestion.findById(id);
     }
 
-    async getActiveQuestion(): Promise<IClassroomQuestion | null> {
+    async getActiveQuestion(filter: QueryFilter<IClassroomQuestion> = {}): Promise<IClassroomQuestion | null> {
         return await ClassroomQuestion.findOne({
+            ...filter,
             isActive: true,
             type: { $in: ['MULTIPLE_CHOICE', 'SHORT_ANSWER', 'POLL'] }
         }).sort({ updatedAt: -1 });
@@ -67,11 +68,18 @@ class ClassroomAssessmentRepository {
         );
     }
 
-    async setActiveQuestion(id: string): Promise<IClassroomQuestion | null> {
+    async setActiveQuestion(id: string, createdBy?: string | mongoose.Types.ObjectId): Promise<IClassroomQuestion | null> {
         if (!mongoose.Types.ObjectId.isValid(id)) return null;
-        // First deactivate all other questions
+        // First deactivate all other questions for this creator (or globally if no creator specified)
+        const deactivateFilter: QueryFilter<IClassroomQuestion> = {
+            _id: { $ne: new mongoose.Types.ObjectId(id) },
+            isActive: true
+        };
+        if (createdBy) {
+            deactivateFilter.createdBy = new mongoose.Types.ObjectId(createdBy.toString());
+        }
         await ClassroomQuestion.updateMany(
-            { _id: { $ne: new mongoose.Types.ObjectId(id) }, isActive: true },
+            deactivateFilter,
             { $set: { isActive: false, status: 'CLOSED' } }
         );
         // Activate target question

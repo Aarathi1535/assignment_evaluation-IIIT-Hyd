@@ -26,10 +26,20 @@ export async function GET() {
       .sort({ createdAt: -1 })
       .limit(20);
 
+    const ClassroomParticipant = (await import('@/models/ClassroomParticipant')).default;
+    const enrichedSessions = await Promise.all(
+      sessions.map(async (sess) => {
+        const accurateCount = await ClassroomParticipant.countDocuments({ session: sess._id });
+        const obj = sess.toObject();
+        obj.participantCount = accurateCount;
+        return obj;
+      })
+    );
+
     return NextResponse.json({
       success: true,
       message: 'Sessions retrieved successfully',
-      data: sessions
+      data: enrichedSessions
     }, { status: 200 });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
