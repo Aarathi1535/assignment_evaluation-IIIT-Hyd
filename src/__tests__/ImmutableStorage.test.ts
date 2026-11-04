@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
@@ -22,10 +22,12 @@ describe('Immutable Original Storage & HMAC Tamper Evidence (AE-043)', () => {
     const studentId = new mongoose.Types.ObjectId().toString();
     const taId = new mongoose.Types.ObjectId().toString();
 
-    const originalSecret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
-    const originalKeyId = process.env.ORIGINAL_STORAGE_KEY_ID;
+    let originalSecret: string | undefined;
+    let originalKeyId: string | undefined;
 
     beforeEach(async () => {
+        originalSecret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+        originalKeyId = process.env.ORIGINAL_STORAGE_KEY_ID;
         process.env.ORIGINAL_STORAGE_PATH = testStorageDir;
         process.env.ORIGINAL_STORAGE_HMAC_SECRET = 'test-secure-hmac-secret-32-chars-long';
         process.env.ORIGINAL_STORAGE_KEY_ID = 'v1';
@@ -34,8 +36,16 @@ describe('Immutable Original Storage & HMAC Tamper Evidence (AE-043)', () => {
     });
 
     afterEach(async () => {
-        process.env.ORIGINAL_STORAGE_HMAC_SECRET = originalSecret;
-        process.env.ORIGINAL_STORAGE_KEY_ID = originalKeyId;
+        if (originalSecret === undefined) {
+            delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+        } else {
+            process.env.ORIGINAL_STORAGE_HMAC_SECRET = originalSecret;
+        }
+        if (originalKeyId === undefined) {
+            delete process.env.ORIGINAL_STORAGE_KEY_ID;
+        } else {
+            process.env.ORIGINAL_STORAGE_KEY_ID = originalKeyId;
+        }
 
         try {
             if (fs.existsSync(testStorageDir)) {
@@ -362,13 +372,17 @@ describe('Immutable Original Storage & HMAC Tamper Evidence (AE-043)', () => {
             });
         });
 
-        it('should clean up partially written file if a later stage fails', async () => {
+        it('should clean up a partially written file and audit a later storage failure', async () => {
             const batchId = crypto.randomUUID();
             const fileId = crypto.randomUUID();
             const buffer = Buffer.from('Content to fail', 'utf-8');
+            const originalWriteFile = fs.promises.writeFile;
 
-            // Force failure during storage by deleting the HMAC secret
-            delete process.env.ORIGINAL_STORAGE_HMAC_SECRET;
+            vi.spyOn(fs.promises, 'writeFile').mockImplementationOnce((...args) =>
+                Reflect.apply(originalWriteFile, fs.promises, args).then(() => {
+                    throw new Error('simulated failure after original file write');
+                })
+            );
 
             await expect(
                 ImmutableStorageService.storeOriginal({
