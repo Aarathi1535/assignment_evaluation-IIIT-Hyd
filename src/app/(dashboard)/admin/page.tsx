@@ -51,6 +51,12 @@ export default function AdminDashboardPage() {
           <span>Upload Answer Sheets</span>
         </Button>
       </Link>
+      <Link href="/admin/audit-logs">
+        <Button variant="outline" size="md">
+          <Terminal className="h-4 w-4" />
+          <span>View Audit History</span>
+        </Button>
+      </Link>
       <Button variant="primary" size="md">
         <UserPlus className="h-4 w-4" />
         <span>Manage Users</span>
@@ -85,9 +91,14 @@ export default function AdminDashboardPage() {
         <div className="space-y-3">
           <h2 className="text-xl font-bold text-slate-900">System Logs</h2>
           <EmptyState
-            title="No audit entries"
-            description="Security audits and background task logs will be logged here."
+            title="Audit trail"
+            description="Review security events and exam changes in the immutable audit history."
             icon={ShieldAlert}
+            action={
+              <Link href="/admin/audit-logs">
+                <Button variant="outline" size="sm">Open audit history</Button>
+              </Link>
+            }
           />
         </div>
       </div>

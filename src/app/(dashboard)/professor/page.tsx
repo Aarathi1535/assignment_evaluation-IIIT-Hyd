@@ -124,6 +124,12 @@ export default function ProfessorDashboardPage() {
           <span>Regrade Requests</span>
         </Button>
       </Link>
+      <Link href="/professor/audit-logs">
+        <Button variant="outline" size="md">
+          <ClipboardList className="h-4 w-4" />
+          <span>Audit History</span>
+        </Button>
+      </Link>
     </>
   );
 
