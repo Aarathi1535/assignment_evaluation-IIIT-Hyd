@@ -23,6 +23,13 @@ export interface StudentResultItemDto {
     maxMarks?: number;
 }
 
+export interface ReleasedExamScoreDto {
+    studentId: string;
+    scriptId: string;
+    score: number;
+    maxMarks: number;
+}
+
 export interface ReleasedStudentResultDto {
     examId: string;
     examTitle: string;
@@ -413,6 +420,45 @@ export class StudentResultService {
         }
 
         return results;
+    }
+
+    async getPublishedExamScores(exam: IExam): Promise<ReleasedExamScoreDto[]> {
+        if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
+            return [];
+        }
+
+        const scripts = await AnswerScript.find({
+            exam: exam._id,
+            isActive: true,
+            student: { $type: 'objectId' }
+        }).sort({ _id: 1 });
+        const studentIds = scripts.flatMap(script => script.student ? [script.student] : []);
+        const activeStudents = await User.find({
+            _id: { $in: studentIds },
+            role: UserRole.STUDENT,
+            isActive: true
+        }).select('_id').lean();
+        const activeStudentIds = new Set(activeStudents.map(student => student._id.toString()));
+        const releasedScores: ReleasedExamScoreDto[] = [];
+
+        for (const script of scripts) {
+            if (!script.student || !activeStudentIds.has(script.student.toString())) {
+                continue;
+            }
+            const result = await this.evaluateReleaseConditions(script.student, exam, script);
+            if (result.isReleased && result.total !== undefined && result.maxMarks !== undefined &&
+                Number.isFinite(result.total) && Number.isFinite(result.maxMarks) &&
+                result.total >= 0 && result.total <= result.maxMarks && result.maxMarks > 0) {
+                releasedScores.push({
+                    studentId: script.student.toString(),
+                    scriptId: script._id.toString(),
+                    score: result.total,
+                    maxMarks: result.maxMarks
+                });
+            }
+        }
+
+        return releasedScores;
     }
 
     /**
