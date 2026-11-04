@@ -18,6 +18,7 @@ export interface IRegradeDecision {
     decidedAt: Date;
     originalScore: number;
     revisedScore?: number;
+    gradeAppliedAt?: Date;
 }
 
 export interface IRegradeRequest extends Document {
@@ -65,6 +66,9 @@ const RegradeDecisionSchema = new Schema<IRegradeDecision>(
         revisedScore: {
             type: Number,
             min: 0
+        },
+        gradeAppliedAt: {
+            type: Date
         }
     },
     { _id: false }

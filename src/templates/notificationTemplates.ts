@@ -59,11 +59,20 @@ export interface ReopenTemplatePayload {
     recipient?: string | mongoose.Types.ObjectId;
 }
 
+export interface RegradeTemplatePayload {
+    examTitle?: string | null;
+    question?: number | null;
+    outcome?: 'APPROVED' | 'REJECTED' | null;
+    score?: number | null;
+    recipient?: string | mongoose.Types.ObjectId;
+}
+
 export type NotificationPayloadMap = {
     [NotificationType.ASSIGNMENT]: AssignmentTemplatePayload;
     [NotificationType.REASSIGNMENT]: ReassignmentTemplatePayload;
     [NotificationType.PUBLISH]: PublishTemplatePayload;
     [NotificationType.FLAG]: FlagTemplatePayload;
+    [NotificationType.REGRADE]: RegradeTemplatePayload;
 };
 
 /**
@@ -163,6 +172,22 @@ export function renderFlagTemplate(payload?: FlagTemplatePayload | null): Render
     };
 }
 
+export function renderRegradeTemplate(payload?: RegradeTemplatePayload | null): RenderedNotification {
+    const question = extractValidQuestion(payload?.question);
+    const questionText = question === null ? 'your question' : `question ${question}`;
+    const examTitle = payload?.examTitle?.trim();
+    const examText = examTitle ? ` for ${examTitle}` : '';
+    const approved = payload?.outcome === 'APPROVED';
+
+    return {
+        type: NotificationType.REGRADE,
+        title: approved ? 'Regrade request approved' : 'Regrade request rejected',
+        message: approved
+            ? `Your regrade request for ${questionText}${examText} was approved${payload?.score === null || payload?.score === undefined ? '.' : `. Your updated score is ${payload.score}.`}`
+            : `Your regrade request for ${questionText}${examText} was rejected.`
+    };
+}
+
 /**
  * Registry of notification template rendering functions.
  */
@@ -170,7 +195,8 @@ export const NotificationTemplates = {
     [NotificationType.ASSIGNMENT]: renderAssignmentTemplate,
     [NotificationType.REASSIGNMENT]: renderReassignmentTemplate,
     [NotificationType.PUBLISH]: renderPublishTemplate,
-    [NotificationType.FLAG]: renderFlagTemplate
+    [NotificationType.FLAG]: renderFlagTemplate,
+    [NotificationType.REGRADE]: renderRegradeTemplate
 } as const;
 
 /**
@@ -189,6 +215,8 @@ export function renderNotificationTemplate<T extends NotificationType>(
             return renderPublishTemplate(payload as PublishTemplatePayload);
         case NotificationType.FLAG:
             return renderFlagTemplate(payload as FlagTemplatePayload);
+        case NotificationType.REGRADE:
+            return renderRegradeTemplate(payload as RegradeTemplatePayload);
         default:
             return {
                 type: NotificationType.ASSIGNMENT,

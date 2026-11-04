@@ -9,6 +9,45 @@ import Exam from '../../../../../models/Exam';
 import Grade from '../../../../../models/Grade';
 import RegradeRequest, { RegradeDecisionOutcome, RegradeStatus } from '../../../../../models/RegradeRequest';
 import Rubric from '../../../../../models/Rubric';
+import NotificationService from '../../../../../services/NotificationService';
+import { NotificationType } from '../../../../../models/Notification';
+import { renderNotificationTemplate } from '../../../../../templates/notificationTemplates';
+
+function reviseCriterionMarks(
+    marks: Array<{ criterionName: string; score: number; feedback?: string }>,
+    criteria: Array<{ criterionName: string; points: number }>,
+    targetScore: number,
+    scoreStep: number
+) {
+    const existing = new Map(marks.map(mark => [mark.criterionName, mark]));
+    const revised = criteria.map(criterion => {
+        const mark = existing.get(criterion.criterionName);
+        return {
+            criterionName: criterion.criterionName,
+            units: Math.round((mark?.score || 0) / scoreStep),
+            maxUnits: Math.floor(criterion.points / scoreStep + 1e-8),
+            feedback: mark?.feedback || ''
+        };
+    });
+    let remaining = Math.round(targetScore / scoreStep) -
+        revised.reduce((total, mark) => total + mark.units, 0);
+
+    for (const mark of revised) {
+        const adjustment = remaining > 0
+            ? Math.min(remaining, mark.maxUnits - mark.units)
+            : -Math.min(-remaining, mark.units);
+        mark.units += adjustment;
+        remaining -= adjustment;
+        if (remaining === 0) break;
+    }
+
+    if (remaining !== 0) return null;
+    return revised.map(mark => ({
+        criterionName: mark.criterionName,
+        score: Math.round(mark.units * scoreStep * 1e8) / 1e8,
+        ...(mark.feedback ? { feedback: mark.feedback } : {})
+    }));
+}
 
 const decisionSchema = z.object({
     outcome: z.nativeEnum(RegradeDecisionOutcome),
@@ -90,7 +129,7 @@ export async function PATCH(
             answerScript: regrade.answerScript,
             question: regrade.questionNumber,
             isFinal: true
-        }).select('totalScore rubric');
+        }).select('totalScore rubric marksAwarded');
         if (!grade) {
             return NextResponse.json(
                 { success: false, message: 'The finalized grade for this question was not found', data: null },
@@ -126,6 +165,19 @@ export async function PATCH(
 
         const decidedAt = new Date();
         const priorStatus = regrade.status;
+        const approvedScore = outcome === RegradeDecisionOutcome.APPROVED
+            ? revisedScore ?? grade.totalScore
+            : undefined;
+        const updatedMarks = approvedScore !== undefined && approvedScore !== grade.totalScore
+            ? reviseCriterionMarks(grade.marksAwarded, question.criteria, approvedScore, rubric.scoreStep)
+            : grade.marksAwarded;
+        if (updatedMarks === null) {
+            return NextResponse.json(
+                { success: false, message: 'Revised score cannot be represented by the rubric criteria', data: null },
+                { status: 400 }
+            );
+        }
+
         const updated = await RegradeRequest.findOneAndUpdate(
             {
                 _id: regrade._id,
@@ -145,7 +197,7 @@ export async function PATCH(
                         decidedAt,
                         originalScore: grade.totalScore,
                         ...(outcome === RegradeDecisionOutcome.APPROVED
-                            ? { revisedScore: revisedScore ?? grade.totalScore }
+                            ? { revisedScore: approvedScore, gradeAppliedAt: decidedAt }
                             : {})
                     }
                 }
@@ -157,6 +209,28 @@ export async function PATCH(
                 { success: false, message: 'This regrade request has already been resolved', data: null },
                 { status: 409 }
             );
+        }
+
+        let updatedGrade: typeof grade | null = null;
+        if (approvedScore !== undefined && approvedScore !== grade.totalScore) {
+            updatedGrade = await Grade.findOneAndUpdate(
+                { _id: grade._id, isFinal: true, totalScore: grade.totalScore },
+                { $set: { marksAwarded: updatedMarks, totalScore: approvedScore } },
+                { returnDocument: 'after', runValidators: true }
+            );
+            if (!updatedGrade) {
+                await RegradeRequest.updateOne(
+                    { _id: updated._id, status: RegradeStatus.RESOLVED, 'decision.decidedAt': decidedAt },
+                    {
+                        $set: { status: priorStatus, isOpen: true },
+                        $unset: { decision: 1, handledBy: 1, resolutionNotes: 1 }
+                    }
+                );
+                return NextResponse.json(
+                    { success: false, message: 'The grade changed during review; reload and try again', data: null },
+                    { status: 409 }
+                );
+            }
         }
 
         const audited = await writeAuditLog({
@@ -173,12 +247,23 @@ export async function PATCH(
                 outcome,
                 reason,
                 originalScore: grade.totalScore,
-                revisedScore: outcome === RegradeDecisionOutcome.APPROVED
-                    ? revisedScore ?? grade.totalScore
+                revisedScore: approvedScore ?? null,
+                originalMarks: grade.marksAwarded.map(mark => ({ criterionName: mark.criterionName, score: mark.score })),
+                revisedMarks: outcome === RegradeDecisionOutcome.APPROVED
+                    ? updatedMarks.map(mark => ({ criterionName: mark.criterionName, score: mark.score }))
                     : null
             }
         });
         if (!audited) {
+            if (updatedGrade) {
+                const gradeRollback = await Grade.updateOne(
+                    { _id: updatedGrade._id, totalScore: approvedScore, updatedAt: updatedGrade.updatedAt },
+                    { $set: { marksAwarded: grade.marksAwarded, totalScore: grade.totalScore } }
+                );
+                if (gradeRollback.modifiedCount !== 1) {
+                    console.error('Failed to roll back unaudited grade change', { requestId: id });
+                }
+            }
             const rollback = await RegradeRequest.updateOne(
                 {
                     _id: updated._id,
@@ -200,12 +285,35 @@ export async function PATCH(
             );
         }
 
+        let notificationDelivery: 'SENT' | 'FAILED' = 'SENT';
+        try {
+            const notification = renderNotificationTemplate(NotificationType.REGRADE, {
+                examTitle: exam.title,
+                question: regrade.questionNumber,
+                outcome,
+                score: approvedScore
+            });
+            await NotificationService.createNotifications([{
+                recipient: regrade.student,
+                type: notification.type,
+                title: notification.title,
+                message: notification.message,
+                exam: exam._id,
+                answerScript: regrade.answerScript,
+                question: regrade.questionNumber
+            }]);
+        } catch (notificationError) {
+            notificationDelivery = 'FAILED';
+            console.error('Regrade decision saved, but student notification delivery failed:', notificationError);
+        }
+
         return NextResponse.json({
             success: true,
             data: {
                 id: updated._id.toString(),
                 status: updated.status,
-                decision: updated.decision
+                decision: updated.decision,
+                notificationDelivery
             }
         }, { status: 200, headers: { 'Cache-Control': 'private, no-store' } });
     } catch (error: unknown) {

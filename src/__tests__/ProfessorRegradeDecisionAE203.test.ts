@@ -9,6 +9,8 @@ import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Grade from '../models/Grade';
 import RegradeRequest, { RegradeDecisionOutcome, RegradeStatus } from '../models/RegradeRequest';
 import Rubric from '../models/Rubric';
+import Notification, { NotificationType } from '../models/Notification';
+import NotificationService from '../services/NotificationService';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
 
@@ -139,6 +141,10 @@ describe('AE-203 regrade decisions', () => {
         });
         const body = await response.json();
         const saved = await RegradeRequest.findById(fixture.regrade._id);
+        const savedGrade = await Grade.findOne({
+            answerScript: fixture.regrade.answerScript,
+            question: 1
+        });
         const audit = await AuditLog.findOne({ entityId: fixture.regrade._id, action: 'REGRADE_DECIDED' });
 
         expect(response.status).toBe(200);
@@ -156,6 +162,15 @@ describe('AE-203 regrade decisions', () => {
             originalScore: 7,
             revisedScore: 8.5
         });
+        expect(savedGrade?.totalScore).toBe(8.5);
+        expect(savedGrade?.marksAwarded.map(mark => ({
+            criterionName: mark.criterionName,
+            score: mark.score
+        }))).toEqual([{ criterionName: 'Accuracy', score: 8.5 }]);
+        expect(await Notification.countDocuments({
+            recipient: fixture.student._id,
+            type: NotificationType.REGRADE
+        })).toBe(1);
     });
 
     it('rejects invalid scores, missing reasons, and score increments outside the rubric step', async () => {
@@ -184,5 +199,24 @@ describe('AE-203 regrade decisions', () => {
         expect((await decide(fixture.regrade._id.toString(), body)).status).toBe(200);
         expect((await decide(fixture.regrade._id.toString(), body)).status).toBe(409);
         expect(await AuditLog.countDocuments({ action: 'REGRADE_DECIDED' })).toBe(1);
+    });
+
+    it('does not undo a successful grade decision when student notification delivery fails', async () => {
+        const fixture = await createFixture();
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        vi.spyOn(NotificationService, 'createNotifications').mockRejectedValueOnce(new Error('notification unavailable'));
+
+        const response = await decide(fixture.regrade._id.toString(), {
+            outcome: 'APPROVED',
+            reason: 'The rubric was misapplied.',
+            revisedScore: 8
+        });
+        const body = await response.json();
+        const grade = await Grade.findOne({ answerScript: fixture.regrade.answerScript, question: 1 });
+
+        expect(response.status).toBe(200);
+        expect(body.data.notificationDelivery).toBe('FAILED');
+        expect(grade?.totalScore).toBe(8);
+        expect(await RegradeRequest.findById(fixture.regrade._id).then(saved => saved?.status)).toBe(RegradeStatus.RESOLVED);
     });
 });
