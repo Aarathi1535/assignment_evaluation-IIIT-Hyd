@@ -168,7 +168,7 @@ describe('AE-198: published results and student regrade workflow (route-level)',
             exam: exam._id
         });
         expect(publishedNotification).toBeTruthy();
-        expect(publishedNotification?.title).toContain('Results Published');
+        expect(publishedNotification?.title).toContain('Grades Published');
 
         mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
         const releasedResults = await getResults();
