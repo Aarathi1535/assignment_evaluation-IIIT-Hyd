@@ -19,6 +19,18 @@ export interface EnrollContext extends AuditContext {
     rollNumbers?: Record<string, string | null | undefined>;
 }
 
+function isTransactionCapable(): boolean {
+    const client = (mongoose.connection as unknown as { client?: { topology?: { description?: { type?: string } } } })?.client;
+    const topology = client?.topology;
+    const topologyType = (topology?.description?.type as string | undefined) ?? 'Unknown';
+    return [
+        'ReplicaSetWithPrimary',
+        'ReplicaSetNoPrimary',
+        'Sharded',
+        'LoadBalanced',
+    ].includes(topologyType);
+}
+
 class ExamService {
     async createExam(data: Partial<IExam>, context?: AuditContext): Promise<IExam> {
         if (data.course && context?.actingUserId) {
@@ -218,26 +230,24 @@ class ExamService {
 
         // Validate status transition
         if (data.status !== undefined && data.status !== examBefore.status) {
+            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
+                throw new HttpError(
+                    'Direct status update to PUBLISHED is not allowed. Use POST /api/exams/[id]/publish to publish exam results.',
+                    400
+                );
+            }
+            if (examBefore.status === ExamStatus.PUBLISHED && (data.status === ExamStatus.REVIEW_PENDING || String(data.status).toUpperCase() === 'REVIEW_PENDING')) {
+                throw new HttpError(
+                    'Direct status update to REVIEW_PENDING from PUBLISHED is not allowed. Use POST /api/exams/[id]/unpublish to unpublish exam results.',
+                    400
+                );
+            }
             const { isValidTransition } = await import('../validations/examValidation');
             if (!isValidTransition(examBefore.status, data.status as ExamStatus)) {
                 throw new HttpError(`Invalid status transition from ${examBefore.status} to ${data.status}`, 400);
             }
 
-            // AE-164: An OPEN flag must prevent publication of the affected exam results to students.
-            // RESOLVED and ESCALATED flags do not block publication.
-            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
-                const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
-                const openFlagCount = await ScriptFlag.countDocuments({
-                    exam: new mongoose.Types.ObjectId(id),
-                    status: 'OPEN'
-                });
-                if (openFlagCount > 0) {
-                    throw new HttpError(
-                        `Cannot publish exam: There are ${openFlagCount} open flag(s) that must be resolved or escalated first`,
-                        400
-                    );
-                }
-            }
+
         }
 
         // Validate gradingDeadline rules (freeze rule on grading commencement and chronology against examDate)
@@ -709,13 +719,17 @@ class ExamService {
             throw new HttpError('Cannot publish inactive exam', 400);
         }
 
-        if (examBefore.status === ExamStatus.ARCHIVED) {
-            throw new HttpError('Cannot publish archived exam', 400);
-        }
-
         // Idempotent: If already published, return without duplicate side effects
         if (examBefore.status === ExamStatus.PUBLISHED) {
             return examBefore;
+        }
+
+        // Status check: only REVIEW_PENDING exams can be published
+        if (examBefore.status !== ExamStatus.REVIEW_PENDING) {
+            throw new HttpError(
+                `Cannot publish exam in status '${examBefore.status}'. Only exams in 'REVIEW_PENDING' status can be published.`,
+                409
+            );
         }
 
         // AE-164: Check for OPEN flags that block publication
@@ -735,38 +749,90 @@ class ExamService {
         const publishedAt = new Date();
         const publishedBy = new mongoose.Types.ObjectId(actingUserId);
 
-        const updatedExam = await Exam.findByIdAndUpdate(
-            id,
-            {
-                $set: {
-                    status: ExamStatus.PUBLISHED,
-                    publishedBy,
-                    publishedAt
-                }
-            },
-            { returnDocument: 'after' }
-        );
-
-        if (!updatedExam) {
-            throw new HttpError('Exam not found', 404);
+        const transactionCapable = isTransactionCapable();
+        const session = transactionCapable ? await mongoose.startSession() : null;
+        if (session) {
+            session.startTransaction();
         }
 
-        await writeAuditLog({
-            user: new mongoose.Types.ObjectId(actingUserId),
-            action: 'EXAM_PUBLISHED',
-            outcome: 'SUCCESS',
-            entityId: updatedExam._id as mongoose.Types.ObjectId,
-            entityType: 'Exam',
-            details: {
-                title: updatedExam.title,
-                course: updatedExam.course,
-                publishedBy,
-                publishedAt
-            },
-            ipAddress: context?.ipAddress
-        });
+        try {
+            // Atomic update: only transitions if status is currently REVIEW_PENDING
+            const updatedExam = await Exam.findOneAndUpdate(
+                {
+                    _id: new mongoose.Types.ObjectId(id),
+                    isActive: true,
+                    status: ExamStatus.REVIEW_PENDING
+                },
+                {
+                    $set: {
+                        status: ExamStatus.PUBLISHED,
+                        publishedBy,
+                        publishedAt
+                    }
+                },
+                { returnDocument: 'after', session: session || undefined }
+            );
 
-        return updatedExam;
+            if (!updatedExam) {
+                const current = await Exam.findById(id);
+                if (current && current.status === ExamStatus.PUBLISHED) {
+                    if (session) await session.abortTransaction();
+                    return current;
+                }
+                throw new HttpError(
+                    `Cannot publish exam in status '${current?.status || 'UNKNOWN'}'. Only exams in 'REVIEW_PENDING' status can be published.`,
+                    409
+                );
+            }
+
+            const auditSuccess = await writeAuditLog({
+                user: new mongoose.Types.ObjectId(actingUserId),
+                action: 'EXAM_PUBLISHED',
+                outcome: 'SUCCESS',
+                entityId: updatedExam._id as mongoose.Types.ObjectId,
+                entityType: 'Exam',
+                details: {
+                    title: updatedExam.title,
+                    course: updatedExam.course,
+                    publishedBy,
+                    publishedAt
+                },
+                ipAddress: context?.ipAddress,
+                session: session || undefined
+            });
+
+            if (!auditSuccess) {
+                throw new HttpError('Failed to record audit log for exam publication', 500);
+            }
+
+            if (session) {
+                await session.commitTransaction();
+            }
+
+            return updatedExam;
+        } catch (error) {
+            if (session) {
+                try {
+                    await session.abortTransaction();
+                } catch {
+                    // Ignore abort error
+                }
+            } else {
+                // Fail-closed compensation if standalone
+                await Exam.findByIdAndUpdate(id, {
+                    $set: {
+                        status: ExamStatus.REVIEW_PENDING,
+                        publishedBy: null,
+                        publishedAt: null
+                    }
+                });
+            }
+            throw error;
+        } finally {
+            if (session) {
+                session.endSession();
+            }
+        }
     }
 }
 
