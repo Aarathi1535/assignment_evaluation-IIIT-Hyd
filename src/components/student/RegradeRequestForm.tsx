@@ -168,6 +168,12 @@ export function RegradeRequestForm({
       setSubmissionState('success');
       setMessage('Your regrade request was submitted successfully.');
       setReason('');
+      const nextAvailable = questionNumbers.find(
+        q => q.toString() !== activeQuestion && !openRequests.includes(q)
+      );
+      if (nextAvailable !== undefined) {
+        setSelectedQuestion(nextAvailable.toString());
+      }
     } catch (error: unknown) {
       setSubmissionState('error');
       setMessage(error instanceof Error ? error.message : 'Could not submit your regrade request.');
@@ -225,7 +231,7 @@ export function RegradeRequestForm({
               );
             })}
           </select>
-          {isCurrentQuestionOpen && (
+          {isCurrentQuestionOpen && submissionState !== 'success' && (
             <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-700">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>

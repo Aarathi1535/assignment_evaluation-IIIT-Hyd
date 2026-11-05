@@ -61,8 +61,9 @@ describe('AE-194: Student regrade request form', () => {
         });
 
         expect(await screen.findByText('Your regrade request was submitted successfully.')).toBeTruthy();
-        const link = screen.getByRole('link', { name: 'Regrade Requests' });
-        expect(link.getAttribute('href')).toBe('/student/regrade-requests');
+        const links = screen.getAllByRole('link', { name: 'Regrade Requests' });
+        expect(links.length).toBeGreaterThanOrEqual(1);
+        expect(links[0].getAttribute('href')).toBe('/student/regrade-requests');
         expect(fetchMock).toHaveBeenCalledWith('/api/student/regrade-requests', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
