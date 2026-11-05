@@ -696,6 +696,89 @@ class ExamService {
         });
     }
 
+    async getPublishPreview(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string
+    ): Promise<{
+        totalEnrolled: number;
+        readyToRelease: number;
+        notReady: number;
+        openFlags: number;
+        warnings: string[];
+    }> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const exam = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!exam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const StudentMapping = mongoose.models.StudentMapping || (await import('../models/StudentMapping')).default;
+        const AnswerScript = mongoose.models.AnswerScript || (await import('../models/AnswerScript')).default;
+        const Grade = mongoose.models.Grade || (await import('../models/Grade')).default;
+        const ScriptFlagModule = await import('../models/ScriptFlag');
+        const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
+
+        const totalEnrolled = await StudentMapping.countDocuments({ exam: exam._id });
+        const openFlags = await ScriptFlag.countDocuments({
+            exam: exam._id,
+            status: ScriptFlagModule.FlagStatus.OPEN
+        });
+
+        const scripts = await AnswerScript.find({ exam: exam._id, isActive: true });
+        const scriptIds = scripts.map((s: { _id: unknown }) => s._id);
+
+        const scriptsWithOpenFlags = await ScriptFlag.distinct('answerScript', {
+            exam: exam._id,
+            status: ScriptFlagModule.FlagStatus.OPEN
+        });
+        const openFlagScriptIdSet = new Set(scriptsWithOpenFlags.map((sid: unknown) => String(sid)));
+
+        const finalGrades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        });
+        const finalGradeScriptIdSet = new Set(finalGrades.map((g: { answerScript: unknown }) => String(g.answerScript)));
+
+        let readyToRelease = 0;
+        let notReady = 0;
+
+        for (const script of scripts) {
+            const sId = String(script._id);
+            const hasFinalGrade = finalGradeScriptIdSet.has(sId);
+            const hasOpenFlag = openFlagScriptIdSet.has(sId);
+
+            if (hasFinalGrade && !hasOpenFlag) {
+                readyToRelease++;
+            } else {
+                notReady++;
+            }
+        }
+
+        if (totalEnrolled > scripts.length) {
+            notReady += (totalEnrolled - scripts.length);
+        }
+
+        const warnings: string[] = [];
+        if (openFlags > 0) {
+            warnings.push(`${openFlags} open flag(s) must be resolved or escalated before publication.`);
+        }
+        if (notReady > 0) {
+            warnings.push(`${notReady} student(s) do not have final grades and will receive NOT_AVAILABLE status.`);
+        }
+
+        return {
+            totalEnrolled,
+            readyToRelease,
+            notReady,
+            openFlags,
+            warnings
+        };
+    }
+
     async publishExam(
         id: string,
         actingUserId: string,
