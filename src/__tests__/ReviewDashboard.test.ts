@@ -304,4 +304,101 @@ describe('AE-076 Review Dashboard Summary & Counts', () => {
         expect(body.data.scripts[0]._id.toString()).toBe(s1._id.toString());
         expect(body.data.scripts[0].pages[0].pageNumber).toBe(1);
     });
+
+    describe('Hotfix Regression: Ingestion Summary Staff-Only Authorization', () => {
+        const studentId = new mongoose.Types.ObjectId().toString();
+        const taId = new mongoose.Types.ObjectId().toString();
+        const adminId = new mongoose.Types.ObjectId().toString();
+
+        it('11. unauthenticated requests receive 401 for both default and category=total', async () => {
+            const exam = await createExam(professorId);
+            mockSessionUser = null;
+
+            // Default request
+            const defaultRes = await ingestionSummaryGET(makeRequest(), makeContext(exam._id.toString()));
+            expect(defaultRes.status).toBe(401);
+            const defaultBody = await defaultRes.json();
+            expect(defaultBody.success).toBe(false);
+            expect(defaultBody.message).toMatch(/Unauthorized/i);
+
+            // category=total request
+            const totalRes = await ingestionSummaryGET(makeRequest('total'), makeContext(exam._id.toString()));
+            expect(totalRes.status).toBe(401);
+            const totalBody = await totalRes.json();
+            expect(totalBody.success).toBe(false);
+            expect(totalBody.message).toMatch(/Unauthorized/i);
+        });
+
+        it('12. students receive 403 Forbidden for both default and category=total', async () => {
+            const exam = await createExam(professorId);
+            mockSessionUser = { id: studentId, email: 'student@test.com', name: 'Student', role: UserRole.STUDENT };
+
+            // Default request
+            const defaultRes = await ingestionSummaryGET(makeRequest(), makeContext(exam._id.toString()));
+            expect(defaultRes.status).toBe(403);
+            const defaultBody = await defaultRes.json();
+            expect(defaultBody.success).toBe(false);
+            expect(defaultBody.message).toMatch(/Forbidden/i);
+
+            // category=total request
+            const totalRes = await ingestionSummaryGET(makeRequest('total'), makeContext(exam._id.toString()));
+            expect(totalRes.status).toBe(403);
+            const totalBody = await totalRes.json();
+            expect(totalBody.success).toBe(false);
+            expect(totalBody.message).toMatch(/Forbidden/i);
+        });
+
+        it('13. teaching assistants receive 403 Forbidden for both default and category=total', async () => {
+            const exam = await createExam(professorId);
+            mockSessionUser = { id: taId, email: 'ta@test.com', name: 'TA', role: UserRole.TA };
+
+            // Default request
+            const defaultRes = await ingestionSummaryGET(makeRequest(), makeContext(exam._id.toString()));
+            expect(defaultRes.status).toBe(403);
+            const defaultBody = await defaultRes.json();
+            expect(defaultBody.success).toBe(false);
+            expect(defaultBody.message).toMatch(/Forbidden/i);
+
+            // category=total request
+            const totalRes = await ingestionSummaryGET(makeRequest('total'), makeContext(exam._id.toString()));
+            expect(totalRes.status).toBe(403);
+            const totalBody = await totalRes.json();
+            expect(totalBody.success).toBe(false);
+            expect(totalBody.message).toMatch(/Forbidden/i);
+        });
+
+        it('14. authorized staff (professor and admin) can access default and category=total requests', async () => {
+            const exam = await createExam(professorId);
+
+            // Professor (owner) default
+            mockSessionUser = { id: professorId, email: 'prof@test.com', name: 'Prof', role: UserRole.PROFESSOR };
+            const profDefaultRes = await ingestionSummaryGET(makeRequest(), makeContext(exam._id.toString()));
+            expect(profDefaultRes.status).toBe(200);
+            const profDefaultBody = await profDefaultRes.json();
+            expect(profDefaultBody.success).toBe(true);
+            expect(profDefaultBody.data.counts).toBeDefined();
+
+            // Professor (owner) category=total
+            const profTotalRes = await ingestionSummaryGET(makeRequest('total'), makeContext(exam._id.toString()));
+            expect(profTotalRes.status).toBe(200);
+            const profTotalBody = await profTotalRes.json();
+            expect(profTotalBody.success).toBe(true);
+            expect(profTotalBody.data.scripts).toBeDefined();
+
+            // Admin default
+            mockSessionUser = { id: adminId, email: 'admin@test.com', name: 'Admin', role: UserRole.ADMIN };
+            const adminDefaultRes = await ingestionSummaryGET(makeRequest(), makeContext(exam._id.toString()));
+            expect(adminDefaultRes.status).toBe(200);
+            const adminDefaultBody = await adminDefaultRes.json();
+            expect(adminDefaultBody.success).toBe(true);
+            expect(adminDefaultBody.data.counts).toBeDefined();
+
+            // Admin category=total
+            const adminTotalRes = await ingestionSummaryGET(makeRequest('total'), makeContext(exam._id.toString()));
+            expect(adminTotalRes.status).toBe(200);
+            const adminTotalBody = await adminTotalRes.json();
+            expect(adminTotalBody.success).toBe(true);
+            expect(adminTotalBody.data.scripts).toBeDefined();
+        });
+    });
 });
