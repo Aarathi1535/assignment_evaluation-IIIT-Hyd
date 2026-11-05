@@ -80,6 +80,8 @@ export interface IExam extends Document {
     publishedAt?: Date | null;
     unpublishedBy?: mongoose.Types.ObjectId | null;
     unpublishedAt?: Date | null;
+    regradeWindowOpensAt?: Date | null;
+    regradeWindowClosesAt?: Date | null;
     published_by?: mongoose.Types.ObjectId | null;
     published_at?: Date | null;
     createdAt: Date;
@@ -239,6 +241,14 @@ const ExamSchema = new Schema<IExam>(
             default: null
         },
         unpublishedAt: {
+            type: Date,
+            default: null
+        },
+        regradeWindowOpensAt: {
+            type: Date,
+            default: null
+        },
+        regradeWindowClosesAt: {
             type: Date,
             default: null
         }

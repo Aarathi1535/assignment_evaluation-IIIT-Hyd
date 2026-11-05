@@ -1204,6 +1204,75 @@ class ExamService {
             throw error;
         }
     }
+    async updateRegradeWindow(
+        id: string,
+        opensAt: Date | null,
+        closesAt: Date | null,
+        actingUserId: string,
+        actingUserRole: string,
+        context?: { ipAddress?: string }
+    ): Promise<IExam> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+        if (!['PROFESSOR', 'ADMIN'].includes(actingUserRole.toUpperCase())) {
+            throw new HttpError('Forbidden', 403);
+        }
+        if ((opensAt === null) !== (closesAt === null)) {
+            throw new HttpError('Both regrade window timestamps must be set or cleared together', 400);
+        }
+        if (opensAt && Number.isNaN(opensAt.getTime())) {
+            throw new HttpError('Invalid regrade window opening timestamp', 400);
+        }
+        if (closesAt && Number.isNaN(closesAt.getTime())) {
+            throw new HttpError('Invalid regrade window closing timestamp', 400);
+        }
+        if (opensAt && closesAt && opensAt.getTime() >= closesAt.getTime()) {
+            throw new HttpError('Regrade window opening time must be before its closing time', 400);
+        }
+
+        const examBefore = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!examBefore) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const updatedExam = await Exam.findOneAndUpdate(
+            { _id: examBefore._id, isActive: true },
+            { $set: { regradeWindowOpensAt: opensAt, regradeWindowClosesAt: closesAt } },
+            { returnDocument: 'after' }
+        );
+        if (!updatedExam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const auditSuccess = await writeAuditLog({
+            user: new mongoose.Types.ObjectId(actingUserId),
+            action: 'EXAM_REGRADE_WINDOW_UPDATED',
+            outcome: 'SUCCESS',
+            entityId: updatedExam._id as mongoose.Types.ObjectId,
+            entityType: 'Exam',
+            details: {
+                previousOpensAt: examBefore.regradeWindowOpensAt,
+                previousClosesAt: examBefore.regradeWindowClosesAt,
+                opensAt,
+                closesAt
+            },
+            ipAddress: context?.ipAddress
+        });
+
+        if (!auditSuccess) {
+            // Fail-closed compensation: revert back to previous timestamps
+            await Exam.findByIdAndUpdate(id, {
+                $set: {
+                    regradeWindowOpensAt: examBefore.regradeWindowOpensAt,
+                    regradeWindowClosesAt: examBefore.regradeWindowClosesAt
+                }
+            });
+            throw new HttpError('Failed to record audit log for regrade window update', 500);
+        }
+
+        return updatedExam;
+    }
 }
 
 const examService = new ExamService();
