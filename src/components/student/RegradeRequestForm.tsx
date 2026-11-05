@@ -79,17 +79,12 @@ export function RegradeRequestForm({
   regradeWindowClosesAt,
   openQuestionNumbers
 }: RegradeRequestFormProps) {
-  const [openRequests, setOpenRequests] = useState<number[]>(() => openQuestionNumbers || []);
+  const [locallyOpenRequests, setLocallyOpenRequests] = useState<number[]>([]);
+  const openRequests = Array.from(new Set([...(openQuestionNumbers || []), ...locallyOpenRequests]));
   const [reason, setReason] = useState('');
   const [submissionState, setSubmissionState] = useState<SubmissionState>('idle');
   const [message, setMessage] = useState('');
   const [currentTime, setCurrentTime] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (openQuestionNumbers && openQuestionNumbers.length > 0) {
-      setOpenRequests(prev => Array.from(new Set([...prev, ...openQuestionNumbers])));
-    }
-  }, [openQuestionNumbers]);
 
   // Find first eligible question that does not already have an open request
   const firstAvailableQuestion = questionNumbers.find(q => !openRequests.includes(q));
@@ -159,12 +154,12 @@ export function RegradeRequestForm({
       const body = await response.json() as { success?: boolean; message?: string };
       if (!response.ok || body.success !== true) {
         if (response.status === 409) {
-          setOpenRequests(prev => Array.from(new Set([...prev, Number(activeQuestion)])));
+          setLocallyOpenRequests(prev => Array.from(new Set([...prev, Number(activeQuestion)])));
         }
         throw new Error(body.message || `Could not submit regrade request (${response.status}).`);
       }
 
-      setOpenRequests(prev => Array.from(new Set([...prev, Number(activeQuestion)])));
+      setLocallyOpenRequests(prev => Array.from(new Set([...prev, Number(activeQuestion)])));
       setSubmissionState('success');
       setMessage('Your regrade request was submitted successfully.');
       setReason('');
