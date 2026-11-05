@@ -28,15 +28,6 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
     let rubricsGET: typeof import('../app/api/rubrics/route').GET;
     let rubricByIdGET: typeof import('../app/api/rubrics/[id]/route').GET;
 
-    let professor!: IUser;
-    let studentAlice!: IUser;
-    let studentBob!: IUser;
-    let ta!: IUser;
-    let course!: InstanceType<typeof Course>;
-    let publishedExam!: InstanceType<typeof Exam>;
-    let draftExam!: InstanceType<typeof Exam>;
-    let rubric!: InstanceType<typeof Rubric>;
-
     beforeAll(async () => {
         coursesGET = (await import('../app/api/courses/route')).GET;
         courseByIdGET = (await import('../app/api/courses/[id]/route')).GET;
@@ -52,37 +43,37 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         mockSessionUser = null;
     });
 
-    it('creates test fixtures for the security audit', async () => {
-        professor = await User.create({
+    it('walks every VIEW_COURSES route as a student, verifying proper scoping and zero data exposure', async () => {
+        const professor: IUser = await User.create({
             name: 'Prof Security',
             email: 'prof-ae199@example.edu',
-            password: 'Password@123',
+            password: 'password123',
             role: UserRole.PROFESSOR,
             isActive: true
         });
-        studentAlice = await User.create({
+        const studentAlice: IUser = await User.create({
             name: 'Alice Student',
             email: 'alice-ae199@example.edu',
-            password: 'Password@123',
+            password: 'password123',
             role: UserRole.STUDENT,
             isActive: true
         });
-        studentBob = await User.create({
+        const studentBob: IUser = await User.create({
             name: 'Bob Student',
             email: 'bob-ae199@example.edu',
-            password: 'Password@123',
+            password: 'password123',
             role: UserRole.STUDENT,
             isActive: true
         });
-        ta = await User.create({
+        const ta: IUser = await User.create({
             name: 'TA Security',
             email: 'ta-ae199@example.edu',
-            password: 'Password@123',
+            password: 'password123',
             role: UserRole.TA,
             isActive: true
         });
 
-        course = await Course.create({
+        const course = await Course.create({
             courseCode: 'CS199',
             courseName: 'Security Audit',
             academicYear: '2026',
@@ -93,7 +84,7 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
             isActive: true
         });
 
-        publishedExam = await Exam.create({
+        const publishedExam = await Exam.create({
             title: 'Published Audit Exam',
             course: course._id,
             createdBy: professor._id,
@@ -106,7 +97,7 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
             regradeWindowClosesAt: new Date(Date.now() + 60 * 60_000)
         });
 
-        draftExam = await Exam.create({
+        const draftExam = await Exam.create({
             title: 'Draft Exam Under Review',
             course: course._id,
             createdBy: professor._id,
@@ -117,7 +108,7 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
             isActive: true
         });
 
-        rubric = await Rubric.create({
+        const rubric = await Rubric.create({
             exam: publishedExam._id,
             createdBy: professor._id,
             scoreStep: 0.5,
@@ -129,27 +120,25 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         });
         publishedExam.rubric = rubric._id;
         await publishedExam.save();
-    });
 
-    it('1. GET /api/exams/[id]/ingestion-summary denies students and unprivileged TAs (403)', async () => {
+        // 1. GET /api/exams/[id]/ingestion-summary denies students and unprivileged TAs (403)
         mockSessionUser = { id: studentAlice._id.toString(), role: UserRole.STUDENT };
-        const studentResponse = await ingestionSummaryGET(
+        const studentIngestionRes = await ingestionSummaryGET(
             new NextRequest(`http://localhost:3000/api/exams/${publishedExam._id}/ingestion-summary?category=total`),
             { params: Promise.resolve({ id: publishedExam._id.toString() }) }
         );
-        expect(studentResponse.status).toBe(403);
+        expect(studentIngestionRes.status).toBe(403);
 
         mockSessionUser = { id: ta._id.toString(), role: UserRole.TA };
-        const taResponse = await ingestionSummaryGET(
+        const taIngestionRes = await ingestionSummaryGET(
             new NextRequest(`http://localhost:3000/api/exams/${publishedExam._id}/ingestion-summary`),
             { params: Promise.resolve({ id: publishedExam._id.toString() }) }
         );
-        expect(taResponse.status).toBe(403);
-    });
+        expect(taIngestionRes.status).toBe(403);
 
-    it('2. GET /api/courses and /api/courses/[id] strip enrolled student rosters for students', async () => {
+        // 2. GET /api/courses and /api/courses/[id] strip enrolled student rosters for students
         mockSessionUser = { id: studentAlice._id.toString(), role: UserRole.STUDENT };
-        const listResponse = await coursesGET(new NextRequest('http://localhost:3000/api/courses'));
+        const listResponse = await coursesGET();
         expect(listResponse.status).toBe(200);
         const listBody = await listResponse.json();
         expect(listBody.data).toHaveLength(1);
@@ -162,32 +151,27 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         expect(detailResponse.status).toBe(200);
         const detailBody = await detailResponse.json();
         expect(detailBody.data).not.toHaveProperty('enrolledStudents');
-    });
 
-    it('3. GET /api/exams lists only published exams for enrolled courses without storage leaks', async () => {
-        mockSessionUser = { id: studentAlice._id.toString(), role: UserRole.STUDENT };
+        // 3. GET /api/exams lists only published exams for enrolled courses without storage leaks
         const examsResponse = await examsGET(new NextRequest('http://localhost:3000/api/exams'));
         expect(examsResponse.status).toBe(200);
         const examsBody = await examsResponse.json();
-        expect(examsBody.data.map((e: { _id: string }) => e._id)).toContain(publishedExam._id.toString());
-        expect(examsBody.data.map((e: { _id: string }) => e._id)).not.toContain(draftExam._id.toString());
+        const returnedExamIds = examsBody.data.map((e: { _id: string }) => e._id);
+        expect(returnedExamIds).toContain(publishedExam._id.toString());
+        expect(returnedExamIds).not.toContain(draftExam._id.toString());
 
         const rawText = JSON.stringify(examsBody);
         expect(rawText).not.toContain('storageKey');
         expect(rawText).not.toContain('filePath');
-    });
 
-    it('4. GET /api/exams/[id] denies access to unpublished exams for students', async () => {
-        mockSessionUser = { id: studentAlice._id.toString(), role: UserRole.STUDENT };
+        // 4. GET /api/exams/[id] denies access to unpublished exams for students
         const draftDetailResponse = await examByIdGET(
             new NextRequest(`http://localhost:3000/api/exams/${draftExam._id}`),
             { params: Promise.resolve({ id: draftExam._id.toString() }) }
         );
         expect([403, 404]).toContain(draftDetailResponse.status);
-    });
 
-    it('5. GET /api/exams/[id]/regrade-window returns window dates for enrolled students', async () => {
-        mockSessionUser = { id: studentAlice._id.toString(), role: UserRole.STUDENT };
+        // 5. GET /api/exams/[id]/regrade-window returns window dates for enrolled students
         const windowResponse = await regradeWindowGET(
             new NextRequest(`http://localhost:3000/api/exams/${publishedExam._id}/regrade-window`),
             { params: Promise.resolve({ id: publishedExam._id.toString() }) }
@@ -196,10 +180,8 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         const windowBody = await windowResponse.json();
         expect(windowBody.data).toHaveProperty('regradeWindowOpensAt');
         expect(windowBody.data).toHaveProperty('regradeWindowClosesAt');
-    });
 
-    it('6. GET /api/rubrics and /api/rubrics/[id] return rubric without leaking student scripts or storage keys', async () => {
-        mockSessionUser = { id: studentAlice._id.toString(), role: UserRole.STUDENT };
+        // 6. GET /api/rubrics and /api/rubrics/[id] return rubric without leaking student scripts or storage keys
         const rubricResponse = await rubricByIdGET(
             new NextRequest(`http://localhost:3000/api/rubrics/${rubric._id}`),
             { params: Promise.resolve({ id: rubric._id.toString() }) }
