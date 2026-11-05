@@ -798,8 +798,13 @@ class ExamService {
             throw new HttpError('Cannot publish inactive exam', 400);
         }
 
-        // Idempotent: If already published, return without duplicate side effects
+        // Idempotent: If already published, re-run notification dispatch (idempotent step) and return
         if (examBefore.status === ExamStatus.PUBLISHED) {
+            try {
+                await this.notifyStudentsOnExamPublish(examBefore);
+            } catch (notifyErr) {
+                console.error('Failed to dispatch student publication notifications on retry:', notifyErr);
+            }
             return examBefore;
         }
 
@@ -856,6 +861,11 @@ class ExamService {
                 const current = await Exam.findById(id);
                 if (current && current.status === ExamStatus.PUBLISHED) {
                     if (session) await session.abortTransaction();
+                    try {
+                        await this.notifyStudentsOnExamPublish(current);
+                    } catch (notifyErr) {
+                        console.error('Failed to dispatch student publication notifications on retry:', notifyErr);
+                    }
                     return current;
                 }
                 throw new HttpError(
@@ -888,6 +898,14 @@ class ExamService {
                 await session.commitTransaction();
             }
 
+            // AE-192: Dispatch student publication notifications non-blockingly
+            try {
+                await this.notifyStudentsOnExamPublish(updatedExam);
+            } catch (notifyErr) {
+                console.error('Failed to dispatch student publication notifications:', notifyErr);
+                // Publication status must not be affected by notification failure
+            }
+
             return updatedExam;
         } catch (error) {
             if (session) {
@@ -912,6 +930,148 @@ class ExamService {
                 session.endSession();
             }
         }
+    }
+    /**
+     * Dispatches publication notifications to all eligible students (AE-192).
+     *
+     * Hardened according to mentor review:
+     * 1. Release rule: ONLY students whose script has a finalized grade AND no OPEN flags are notified.
+     *    Students with no script, an unfinalized grade, or an open flag receive NOT_AVAILABLE results
+     *    and must NOT be notified.
+     * 2. Checks feature flag isStudentResultsEnabled(): if disabled, skips notifying immediately.
+     * 3. Prevents duplicate notifications on retry via partial unique index on { exam, recipient, type }
+     *    and atomic upsert ($setOnInsert).
+     * 4. Dispatches stub emails concurrently via Promise.allSettled and logs studentId (not email).
+     * 5. Non-blocking: failures must never roll back publication status.
+     */
+    async notifyStudentsOnExamPublish(exam: IExam): Promise<{ notifiedCount: number; skippedCount: number }> {
+        // 1. Check feature flag
+        const { isStudentResultsEnabled } = await import('../config/env');
+        if (!isStudentResultsEnabled()) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        // 2. Identify active scripts for this exam
+        const AnswerScript = mongoose.models.AnswerScript || (await import('../models/AnswerScript')).default;
+        const Grade = mongoose.models.Grade || (await import('../models/Grade')).default;
+        const ScriptFlagModule = await import('../models/ScriptFlag');
+        const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
+
+        const scripts = await AnswerScript.find({ exam: exam._id, isActive: true });
+        if (scripts.length === 0) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        const scriptIds = scripts.map((s: { _id: unknown }) => s._id);
+
+        // Find scripts that have open flags
+        const scriptsWithOpenFlags = await ScriptFlag.distinct('answerScript', {
+            answerScript: { $in: scriptIds },
+            status: ScriptFlagModule.FlagStatus.OPEN
+        });
+        const openFlagScriptIdSet = new Set(scriptsWithOpenFlags.map((sid: unknown) => String(sid)));
+
+        // Find scripts that have finalized grades
+        const finalGrades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        });
+        const finalGradeScriptIdSet = new Set(finalGrades.map((g: { answerScript: unknown }) => String(g.answerScript)));
+
+        // Only students whose script is final and has no open flags
+        const candidateStudentIdSet = new Set<string>();
+        for (const script of scripts) {
+            const sId = String(script._id);
+            if (finalGradeScriptIdSet.has(sId) && !openFlagScriptIdSet.has(sId)) {
+                if (script.student) {
+                    candidateStudentIdSet.add(script.student.toString());
+                }
+            }
+        }
+
+        if (candidateStudentIdSet.size === 0) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        // 3. Filter only eligible active student users
+        const candidateObjectIds = Array.from(candidateStudentIdSet).map(id => new mongoose.Types.ObjectId(id));
+        const eligibleStudents = await User.find({
+            _id: { $in: candidateObjectIds },
+            role: UserRole.STUDENT,
+            isActive: true
+        });
+
+        if (eligibleStudents.length === 0) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        // 4. Find already notified students to report skipped count
+        const Notification = (await import('../models/Notification')).default;
+        const { NotificationType } = await import('../models/Notification');
+        const existingNotifications = await Notification.find({
+            exam: exam._id,
+            type: NotificationType.PUBLISH
+        });
+        const alreadyNotifiedSet = new Set(existingNotifications.map(n => n.recipient.toString()));
+
+        const studentsToNotify = eligibleStudents.filter(s => !alreadyNotifiedSet.has(s._id.toString()));
+        const skippedCount = eligibleStudents.length - studentsToNotify.length;
+
+        if (studentsToNotify.length === 0) {
+            return { notifiedCount: 0, skippedCount };
+        }
+
+        // 5. Render notification template
+        const { renderPublishTemplate } = await import('../templates/notificationTemplates');
+        const rendered = renderPublishTemplate({
+            exam: exam._id,
+            examTitle: exam.title,
+            publishedAt: exam.publishedAt || new Date()
+        });
+
+        // 6. Upsert in-app notifications concurrently
+        const notifyPromises = studentsToNotify.map(async (student) => {
+            return Notification.updateOne(
+                {
+                    exam: exam._id,
+                    recipient: student._id,
+                    type: NotificationType.PUBLISH
+                },
+                {
+                    $setOnInsert: {
+                        exam: exam._id,
+                        recipient: student._id,
+                        type: NotificationType.PUBLISH,
+                        title: rendered.title,
+                        message: rendered.message,
+                        read: false
+                    }
+                },
+                { upsert: true }
+            );
+        });
+
+        await Promise.allSettled(notifyPromises);
+
+        // 7. Dispatch stub email notifications concurrently via emailAdapter
+        const { emailAdapter } = await import('../lib/emailAdapter');
+        const emailPromises = studentsToNotify.map(async (student) => {
+            if (student.email) {
+                try {
+                    await emailAdapter.sendMail({
+                        to: student.email,
+                        subject: rendered.title,
+                        text: `${rendered.message}\nYou can view your evaluated script and feedback in the student portal.`
+                    });
+                } catch (emailErr) {
+                    console.error(`Failed to send publication email stub to student ${student._id}:`, emailErr);
+                }
+            }
+        });
+
+        await Promise.allSettled(emailPromises);
+
+        return { notifiedCount: studentsToNotify.length, skippedCount };
     }
 }
 
