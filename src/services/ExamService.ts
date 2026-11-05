@@ -230,24 +230,20 @@ class ExamService {
 
         // Validate status transition
         if (data.status !== undefined && data.status !== examBefore.status) {
-            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
-                throw new HttpError(
-                    'Direct status update to PUBLISHED is not allowed. Use POST /api/exams/[id]/publish to publish exam results.',
-                    400
-                );
-            }
-            if (examBefore.status === ExamStatus.PUBLISHED && (data.status === ExamStatus.REVIEW_PENDING || String(data.status).toUpperCase() === 'REVIEW_PENDING')) {
-                throw new HttpError(
-                    'Direct status update to REVIEW_PENDING from PUBLISHED is not allowed. Use POST /api/exams/[id]/unpublish to unpublish exam results.',
-                    400
-                );
-            }
             const { isValidTransition } = await import('../validations/examValidation');
             if (!isValidTransition(examBefore.status, data.status as ExamStatus)) {
+                if (examBefore.status === ExamStatus.PUBLISHED && (data.status === ExamStatus.REVIEW_PENDING || String(data.status).toUpperCase() === 'REVIEW_PENDING')) {
+                    throw new HttpError(
+                        'Invalid status transition: Direct status update to REVIEW_PENDING from PUBLISHED is not allowed. Use POST /api/exams/[id]/unpublish to unpublish exam results.',
+                        400
+                    );
+                }
                 throw new HttpError(`Invalid status transition from ${examBefore.status} to ${data.status}`, 400);
             }
 
-
+            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
+                return await this.publishExam(id, actingUserId, actingUserRole, context);
+            }
         }
 
         // Validate gradingDeadline rules (freeze rule on grading commencement and chronology against examDate)
