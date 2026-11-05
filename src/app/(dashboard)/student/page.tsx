@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { BookOpen, FileCheck, Award, HelpCircle, Eye, RefreshCw, GraduationCap } from 'lucide-react';
+import { BookOpen, FileCheck, Award, Eye, RefreshCw, GraduationCap } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -113,14 +113,6 @@ export default function StudentDashboardPage() {
       borderColor: 'border-slate-200',
       iconBg: 'bg-emerald-50 text-emerald-600',
     },
-    {
-      title: 'Regrade Requests',
-      value: '0',
-      icon: HelpCircle,
-      color: 'text-amber-600',
-      borderColor: 'border-slate-200',
-      iconBg: 'bg-amber-50 text-amber-600',
-    },
   ];
 
   const isResultsEnabled =
@@ -136,10 +128,14 @@ export default function StudentDashboardPage() {
           </Button>
         </Link>
       )}
-      <Button variant="secondary" size="md">
-        <RefreshCw className="h-4 w-4" />
-        <span>Request Regrade</span>
-      </Button>
+      {isResultsEnabled && (
+        <Link href="/student/regrade-requests">
+          <Button variant="secondary" size="md">
+            <RefreshCw className="h-4 w-4" />
+            <span>Track Regrade Requests</span>
+          </Button>
+        </Link>
+      )}
       <Button variant="outline" size="md" onClick={() => void refreshDashboard()} disabled={refreshing}>
         <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
         <span>Refresh Dashboard</span>
