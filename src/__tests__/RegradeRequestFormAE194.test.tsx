@@ -17,7 +17,7 @@ describe('AE-194: Student regrade request form', () => {
         vi.unstubAllGlobals();
     });
 
-    function renderOpenForm() {
+    function renderOpenForm(openQuestionNumbers?: number[]) {
         const now = Date.now();
         return render(
             <RegradeRequestForm
@@ -25,15 +25,18 @@ describe('AE-194: Student regrade request form', () => {
                 questionNumbers={[1, 2, 4]}
                 regradeWindowOpensAt={new Date(now - 60_000).toISOString()}
                 regradeWindowClosesAt={new Date(now + 60_000).toISOString()}
+                openQuestionNumbers={openQuestionNumbers}
             />
         );
     }
 
-    it('shows eligible questions and the current regrade window state', () => {
+    it('shows eligible questions and the current regrade window state with dates', () => {
         renderOpenForm();
 
-        expect(screen.getByRole('status').textContent).toContain('Regrade window is currently open.');
-        expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual([
+        const statusEl = screen.getByRole('status');
+        expect(statusEl.textContent).toContain('Regrade window is currently open.');
+        expect(statusEl.textContent).toContain('Open until');
+        expect(screen.getAllByRole('option').map(option => option.textContent?.trim())).toEqual([
             'Question 1',
             'Question 2',
             'Question 4'
@@ -41,7 +44,7 @@ describe('AE-194: Student regrade request form', () => {
         expect((screen.getByRole('button', { name: 'Submit regrade request' }) as HTMLButtonElement).disabled).toBe(false);
     });
 
-    it('submits the selected question and justification and shows success', async () => {
+    it('submits the selected question and justification and shows success with link to status page', async () => {
         fetchMock.mockResolvedValue({
             ok: true,
             status: 201,
@@ -58,6 +61,8 @@ describe('AE-194: Student regrade request form', () => {
         });
 
         expect(await screen.findByText('Your regrade request was submitted successfully.')).toBeTruthy();
+        const link = screen.getByRole('link', { name: 'Regrade Requests' });
+        expect(link.getAttribute('href')).toBe('/student/regrade-requests');
         expect(fetchMock).toHaveBeenCalledWith('/api/student/regrade-requests', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -69,7 +74,33 @@ describe('AE-194: Student regrade request form', () => {
         });
     });
 
-    it('disables submission outside the regrade window', () => {
+    it('rejects whitespace-only justification on the client without sending fetch', async () => {
+        renderOpenForm();
+
+        fireEvent.change(screen.getByLabelText('Justification'), {
+            target: { value: '            ' }
+        });
+        await act(async () => {
+            fireEvent.submit(screen.getByRole('form', { name: 'Regrade request' }));
+        });
+
+        expect(await screen.findByText('Please provide a justification with at least 10 non-whitespace characters.')).toBeTruthy();
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('shows already-open request as existing and disables it from being submitted again', () => {
+        renderOpenForm([2]);
+
+        const option2 = screen.getByRole('option', { name: /Question 2/ }) as HTMLOptionElement;
+        expect(option2.disabled).toBe(true);
+        expect(option2.textContent).toContain('Request already open');
+
+        fireEvent.change(screen.getByLabelText('Question'), { target: { value: '2' } });
+        expect((screen.getByRole('button', { name: 'Submit regrade request' }) as HTMLButtonElement).disabled).toBe(true);
+        expect(screen.getByText(/already pending review/)).toBeTruthy();
+    });
+
+    it('disables submission outside the regrade window and shows closed dates', () => {
         const past = new Date(Date.now() - 60_000).toISOString();
         render(
             <RegradeRequestForm
@@ -81,6 +112,7 @@ describe('AE-194: Student regrade request form', () => {
         );
 
         expect(screen.getByText('Regrade window is currently closed.')).toBeTruthy();
+        expect(screen.getByText(/Window closed on/)).toBeTruthy();
         expect((screen.getByRole('button', { name: 'Submit regrade request' }) as HTMLButtonElement).disabled).toBe(true);
         expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -112,7 +144,7 @@ describe('AE-194: Student regrade request form', () => {
         });
     });
 
-    it('shows the server error when the request is rejected', async () => {
+    it('shows the server error when the request is rejected and marks question as open on 409', async () => {
         fetchMock.mockResolvedValue({
             ok: false,
             status: 409,
@@ -128,5 +160,7 @@ describe('AE-194: Student regrade request form', () => {
         });
 
         expect((await screen.findByRole('alert')).textContent).toContain('An open regrade request already exists.');
+        const option1 = screen.getByRole('option', { name: /Question 1/ }) as HTMLOptionElement;
+        expect(option1.disabled).toBe(true);
     });
 });
