@@ -61,13 +61,7 @@ class ExamRepository {
             if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
                 return null;
             }
-            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
-            const profCourses = await Course.find({ professor: new mongoose.Types.ObjectId(actingUserId), isActive: true });
-            const profCourseIds = profCourses.map(c => c._id);
-            query.$or = [
-                { createdBy: new mongoose.Types.ObjectId(actingUserId) },
-                { course: { $in: profCourseIds } }
-            ];
+            query.createdBy = new mongoose.Types.ObjectId(actingUserId);
             return query;
         }
 

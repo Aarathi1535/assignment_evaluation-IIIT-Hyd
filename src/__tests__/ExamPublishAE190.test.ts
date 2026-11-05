@@ -28,7 +28,6 @@ vi.mock('next-auth', async (importOriginal) => {
 describe('AE-190: Professor Publish Action Per Exam', () => {
     let publishPOST: any;
     let prof: any;
-    let otherProf: any;
     let ta: any;
     let student: any;
     let course: any;
@@ -58,14 +57,6 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
         prof = await User.create({
             name: 'Prof Turing',
             email: 'turing@iiit.ac.in',
-            password: 'Password@123',
-            role: UserRole.PROFESSOR,
-            isActive: true,
-        });
-
-        otherProf = await User.create({
-            name: 'Prof Lovelace',
-            email: 'lovelace@iiit.ac.in',
             password: 'Password@123',
             role: UserRole.PROFESSOR,
             isActive: true,
@@ -270,7 +261,7 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
 
     it('5. Prevents publication when an OPEN flag exists (AE-164)', async () => {
         // Create an OPEN flag
-        const flag = await ScriptFlag.create({
+        const flag: any = await ScriptFlag.create({
             exam: exam._id,
             answerScript: script._id,
             raisedBy: ta._id,
@@ -324,5 +315,132 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
         });
         const resNotFound = await publishPOST(reqNotFound, { params: Promise.resolve({ id: nonExistentId }) });
         expect(resNotFound.status).toBe(404);
+    });
+
+    it('7. Enforces professor ownership: other professor receives 404, status unchanged, no audit row', async () => {
+        const otherProf = await User.create({
+            name: 'Prof Other',
+            email: 'otherprof@iiit.ac.in',
+            password: 'Password@123',
+            role: UserRole.PROFESSOR,
+            isActive: true,
+        });
+
+        mockSessionUser = { id: otherProf._id.toString(), role: UserRole.PROFESSOR };
+        const req = new NextRequest(`http://localhost:3000/api/exams/${exam._id}/publish`, {
+            method: 'POST',
+        });
+        const res = await publishPOST(req, { params: Promise.resolve({ id: exam._id.toString() }) });
+        expect(res.status).toBe(404);
+
+        // Exam status remains unchanged
+        const dbExam = await Exam.findById(exam._id);
+        expect(dbExam!.status).toBe(ExamStatus.REVIEW_PENDING);
+
+        // No audit row written for this attempt
+        const auditRows = await AuditLog.find({ entityId: exam._id, action: 'EXAM_PUBLISHED' });
+        expect(auditRows.length).toBe(0);
+    });
+
+    it('8. Rejects publication with 409 Conflict if exam is not in REVIEW_PENDING status', async () => {
+        mockSessionUser = { id: prof._id.toString(), role: UserRole.PROFESSOR };
+
+        const testStatuses = [ExamStatus.DRAFT, ExamStatus.SCHEDULED, ExamStatus.SCANNING, ExamStatus.EVALUATING];
+        for (const status of testStatuses) {
+            exam.status = status;
+            await exam.save();
+
+            const req = new NextRequest(`http://localhost:3000/api/exams/${exam._id}/publish`, {
+                method: 'POST',
+            });
+            const res = await publishPOST(req, { params: Promise.resolve({ id: exam._id.toString() }) });
+            expect(res.status).toBe(409);
+            const body = await res.json();
+            expect(body.message).toContain('Only exams in \'REVIEW_PENDING\' status can be published');
+
+            const dbExam = await Exam.findById(exam._id);
+            expect(dbExam!.status).toBe(status);
+        }
+    });
+
+    it('9. Prevents unpublish bypass and delegates PUT /api/exams/[id] status to publishExam', async () => {
+        const examPUT = (await import('../app/api/exams/[id]/route')).PUT;
+        mockSessionUser = { id: prof._id.toString(), role: UserRole.PROFESSOR };
+
+        // DRAFT -> PUBLISHED must fail invalid transition
+        const draftExam = await Exam.create({
+            title: 'Draft Exam',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date(),
+            totalMarks: 100,
+            numberOfQuestions: 5,
+            status: ExamStatus.DRAFT,
+            isActive: true,
+        });
+        const reqDraft = new NextRequest(`http://localhost:3000/api/exams/${draftExam._id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: ExamStatus.PUBLISHED }),
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const resDraft = await examPUT(reqDraft, { params: Promise.resolve({ id: draftExam._id.toString() }) });
+        expect(resDraft.status).toBe(400);
+        const bodyDraft = await resDraft.json();
+        expect(bodyDraft.message).toContain('Invalid status transition');
+
+        // REVIEW_PENDING -> PUBLISHED via PUT safely delegates to publishExam (sets publishedBy & audit)
+        const reqPending = new NextRequest(`http://localhost:3000/api/exams/${exam._id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: ExamStatus.PUBLISHED }),
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const resPending = await examPUT(reqPending, { params: Promise.resolve({ id: exam._id.toString() }) });
+        expect(resPending.status).toBe(200);
+
+        const publishedExam = await Exam.findById(exam._id);
+        expect(publishedExam!.status).toBe(ExamStatus.PUBLISHED);
+        expect(publishedExam!.publishedBy?.toString()).toBe(prof._id.toString());
+        expect(publishedExam!.publishedAt).toBeDefined();
+
+        const auditRows = await AuditLog.find({ entityId: exam._id, action: 'EXAM_PUBLISHED' });
+        expect(auditRows.length).toBe(1);
+
+        // PUBLISHED -> REVIEW_PENDING via PUT must be rejected pointing to unpublish route
+        const reqUnpublish = new NextRequest(`http://localhost:3000/api/exams/${exam._id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: ExamStatus.REVIEW_PENDING }),
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const resUnpublish = await examPUT(reqUnpublish, { params: Promise.resolve({ id: exam._id.toString() }) });
+        expect(resUnpublish.status).toBe(400);
+        const bodyUnpublish = await resUnpublish.json();
+        expect(bodyUnpublish.message).toContain('Direct status update to REVIEW_PENDING from PUBLISHED is not allowed');
+    });
+
+    it('10. Atomic publication: concurrent publish requests create only one EXAM_PUBLISHED audit row', async () => {
+        mockSessionUser = { id: prof._id.toString(), role: UserRole.PROFESSOR };
+
+        const makeReq = () => new NextRequest(`http://localhost:3000/api/exams/${exam._id}/publish`, {
+            method: 'POST',
+        });
+
+        // 3 concurrent requests
+        const results = await Promise.all([
+            publishPOST(makeReq(), { params: Promise.resolve({ id: exam._id.toString() }) }),
+            publishPOST(makeReq(), { params: Promise.resolve({ id: exam._id.toString() }) }),
+            publishPOST(makeReq(), { params: Promise.resolve({ id: exam._id.toString() }) }),
+        ]);
+
+        // All should succeed (one won atomic transition, other two were handled or idempotent)
+        for (const res of results) {
+            expect(res.status).toBe(200);
+        }
+
+        const dbExam = await Exam.findById(exam._id);
+        expect(dbExam!.status).toBe(ExamStatus.PUBLISHED);
+
+        // Exactly one EXAM_PUBLISHED audit log row
+        const auditRows = await AuditLog.find({ entityId: exam._id, action: 'EXAM_PUBLISHED' });
+        expect(auditRows.length).toBe(1);
     });
 });

@@ -19,6 +19,18 @@ export interface EnrollContext extends AuditContext {
     rollNumbers?: Record<string, string | null | undefined>;
 }
 
+function isTransactionCapable(): boolean {
+    const client = (mongoose.connection as unknown as { client?: { topology?: { description?: { type?: string } } } })?.client;
+    const topology = client?.topology;
+    const topologyType = (topology?.description?.type as string | undefined) ?? 'Unknown';
+    return [
+        'ReplicaSetWithPrimary',
+        'ReplicaSetNoPrimary',
+        'Sharded',
+        'LoadBalanced',
+    ].includes(topologyType);
+}
+
 class ExamService {
     async createExam(data: Partial<IExam>, context?: AuditContext): Promise<IExam> {
         if (data.course && context?.actingUserId) {
@@ -220,23 +232,17 @@ class ExamService {
         if (data.status !== undefined && data.status !== examBefore.status) {
             const { isValidTransition } = await import('../validations/examValidation');
             if (!isValidTransition(examBefore.status, data.status as ExamStatus)) {
-                throw new HttpError(`Invalid status transition from ${examBefore.status} to ${data.status}`, 400);
-            }
-
-            // AE-164: An OPEN flag must prevent publication of the affected exam results to students.
-            // RESOLVED and ESCALATED flags do not block publication.
-            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
-                const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
-                const openFlagCount = await ScriptFlag.countDocuments({
-                    exam: new mongoose.Types.ObjectId(id),
-                    status: 'OPEN'
-                });
-                if (openFlagCount > 0) {
+                if (examBefore.status === ExamStatus.PUBLISHED && (data.status === ExamStatus.REVIEW_PENDING || String(data.status).toUpperCase() === 'REVIEW_PENDING')) {
                     throw new HttpError(
-                        `Cannot publish exam: There are ${openFlagCount} open flag(s) that must be resolved or escalated first`,
+                        'Invalid status transition: Direct status update to REVIEW_PENDING from PUBLISHED is not allowed. Use POST /api/exams/[id]/unpublish to unpublish exam results.',
                         400
                     );
                 }
+                throw new HttpError(`Invalid status transition from ${examBefore.status} to ${data.status}`, 400);
+            }
+
+            if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
+                return await this.publishExam(id, actingUserId, actingUserRole, context);
             }
         }
 
@@ -690,6 +696,89 @@ class ExamService {
         });
     }
 
+    async getPublishPreview(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string
+    ): Promise<{
+        totalEnrolled: number;
+        readyToRelease: number;
+        notReady: number;
+        openFlags: number;
+        warnings: string[];
+    }> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const exam = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!exam) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        const StudentMapping = mongoose.models.StudentMapping || (await import('../models/StudentMapping')).default;
+        const AnswerScript = mongoose.models.AnswerScript || (await import('../models/AnswerScript')).default;
+        const Grade = mongoose.models.Grade || (await import('../models/Grade')).default;
+        const ScriptFlagModule = await import('../models/ScriptFlag');
+        const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
+
+        const totalEnrolled = await StudentMapping.countDocuments({ exam: exam._id });
+        const openFlags = await ScriptFlag.countDocuments({
+            exam: exam._id,
+            status: ScriptFlagModule.FlagStatus.OPEN
+        });
+
+        const scripts = await AnswerScript.find({ exam: exam._id, isActive: true });
+        const scriptIds = scripts.map((s: { _id: unknown }) => s._id);
+
+        const scriptsWithOpenFlags = await ScriptFlag.distinct('answerScript', {
+            exam: exam._id,
+            status: ScriptFlagModule.FlagStatus.OPEN
+        });
+        const openFlagScriptIdSet = new Set(scriptsWithOpenFlags.map((sid: unknown) => String(sid)));
+
+        const finalGrades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        });
+        const finalGradeScriptIdSet = new Set(finalGrades.map((g: { answerScript: unknown }) => String(g.answerScript)));
+
+        let readyToRelease = 0;
+        let notReady = 0;
+
+        for (const script of scripts) {
+            const sId = String(script._id);
+            const hasFinalGrade = finalGradeScriptIdSet.has(sId);
+            const hasOpenFlag = openFlagScriptIdSet.has(sId);
+
+            if (hasFinalGrade && !hasOpenFlag) {
+                readyToRelease++;
+            } else {
+                notReady++;
+            }
+        }
+
+        if (totalEnrolled > scripts.length) {
+            notReady += (totalEnrolled - scripts.length);
+        }
+
+        const warnings: string[] = [];
+        if (openFlags > 0) {
+            warnings.push(`${openFlags} open flag(s) must be resolved or escalated before publication.`);
+        }
+        if (notReady > 0) {
+            warnings.push(`${notReady} student(s) do not have final grades and will receive NOT_AVAILABLE status.`);
+        }
+
+        return {
+            totalEnrolled,
+            readyToRelease,
+            notReady,
+            openFlags,
+            warnings
+        };
+    }
+
     async publishExam(
         id: string,
         actingUserId: string,
@@ -709,20 +798,30 @@ class ExamService {
             throw new HttpError('Cannot publish inactive exam', 400);
         }
 
-        if (examBefore.status === ExamStatus.ARCHIVED) {
-            throw new HttpError('Cannot publish archived exam', 400);
-        }
-
-        // Idempotent: If already published, return without duplicate side effects
+        // Idempotent: If already published, re-run notification dispatch (idempotent step) and return
         if (examBefore.status === ExamStatus.PUBLISHED) {
+            try {
+                await this.notifyStudentsOnExamPublish(examBefore);
+            } catch (notifyErr) {
+                console.error('Failed to dispatch student publication notifications on retry:', notifyErr);
+            }
             return examBefore;
         }
 
+        // Status check: only REVIEW_PENDING exams can be published
+        if (examBefore.status !== ExamStatus.REVIEW_PENDING) {
+            throw new HttpError(
+                `Cannot publish exam in status '${examBefore.status}'. Only exams in 'REVIEW_PENDING' status can be published.`,
+                409
+            );
+        }
+
         // AE-164: Check for OPEN flags that block publication
-        const ScriptFlag = mongoose.models.ScriptFlag || (await import('../models/ScriptFlag')).default;
+        const ScriptFlagModule = await import('../models/ScriptFlag');
+        const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
         const openFlagCount = await ScriptFlag.countDocuments({
             exam: new mongoose.Types.ObjectId(id),
-            status: 'OPEN'
+            status: ScriptFlagModule.FlagStatus.OPEN
         });
         if (openFlagCount > 0) {
             throw new HttpError(
@@ -734,38 +833,376 @@ class ExamService {
         const publishedAt = new Date();
         const publishedBy = new mongoose.Types.ObjectId(actingUserId);
 
-        const updatedExam = await Exam.findByIdAndUpdate(
-            id,
-            {
-                $set: {
-                    status: ExamStatus.PUBLISHED,
+        const transactionCapable = isTransactionCapable();
+        const session = transactionCapable ? await mongoose.startSession() : null;
+        if (session) {
+            session.startTransaction();
+        }
+
+        try {
+            // Atomic update: only transitions if status is currently REVIEW_PENDING
+            const updatedExam = await Exam.findOneAndUpdate(
+                {
+                    _id: new mongoose.Types.ObjectId(id),
+                    isActive: true,
+                    status: ExamStatus.REVIEW_PENDING
+                },
+                {
+                    $set: {
+                        status: ExamStatus.PUBLISHED,
+                        publishedBy,
+                        publishedAt,
+                        unpublishedBy: null,
+                        unpublishedAt: null
+                    }
+                },
+                { returnDocument: 'after', session: session || undefined }
+            );
+
+            if (!updatedExam) {
+                const current = await Exam.findById(id);
+                if (current && current.status === ExamStatus.PUBLISHED) {
+                    if (session) await session.abortTransaction();
+                    try {
+                        await this.notifyStudentsOnExamPublish(current);
+                    } catch (notifyErr) {
+                        console.error('Failed to dispatch student publication notifications on retry:', notifyErr);
+                    }
+                    return current;
+                }
+                throw new HttpError(
+                    `Cannot publish exam in status '${current?.status || 'UNKNOWN'}'. Only exams in 'REVIEW_PENDING' status can be published.`,
+                    409
+                );
+            }
+
+            const auditSuccess = await writeAuditLog({
+                user: new mongoose.Types.ObjectId(actingUserId),
+                action: 'EXAM_PUBLISHED',
+                outcome: 'SUCCESS',
+                entityId: updatedExam._id as mongoose.Types.ObjectId,
+                entityType: 'Exam',
+                details: {
+                    title: updatedExam.title,
+                    course: updatedExam.course,
                     publishedBy,
                     publishedAt
-                }
-            },
-            { returnDocument: 'after' }
-        );
+                },
+                ipAddress: context?.ipAddress,
+                session: session || undefined
+            });
 
-        if (!updatedExam) {
+            if (!auditSuccess) {
+                throw new HttpError('Failed to record audit log for exam publication', 500);
+            }
+
+            if (session) {
+                await session.commitTransaction();
+            }
+
+            // AE-192: Dispatch student publication notifications non-blockingly
+            try {
+                await this.notifyStudentsOnExamPublish(updatedExam);
+            } catch (notifyErr) {
+                console.error('Failed to dispatch student publication notifications:', notifyErr);
+                // Publication status must not be affected by notification failure
+            }
+
+            return updatedExam;
+        } catch (error) {
+            if (session) {
+                try {
+                    await session.abortTransaction();
+                } catch {
+                    // Ignore abort error
+                }
+            } else {
+                // Fail-closed compensation if standalone
+                await Exam.findByIdAndUpdate(id, {
+                    $set: {
+                        status: ExamStatus.REVIEW_PENDING,
+                        publishedBy: null,
+                        publishedAt: null
+                    }
+                });
+            }
+            throw error;
+        } finally {
+            if (session) {
+                session.endSession();
+            }
+        }
+    }
+    /**
+     * Dispatches publication notifications to all eligible students (AE-192).
+     *
+     * Hardened according to mentor review:
+     * 1. Release rule: ONLY students whose script has a finalized grade AND no OPEN flags are notified.
+     *    Students with no script, an unfinalized grade, or an open flag receive NOT_AVAILABLE results
+     *    and must NOT be notified.
+     * 2. Checks feature flag isStudentResultsEnabled(): if disabled, skips notifying immediately.
+     * 3. Prevents duplicate notifications on retry via partial unique index on { exam, recipient, type }
+     *    and atomic upsert ($setOnInsert).
+     * 4. Dispatches stub emails concurrently via Promise.allSettled and logs studentId (not email).
+     * 5. Non-blocking: failures must never roll back publication status.
+     */
+    async notifyStudentsOnExamPublish(exam: IExam): Promise<{ notifiedCount: number; skippedCount: number }> {
+        // 1. Check feature flag
+        const { isStudentResultsEnabled } = await import('../config/env');
+        if (!isStudentResultsEnabled()) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        // 2. Identify active scripts for this exam
+        const AnswerScript = mongoose.models.AnswerScript || (await import('../models/AnswerScript')).default;
+        const Grade = mongoose.models.Grade || (await import('../models/Grade')).default;
+        const ScriptFlagModule = await import('../models/ScriptFlag');
+        const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
+
+        const scripts = await AnswerScript.find({ exam: exam._id, isActive: true });
+        if (scripts.length === 0) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        const scriptIds = scripts.map((s: { _id: unknown }) => s._id);
+
+        // Find scripts that have open flags
+        const scriptsWithOpenFlags = await ScriptFlag.distinct('answerScript', {
+            answerScript: { $in: scriptIds },
+            status: ScriptFlagModule.FlagStatus.OPEN
+        });
+        const openFlagScriptIdSet = new Set(scriptsWithOpenFlags.map((sid: unknown) => String(sid)));
+
+        // Find scripts that have finalized grades
+        const finalGrades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        });
+        const finalGradeScriptIdSet = new Set(finalGrades.map((g: { answerScript: unknown }) => String(g.answerScript)));
+
+        // Only students whose script is final and has no open flags
+        const candidateStudentIdSet = new Set<string>();
+        for (const script of scripts) {
+            const sId = String(script._id);
+            if (finalGradeScriptIdSet.has(sId) && !openFlagScriptIdSet.has(sId)) {
+                if (script.student) {
+                    candidateStudentIdSet.add(script.student.toString());
+                }
+            }
+        }
+
+        if (candidateStudentIdSet.size === 0) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        // 3. Filter only eligible active student users
+        const candidateObjectIds = Array.from(candidateStudentIdSet).map(id => new mongoose.Types.ObjectId(id));
+        const eligibleStudents = await User.find({
+            _id: { $in: candidateObjectIds },
+            role: UserRole.STUDENT,
+            isActive: true
+        });
+
+        if (eligibleStudents.length === 0) {
+            return { notifiedCount: 0, skippedCount: 0 };
+        }
+
+        // 4. Find already notified students to report skipped count
+        const Notification = (await import('../models/Notification')).default;
+        const { NotificationType } = await import('../models/Notification');
+        const existingNotifications = await Notification.find({
+            exam: exam._id,
+            type: NotificationType.PUBLISH
+        });
+        const alreadyNotifiedSet = new Set(existingNotifications.map(n => n.recipient.toString()));
+
+        const studentsToNotify = eligibleStudents.filter(s => !alreadyNotifiedSet.has(s._id.toString()));
+        const skippedCount = eligibleStudents.length - studentsToNotify.length;
+
+        if (studentsToNotify.length === 0) {
+            return { notifiedCount: 0, skippedCount };
+        }
+
+        // 5. Render notification template
+        const { renderPublishTemplate } = await import('../templates/notificationTemplates');
+        const rendered = renderPublishTemplate({
+            exam: exam._id,
+            examTitle: exam.title,
+            publishedAt: exam.publishedAt || new Date()
+        });
+
+        // 6. Upsert in-app notifications concurrently
+        const notifyPromises = studentsToNotify.map(async (student) => {
+            return Notification.updateOne(
+                {
+                    exam: exam._id,
+                    recipient: student._id,
+                    type: NotificationType.PUBLISH
+                },
+                {
+                    $setOnInsert: {
+                        exam: exam._id,
+                        recipient: student._id,
+                        type: NotificationType.PUBLISH,
+                        title: rendered.title,
+                        message: rendered.message,
+                        read: false
+                    }
+                },
+                { upsert: true }
+            );
+        });
+
+        await Promise.allSettled(notifyPromises);
+
+        // 7. Dispatch stub email notifications concurrently via emailAdapter
+        const { emailAdapter } = await import('../lib/emailAdapter');
+        const emailPromises = studentsToNotify.map(async (student) => {
+            if (student.email) {
+                try {
+                    await emailAdapter.sendMail({
+                        to: student.email,
+                        subject: rendered.title,
+                        text: `${rendered.message}\nYou can view your evaluated script and feedback in the student portal.`
+                    });
+                } catch (emailErr) {
+                    console.error(`Failed to send publication email stub to student ${student._id}:`, emailErr);
+                }
+            }
+        });
+
+        await Promise.allSettled(emailPromises);
+
+        return { notifiedCount: studentsToNotify.length, skippedCount };
+    }
+    /**
+     * Unpublishes a published exam, reverting status to REVIEW_PENDING with full audit trail (AE-193).
+     *
+     * State and access implications:
+     * - Status reverts from PUBLISHED to REVIEW_PENDING.
+     * - Students immediately lose access to all result views, downloads, annotations, and API endpoints (returning 404).
+     * - Open regrade requests remain open in the database but are hidden/inaccessible to students while unpublished.
+     * - Note on local exports: PDFs previously downloaded by students cannot be recalled from their local drives;
+     *   unpublishing immediately prevents any further downloads, images, or export requests.
+     * - Recorded actor and timestamp (unpublishedBy, unpublishedAt) are audited with fail-closed guarantees.
+     * - On non-PUBLISHED statuses: returns 409 Conflict (or idempotent return if already REVIEW_PENDING).
+     */
+    async unpublishExam(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string,
+        context?: { ipAddress?: string }
+    ): Promise<IExam> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const examBefore = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!examBefore) {
             throw new HttpError('Exam not found', 404);
         }
 
-        await writeAuditLog({
-            user: new mongoose.Types.ObjectId(actingUserId),
-            action: 'EXAM_PUBLISHED',
-            outcome: 'SUCCESS',
-            entityId: updatedExam._id as mongoose.Types.ObjectId,
-            entityType: 'Exam',
-            details: {
-                title: updatedExam.title,
-                course: updatedExam.course,
-                publishedBy,
-                publishedAt
-            },
-            ipAddress: context?.ipAddress
-        });
+        if (!examBefore.isActive) {
+            throw new HttpError('Cannot unpublish inactive exam', 400);
+        }
 
-        return updatedExam;
+        // Idempotent: If already in REVIEW_PENDING, return without duplicate side effects
+        if (examBefore.status === ExamStatus.REVIEW_PENDING) {
+            return examBefore;
+        }
+
+        // Status check: only PUBLISHED exams can be unpublished
+        if (examBefore.status !== ExamStatus.PUBLISHED) {
+            throw new HttpError(
+                `Cannot unpublish exam in status '${examBefore.status}'. Only exams in 'PUBLISHED' status can be unpublished.`,
+                409
+            );
+        }
+
+        const unpublishedAt = new Date();
+        const unpublishedBy = new mongoose.Types.ObjectId(actingUserId);
+
+        const transactionCapable = isTransactionCapable();
+        const session = transactionCapable ? await mongoose.startSession() : null;
+        if (session) {
+            session.startTransaction();
+        }
+
+        try {
+            const updatedExam = await Exam.findOneAndUpdate(
+                {
+                    _id: new mongoose.Types.ObjectId(id),
+                    isActive: true,
+                    status: ExamStatus.PUBLISHED
+                },
+                {
+                    $set: {
+                        status: ExamStatus.REVIEW_PENDING,
+                        unpublishedBy,
+                        unpublishedAt
+                    }
+                },
+                { returnDocument: 'after', session: session || undefined }
+            );
+
+            if (!updatedExam) {
+                const current = await Exam.findById(id);
+                if (current && current.status === ExamStatus.REVIEW_PENDING) {
+                    if (session) await session.abortTransaction();
+                    return current;
+                }
+                throw new HttpError(
+                    `Cannot unpublish exam in status '${current?.status || 'UNKNOWN'}'. Only exams in 'PUBLISHED' status can be unpublished.`,
+                    409
+                );
+            }
+
+            const auditSuccess = await writeAuditLog({
+                user: unpublishedBy,
+                action: 'EXAM_UNPUBLISHED',
+                outcome: 'SUCCESS',
+                entityId: updatedExam._id as mongoose.Types.ObjectId,
+                entityType: 'Exam',
+                details: {
+                    title: updatedExam.title,
+                    course: updatedExam.course,
+                    publishedBy: updatedExam.publishedBy,
+                    publishedAt: updatedExam.publishedAt,
+                    unpublishedBy,
+                    unpublishedAt
+                },
+                ipAddress: context?.ipAddress,
+                session: session || undefined
+            });
+
+            if (!auditSuccess) {
+                throw new HttpError('Failed to record audit log for exam unpublication', 500);
+            }
+
+            if (session) {
+                await session.commitTransaction();
+            }
+
+            return updatedExam;
+        } catch (error) {
+            if (session) {
+                try {
+                    await session.abortTransaction();
+                } catch {
+                    // Ignore abort error
+                }
+            } else {
+                // Fail-closed compensation if standalone
+                await Exam.findByIdAndUpdate(id, {
+                    $set: {
+                        status: ExamStatus.PUBLISHED,
+                        unpublishedBy: null,
+                        unpublishedAt: null
+                    }
+                });
+            }
+            throw error;
+        }
     }
 }
 
