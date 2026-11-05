@@ -851,7 +851,9 @@ class ExamService {
                     $set: {
                         status: ExamStatus.PUBLISHED,
                         publishedBy,
-                        publishedAt
+                        publishedAt,
+                        unpublishedBy: null,
+                        unpublishedAt: null
                     }
                 },
                 { returnDocument: 'after', session: session || undefined }
@@ -1072,6 +1074,135 @@ class ExamService {
         await Promise.allSettled(emailPromises);
 
         return { notifiedCount: studentsToNotify.length, skippedCount };
+    }
+    /**
+     * Unpublishes a published exam, reverting status to REVIEW_PENDING with full audit trail (AE-193).
+     *
+     * State and access implications:
+     * - Status reverts from PUBLISHED to REVIEW_PENDING.
+     * - Students immediately lose access to all result views, downloads, annotations, and API endpoints (returning 404).
+     * - Open regrade requests remain open in the database but are hidden/inaccessible to students while unpublished.
+     * - Note on local exports: PDFs previously downloaded by students cannot be recalled from their local drives;
+     *   unpublishing immediately prevents any further downloads, images, or export requests.
+     * - Recorded actor and timestamp (unpublishedBy, unpublishedAt) are audited with fail-closed guarantees.
+     * - On non-PUBLISHED statuses: returns 409 Conflict (or idempotent return if already REVIEW_PENDING).
+     */
+    async unpublishExam(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string,
+        context?: { ipAddress?: string }
+    ): Promise<IExam> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const examBefore = await ExamRepository.getExamById(id, actingUserId, actingUserRole);
+        if (!examBefore) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        if (!examBefore.isActive) {
+            throw new HttpError('Cannot unpublish inactive exam', 400);
+        }
+
+        // Idempotent: If already in REVIEW_PENDING, return without duplicate side effects
+        if (examBefore.status === ExamStatus.REVIEW_PENDING) {
+            return examBefore;
+        }
+
+        // Status check: only PUBLISHED exams can be unpublished
+        if (examBefore.status !== ExamStatus.PUBLISHED) {
+            throw new HttpError(
+                `Cannot unpublish exam in status '${examBefore.status}'. Only exams in 'PUBLISHED' status can be unpublished.`,
+                409
+            );
+        }
+
+        const unpublishedAt = new Date();
+        const unpublishedBy = new mongoose.Types.ObjectId(actingUserId);
+
+        const transactionCapable = isTransactionCapable();
+        const session = transactionCapable ? await mongoose.startSession() : null;
+        if (session) {
+            session.startTransaction();
+        }
+
+        try {
+            const updatedExam = await Exam.findOneAndUpdate(
+                {
+                    _id: new mongoose.Types.ObjectId(id),
+                    isActive: true,
+                    status: ExamStatus.PUBLISHED
+                },
+                {
+                    $set: {
+                        status: ExamStatus.REVIEW_PENDING,
+                        unpublishedBy,
+                        unpublishedAt
+                    }
+                },
+                { returnDocument: 'after', session: session || undefined }
+            );
+
+            if (!updatedExam) {
+                const current = await Exam.findById(id);
+                if (current && current.status === ExamStatus.REVIEW_PENDING) {
+                    if (session) await session.abortTransaction();
+                    return current;
+                }
+                throw new HttpError(
+                    `Cannot unpublish exam in status '${current?.status || 'UNKNOWN'}'. Only exams in 'PUBLISHED' status can be unpublished.`,
+                    409
+                );
+            }
+
+            const auditSuccess = await writeAuditLog({
+                user: unpublishedBy,
+                action: 'EXAM_UNPUBLISHED',
+                outcome: 'SUCCESS',
+                entityId: updatedExam._id as mongoose.Types.ObjectId,
+                entityType: 'Exam',
+                details: {
+                    title: updatedExam.title,
+                    course: updatedExam.course,
+                    publishedBy: updatedExam.publishedBy,
+                    publishedAt: updatedExam.publishedAt,
+                    unpublishedBy,
+                    unpublishedAt
+                },
+                ipAddress: context?.ipAddress,
+                session: session || undefined
+            });
+
+            if (!auditSuccess) {
+                throw new HttpError('Failed to record audit log for exam unpublication', 500);
+            }
+
+            if (session) {
+                await session.commitTransaction();
+            }
+
+            return updatedExam;
+        } catch (error) {
+            if (session) {
+                try {
+                    await session.abortTransaction();
+                } catch {
+                    // Ignore abort error
+                }
+            } else {
+                // Fail-closed compensation if standalone
+                await Exam.findByIdAndUpdate(id, {
+                    $set: {
+                        status: ExamStatus.PUBLISHED,
+                        unpublishedBy: null,
+                        unpublishedAt: null
+                    }
+                });
+            }
+            throw error;
+        }
     }
 }
 

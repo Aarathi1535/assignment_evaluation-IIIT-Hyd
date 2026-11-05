@@ -78,6 +78,8 @@ export interface IExam extends Document {
     studentDownloadPolicy?: StudentDownloadPolicy;
     publishedBy?: mongoose.Types.ObjectId | null;
     publishedAt?: Date | null;
+    unpublishedBy?: mongoose.Types.ObjectId | null;
+    unpublishedAt?: Date | null;
     published_by?: mongoose.Types.ObjectId | null;
     published_at?: Date | null;
     createdAt: Date;
@@ -228,6 +230,15 @@ const ExamSchema = new Schema<IExam>(
             default: null
         },
         publishedAt: {
+            type: Date,
+            default: null
+        },
+        unpublishedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            default: null
+        },
+        unpublishedAt: {
             type: Date,
             default: null
         }
