@@ -9,6 +9,7 @@ import Grade, { IGrade } from '../models/Grade';
 import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
 import StudentMapping from '../models/StudentMapping';
 import Rubric, { IRubric } from '../models/Rubric';
+import RegradeRequest from '../models/RegradeRequest';
 
 export type ResultReleaseStatus = 'RELEASED' | 'NOT_AVAILABLE';
 
@@ -53,9 +54,13 @@ export interface ItemizedResultDto {
     exam: {
         title: string;
         totalMarks: number;
+        regradeWindowOpensAt?: Date | null;
+        regradeWindowClosesAt?: Date | null;
     };
     mode: 'QUESTION' | 'WHOLE';
     questions: QuestionResultDto[];
+    eligibleQuestionNumbers: number[];
+    openQuestionNumbers?: number[];
     total: number;
     maxTotal: number;
 }
@@ -492,6 +497,7 @@ export class StudentResultService {
         const mode: 'QUESTION' | 'WHOLE' = isWholeScript ? 'WHOLE' : 'QUESTION';
 
         const rubricCache = new Map<string, IRubric>();
+        let eligibleQuestionNumbers: number[] = [];
         const getRubric = async (rubricId: mongoose.Types.ObjectId | string): Promise<IRubric> => {
             const idStr = rubricId.toString();
             const cached = rubricCache.get(idStr);
@@ -518,6 +524,9 @@ export class StudentResultService {
                     throw new HttpError('Not found', 404);
                 }
                 const rubric = await getRubric(grade.rubric);
+                if (eligibleQuestionNumbers.length === 0) {
+                    eligibleQuestionNumbers = rubric.questions.map(question => question.questionNumber);
+                }
                 const rubricQuestion = rubric.questions?.find(
                     q => q.questionNumber === grade.question
                 );
@@ -562,6 +571,7 @@ export class StudentResultService {
                 throw new HttpError('Not found', 404);
             }
             const rubric = await getRubric(grade.rubric);
+            eligibleQuestionNumbers = rubric.questions.map(question => question.questionNumber);
             const allRubricCriteria = (rubric.questions || []).flatMap(q => q.criteria || []);
             const totalRubricMarks = (rubric.questions || []).reduce(
                 (sum, q) => sum + (Number(q.maxMarks) || 0),
@@ -604,13 +614,29 @@ export class StudentResultService {
         ) / 100;
         const maxTotal = questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
 
+        let openQuestionNumbers: number[] = [];
+        try {
+            const openRequests = await RegradeRequest.find({
+                student: script.student,
+                exam: exam._id,
+                isOpen: true
+            }).select('questionNumber').lean();
+            openQuestionNumbers = openRequests.map(r => r.questionNumber);
+        } catch {
+            openQuestionNumbers = [];
+        }
+
         return {
             exam: {
                 title: exam.title,
                 totalMarks: exam.totalMarks,
+                regradeWindowOpensAt: exam.regradeWindowOpensAt,
+                regradeWindowClosesAt: exam.regradeWindowClosesAt,
             },
             mode,
             questions,
+            eligibleQuestionNumbers,
+            openQuestionNumbers,
             total,
             maxTotal,
         };
@@ -619,4 +645,3 @@ export class StudentResultService {
 
 const studentResultService = new StudentResultService();
 export default studentResultService;
-
