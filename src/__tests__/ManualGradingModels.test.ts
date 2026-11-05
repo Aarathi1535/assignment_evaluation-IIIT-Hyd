@@ -220,13 +220,15 @@ describe('Manual Grading Domain Models Tests', () => {
 
             const request = new RegradeRequest({
                 answerScript: answerScriptId,
+                exam: new mongoose.Types.ObjectId(),
+                questionNumber: 2,
                 student: studentId,
                 reason: 'I believe Question 2 was graded too harshly.'
             });
 
             await expect(request.validate()).resolves.toBeUndefined();
             const saved = await request.save();
-            expect(saved.status).toBe('PENDING');
+            expect(saved.status).toBe('OPEN');
 
             // Cleanup
             await RegradeRequest.findByIdAndDelete(saved._id);
