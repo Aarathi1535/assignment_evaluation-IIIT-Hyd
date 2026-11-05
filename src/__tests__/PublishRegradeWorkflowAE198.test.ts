@@ -1,3 +1,4 @@
+// Route-level integration test suite exercising real Next.js API route handlers and MongoDB models
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import Course from '../models/Course';
@@ -8,6 +9,7 @@ import Grade from '../models/Grade';
 import Allocation, { AllocationStatus } from '../models/Allocation';
 import Rubric from '../models/Rubric';
 import RegradeRequest from '../models/RegradeRequest';
+import Notification, { NotificationType } from '../models/Notification';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
 
@@ -21,8 +23,9 @@ vi.mock('next-auth', async (importOriginal) => {
     };
 });
 
-describe('AE-198: published results and student regrade workflow', () => {
+describe('AE-198: published results and student regrade workflow (route-level)', () => {
     let publishExam: typeof import('../app/api/exams/[id]/publish/route').POST;
+    let unpublishExam: typeof import('../app/api/exams/[id]/unpublish/route').POST;
     let getResults: typeof import('../app/api/student/results/route').GET;
     let getResultDetails: typeof import('../app/api/student/results/[scriptId]/route').GET;
     let getRegradeRequests: typeof import('../app/api/student/regrade-requests/route').GET;
@@ -33,19 +36,23 @@ describe('AE-198: published results and student regrade workflow', () => {
     let otherStudent!: IUser;
     let exam!: InstanceType<typeof Exam>;
     let script!: InstanceType<typeof AnswerScript>;
+    const originalResultsEnabled = process.env.STUDENT_RESULTS_ENABLED;
 
     beforeAll(async () => {
         publishExam = (await import('../app/api/exams/[id]/publish/route')).POST;
+        unpublishExam = (await import('../app/api/exams/[id]/unpublish/route')).POST;
         getResults = (await import('../app/api/student/results/route')).GET;
         getResultDetails = (await import('../app/api/student/results/[scriptId]/route')).GET;
         const regradeRoutes = await import('../app/api/student/regrade-requests/route');
         getRegradeRequests = regradeRoutes.GET;
         postRegradeRequest = regradeRoutes.POST;
         await RegradeRequest.init();
+        await Notification.init();
     });
 
     afterEach(() => {
         mockSessionUser = null;
+        process.env.STUDENT_RESULTS_ENABLED = originalResultsEnabled;
     });
 
     it('publishes results, permits the owner to request and track a regrade, and denies another student', async () => {
@@ -154,6 +161,15 @@ describe('AE-198: published results and student regrade workflow', () => {
         expect(publishResponse.status).toBe(200);
         expect((await publishResponse.json()).data.status).toBe(ExamStatus.PUBLISHED);
 
+        // Mentor nit: Assert publication notification was delivered to the eligible student
+        const publishedNotification = await Notification.findOne({
+            recipient: student._id,
+            type: NotificationType.PUBLISH,
+            exam: exam._id
+        });
+        expect(publishedNotification).toBeTruthy();
+        expect(publishedNotification?.title).toContain('Results Published');
+
         mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
         const releasedResults = await getResults();
         const releasedBody = await releasedResults.json();
@@ -170,6 +186,30 @@ describe('AE-198: published results and student regrade workflow', () => {
             { params: Promise.resolve({ scriptId: script._id.toString() }) }
         );
         expect(resultDetails.status).toBe(200);
+
+        // Mentor nit: Step for closed window
+        exam.regradeWindowOpensAt = new Date(Date.now() - 120_000);
+        exam.regradeWindowClosesAt = new Date(Date.now() - 60_000);
+        await exam.save();
+
+        const closedWindowResponse = await postRegradeRequest(
+            new NextRequest('http://localhost:3000/api/student/regrade-requests', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    scriptId: script._id.toString(),
+                    questionNumber: 1,
+                    reason: 'Submission when regrade window is closed.'
+                })
+            })
+        );
+        expect(closedWindowResponse.status).toBe(400);
+        const closedWindowBody = await closedWindowResponse.json();
+        expect(closedWindowBody.message).toContain('Regrade window is closed');
+
+        // Reopen regrade window
+        exam.regradeWindowClosesAt = new Date(Date.now() + 60 * 60_000);
+        await exam.save();
 
         const requestResponse = await postRegradeRequest(
             new NextRequest('http://localhost:3000/api/student/regrade-requests', {
@@ -189,6 +229,22 @@ describe('AE-198: published results and student regrade workflow', () => {
             questionNumber: 1,
             status: 'open'
         });
+
+        // Mentor nit: Step for duplicate regrade request
+        const duplicateRequestResponse = await postRegradeRequest(
+            new NextRequest('http://localhost:3000/api/student/regrade-requests', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    scriptId: script._id.toString(),
+                    questionNumber: 1,
+                    reason: 'Duplicate request for question 1 while first is open.'
+                })
+            })
+        );
+        expect(duplicateRequestResponse.status).toBe(409);
+        const duplicateBody = await duplicateRequestResponse.json();
+        expect(duplicateBody.message).toContain('already exists');
 
         const ownRequests = await getRegradeRequests();
         expect((await ownRequests.json()).data).toMatchObject([
@@ -226,5 +282,27 @@ describe('AE-198: published results and student regrade workflow', () => {
         );
         expect(deniedRequest.status).toBe(404);
         expect(await RegradeRequest.countDocuments()).toBe(1);
+
+        // Mentor nit: Step for unpublish -> denied
+        mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
+        const unpublishResponse = await unpublishExam(
+            new NextRequest(`http://localhost:3000/api/exams/${exam._id}/unpublish`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ reason: 'Audit unpublish for correction' })
+            }),
+            { params: Promise.resolve({ id: exam._id.toString() }) }
+        );
+        expect(unpublishResponse.status).toBe(200);
+
+        mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
+        const resultsAfterUnpublish = await getResults();
+        expect((await resultsAfterUnpublish.json()).data).toEqual([]);
+
+        const deniedDetailsAfterUnpublish = await getResultDetails(
+            new NextRequest(`http://localhost:3000/api/student/results/${script._id}`),
+            { params: Promise.resolve({ scriptId: script._id.toString() }) }
+        );
+        expect(deniedDetailsAfterUnpublish.status).toBe(404);
     });
 });
