@@ -203,7 +203,7 @@ describe('AE-198: published results and student regrade workflow (route-level)',
                 })
             })
         );
-        expect(closedWindowResponse.status).toBe(400);
+        expect(closedWindowResponse.status).toBe(403);
         const closedWindowBody = await closedWindowResponse.json();
         expect(closedWindowBody.message).toContain('Regrade window is closed');
 
