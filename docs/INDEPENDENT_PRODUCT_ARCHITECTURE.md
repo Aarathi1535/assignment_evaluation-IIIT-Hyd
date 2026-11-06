@@ -82,3 +82,4 @@ docker-compose -f docker-compose.products.yml up -d
 | **Assignment Evaluation** | 3000 | `mongo-assignment:27017` | `deploy/assignment/.env.example` |
 | **Classroom Activity** | 3001 | `mongo-classroom:27017` | `deploy/classroom/.env.example` |
 | **Personalised Learning** | 3002 | `mongo-personalized:27017` | `deploy/personalized/.env.example` |
+

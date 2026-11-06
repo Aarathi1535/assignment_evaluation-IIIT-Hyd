@@ -57,3 +57,4 @@ const ClassroomUser: Model<IClassroomUser> =
   mongoose.model<IClassroomUser>('ClassroomUser', ClassroomUserSchema);
 
 export default ClassroomUser;
+

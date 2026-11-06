@@ -10,3 +10,4 @@ export async function POST() {
   response.cookies.delete('classroom_token');
   return response;
 }
+

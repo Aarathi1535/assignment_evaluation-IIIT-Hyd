@@ -5,3 +5,4 @@ import ProfessorPersonalizedPage from '../../(dashboard)/professor/personalized/
 export default function PersonalizedProfessorRoute() {
   return <ProfessorPersonalizedPage />;
 }
+

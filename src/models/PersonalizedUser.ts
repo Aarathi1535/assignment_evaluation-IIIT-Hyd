@@ -63,3 +63,4 @@ const PersonalizedUser: Model<IPersonalizedUser> =
   mongoose.model<IPersonalizedUser>('PersonalizedUser', PersonalizedUserSchema);
 
 export default PersonalizedUser;
+
