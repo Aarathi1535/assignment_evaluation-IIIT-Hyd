@@ -52,9 +52,23 @@ export async function PATCH(
             return NextResponse.json({ success: false, message: 'Resolved requests cannot be assigned', data: null }, { status: 409 });
         }
 
-        const exam = auth.user.role === UserRole.ADMIN
-            ? await Exam.findById(regrade.exam).select('_id createdBy course')
-            : await Exam.findOne({ _id: regrade.exam, createdBy: auth.user.id }).select('_id createdBy course');
+        let exam = null;
+        if (auth.user.role === UserRole.ADMIN) {
+            exam = await Exam.findById(regrade.exam).select('_id createdBy course');
+        } else if (auth.user.role === UserRole.PROFESSOR) {
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(auth.user.id),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map(c => c._id);
+            exam = await Exam.findOne({
+                _id: regrade.exam,
+                $or: [
+                    { createdBy: new mongoose.Types.ObjectId(auth.user.id) },
+                    { course: { $in: profCourseIds } }
+                ]
+            }).select('_id createdBy course');
+        }
         if (!exam) {
             return NextResponse.json({ success: false, message: 'Regrade request not found', data: null }, { status: 404 });
         }
@@ -64,7 +78,7 @@ export async function PATCH(
         if (reviewerId === previousAssignee) {
             return NextResponse.json({
                 success: true,
-                data: { id: regrade._id.toString(), assignedTo: previousAssignee }
+                data: { id: regrade._id.toString(), status: regrade.status, assignedTo: previousAssignee }
             }, { status: 200 });
         }
 
@@ -80,8 +94,7 @@ export async function PATCH(
             ]);
             const isCourseTa = Boolean(course?.teachingAssistants.some(ta => ta.equals(reviewerId)));
             const isExamProfessor = candidate?.role === UserRole.PROFESSOR &&
-                candidate._id.equals(exam.createdBy) &&
-                Boolean(course?.professor.equals(exam.createdBy));
+                (candidate._id.equals(exam.createdBy) || Boolean(course?.professor.equals(candidate._id)));
             const isAuthorizedTa = candidate?.role === UserRole.TA && isCourseTa;
             if (!candidate || (!isAuthorizedTa && !isExamProfessor)) {
                 return NextResponse.json(
@@ -95,6 +108,7 @@ export async function PATCH(
         const assignedAt = new Date();
         const assignee = reviewer?._id ?? null;
         const assignedBy = new mongoose.Types.ObjectId(auth.user.id);
+        const nextStatus = assignee ? RegradeStatus.REVIEWING : RegradeStatus.OPEN;
         const updated = await RegradeRequest.findOneAndUpdate(
             {
                 _id: regrade._id,
@@ -102,7 +116,13 @@ export async function PATCH(
                 assignedTo: previousAssignee ? new mongoose.Types.ObjectId(previousAssignee) : null
             },
             {
-                $set: { assignedTo: assignee, assignedBy, assignedAt },
+                $set: {
+                    assignedTo: assignee,
+                    assignedBy,
+                    assignedAt,
+                    status: nextStatus,
+                    isOpen: true
+                },
                 $push: { assignmentHistory: { assignee, assignedBy, assignedAt } }
             },
             { returnDocument: 'after', runValidators: true }
@@ -140,7 +160,9 @@ export async function PATCH(
                     $set: {
                         assignedTo: previousAssignee ? new mongoose.Types.ObjectId(previousAssignee) : null,
                         assignedBy: regrade.assignedBy || null,
-                        assignedAt: regrade.assignedAt || null
+                        assignedAt: regrade.assignedAt || null,
+                        status: regrade.status,
+                        isOpen: true
                     },
                     $pull: { assignmentHistory: { assignedAt } }
                 }
@@ -158,6 +180,7 @@ export async function PATCH(
             success: true,
             data: {
                 id: updated._id.toString(),
+                status: updated.status,
                 assignedTo: reviewer ? {
                     id: reviewer._id.toString(),
                     name: reviewer.name,
