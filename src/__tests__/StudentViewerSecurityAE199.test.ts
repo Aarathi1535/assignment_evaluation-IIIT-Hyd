@@ -153,7 +153,7 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         expect(detailBody.data).not.toHaveProperty('enrolledStudents');
 
         // 3. GET /api/exams lists only published exams for enrolled courses without storage leaks
-        const examsResponse = await examsGET(new NextRequest('http://localhost:3000/api/exams'));
+        const examsResponse = await examsGET();
         expect(examsResponse.status).toBe(200);
         const examsBody = await examsResponse.json();
         const returnedExamIds = examsBody.data.map((e: { _id: string }) => e._id);
