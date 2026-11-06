@@ -6,6 +6,7 @@ import { connectDB } from '../../../../../../lib/db';
 import { ExamStatus } from '../../../../../../models/Exam';
 import ExamRepository from '../../../../../../repositories/ExamRepository';
 import { buildCsv, buildXlsx, getExamGradeExportData } from '../../../../../../lib/gradeExport';
+import { buildLmsCsv, mapLmsStudentIdsToGrades } from '../../../../../../lib/lmsMapping';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,9 +35,9 @@ export async function GET(
 
     const formatParam = request.nextUrl.searchParams.get('format') || 'csv';
     const format = formatParam.toLowerCase();
-    if (format !== 'csv' && format !== 'xlsx') {
+    if (format !== 'csv' && format !== 'xlsx' && format !== 'lms' && format !== 'canvas') {
         return NextResponse.json(
-            { success: false, message: 'Invalid export format. Supported formats: csv, xlsx', data: null },
+            { success: false, message: 'Invalid export format. Supported formats: csv, xlsx, lms, canvas', data: null },
             { status: 400, headers: { 'Cache-Control': 'private, no-store' } }
         );
     }
@@ -56,6 +57,20 @@ export async function GET(
                 { success: false, message: 'Grade export is available only for published exams', data: null },
                 { status: 409, headers: { 'Cache-Control': 'private, no-store' } }
             );
+        }
+
+        if (format === 'lms' || format === 'canvas') {
+            const lmsResult = await mapLmsStudentIdsToGrades(exam);
+            const csvContent = buildLmsCsv(lmsResult, format === 'canvas' ? 'canvas' : 'standard');
+            return new NextResponse(csvContent, {
+                status: 200,
+                headers: {
+                    'Content-Type': 'text/csv; charset=utf-8',
+                    'Content-Disposition': `attachment; filename="exam-${id}-lms-${format}.csv"`,
+                    'Cache-Control': 'private, no-store',
+                    'X-Content-Type-Options': 'nosniff'
+                }
+            });
         }
 
         const exportData = await getExamGradeExportData(exam);
