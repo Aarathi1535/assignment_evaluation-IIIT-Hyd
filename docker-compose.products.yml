@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # ==============================================================
+  # PRODUCT 1: ASSIGNMENT EVALUATION
+  # Independent App + Independent MongoDB
+  # ==============================================================
+  mongo-assignment:
+    image: mongo:7.0
+    container_name: assignment-evaluator-db
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-assignment-data:/data/db
+    networks:
+      - assignment-network
+
+  app-assignment:
+    build:
+      context: .
+      dockerfile: deploy/assignment/Dockerfile
+    container_name: assignment-evaluator-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongo-assignment:27017/assignment_evaluation
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=assignment-eval-production-secret-key-32chars
+    depends_on:
+      - mongo-assignment
+    networks:
+      - assignment-network
+
+  # ==============================================================
+  # PRODUCT 2: CLASSROOM ACTIVITY
+  # Independent App + Independent MongoDB
+  # ==============================================================
+  mongo-classroom:
+    image: mongo:7.0
+    container_name: classroom-activity-db
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-classroom-data:/data/db
+    networks:
+      - classroom-network
+
+  app-classroom:
+    build:
+      context: .
+      dockerfile: deploy/classroom/Dockerfile
+    container_name: classroom-activity-app
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - MONGODB_CLASSROOM_URI=mongodb://mongo-classroom:27017/classroom_activity
+      - MONGODB_URI=mongodb://mongo-classroom:27017/classroom_activity
+      - CLASSROOM_AUTH_SECRET=classroom-production-secret-key-32chars
+      - NEXT_PUBLIC_ENABLE_CLASSROOM_ASSESSMENT=true
+    depends_on:
+      - mongo-classroom
+    networks:
+      - classroom-network
+
+  # ==============================================================
+  # PRODUCT 3: PERSONALISED LEARNING
+  # Independent App + Independent MongoDB
+  # ==============================================================
+  mongo-personalized:
+    image: mongo:7.0
+    container_name: personalized-learning-db
+    restart: unless-stopped
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo-personalized-data:/data/db
+    networks:
+      - personalized-network
+
+  app-personalized:
+    build:
+      context: .
+      dockerfile: deploy/personalized/Dockerfile
+    container_name: personalized-learning-app
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - MONGODB_PERSONALIZED_URI=mongodb://mongo-personalized:27017/personalized_learning
+      - MONGODB_URI=mongodb://mongo-personalized:27017/personalized_learning
+      - PERSONALIZED_AUTH_SECRET=personalized-production-secret-key-32chars
+      - NEXT_PUBLIC_ENABLE_PERSONALIZED_ASSESSMENT=true
+    depends_on:
+      - mongo-personalized
+    networks:
+      - personalized-network
+
+volumes:
+  mongo-assignment-data:
+  mongo-classroom-data:
+  mongo-personalized-data:
+
+networks:
+  assignment-network:
+    driver: bridge
+  classroom-network:
+    driver: bridge
+  personalized-network:
+    driver: bridge
