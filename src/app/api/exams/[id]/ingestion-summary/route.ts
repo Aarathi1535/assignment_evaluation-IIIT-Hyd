@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../lib/db';
-import { requirePermission } from '../../../../../lib/apiAuth';
+import { requireAnyPermission } from '../../../../../lib/apiAuth';
 import { Permission } from '../../../../../constants/permissions';
 import { HttpError } from '../../../../../lib/errors';
 import IngestionApprovalService, { ReviewDashboardScript } from '../../../../../services/IngestionApprovalService';
@@ -17,7 +17,10 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requirePermission(Permission.VIEW_COURSES);
+  const auth = await requireAnyPermission([
+    Permission.APPROVE_INGESTION,
+    Permission.VIEW_BATCH
+  ]);
   if (!auth.authorized) {
     return auth.response;
   }
@@ -51,7 +54,7 @@ export async function GET(
     // 2. Fetch scripts if a category filter is requested for drill-down
     const url = new URL(req.url);
     const categoryParam = url.searchParams.get('category');
-    
+
     let scripts: ReviewDashboardScript[] | null = null;
     if (categoryParam) {
       if (!['total', 'unmatched', 'blank', 'duplicate', 'conflict'].includes(categoryParam)) {
