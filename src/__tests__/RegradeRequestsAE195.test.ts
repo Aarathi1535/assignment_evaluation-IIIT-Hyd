@@ -5,7 +5,7 @@ import Exam, { ExamStatus } from '../models/Exam';
 import User, { IUser, UserRole } from '../models/User';
 import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Grade from '../models/Grade';
-import RegradeRequest, { RegradeStatus } from '../models/RegradeRequest';
+import RegradeRequest, { RegradeStatus, isValidRegradeTransition } from '../models/RegradeRequest';
 import Rubric from '../models/Rubric';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
@@ -38,6 +38,7 @@ describe('AE-195: Student regrade request API', () => {
 
     afterEach(() => {
         mockSessionUser = null;
+        delete process.env.STUDENT_RESULTS_ENABLED;
     });
 
     async function createPublishedExam() {
@@ -163,6 +164,7 @@ describe('AE-195: Student regrade request API', () => {
         expect(saved?.exam.toString()).toBe(exam._id.toString());
         expect(saved?.reason).toBe('The rubric criteria were not applied to my answer.');
         expect(saved?.status).toBe(RegradeStatus.OPEN);
+        expect(saved?.isOpen).toBe(true);
     });
 
     it('does not accept a spoofed student identity in the request body', async () => {
@@ -194,6 +196,29 @@ describe('AE-195: Student regrade request API', () => {
 
         expect(response.status).toBe(404);
         expect(await RegradeRequest.countDocuments()).toBe(0);
+    });
+
+    it('returns uniform 404 for malformed scriptId following AE-189 rule', async () => {
+        await createPublishedExam();
+        mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
+
+        const response = await submit({
+            scriptId: 'invalid-malformed-id',
+            questionNumber: 1,
+            reason: 'The rubric criteria were not applied to my answer.'
+        });
+
+        expect(response.status).toBe(404);
+    });
+
+    it('checks feature flag before parsing/validating body in POST', async () => {
+        await createPublishedExam();
+        process.env.STUDENT_RESULTS_ENABLED = 'false';
+        mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
+
+        // Even with completely invalid body, must return 404 not 400
+        const response = await submit({ invalidField: true });
+        expect(response.status).toBe(404);
     });
 
     it('rejects requests outside the configured window and for invalid questions', async () => {
@@ -247,6 +272,7 @@ describe('AE-195: Student regrade request API', () => {
         await savedRequest.save();
         expect((await submit(request)).status).toBe(409);
 
+        // Transition to RESOLVED sets isOpen: false and allows a new request
         savedRequest.status = RegradeStatus.RESOLVED;
         await savedRequest.save();
         expect(savedRequest.isOpen).toBe(false);
@@ -254,7 +280,7 @@ describe('AE-195: Student regrade request API', () => {
         expect(await RegradeRequest.countDocuments()).toBe(3);
     });
 
-    it('lists only the authenticated student’s regrade requests', async () => {
+    it('lists only the authenticated student’s regrade requests and filters out unpublished exams', async () => {
         await createPublishedExam();
         const studentScript = await createReleasedScript(student);
         const otherScript = await createReleasedScript(otherStudent);
@@ -274,6 +300,7 @@ describe('AE-195: Student regrade request API', () => {
         });
         mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
 
+        // Published exam: student sees 1 request
         const response = await getRequests();
         const body = await response.json();
 
@@ -286,5 +313,21 @@ describe('AE-195: Student regrade request API', () => {
         });
         expect(JSON.stringify(body)).not.toContain(otherStudent._id.toString());
         expect(JSON.stringify(body)).not.toContain('answerScript');
+
+        // When exam is unpublished (status: REVIEW_PENDING), GET filters it out
+        await Exam.updateOne({ _id: exam._id }, { status: ExamStatus.REVIEW_PENDING });
+        const resUnpublished = await getRequests();
+        const bodyUnpublished = await resUnpublished.json();
+        expect(resUnpublished.status).toBe(200);
+        expect(bodyUnpublished.data).toHaveLength(0);
+    });
+
+    it('validates regrade status transitions', () => {
+        expect(isValidRegradeTransition(RegradeStatus.OPEN, RegradeStatus.REVIEWING)).toBe(true);
+        expect(isValidRegradeTransition(RegradeStatus.OPEN, RegradeStatus.RESOLVED)).toBe(true);
+        expect(isValidRegradeTransition(RegradeStatus.REVIEWING, RegradeStatus.RESOLVED)).toBe(true);
+        expect(isValidRegradeTransition(RegradeStatus.REVIEWING, RegradeStatus.OPEN)).toBe(true);
+        expect(isValidRegradeTransition(RegradeStatus.RESOLVED, RegradeStatus.OPEN)).toBe(false);
     });
 });
+

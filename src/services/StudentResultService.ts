@@ -9,6 +9,7 @@ import Grade, { IGrade } from '../models/Grade';
 import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
 import StudentMapping from '../models/StudentMapping';
 import Rubric, { IRubric } from '../models/Rubric';
+import RegradeRequest from '../models/RegradeRequest';
 
 export type ResultReleaseStatus = 'RELEASED' | 'NOT_AVAILABLE';
 
@@ -59,6 +60,7 @@ export interface ItemizedResultDto {
     mode: 'QUESTION' | 'WHOLE';
     questions: QuestionResultDto[];
     eligibleQuestionNumbers: number[];
+    openQuestionNumbers?: number[];
     total: number;
     maxTotal: number;
 }
@@ -612,6 +614,18 @@ export class StudentResultService {
         ) / 100;
         const maxTotal = questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
 
+        let openQuestionNumbers: number[] = [];
+        try {
+            const openRequests = await RegradeRequest.find({
+                student: script.student,
+                exam: exam._id,
+                isOpen: true
+            }).select('questionNumber').lean();
+            openQuestionNumbers = openRequests.map(r => r.questionNumber);
+        } catch {
+            openQuestionNumbers = [];
+        }
+
         return {
             exam: {
                 title: exam.title,
@@ -622,6 +636,7 @@ export class StudentResultService {
             mode,
             questions,
             eligibleQuestionNumbers,
+            openQuestionNumbers,
             total,
             maxTotal,
         };

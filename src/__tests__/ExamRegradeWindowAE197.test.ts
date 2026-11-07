@@ -20,6 +20,7 @@ vi.mock('next-auth', async (importOriginal) => {
 
 describe('AE-197: Per-exam regrade window configuration', () => {
     let updateWindowPUT: typeof import('../app/api/exams/[id]/regrade-window/route').PUT;
+    let getWindowGET: typeof import('../app/api/exams/[id]/regrade-window/route').GET;
     let professor!: IUser;
     let otherProfessor!: IUser;
     let ta!: IUser;
@@ -27,6 +28,7 @@ describe('AE-197: Per-exam regrade window configuration', () => {
 
     beforeAll(async () => {
         updateWindowPUT = (await import('../app/api/exams/[id]/regrade-window/route')).PUT;
+        getWindowGET = (await import('../app/api/exams/[id]/regrade-window/route')).GET;
     });
 
     afterEach(() => {
@@ -121,6 +123,24 @@ describe('AE-197: Per-exam regrade window configuration', () => {
         });
     });
 
+    it('fetches regrade window via GET route', async () => {
+        await createExam();
+        mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
+
+        await updateWindow({
+            regradeWindowOpensAt: '2026-11-03T10:00:00.000Z',
+            regradeWindowClosesAt: '2026-11-10T10:00:00.000Z'
+        });
+
+        const req = new NextRequest(`http://localhost:3000/api/exams/${examId}/regrade-window`);
+        const res = await getWindowGET(req, { params: Promise.resolve({ id: examId }) });
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.success).toBe(true);
+        expect(new Date(body.data.regradeWindowOpensAt).toISOString()).toBe('2026-11-03T10:00:00.000Z');
+        expect(new Date(body.data.regradeWindowClosesAt).toISOString()).toBe('2026-11-10T10:00:00.000Z');
+    });
+
     it('rejects invalid timestamps and invalid or incomplete ranges', async () => {
         await createExam();
         mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
@@ -194,3 +214,4 @@ describe('AE-197: Per-exam regrade window configuration', () => {
         expect(isRegradeWindowOpen({ regradeWindowOpensAt: opensAt }, opensAt)).toBe(false);
     });
 });
+

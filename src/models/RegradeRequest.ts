@@ -6,6 +6,17 @@ export enum RegradeStatus {
     RESOLVED = 'RESOLVED'
 }
 
+const VALID_REGRADE_STATUS_TRANSITIONS: Record<RegradeStatus, RegradeStatus[]> = {
+    [RegradeStatus.OPEN]: [RegradeStatus.REVIEWING, RegradeStatus.RESOLVED],
+    [RegradeStatus.REVIEWING]: [RegradeStatus.RESOLVED, RegradeStatus.OPEN],
+    [RegradeStatus.RESOLVED]: []
+};
+
+export function isValidRegradeTransition(current: RegradeStatus, next: RegradeStatus): boolean {
+    if (current === next) return true;
+    return VALID_REGRADE_STATUS_TRANSITIONS[current]?.includes(next) ?? false;
+}
+
 export enum RegradeDecisionOutcome {
     APPROVED = 'APPROVED',
     REJECTED = 'REJECTED'
@@ -176,6 +187,18 @@ RegradeRequestSchema.index(
 
 RegradeRequestSchema.pre('validate', function () {
     this.isOpen = this.status !== RegradeStatus.RESOLVED;
+});
+
+RegradeRequestSchema.pre(['updateOne', 'findOneAndUpdate'], function () {
+    const update = this.getUpdate() as Record<string, unknown> | null;
+    if (update) {
+        if (update.status) {
+            update.isOpen = update.status !== RegradeStatus.RESOLVED;
+        } else if (update.$set && typeof update.$set === 'object' && 'status' in update.$set) {
+            const setObj = update.$set as Record<string, unknown>;
+            setObj.isOpen = setObj.status !== RegradeStatus.RESOLVED;
+        }
+    }
 });
 
 const RegradeRequest: Model<IRegradeRequest> = mongoose.models.RegradeRequest || mongoose.model<IRegradeRequest>('RegradeRequest', RegradeRequestSchema);
