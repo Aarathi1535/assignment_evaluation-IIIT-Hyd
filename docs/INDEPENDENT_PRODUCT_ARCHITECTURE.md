@@ -1,5 +1,7 @@
 # Independent Product Architecture
 
+> **Note**: For the comprehensive Architecture Note v2 covering dual authentication, LTI 1.3, OpenAPI, headless APIs, and guest-join decisions, see [ARCHITECTURE_NOTE_v2.md](file:///docs/ARCHITECTURE_NOTE_v2.md).
+
 This document specifies the decoupled, multi-product architecture of the IIIT Hyderabad Learning Platform.
 
 ## 1. System Overview
