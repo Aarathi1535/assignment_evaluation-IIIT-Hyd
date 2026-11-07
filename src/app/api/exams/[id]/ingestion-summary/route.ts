@@ -11,7 +11,7 @@ import IngestionApprovalService, { ReviewDashboardScript } from '../../../../../
  *
  * Ingestion review dashboard counts and scripts list endpoint for AE-076.
  * Returns aggregation counts and matching script lists.
- * Requires VIEW_COURSES permission and enforces scope constraints.
+ * Requires APPROVE_INGESTION or VIEW_BATCH permission and enforces scope constraints.
  */
 export async function GET(
   req: NextRequest,
