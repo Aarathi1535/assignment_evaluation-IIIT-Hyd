@@ -5,7 +5,7 @@ import { Permission } from '../../../../constants/permissions';
 import { connectDB } from '../../../../lib/db';
 import { HttpError, isDuplicateKeyError } from '../../../../lib/errors';
 import { requirePermission } from '../../../../lib/apiAuth';
-import Exam from '../../../../models/Exam';
+import Exam, { ExamStatus } from '../../../../models/Exam';
 import Grade from '../../../../models/Grade';
 import RegradeRequest, { IRegradeRequest } from '../../../../models/RegradeRequest';
 import Rubric from '../../../../models/Rubric';
@@ -15,7 +15,7 @@ import { isRegradeWindowOpen } from '../../../../utils/regradeWindow';
 export const dynamic = 'force-dynamic';
 
 const createRequestSchema = z.object({
-    scriptId: z.string().refine(mongoose.Types.ObjectId.isValid, 'Invalid script ID'),
+    scriptId: z.string().trim().min(1),
     questionNumber: z.number().int().positive(),
     reason: z.string().trim().min(10).max(2000)
 }).strict();
@@ -38,7 +38,9 @@ function toStudentRequest(
 
 function errorResponse(error: unknown) {
     const status = error instanceof HttpError ? error.statusCode : 500;
-    const message = error instanceof Error ? error.message : 'An unexpected error occurred';
+    const message = status === 500
+        ? 'An unexpected error occurred'
+        : (error instanceof Error ? error.message : 'An unexpected error occurred');
     return NextResponse.json(
         { success: false, message, data: null },
         { status, headers: { 'Cache-Control': 'private, no-store' } }
@@ -57,19 +59,27 @@ export async function GET() {
             auth.user.id,
             auth.user.role
         );
-        const requests = await RegradeRequest.find({ student: student._id })
+
+        // Filter to exams the student can currently see (active and PUBLISHED)
+        const visibleExams = await Exam.find({
+            isActive: true,
+            status: ExamStatus.PUBLISHED
+        }).select('_id title').lean();
+        const visibleExamMap = new Map(visibleExams.map(exam => [exam._id.toString(), exam.title]));
+        const visibleExamIds = visibleExams.map(exam => exam._id);
+
+        const requests = await RegradeRequest.find({
+            student: student._id,
+            exam: { $in: visibleExamIds }
+        })
             .sort({ createdAt: -1 })
             .lean();
-        const exams = await Exam.find({
-            _id: { $in: requests.map(request => request.exam) }
-        }).select('title').lean();
-        const examTitles = new Map(exams.map(exam => [exam._id.toString(), exam.title]));
 
         return NextResponse.json({
             success: true,
             data: requests.map(request => toStudentRequest(
                 request as Pick<IRegradeRequest, '_id' | 'exam' | 'questionNumber' | 'reason' | 'status' | 'createdAt' | 'updatedAt'>,
-                examTitles.get(request.exam.toString()) || ''
+                visibleExamMap.get(request.exam.toString()) || ''
             ))
         }, { status: 200, headers: { 'Cache-Control': 'private, no-store' } });
     } catch (error: unknown) {
@@ -84,6 +94,14 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+        await connectDB();
+
+        // Validate student access and feature flag FIRST before inspecting or validating the body
+        const student = await StudentResultService.validateStudentAccess(
+            auth.user.id,
+            auth.user.role
+        );
+
         let body: unknown;
         try {
             body = await req.json();
@@ -102,8 +120,12 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        await connectDB();
-        const { student, script, exam } = await StudentResultService.verifyStudentScriptAccess(
+        // AE-189 uniform error response: malformed scriptId returns 404 identical to nonexistent script
+        if (!mongoose.Types.ObjectId.isValid(parsed.data.scriptId)) {
+            throw new HttpError('Result not found', 404);
+        }
+
+        const { script, exam } = await StudentResultService.verifyStudentScriptAccess(
             parsed.data.scriptId,
             auth.user.id,
             auth.user.role
@@ -156,3 +178,4 @@ export async function POST(req: NextRequest) {
         return errorResponse(error);
     }
 }
+
