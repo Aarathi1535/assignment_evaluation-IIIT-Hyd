@@ -1,6 +1,6 @@
 # Architecture Note v2: Independent Product Architecture
 
-**Document Version:** 2.0.0  
+**Document Version:** 2.1.0  
 **Date:** 2026-11-07  
 **Status:** DRAFT (Submitted for Mentor & Stakeholder Sign-Off)  
 **Authors:** Learning Platform Engineering Team  
@@ -16,10 +16,10 @@ Following architectural review feedback on PR #323, this document formalizes the
 2. **Classroom Activity (Product 2):** A real-time classroom assessment and engagement system featuring timed handwritten answer-sheet image capture/verification and Mentimeter-inspired live participation polls.
 3. **Personalised Learning (Product 3):** An adaptive diagnostic and question-bank system driving personalized daily practice and concept mastery tracking.
 
-This note incorporates the clarified login strategy, headless microservice and API-first designs, LTI 1.3 grade passback specifications, student guest-join protocols, database isolation guarantees, AI privacy gates, and the step-by-step Git release sequence.
+This note establishes the clarified dual-login strategy, headless microservice and API-first designs, LTI 1.3 grade passback specifications, student guest-join protocols, database isolation guarantees, AI privacy gates, and the step-by-step Git release sequence.
 
 > [!IMPORTANT]
-> **Implementation Sign-Off Gate**: Per mentor directives and project instructions, platform implementation work remains paused until Architecture Note v2 receives formal review and approval.
+> **Implementation Sign-Off Gate**: Per mentor directives and project instructions, platform implementation work remains paused until Architecture Note v2 receives formal review and approval from the mentor and Prof. Jawahar.
 
 ---
 
@@ -28,26 +28,26 @@ This note incorporates the clarified login strategy, headless microservice and A
 To guarantee zero regression of Assignment Evaluation features (including AE-202 through AE-220) and clean integration into `main`, the engineering workflow follows this exact sequential execution:
 
 ```
-[PR #321 (hotfix)] ──> [main]
+[PR #321 (hotfix)] ──> [main] (MERGED at b5def10)
                           ▲
-[PRs #288─#299] ──────> [feature/exam-eval-platform]
+[PR #324 (AE-190─200)] ──> [feature/exam-eval-platform] (OPEN DRAFT at 24e88d0)
                           ▲
 [AE-202 ── AE-220] ───> [feature blocks: regrade, audit, analytics, export]
                           ▲
 [Note v2 Sign-Off] ───> [Decomposed PRs: AI, Classroom, Personalised, Auth, Deploy]
 ```
 
-### 2.1 Git Sequence Steps
+### 2.1 Git Sequence Steps & Current Status
 
 | Step | Action Item | Target / Destination | Current Status | Ownership / Blocker |
 |---|---|---|---|---|
-| **1** | Convert PR #323 to Draft | `refactor/independent-product-architecture` | **COMPLETED** (Draft state active) | Self-merge strictly prohibited. |
-| **2** | Merge PR #321 (`hotfix/ingestion-summary-staff-auth`) | `main` | **OPEN / READY** | **External Action Required**: Needs mentor/maintainer merge to `main`. (Fixes data leak; verified 403). |
-| **3.1** | Land PRs #288–#299 | `feature/exam-eval-platform` | **OPEN / STACKED** | Stacked branches #288–#299 to be merged into `feature/exam-eval-platform`. |
-| **3.2** | Open PR `feature/exam-eval-platform` -> `main` | `main` | **PENDING 3.1** | Creates canonical base on `main`. |
-| **3.3** | Upstream merge into AE-202...AE-220 | Ticket branches | **PENDING 3.2** | Single linear merge with no force-pushes, resolving 18 conflicting files cleanly. |
-| **3.4** | Open reviewable PRs per functional block | `feature/exam-eval-platform` / `main` | **PENDING 3.3** | Modular PRs: (a) Regrade, (b) Audit log hardening, (c) Analytics, (d) Grade export. |
-| **4** | Review and Sign-Off on Architecture Note v2 | `docs/ARCHITECTURE_NOTE_v2.md` | **SUBMITTED FOR SIGN-OFF** | **External Action Required**: Mentor & Prof. Jawahar approval. |
+| **1** | Convert PR #323 to Draft | `refactor/independent-product-architecture` | **COMPLETED** | Draft mode active. Self-merge strictly prohibited. |
+| **2** | Merge PR #321 (`hotfix/ingestion-summary-staff-auth`) | `main` | **COMPLETED** | Merged manually into `main` at commit `b5def10`. Verifies staff-only 403 on ingestion summary. |
+| **3.1** | Land PRs #288–#299 into `feature/exam-eval-platform` | `feature/exam-eval-platform` | **COMPLETED** | Fast-forwarded to tip of stack (`docs/AE-200-student-portal` at `779f1e4`). |
+| **3.2** | Merge `main` and open consolidated PR #324 | `main` | **COMPLETED** | PR #324 opened as Draft at commit `24e88d0`. All 73 focused tests and 181 comprehensive tests passing. |
+| **3.3** | Review & Merge PR #324 into `main` | `main` | **PENDING MAINTAINER** | **External Action Required**: Maintainer/mentor review and merge of PR #324. |
+| **3.4** | Upstream merge `main` into AE-202...AE-220 | Ticket branches | **HOLD UNTIL 3.3** | Single linear merge with no force-pushes, opening modular PRs per functional block (regrade, audit, analytics, export). |
+| **4** | Review and Sign-Off on Architecture Note v2 | `docs/ARCHITECTURE_NOTE_v2.md` | **SUBMITTED FOR SIGN-OFF** | **External Action Required**: Review by mentor and Prof. Jawahar (including Guest-Join decision). |
 | **5** | Implement Modular Multi-Product PRs | Dedicated feature branches | **ON HOLD (Gated on Step 4)** | Decomposed PRs to be submitted in order. |
 
 ---
@@ -74,28 +74,14 @@ To guarantee zero regression of Assignment Evaluation features (including AE-202
    └──────────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
 
-### 3.1 Product 1: Assignment Evaluation
-- **Mission:** Preserved core examination grading, multi-grader allocations, rubric-based script grading, re-grading workflows, statistical analytics, and authorized CSV/XLSX exports.
-- **Runtime Port:** `3000`
-- **Database:** `MONGODB_URI` (`connectDB()`) using isolated Mongoose client.
-- **Identity & Auth:** NextAuth session cookie (`next-auth.session-token`).
-- **Access Endpoints:** `/login`, `/admin`, `/professor`, `/ta`, `/student`, `/api/grading/*`, `/api/exams/*`, `/api/analytics/*`, `/api/export/*`.
+### 3.1 Prototype Reality vs Target Architecture ("Working Towards")
+As noted in the mentor review on PR #323, the initial prototype demonstrated high module reuse and passing unit tests, but true process, routing, and database isolation remain in a "Working Towards" state:
+- All 36 business routes currently compile within the root Next.js build runtime.
+- Database connections in the prototype shared the global Mongoose instance initialized by `instrumentation.ts`.
+- Middleware rules in `proxy.ts` previously bypassed route-level role checks.
+- Dockerfiles currently package the shared Next.js application image.
 
-### 3.2 Product 2: Classroom Activity
-- **Mission:** Real-time classroom assessment blending timed handwritten answer-sheet uploads with Mentimeter-inspired live engagement polling.
-- **Runtime Port:** `3001`
-- **Database:** `MONGODB_CLASSROOM_URI` (`connectClassroomDB()`) using isolated connection instance.
-- **Identity & Auth:**
-  - Instructor/TA: Independent HMAC-SHA256 JWT (`classroom_token`).
-  - Student / Guest: Ephemeral session-scoped participant token (`classroom_participant_token`).
-- **Access Endpoints:** `/classroom`, `/classroom/login`, `/classroom/register`, `/classroom/join`, `/api/v1/classroom/*`.
-
-### 3.3 Product 3: Personalised Learning
-- **Mission:** Diagnostic knowledge mastery, adaptive daily practice scheduling, curriculum syllabus taxonomy, and AI question generation.
-- **Runtime Port:** `3002`
-- **Database:** `MONGODB_PERSONALIZED_URI` (`connectPersonalizedDB()`) using isolated connection instance.
-- **Identity & Auth:** Independent HMAC-SHA256 JWT (`personalized_token`).
-- **Access Endpoints:** `/personalized`, `/personalized/login`, `/personalized/register`, `/personalized/today`, `/api/v1/personalized/*`.
+The decomposed roadmap in Section 10 systematically refactors these components into true standalone boundaries.
 
 ---
 
@@ -123,25 +109,26 @@ In accordance with mentor instructions, the platform supports both **independent
 └──────────────────┘            └──────────────────┘            └──────────────────┘
 ```
 
-1. **Independent Account Registries:**
-   - Products maintain isolated user collections: `User` (Evaluation), `ClassroomUser` (Classroom), and `PersonalizedUser` (Personalised).
-   - Passwords are encrypted independently with high-factor bcrypt.
-2. **Explicit Shared Platform Login:**
-   - A shared platform token can be accepted by each product when enabled via `ENABLE_SHARED_PLATFORM_AUTH=true`.
-   - The token is cryptographically verified against `PLATFORM_SHARED_SECRET` / `PLATFORM_PUBLIC_KEY`.
-   - Products validate the signed claims (e.g., `sub`, `email`, `role`, `authorized_products`).
-3. **Strict Account Isolation (No Email Linking):**
-   - Accounts are **never automatically linked or merged** just because email addresses match across products.
-   - An account in Classroom Activity remains entirely separate from an account with the same email in Personalised Learning unless explicitly federated through the shared platform identity provider.
+1. **Independent Product Accounts & Logins by Default:**
+   - Products maintain separate, isolated user collections: `User` (Evaluation), `ClassroomUser` (Classroom), and `PersonalizedUser` (Personalised).
+   - Passwords are encrypted independently using high-factor bcrypt (`12` rounds).
+   - Each product handles its own registration and authentication lifecycle (`/login`, `/classroom/login`, `/personalized/login`).
+2. **Optional Shared Platform Login (Explicitly Signed):**
+   - When enabled, a shared platform token can authenticate a user across products without requiring separate logins.
+   - The token must be cryptographically signed by the central platform identity provider and verified against `PLATFORM_SHARED_SECRET` or `PLATFORM_PUBLIC_KEY`.
+   - **Independent Product Configuration:** Shared login must be independently toggleable per product (e.g., `CLASSROOM_ENABLE_SHARED_AUTH=true`, `PERSONALIZED_ENABLE_SHARED_AUTH=true`). A product with this disabled accepts only its native credentials.
+3. **Strict Account Isolation (Never Automatic Email Linking):**
+   - Products must **never automatically link, merge, or grant cross-access** simply because email addresses match.
+   - An account registered in Classroom Activity with `alice@iiit.ac.in` has zero implicit connection to `alice@iiit.ac.in` in Assignment Evaluation or Personalised Learning unless explicitly federated via the signed platform token.
 
-### 4.2 Student Guest-Join & Session Security (Decision for Prof. Jawahar)
-In live classroom environments, students frequently join sessions on mobile devices via QR codes or 6-digit access codes. The protocol must prevent impersonation, answer hijacking, and unauthorized grading access:
+### 4.2 Student Guest-Join & Session Security
+In live classroom environments, students frequently join sessions via mobile devices scanning QR codes or entering 6-digit access codes:
 
 1. **Session-Scoped Participant Token:**
-   - When a student joins via `POST /api/v1/classroom/sessions/{code}/join`, the server verifies the active session PIN, creates or validates a participant entry, and issues an ephemeral, cryptographically signed `classroom_participant_token` containing `{ sessionId, participantId, studentIdentifier }`.
-2. **Elimination of Anonymous Hijacking:**
+   - When a student joins via `POST /api/v1/classroom/sessions/{code}/join`, the server validates the active session PIN, records participant registration, and issues an ephemeral, cryptographically signed `classroom_participant_token` containing `{ sessionId, participantId, studentIdentifier }`.
+2. **Elimination of Anonymous Hijacking & Answer Overwriting:**
    - Form submissions to `POST /api/v1/classroom/submit` require the signed participant token (passed via cookie or `Authorization: Bearer <token>`). Submissions omitting the token or attempting to forge `participantId` are rejected with `401 Unauthorized`.
-   - Duplicate name entries within the same live session prompt the user for an disambiguating identifier (e.g. roll number) rather than silently returning an existing student's token and overwriting previous answers.
+   - Duplicate name entries within the same live session require a disambiguating identifier (e.g. roll number) rather than silently returning an existing student's token and allowing answer overwriting.
 3. **No Cross-Product Leakage:**
    - Guest participant tokens are strictly rejected by Assignment Evaluation and Personalised Learning APIs (`403 Forbidden`).
 
@@ -195,13 +182,12 @@ To satisfy Prof. Jawahar's requirement that services operate independently and i
 
 ### 6.1 Versioned `/v1` Service Contracts
 All products expose clean, versioned headless APIs decoupled from Next.js server-side page rendering:
-
 - **Assignment Evaluation:** `/api/v1/evaluation/*` (with `/api/exams/*` and `/api/grading/*` maintained for backward compatibility).
 - **Classroom Activity:** `/api/v1/classroom/*` (sessions, join, submit, poll, review, stream).
 - **Personalised Learning:** `/api/v1/personalized/*` (daily, questions, schedules, evaluate).
 
 ### 6.2 OpenAPI 3.1 Specifications
-Each independent service provides a formal OpenAPI contract in `docs/openapi/`:
+Each independent service publishes a formal OpenAPI contract in `docs/openapi/`:
 - `docs/openapi/evaluation-v1.yaml`
 - `docs/openapi/classroom-v1.yaml`
 - `docs/openapi/personalized-v1.yaml`
@@ -218,33 +204,12 @@ Expanding on the design in `AE-216` (`docs/LTI_1_3_GRADE_PASSBACK.md`):
 
 ## 7. Database Isolation & Connection Architecture
 
-### 7.1 Root Cause Analysis of Connection Leaking
-In the initial prototype, setting `MONGODB_CLASSROOM_URI` to a separate host was ineffective because `instrumentation.ts` initialized the default Mongoose connection on server start, and `classroomDb.ts` reused `mongoose.connection` if `readyState === 1`. Consequently, all classroom collections were placed in the Evaluation database.
-
-### 7.2 Independent Connection Pools
-The database connection managers are refactored to use isolated Mongoose connections:
-
-```typescript
-// src/lib/classroomDb.ts
-import mongoose, { Connection } from 'mongoose';
-
-let classroomConn: Connection | null = null;
-
-export async function connectClassroomDB(): Promise<Connection> {
-  if (classroomConn && classroomConn.readyState === 1) {
-    return classroomConn;
-  }
-  const uri = process.env.MONGODB_CLASSROOM_URI || process.env.MONGODB_URI!;
-  classroomConn = await mongoose.createConnection(uri, {
-    maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
-  }).asPromise();
-  return classroomConn;
-}
-```
-
-- Models are bound directly to their respective connections via `conn.model(...)` rather than the global `mongoose.model(...)`.
-- The system handles standalone MongoDB instances in development and replica sets in production with uniform transaction fallbacks.
+### 7.1 Multi-Database Connection Architecture
+To guarantee genuine database isolation and prevent connection hijacking:
+- `src/lib/classroomDb.ts`: Uses `mongoose.createConnection(process.env.MONGODB_CLASSROOM_URI)`. Models are compiled on this dedicated connection instance.
+- `src/lib/personalizedDb.ts`: Uses `mongoose.createConnection(process.env.MONGODB_PERSONALIZED_URI)`. Models are compiled on this dedicated connection instance.
+- `src/lib/db.ts`: Preserves the primary connection for Assignment Evaluation (`MONGODB_URI`).
+- Standalone MongoDB topologies in development and replica set configurations in production are supported without connection crashes.
 
 ---
 
@@ -264,34 +229,30 @@ export async function connectClassroomDB(): Promise<Connection> {
 
 ---
 
-## 9. HTTP-Level Verification & Testing Framework
+## 9. Questions & Decisions for Prof. Jawahar's Review & Sign-Off
 
-To ensure that `proxy.ts`, authentication cookies, and API contracts work reliably in production, real route-level HTTP tests will be added:
+To ensure exact alignment before proceeding to platform implementation, the following key architectural questions are submitted for Prof. Jawahar's direction:
 
-```
-[HTTP Test Suite] ──> [Next.js Request Pipeline] ──> [proxy.ts Router] ──> [Isolated API Route]
-```
+### Decision 1: Guest Join vs Registered Student Role for Graded Submissions
+- **Context:** Students can enter live classroom sessions quickly using a 6-digit PIN or QR code as an anonymous guest.
+- **Question:** Should anonymous guest participants be permitted to upload physical handwritten answer sheets for formal grading, or should anonymous guest access be restricted strictly to Mentimeter-style live polling, requiring registered student accounts for graded answer-sheet submissions?
+- **Engineering Recommendation:** 
+  - Allow guest access for real-time engagement polls.
+  - Require a registered student identity (or post-session claim with roll number) for long-form answer-sheet evaluation, ensuring results tie directly into academic records and grade passback.
 
-### Planned HTTP-Level Tests:
-1. **Classroom Auth & Session Cycle:**
-   - Register new user via `POST /api/classroom/auth/register` (verifies `STUDENT` default role).
-   - Log in via `POST /api/classroom/auth/login` (receives signed `classroom_token`).
-   - Call `GET /api/classroom/sessions` with cookie (verifies HTTP 200).
-   - Call without cookie (verifies HTTP 401).
-2. **Personalised Auth & Today Route:**
-   - Register & log in via `POST /api/personalized/auth/login`.
-   - Call `GET /api/personalized/today` with cookie (verifies HTTP 200).
-   - Call with Classroom token (verifies HTTP 401/403).
-3. **Guest Join & Hijack Prevention:**
-   - Join session via `POST /api/classroom/sessions/{code}/join`.
-   - Submit answers with participant token (verifies HTTP 200).
-   - Attempt submission with forged name or missing token (verifies HTTP 401).
-4. **Data Isolation Test:**
-   - Verify that inserts into `ClassroomUser` do not appear in `User` or touch the Assignment Evaluation database.
+### Decision 2: Human-in-the-Loop Review for AI Handwriting Evaluations
+- **Context:** Automated OCR and rubric matching evaluate student handwriting images.
+- **Question:** Should AI evaluations remain in `DRAFT_EVALUATED` state until explicitly approved by the professor/TA, or can simple objective questions (e.g. numeric answers, single formulas) auto-finalize if OCR confidence exceeds a threshold (e.g. 95%)?
+- **Engineering Recommendation:** Enforce human-in-the-loop review for all handwritten submissions initially, marking results as draft until approved by staff.
+
+### Decision 3: Shared Platform Login Rollout Schedule
+- **Context:** Students and instructors may prefer a single set of credentials while each product remains technically independent.
+- **Question:** Should we maintain completely separate logins during Phase 1 with the shared platform login introduced as an opt-in configuration in Phase 2?
+- **Engineering Recommendation:** Implement independent product authentication first to guarantee system decoupling, followed by the optional signed platform token adapter.
 
 ---
 
-## 10. Implementation Roadmap (Post-Approval PR Blocks)
+## 10. Decomposed Implementation Roadmap (Post-Approval PR Blocks)
 
 Following mentor and stakeholder approval of this document, implementation will be executed in targeted, reviewable pull requests:
 
@@ -346,6 +307,5 @@ Following mentor and stakeholder approval of this document, implementation will 
 | Stakeholder / Role | Status | Notes / Signature |
 |---|---|---|
 | **Laxmi Narayana Murthy Vemuri** (Mentor) | `PENDING REVIEW` | Waiting for review of dual-login, Git sequence, and isolation design. |
-| **Prof. C.V. Jawahar** (Lead Advisor) | `PENDING REVIEW` | Waiting for review of guest-join security and poll/handwriting dual focus. |
-| **Engineering Implementation Team** | `SIGNED` | Architecture Note v2 authored and ready for implementation upon sign-off. |
-
+| **Prof. C.V. Jawahar** (Lead Advisor) | `PENDING REVIEW` | Waiting for review of guest-join decision, AI review gate, and poll/handwriting dual focus. |
+| **Engineering Implementation Team** | `SIGNED` | Architecture Note v2.1 authored and ready for implementation upon sign-off. |
