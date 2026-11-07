@@ -205,6 +205,7 @@ export function ItemizedFeedbackPanel({
         <RegradeRequestForm
           scriptId={scriptId}
           questionNumbers={data.eligibleQuestionNumbers}
+          openQuestionNumbers={data.openQuestionNumbers}
           regradeWindowOpensAt={data.exam.regradeWindowOpensAt}
           regradeWindowClosesAt={data.exam.regradeWindowClosesAt}
         />

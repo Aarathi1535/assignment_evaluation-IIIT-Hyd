@@ -128,12 +128,14 @@ export default function StudentDashboardPage() {
           </Button>
         </Link>
       )}
-      <Link href="/student/regrade-requests">
-        <Button variant="secondary" size="md">
-          <RefreshCw className="h-4 w-4" />
-          <span>Track Regrade Requests</span>
-        </Button>
-      </Link>
+      {isResultsEnabled && (
+        <Link href="/student/regrade-requests">
+          <Button variant="secondary" size="md">
+            <RefreshCw className="h-4 w-4" />
+            <span>Track Regrade Requests</span>
+          </Button>
+        </Link>
+      )}
       <Button variant="outline" size="md" onClick={() => void refreshDashboard()} disabled={refreshing}>
         <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
         <span>Refresh Dashboard</span>
