@@ -38,7 +38,6 @@ async function dropObsoleteIndex(collection: any, keys: Record<string, number>, 
  * Explicit migration for existing databases:
  * - drops the obsolete Allocation unique index on { ta: 1, answerScript: 1 }
  * - drops the obsolete Grade unique index on { answerScript: 1 }
- * - drops the obsolete RegradeRequest unique index on { answerScript: 1 }
  * - ensures the new composite indexes exist
  */
 export async function migrateIndexes(): Promise<void> {

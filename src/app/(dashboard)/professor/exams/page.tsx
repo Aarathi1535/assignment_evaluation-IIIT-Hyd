@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users, Activity, BarChart3, Download } from 'lucide-react';
+import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users, Activity, BarChart3, Download, Send, RotateCcw } from 'lucide-react';
+import { PublishResultsModal } from '@/components/professor/PublishResultsModal';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -33,6 +34,9 @@ export default function ProfessorExamsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCourse, setSelectedCourse] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [publishModalExam, setPublishModalExam] = useState<ExamItem | null>(null);
+  const [unpublishModalExam, setUnpublishModalExam] = useState<ExamItem | null>(null);
+  const [unpublishing, setUnpublishing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -81,6 +85,33 @@ export default function ProfessorExamsPage() {
     e.preventDefault();
     e.stopPropagation();
     setDeleteConfirmId(id);
+  };
+
+  const handleConfirmUnpublish = async () => {
+    if (!unpublishModalExam) return;
+    setUnpublishing(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await fetch(`/api/exams/${encodeURIComponent(unpublishModalExam._id)}/unpublish`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setExams((prev) =>
+          prev.map((e) => (e._id === unpublishModalExam._id ? { ...e, status: 'REVIEW_PENDING' } : e))
+        );
+        setSuccessMsg('Exam results unpublished successfully.');
+        setUnpublishModalExam(null);
+      } else {
+        setErrorMsg(data.message || 'Failed to unpublish exam results.');
+      }
+    } catch {
+      setErrorMsg('An unexpected error occurred while unpublishing the exam.');
+    } finally {
+      setUnpublishing(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -337,6 +368,40 @@ export default function ProfessorExamsPage() {
                             </Link>
                           </>
                         )}
+                        {exam.status === 'PUBLISHED' ? (
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="inline-flex items-center h-9 px-2.5 text-xs font-medium rounded-brand bg-emerald-50 text-emerald-800 border border-emerald-200"
+                              data-testid={`published-indicator-${exam._id}`}
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1 text-emerald-600" />
+                              <span>Published</span>
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-9 px-2 text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                              aria-label={`Unpublish results for exam ${exam.title}`}
+                              data-testid={`unpublish-exam-btn-${exam._id}`}
+                              onClick={() => setUnpublishModalExam(exam)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                              <span>Unpublish</span>
+                            </Button>
+                          </div>
+                        ) : exam.status === 'REVIEW_PENDING' ? (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="h-9 px-3 text-xs bg-brand-primary text-white"
+                            aria-label={`Publish results for exam ${exam.title}`}
+                            data-testid={`publish-exam-btn-${exam._id}`}
+                            onClick={() => setPublishModalExam(exam)}
+                          >
+                            <Send className="h-3.5 w-3.5 mr-1" />
+                            <span>Publish</span>
+                          </Button>
+                        ) : null}
                         <Button
                           variant="destructive"
                           size="sm"
@@ -396,6 +461,72 @@ export default function ProfessorExamsPage() {
               </div>
             </div>
           </div>
+        )}
+        {/* Unpublish Confirmation Modal */}
+        {unpublishModalExam && (
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-sans"
+            data-testid="unpublish-modal-backdrop"
+          >
+            <div
+              className="bg-white rounded-brand-lg p-6 max-w-sm w-full mx-4 shadow-xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200 focus:outline-none"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="unpublish-dialog-title"
+            >
+              <h3 id="unpublish-dialog-title" className="text-lg font-bold text-slate-900">
+                Unpublish Exam Results
+              </h3>
+              <p className="text-sm text-slate-600 mt-2 font-medium">
+                Are you sure you want to unpublish results for <strong>{unpublishModalExam.title}</strong>? Students will immediately lose access to their published scores and evaluated scripts.
+              </p>
+              <div className="flex justify-end gap-3 mt-6">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUnpublishModalExam(null)}
+                  disabled={unpublishing}
+                  data-testid="cancel-unpublish-btn"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={unpublishing}
+                  onClick={handleConfirmUnpublish}
+                  data-testid="confirm-unpublish-btn"
+                >
+                  {unpublishing ? 'Unpublishing...' : 'Unpublish'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Publish Results Confirmation & Preview Modal */}
+        {publishModalExam && (
+          <PublishResultsModal
+            isOpen={Boolean(publishModalExam)}
+            examId={publishModalExam._id}
+            initialExam={{
+              _id: publishModalExam._id,
+              title: publishModalExam.title,
+              courseCode: courseMap.get(publishModalExam.course)?.courseCode,
+              courseName: courseMap.get(publishModalExam.course)?.courseName,
+              examDate: publishModalExam.examDate,
+              totalMarks: publishModalExam.totalMarks,
+              numberOfQuestions: publishModalExam.numberOfQuestions,
+              status: publishModalExam.status,
+            }}
+            onClose={() => setPublishModalExam(null)}
+            onPublished={(id) => {
+              setExams((prev) =>
+                prev.map((e) => (e._id === id ? { ...e, status: 'PUBLISHED' } : e))
+              );
+              setSuccessMsg('Exam results published successfully.');
+            }}
+          />
         )}
       </div>
     </DashboardLayout>

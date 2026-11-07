@@ -8,7 +8,6 @@ import Exam, { ExamStatus, IExam } from '../models/Exam';
 import Grade, { IGrade } from '../models/Grade';
 import Rubric from '../models/Rubric';
 import User, { IUser, UserRole } from '../models/User';
-import StudentResultService from '../services/StudentResultService';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
 
@@ -24,6 +23,10 @@ vi.mock('next-auth', async (importOriginal) => {
 
 describe('AE-193: Professor unpublish and audit trail', () => {
     let unpublishPOST: typeof import('../app/api/exams/[id]/unpublish/route').POST;
+    let publishPOST: typeof import('../app/api/exams/[id]/publish/route').POST;
+    let studentResultsGET: typeof import('../app/api/student/results/route').GET;
+    let studentScriptDetailGET: typeof import('../app/api/student/results/[scriptId]/route').GET;
+
     let professor!: IUser;
     let otherProfessor!: IUser;
     let ta!: IUser;
@@ -34,6 +37,9 @@ describe('AE-193: Professor unpublish and audit trail', () => {
 
     beforeAll(async () => {
         unpublishPOST = (await import('../app/api/exams/[id]/unpublish/route')).POST;
+        publishPOST = (await import('../app/api/exams/[id]/publish/route')).POST;
+        studentResultsGET = (await import('../app/api/student/results/route')).GET;
+        studentScriptDetailGET = (await import('../app/api/student/results/[scriptId]/route')).GET;
     });
 
     beforeEach(() => {
@@ -174,29 +180,40 @@ describe('AE-193: Professor unpublish and audit trail', () => {
         });
     });
 
-    it('removes student result and script access after unpublishing', async () => {
+    it('removes student result and script access through real API routes after unpublishing', async () => {
         await createPublishedExam();
-        expect(await StudentResultService.getStudentResults(student._id.toString(), UserRole.STUDENT))
-            .toHaveLength(1);
-        await StudentResultService.verifyStudentScriptAccess(
-            script._id.toString(),
-            student._id.toString(),
-            UserRole.STUDENT
-        );
 
+        // 1. Before unpublish, student route returns results
+        mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
+        const resListBefore = await studentResultsGET();
+        expect(resListBefore.status).toBe(200);
+        const bodyListBefore = await resListBefore.json();
+        expect(bodyListBefore.success).toBe(true);
+        expect(bodyListBefore.data.length).toBeGreaterThan(0);
+
+        const reqDetailBefore = new NextRequest(`http://localhost:3000/api/student/results/${script._id}`);
+        const resDetailBefore = await studentScriptDetailGET(reqDetailBefore, { params: Promise.resolve({ scriptId: script._id.toString() }) });
+        expect(resDetailBefore.status).toBe(200);
+
+        // 2. Professor unpublishes
         mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
-        expect((await callUnpublish()).status).toBe(200);
+        const unpublishRes = await callUnpublish();
+        expect(unpublishRes.status).toBe(200);
 
-        expect(await StudentResultService.getStudentResults(student._id.toString(), UserRole.STUDENT))
-            .toHaveLength(0);
-        await expect(StudentResultService.verifyStudentScriptAccess(
-            script._id.toString(),
-            student._id.toString(),
-            UserRole.STUDENT
-        )).rejects.toMatchObject({ statusCode: 404 });
+        // 3. After unpublish, student routes return empty list and 404 for script detail
+        mockSessionUser = { id: student._id.toString(), role: UserRole.STUDENT };
+        const resListAfter = await studentResultsGET();
+        expect(resListAfter.status).toBe(200);
+        const bodyListAfter = await resListAfter.json();
+        expect(bodyListAfter.success).toBe(true);
+        expect(bodyListAfter.data).toHaveLength(0);
+
+        const reqDetailAfter = new NextRequest(`http://localhost:3000/api/student/results/${script._id}`);
+        const resDetailAfter = await studentScriptDetailGET(reqDetailAfter, { params: Promise.resolve({ scriptId: script._id.toString() }) });
+        expect(resDetailAfter.status).toBe(404);
     });
 
-    it('is idempotent and writes only one unpublish audit record', async () => {
+    it('is idempotent and writes only one unpublish audit record on duplicate requests', async () => {
         await createPublishedExam();
         mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
 
@@ -208,6 +225,43 @@ describe('AE-193: Professor unpublish and audit trail', () => {
         expect(savedExam?.unpublishedAt?.getTime()).toBe(firstTimestamp?.getTime());
         expect(await AuditLog.countDocuments({ action: 'EXAM_UNPUBLISHED', entityId: exam._id }))
             .toBe(1);
+    });
+
+    it('rejects unpublish on non-PUBLISHED exams (e.g. DRAFT) with 409 Conflict', async () => {
+        await createPublishedExam();
+        exam.status = ExamStatus.DRAFT;
+        await exam.save();
+
+        mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
+        const res = await callUnpublish();
+        expect(res.status).toBe(409);
+        const body = await res.json();
+        expect(body.message).toContain("Only exams in 'PUBLISHED' status can be unpublished");
+    });
+
+    it('clears unpublishedBy and unpublishedAt when exam is republished', async () => {
+        await createPublishedExam();
+        mockSessionUser = { id: professor._id.toString(), role: UserRole.PROFESSOR };
+
+        // Unpublish
+        const unpublishRes = await callUnpublish();
+        expect(unpublishRes.status).toBe(200);
+        let currentExam = await Exam.findById(exam._id);
+        expect(currentExam?.status).toBe(ExamStatus.REVIEW_PENDING);
+        expect(currentExam?.unpublishedBy).toBeDefined();
+        expect(currentExam?.unpublishedAt).toBeDefined();
+
+        // Republish via route
+        const republishReq = new NextRequest(`http://localhost:3000/api/exams/${exam._id}/publish`, {
+            method: 'POST'
+        });
+        const republishRes = await publishPOST(republishReq, { params: Promise.resolve({ id: exam._id.toString() }) });
+        expect(republishRes.status).toBe(200);
+
+        currentExam = await Exam.findById(exam._id);
+        expect(currentExam?.status).toBe(ExamStatus.PUBLISHED);
+        expect(currentExam?.unpublishedBy).toBeNull();
+        expect(currentExam?.unpublishedAt).toBeNull();
     });
 
     it('rejects unauthorized users and professors without exam access', async () => {

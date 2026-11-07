@@ -7,7 +7,7 @@ import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 
-type RegradeRequestStatus = 'open' | 'reviewing' | 'resolved';
+type RegradeRequestStatus = 'open' | 'reviewing' | 'in_review' | 'resolved' | 'rejected';
 
 interface StudentRegradeRequest {
   id: string;
@@ -28,7 +28,11 @@ function isStudentRegradeRequest(value: unknown): value is StudentRegradeRequest
   if (!isRecord(value)) {
     return false;
   }
-  const isStatus = value.status === 'open' || value.status === 'reviewing' || value.status === 'resolved';
+  const isStatus = value.status === 'open'
+    || value.status === 'reviewing'
+    || value.status === 'in_review'
+    || value.status === 'resolved'
+    || value.status === 'rejected';
   return typeof value.id === 'string'
     && typeof value.examId === 'string'
     && typeof value.examTitle === 'string'
@@ -61,7 +65,9 @@ async function fetchStudentRegradeRequests(signal: AbortSignal): Promise<Student
 const statusPresentation: Record<RegradeRequestStatus, { label: string; className: string }> = {
   open: { label: 'Open', className: 'border-amber-200 bg-amber-50 text-amber-800' },
   reviewing: { label: 'Reviewing', className: 'border-blue-200 bg-blue-50 text-blue-800' },
-  resolved: { label: 'Resolved', className: 'border-emerald-200 bg-emerald-50 text-emerald-800' }
+  in_review: { label: 'In Review', className: 'border-blue-200 bg-blue-50 text-blue-800' },
+  resolved: { label: 'Resolved', className: 'border-emerald-200 bg-emerald-50 text-emerald-800' },
+  rejected: { label: 'Rejected', className: 'border-rose-200 bg-rose-50 text-rose-800' }
 };
 
 function formatDate(value: string): string {
@@ -197,3 +203,4 @@ export default function StudentRegradeRequestsPage() {
     </DashboardLayout>
   );
 }
+

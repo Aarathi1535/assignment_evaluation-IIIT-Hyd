@@ -108,3 +108,4 @@ describe('AE-196: Student regrade request status tracking', () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 });
+
