@@ -22,3 +22,4 @@ export function isRegradeWindowOpen(
         && opensTime <= nowTime
         && nowTime <= closesTime;
 }
+
