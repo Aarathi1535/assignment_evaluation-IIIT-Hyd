@@ -6,6 +6,7 @@ import { UserRole } from '../../../../../constants/permissions';
 import AnswerScript from '../../../../../models/AnswerScript';
 import IngestionPage from '../../../../../models/IngestionPage';
 import Page from '../../../../../models/Page';
+import RegradeRequest from '../../../../../models/RegradeRequest';
 import ExamRepository from '../../../../../repositories/ExamRepository';
 import AllocationService from '../../../../../services/AllocationService';
 import { HttpError } from '../../../../../lib/errors';
@@ -69,7 +70,11 @@ export async function GET(
         user.id,
         user.role
       );
-      if (!exam) {
+      const assignedRegrade = await RegradeRequest.exists({
+        answerScript: script._id,
+        assignedTo: user.id
+      });
+      if (!exam && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,
@@ -84,7 +89,11 @@ export async function GET(
         script._id,
         user.id
       );
-      if (!allocation) {
+      const assignedRegrade = await RegradeRequest.exists({
+        answerScript: script._id,
+        assignedTo: user.id
+      });
+      if (!allocation && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,

@@ -17,6 +17,27 @@ export function isValidRegradeTransition(current: RegradeStatus, next: RegradeSt
     return VALID_REGRADE_STATUS_TRANSITIONS[current]?.includes(next) ?? false;
 }
 
+export enum RegradeDecisionOutcome {
+    APPROVED = 'APPROVED',
+    REJECTED = 'REJECTED'
+}
+
+export interface IRegradeDecision {
+    outcome: RegradeDecisionOutcome;
+    reason: string;
+    reviewer: mongoose.Types.ObjectId;
+    decidedAt: Date;
+    originalScore: number;
+    revisedScore?: number;
+    gradeAppliedAt?: Date;
+}
+
+export interface IRegradeAssignmentEvent {
+    assignee: mongoose.Types.ObjectId | null;
+    assignedBy: mongoose.Types.ObjectId;
+    assignedAt: Date;
+}
+
 export interface IRegradeRequest extends Document {
     exam: mongoose.Types.ObjectId;
     answerScript: mongoose.Types.ObjectId;
@@ -27,9 +48,61 @@ export interface IRegradeRequest extends Document {
     isOpen: boolean;
     handledBy?: mongoose.Types.ObjectId;
     resolutionNotes?: string;
+    decision?: IRegradeDecision;
+    assignedTo?: mongoose.Types.ObjectId | null;
+    assignedBy?: mongoose.Types.ObjectId;
+    assignedAt?: Date;
+    assignmentHistory: IRegradeAssignmentEvent[];
     createdAt: Date;
     updatedAt: Date;
 }
+
+const RegradeDecisionSchema = new Schema<IRegradeDecision>(
+    {
+        outcome: {
+            type: String,
+            enum: Object.values(RegradeDecisionOutcome),
+            required: true
+        },
+        reason: {
+            type: String,
+            required: true,
+            trim: true,
+            maxlength: 2000
+        },
+        reviewer: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+        },
+        decidedAt: {
+            type: Date,
+            required: true
+        },
+        originalScore: {
+            type: Number,
+            required: true,
+            min: 0
+        },
+        revisedScore: {
+            type: Number,
+            min: 0
+        },
+        gradeAppliedAt: {
+            type: Date
+        }
+    },
+    { _id: false }
+);
+
+const RegradeAssignmentEventSchema = new Schema<IRegradeAssignmentEvent>(
+    {
+        assignee: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+        assignedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+        assignedAt: { type: Date, required: true }
+    },
+    { _id: false }
+);
 
 const RegradeRequestSchema = new Schema<IRegradeRequest>(
     {
@@ -79,6 +152,27 @@ const RegradeRequestSchema = new Schema<IRegradeRequest>(
         resolutionNotes: {
             type: String,
             trim: true
+        },
+        decision: {
+            type: RegradeDecisionSchema,
+            default: undefined
+        },
+        assignedTo: {
+            type: Schema.Types.ObjectId,
+            ref: 'User',
+            default: null,
+            index: true
+        },
+        assignedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'User'
+        },
+        assignedAt: {
+            type: Date
+        },
+        assignmentHistory: {
+            type: [RegradeAssignmentEventSchema],
+            default: []
         }
     },
     {

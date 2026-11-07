@@ -7,6 +7,7 @@ import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAu
 import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
+import RegradeRequest from '../../../../../../../models/RegradeRequest';
 import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
 import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
@@ -160,8 +161,12 @@ export const GET = withServerTiming(async (
         page.answerScript,
         auth.user.id
       );
+      const assignedRegrade = await RegradeRequest.exists({
+        answerScript: page.answerScript,
+        assignedTo: auth.user.id
+      });
 
-      if (!allocation) {
+      if (!allocation && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,

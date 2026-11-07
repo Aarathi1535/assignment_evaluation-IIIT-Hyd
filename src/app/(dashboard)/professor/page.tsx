@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { BookOpen, FileText, Users, Clock, Plus, FolderOpen } from 'lucide-react';
+import { BookOpen, FileText, Users, Clock, Plus, FolderOpen, ClipboardList } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -116,6 +116,12 @@ export default function ProfessorDashboardPage() {
         <Button variant="secondary" size="md">
           <Plus className="h-4 w-4" />
           <span>Create Exam</span>
+        </Button>
+      </Link>
+      <Link href="/professor/regrade-requests">
+        <Button variant="outline" size="md">
+          <ClipboardList className="h-4 w-4" />
+          <span>Regrade Requests</span>
         </Button>
       </Link>
     </>
