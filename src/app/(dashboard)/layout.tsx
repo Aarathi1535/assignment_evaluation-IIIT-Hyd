@@ -16,6 +16,7 @@ import {
   FileText,
   Plus,
   Flag,
+  Sparkles
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { clearUserDrafts } from '@/lib/offlineDrafts';
@@ -124,6 +125,7 @@ export default function DashboardLayout({
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
       { label: 'Courses', href: '/professor/courses', icon: BookOpen },
       { label: 'Exams', href: '/professor/exams', icon: FileText },
+      { label: 'Classroom Assessment', href: '/professor/classroom', icon: Sparkles },
       { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
       { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
       { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
@@ -133,6 +135,7 @@ export default function DashboardLayout({
     ],
     STUDENT: [
       { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
+      { label: 'Classroom Assessment', href: '/student/classroom', icon: Sparkles },
     ],
   };
 
