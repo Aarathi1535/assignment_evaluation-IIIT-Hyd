@@ -1,0 +1,754 @@
+openapi: 3.1.0
+info:
+  title: IIIT Hyderabad Classroom Activity Service API
+  version: 1.0.0
+  description: >
+    Headless REST API for Classroom Activity (Product 2). Supports dual capabilities:
+    1) Primary Workflow: Timed handwritten answer-sheet uploads, OCR extraction, and human-in-the-loop AI draft verification.
+    2) Complementary Workflow: Mentimeter-inspired live engagement polls, QR/PIN guest joining, and real-time response distribution streaming.
+  contact:
+    name: IIIT Hyderabad Learning Platform Engineering Team
+    email: learning-platform@iiit.ac.in
+servers:
+  - url: http://localhost:3001/api/v1/classroom
+    description: Dedicated Classroom Service (Independent Container Mode)
+  - url: http://localhost:3000/api/v1/classroom
+    description: Monolith Reverse Proxy (Development Mode)
+
+paths:
+  /sessions:
+    post:
+      summary: Create a new classroom session
+      description: Instructors create a timed classroom session for live polling and/or handwritten assessment.
+      operationId: createClassroomSession
+      security:
+        - ClassroomAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created successfully with generated PIN and QR token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+    get:
+      summary: List classroom sessions
+      description: Retrieve paginated sessions created by or assigned to the authenticated instructor.
+      operationId: listClassroomSessions
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PageQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [SCHEDULED, ACTIVE, CLOSED, ARCHIVED]
+      responses:
+        '200':
+          description: List of classroom sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSessionsResponse'
+
+  /sessions/{id}:
+    get:
+      summary: Get classroom session details
+      operationId: getSessionById
+      security:
+        - ClassroomAuth: []
+        - GuestParticipantAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    patch:
+      summary: Update session state (activate, close, extend window)
+      operationId: updateSessionState
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /sessions/{id}/code:
+    post:
+      summary: Generate or regenerate session PIN and QR join code
+      operationId: regenerateSessionCode
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      sessionCode:
+                        type: string
+                        example: "482910"
+                      qrCodeUrl:
+                        type: string
+                        format: uri
+                        example: "https://classroom.iiit.ac.in/join?code=482910"
+                      expiresAt:
+                        type: string
+                        format: date-time
+
+  /sessions/{code}/join:
+    post:
+      summary: Guest or student join via 6-digit session PIN or QR scan
+      description: >
+        Enables students and guests to join an active classroom session. Issues an ephemeral,
+        session-scoped participant JWT token. Requires roll number disambiguation if duplicate display names exist.
+      operationId: joinClassroomSession
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{6}$'
+            example: "482910"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinSessionRequest'
+      responses:
+        '200':
+          description: Successfully joined. Returns session-scoped participant token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinSessionResponse'
+        '404':
+          description: Session code not found or session has ended.
+        '409':
+          description: Duplicate participant name requires explicit roll number disambiguator.
+
+  /sessions/{id}/polls:
+    post:
+      summary: Create an interactive live poll for this session
+      description: Instructor creates an engagement poll (single-choice, multiple-choice, rating scale).
+      operationId: createPoll
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePollRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollResponse'
+
+  /polls/{id}/publish:
+    post:
+      summary: Push poll live to all session participants
+      description: Triggers a real-time SSE event to all connected participant screens.
+      operationId: publishPoll
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollResponse'
+
+  /polls/{id}/responses:
+    post:
+      summary: Submit participant response to a live poll
+      description: Submitted by students or guests holding a valid session participant token.
+      operationId: submitPollResponse
+      security:
+        - GuestParticipantAuth: []
+        - ClassroomAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - selectedOptions
+              properties:
+                selectedOptions:
+                  type: array
+                  items:
+                    type: integer
+                  example: [0]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Response recorded"
+        '409':
+          description: Poll is closed or participant already responded.
+
+  /sessions/{id}/live-stats:
+    get:
+      summary: Get live participation count and aggregated poll distributions
+      description: Used by professor dashboard to display real-time engagement charts without disclosing individual names prematurely.
+      operationId: getLiveSessionStats
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LiveSessionStatsResponse'
+
+  /sessions/{id}/events:
+    get:
+      summary: Server-Sent Events (SSE) stream for real-time classroom updates
+      description: Streams poll launches, response tallies, and window status changes to connected browsers.
+      operationId: streamSessionEvents
+      security:
+        - ClassroomAuth: []
+        - GuestParticipantAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          description: SSE text stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /submissions/upload-sheet:
+    post:
+      summary: Upload handwritten answer-sheet photo within timed classroom window
+      description: >
+        Primary workflow. Student submits physical handwritten solution captured via mobile camera.
+        Enforces strict window checks, file integrity, and queues for OCR + AI-assisted evaluation.
+      operationId: uploadAnswerSheet
+      security:
+        - ClassroomAuth: []
+        - GuestParticipantAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - sessionId
+                - questionNumber
+                - image
+              properties:
+                sessionId:
+                  type: string
+                  example: "672cd50172e27b4e9f7a9d01"
+                questionNumber:
+                  type: integer
+                  example: 1
+                image:
+                  type: string
+                  format: binary
+                  description: JPEG or PNG photograph of the handwritten answer page.
+      responses:
+        '201':
+          description: Answer sheet accepted and queued for OCR extraction and draft evaluation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionStatusResponse'
+        '400':
+          description: Invalid image format or corrupted file.
+        '403':
+          description: Classroom activity window has closed.
+
+  /submissions/{id}:
+    get:
+      summary: Get submission status, extracted text, and evaluation state
+      operationId: getSubmissionStatus
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionStatusResponse'
+
+  /submissions/{id}/approve:
+    patch:
+      summary: Professor approves AI draft evaluation (Human-in-the-Loop gate)
+      description: >
+        Finalizes an evaluation that was generated in DRAFT_EVALUATED state by OCR/AI.
+        Grades remain inaccessible to students until this human verification step completes.
+      operationId: approveEvaluation
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - verifiedScore
+              properties:
+                verifiedScore:
+                  type: number
+                  example: 8.5
+                feedbackNotes:
+                  type: string
+                  example: "Well reasoned derivation of recurrence relation."
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionStatusResponse'
+
+  /sessions/{id}/results:
+    get:
+      summary: Complete professor-facing session results and gradebook export
+      operationId: getSessionResults
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      sessionId:
+                        type: string
+                      totalSubmissions:
+                        type: integer
+                      approvedSubmissions:
+                        type: integer
+                      averageScore:
+                        type: number
+                      participants:
+                        type: array
+                        items:
+                          type: object
+
+components:
+  securitySchemes:
+    ClassroomAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Standard Classroom account token (Instructor / Registered Student).
+    GuestParticipantAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Ephemeral session-scoped guest token issued upon PIN/QR join.
+
+  parameters:
+    SessionIdParam:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "672cd50172e27b4e9f7a9d01"
+    PageQuery:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+    LimitQuery:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        maximum: 100
+
+  schemas:
+    CreateSessionRequest:
+      type: object
+      required:
+        - title
+        - courseId
+        - opensAt
+        - closesAt
+      properties:
+        title:
+          type: string
+          example: "Lecture 8: Dynamic Programming Live Quiz"
+        courseId:
+          type: string
+          example: "CS3001"
+        opensAt:
+          type: string
+          format: date-time
+        closesAt:
+          type: string
+          format: date-time
+        allowGuestJoin:
+          type: boolean
+          default: true
+        requireRegisteredForGrading:
+          type: boolean
+          default: true
+          description: Pending Prof. Jawahar decision on whether guests can upload graded handwritten answer sheets.
+
+    UpdateSessionRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [SCHEDULED, ACTIVE, CLOSED, ARCHIVED]
+        closesAt:
+          type: string
+          format: date-time
+
+    SessionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            courseId:
+              type: string
+            sessionCode:
+              type: string
+            status:
+              type: string
+            opensAt:
+              type: string
+              format: date-time
+            closesAt:
+              type: string
+              format: date-time
+            participantCount:
+              type: integer
+            activePollId:
+              type: string
+              nullable: true
+
+    PaginatedSessionsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionResponse'
+        meta:
+          type: object
+          properties:
+            pagination:
+              type: object
+              properties:
+                page:
+                  type: integer
+                limit:
+                  type: integer
+                totalCount:
+                  type: integer
+                totalPages:
+                  type: integer
+
+    JoinSessionRequest:
+      type: object
+      required:
+        - displayName
+      properties:
+        displayName:
+          type: string
+          example: "Alice Sharma"
+        studentRollNumber:
+          type: string
+          example: "2024101001"
+          description: Optional for anonymous polls; required if duplicate name exists or if graded upload policy is activated.
+
+    JoinSessionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            participantToken:
+              type: string
+              description: Ephemeral session-scoped JWT to pass in Authorization header.
+            participantId:
+              type: string
+            sessionId:
+              type: string
+            sessionTitle:
+              type: string
+
+    CreatePollRequest:
+      type: object
+      required:
+        - prompt
+        - options
+      properties:
+        prompt:
+          type: string
+          example: "What is the tight asymptotic lower bound for comparison sorts?"
+        options:
+          type: array
+          items:
+            type: string
+          example: ["O(n)", "Omega(n log n)", "Theta(n^2)", "O(log n)"]
+        timeLimitSeconds:
+          type: integer
+          default: 60
+
+    PollResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+            prompt:
+              type: string
+            options:
+              type: array
+              items:
+                type: string
+            status:
+              type: string
+              enum: [DRAFT, ACTIVE, CLOSED]
+            totalVotes:
+              type: integer
+
+    LiveSessionStatsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            sessionId:
+              type: string
+            connectedParticipants:
+              type: integer
+            handwrittenSheetsUploaded:
+              type: integer
+            currentPoll:
+              type: object
+              nullable: true
+              properties:
+                pollId:
+                  type: string
+                distribution:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      optionIndex:
+                        type: integer
+                      voteCount:
+                        type: integer
+                      percentage:
+                        type: number
+
+    SubmissionStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            submissionId:
+              type: string
+            sessionId:
+              type: string
+            questionNumber:
+              type: integer
+            status:
+              type: string
+              enum: [RECEIVED, OCR_PROCESSING, DRAFT_EVALUATED, APPROVED, REJECTED]
+            extractedText:
+              type: string
+              nullable: true
+            aiScoreDraft:
+              type: number
+              nullable: true
+            verifiedScore:
+              type: number
+              nullable: true
+            approvedBy:
+              type: string
+              nullable: true
+            approvedAt:
+              type: string
+              format: date-time
+              nullable: true
+
+    ErrorPayload:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "SESSION_CLOSED"
+            message:
+              type: string
+              example: "This classroom session has ended."
+            details:
+              type: object
+              nullable: true
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            requestId:
+              type: string
+
+  responses:
+    BadRequestError:
+      description: Malformed or unparseable request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'
+    UnauthorizedError:
+      description: Authentication token missing, expired, or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'
+    ForbiddenError:
+      description: User lacks sufficient role or session scope
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'
+    NotFoundError:
+      description: Requested session or resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'
+    ConflictError:
+      description: State conflict or duplicate active resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'

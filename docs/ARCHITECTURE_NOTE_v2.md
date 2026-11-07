@@ -1,8 +1,8 @@
 # Architecture Note v2: Independent Product Architecture
 
-**Document Version:** 2.1.0  
+**Document Version:** 2.2.0  
 **Date:** 2026-11-07  
-**Status:** DRAFT (Submitted for Mentor & Stakeholder Sign-Off)  
+**Status:** DRAFT (Submitted for Mentor & Stakeholder Sign-Off — Implementation Gated)  
 **Authors:** Learning Platform Engineering Team  
 **Reviewers:** Laxmi Narayana Murthy Vemuri (Mentor), Prof. C.V. Jawahar (Lead Advisor)
 
@@ -12,43 +12,49 @@
 
 Following architectural review feedback on PR #323, this document formalizes the target architecture for transitioning the IIIT Hyderabad Learning Platform from a monolithic assignment evaluation system into three decoupled, independently viable products accessible through a unified discovery experience:
 
-1. **Assignment Evaluation (Product 1):** The core grading engine, rubric manager, script annotation, grading consistency, regrading, and analytics platform.
-2. **Classroom Activity (Product 2):** A real-time classroom assessment and engagement system featuring timed handwritten answer-sheet image capture/verification and Mentimeter-inspired live participation polls.
+1. **Assignment Evaluation (Product 1):** The core grading engine, rubric manager, handwritten script annotation, multi-grader allocations, regrading, and comprehensive analytics/export platform.
+2. **Classroom Activity (Product 2):** A real-time classroom assessment and engagement system featuring timed physical handwritten answer-sheet image capture/verification alongside Mentimeter-inspired live participation polls.
 3. **Personalised Learning (Product 3):** An adaptive diagnostic and question-bank system driving personalized daily practice and concept mastery tracking.
 
-This note establishes the clarified dual-login strategy, headless microservice and API-first designs, LTI 1.3 grade passback specifications, student guest-join protocols, database isolation guarantees, AI privacy gates, and the step-by-step Git release sequence.
+The platform is designed as **separate headless services** capable of operating independently and integrating with external institutional Learning Management Systems (LMS) such as Canvas, Moodle, and Blackboard via **LTI 1.3 Advantage**.
 
 > [!IMPORTANT]
-> **Implementation Sign-Off Gate**: Per mentor directives and project instructions, platform implementation work remains paused until Architecture Note v2 receives formal review and approval from the mentor and Prof. Jawahar.
+> **Mandatory Architecture Approval Gate**: Per mentor directives and project instructions, platform implementation (Step 5) remains strictly paused until Architecture Note v2 receives formal written review and sign-off from the mentor and Prof. Jawahar.
 
 ---
 
 ## 2. Git Integration Sequence & Release Pre-Requisites
 
-To guarantee zero regression of Assignment Evaluation features (including AE-202 through AE-220) and clean integration into `main`, the engineering workflow follows this exact sequential execution:
+To guarantee zero regression of Assignment Evaluation features (including AE-190 through AE-220) and clean integration into `main`, the engineering workflow follows this exact sequential execution:
 
 ```
 [PR #321 (hotfix)] ──> [main] (MERGED at b5def10)
                           ▲
 [PR #324 (AE-190─200)] ──> [feature/exam-eval-platform] (OPEN DRAFT at 24e88d0)
                           ▲
-[AE-202 ── AE-220] ───> [feature blocks: regrade, audit, analytics, export]
+[Block 1: PR #325 (Regrade)] ──> [feature/exam-eval-platform] (OPEN DRAFT, head: AE-205)
                           ▲
-[Note v2 Sign-Off] ───> [Decomposed PRs: AI, Classroom, Personalised, Auth, Deploy]
+[Block 2: PR #326 (Audit)]   ──> [feature/AE-205-reviewer-assignment] (OPEN DRAFT, head: AE-209)
+                          ▲
+[Block 3: PR #327 (Analytics)] ──> [feature/AE-209-audit-csv-export] (OPEN DRAFT, head: AE-213)
+                          ▲
+[Block 4: PR #328 (Export)]   ──> [feature/AE-213-question-level-analytics] (OPEN DRAFT, head: AE-220)
+                          ▲
+[Note v2 Sign-Off Gate] ───> [Decomposed PRs: AI, Classroom, Personalised, Auth, Deploy]
 ```
 
-### 2.1 Git Sequence Steps & Current Status
+### 2.1 Git Sequence Steps & Current Verified Status
 
-| Step | Action Item | Target / Destination | Current Status | Ownership / Blocker |
+| Step | Action Item | Target / Destination | Current Status | Ownership / Details |
 |---|---|---|---|---|
 | **1** | Convert PR #323 to Draft | `refactor/independent-product-architecture` | **COMPLETED** | Draft mode active. Self-merge strictly prohibited. |
 | **2** | Merge PR #321 (`hotfix/ingestion-summary-staff-auth`) | `main` | **COMPLETED** | Merged manually into `main` at commit `b5def10`. Verifies staff-only 403 on ingestion summary. |
 | **3.1** | Land PRs #288–#299 into `feature/exam-eval-platform` | `feature/exam-eval-platform` | **COMPLETED** | Fast-forwarded to tip of stack (`docs/AE-200-student-portal` at `779f1e4`). |
 | **3.2** | Merge `main` and open consolidated PR #324 | `main` | **COMPLETED** | PR #324 opened as Draft at commit `24e88d0`. All 73 focused tests and 181 comprehensive tests passing. |
-| **3.3** | Review & Merge PR #324 into `main` | `main` | **PENDING MAINTAINER** | **External Action Required**: Maintainer/mentor review and merge of PR #324. |
-| **3.4** | Upstream merge `main` into AE-202...AE-220 | Ticket branches | **HOLD UNTIL 3.3** | Single linear merge with no force-pushes, opening modular PRs per functional block (regrade, audit, analytics, export). |
-| **4** | Review and Sign-Off on Architecture Note v2 | `docs/ARCHITECTURE_NOTE_v2.md` | **SUBMITTED FOR SIGN-OFF** | **External Action Required**: Review by mentor and Prof. Jawahar (including Guest-Join decision). |
-| **5** | Implement Modular Multi-Product PRs | Dedicated feature branches | **ON HOLD (Gated on Step 4)** | Decomposed PRs to be submitted in order. |
+| **3.3** | Upstream merge `feature/exam-eval-platform` into AE-202...AE-220 | Ticket branches | **COMPLETED** | Merged cleanly once through stack with zero force-pushes (`805643e` -> `c399d89` -> `77dfdff` -> `d1af2ce` -> `60cb4c4`). |
+| **3.4** | Open reviewable PRs per functional block | Stacked PRs | **COMPLETED** | PR #325 (Regrade), PR #326 (Audit), PR #327 (Analytics), PR #328 (Export) opened as Drafts. |
+| **4** | Review and Sign-Off on Architecture Note v2 | `docs/ARCHITECTURE_NOTE_v2.md` | **SUBMITTED FOR SIGN-OFF** | **External Action Required**: Review by mentor and Prof. Jawahar. |
+| **5** | Implement Modular Multi-Product PRs | Dedicated feature branches | **ON HOLD (Gated on Step 4)** | Decomposed PRs to be submitted in order once approved. |
 
 ---
 
@@ -81,7 +87,7 @@ As noted in the mentor review on PR #323, the initial prototype demonstrated hig
 - Middleware rules in `proxy.ts` previously bypassed route-level role checks.
 - Dockerfiles currently package the shared Next.js application image.
 
-The decomposed roadmap in Section 10 systematically refactors these components into true standalone boundaries.
+The decomposed roadmap in Section 11 systematically refactors these components into true standalone boundaries.
 
 ---
 
@@ -127,7 +133,7 @@ In live classroom environments, students frequently join sessions via mobile dev
 1. **Session-Scoped Participant Token:**
    - When a student joins via `POST /api/v1/classroom/sessions/{code}/join`, the server validates the active session PIN, records participant registration, and issues an ephemeral, cryptographically signed `classroom_participant_token` containing `{ sessionId, participantId, studentIdentifier }`.
 2. **Elimination of Anonymous Hijacking & Answer Overwriting:**
-   - Form submissions to `POST /api/v1/classroom/submit` require the signed participant token (passed via cookie or `Authorization: Bearer <token>`). Submissions omitting the token or attempting to forge `participantId` are rejected with `401 Unauthorized`.
+   - Form submissions to `POST /api/v1/classroom/submissions/upload-sheet` and poll responses require the signed participant token (passed via cookie or `Authorization: Bearer <token>`). Submissions omitting the token or attempting to forge `participantId` are rejected with `401 Unauthorized`.
    - Duplicate name entries within the same live session require a disambiguating identifier (e.g. roll number) rather than silently returning an existing student's token and allowing answer overwriting.
 3. **No Cross-Product Leakage:**
    - Guest participant tokens are strictly rejected by Assignment Evaluation and Personalised Learning APIs (`403 Forbidden`).
@@ -145,8 +151,8 @@ As clarified by Prof. Jawahar and the student team, live polls are an **engageme
                  │                                               │
                  ▼                                               ▼
      ┌───────────────────────┐                       ┌───────────────────────┐
-     │   Pillar 1: Timed     │                       │  Pillar 2: Real-Time  │
-     │   Handwritten Uploads │                       │  Engagement Polls     │
+     │   Pillar 1: Primary   │                       │  Pillar 2: Engagement │
+     │   Handwritten Uploads │                       │  Live Classroom Polls │
      ├───────────────────────┤                       ├───────────────────────┤
      │ - Physical paper write│                       │ - Mentimeter-style    │
      │ - Mobile photo capture│                       │ - Live question push  │
@@ -160,7 +166,7 @@ As clarified by Prof. Jawahar and the student team, live polls are an **engageme
 ### 5.1 Pillar 1: Timed Handwritten Answer-Sheet Submission & Verification
 1. **Physical Writing & Image Submission:**
    - Students write detailed, long-form solutions on paper within the timed classroom window.
-   - Using the mobile interface, students capture clear photos of their answer sheets and upload them via `/api/v1/classroom/upload-sheet`.
+   - Using the mobile interface, students capture clear photos of their answer sheets and upload them via `/api/v1/classroom/submissions/upload-sheet`.
 2. **AI-Assisted Draft Verification (Human-in-the-Loop):**
    - Uploaded answer sheets are processed through handwriting OCR and rubrics to generate draft scores.
    - **Crucial Rule:** AI evaluations are strictly marked as `STATUS: DRAFT_EVALUATED`. No grade is finalized or released to students until the professor/TA inspects the extracted text, verifies accuracy, and clicks "Approve Evaluation".
@@ -171,40 +177,84 @@ As clarified by Prof. Jawahar and the student team, live polls are an **engageme
 1. **Interactive Participation Prompts:**
    - Professors can dispatch quick multiple-choice polls, opinion checks, or conceptual temperature-checks during lectures.
 2. **Real-Time Visualization:**
-   - Live responses stream via Server-Sent Events (`/api/v1/classroom/events`).
+   - Live responses stream via Server-Sent Events (`/api/v1/classroom/sessions/{id}/events`).
    - The instructor display renders dynamic response distribution charts showing aggregate engagement in real time without disclosing individual student names prematurely.
 
 ---
 
-## 6. Headless Independent Services & API-First Architecture
+## 6. AI Evaluation Pipeline & Human-in-the-Loop Governance
 
-To satisfy Prof. Jawahar's requirement that services operate independently and integrate with other institutional Learning Management Systems (Canvas, Moodle, Blackboard):
+The platform establishes four strictly separated stages for automated processing:
 
-### 6.1 Versioned `/v1` Service Contracts
-All products expose clean, versioned headless APIs decoupled from Next.js server-side page rendering:
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│     Stage 1     │     │     Stage 2     │     │     Stage 3     │     │     Stage 4     │
+│ OCR Extraction  │ ──> │ AI Draft Score  │ ──> │ Human Staff     │ ──> │ Finalized Grade │
+│                 │     │                 │     │ Verification    │     │                 │
+│ (Raw text/math) │     │ (Status: DRAFT) │     │ (Audit log: OK) │     │ (Released/LMS)  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+1. **Stage 1 — OCR & Text Extraction:**
+   - Ingests student handwriting image, applies perspective correction, contrast enhancement, and OCR extraction.
+   - Outputs extracted text, math expressions, and segmentation confidence scores.
+2. **Stage 2 — AI-Assisted Evaluation (Draft State):**
+   - Evaluates extracted text against question rubrics and reference criteria.
+   - Outputs recommended scores and diagnostic feedback.
+   - **State Invariant:** Stored with status `DRAFT_EVALUATED`. Never surfaces to students or gradebooks in this state.
+3. **Stage 3 — Human Verification & Approval Gate:**
+   - Course staff (Professor/TA) inspects original image side-by-side with extracted text and AI score recommendation.
+   - Staff confirms or overrides scores via `PATCH /api/v1/classroom/submissions/{id}/approve`.
+   - Generates an immutable audit trail entry (`EVALUATION_APPROVED`).
+4. **Stage 4 — Finalized Results & Passback:**
+   - Transition to `APPROVED`. Scores become visible in student results and eligible for LTI 1.3 LMS grade passback.
+
+### 6.1 AI Privacy & Model Safety Rules
+- **Privacy Gate (`isRealStudentData`):** Defaults to `true`. Student handwriting images and extracted text containing student PII are masked and withheld from external LLM APIs unless explicitly consented and anonymized.
+- **Model Parameterization:** Deprecated model names (`gemini-1.5-flash`, `gemini-2.5-flash`) are eliminated. The active model is governed by the `GEMINI_MODEL` environment variable, defaulting to current LTS models.
+
+---
+
+## 7. Headless Services & API-First Architecture
+
+To satisfy Prof. Jawahar's requirement that services operate independently and integrate with other institutional Learning Management Systems:
+
+### 7.1 Versioned `/v1` Endpoints
+All products expose clean, versioned headless REST APIs decoupled from Next.js server-side page rendering:
 - **Assignment Evaluation:** `/api/v1/evaluation/*` (with `/api/exams/*` and `/api/grading/*` maintained for backward compatibility).
 - **Classroom Activity:** `/api/v1/classroom/*` (sessions, join, submit, poll, review, stream).
 - **Personalised Learning:** `/api/v1/personalized/*` (daily, questions, schedules, evaluate).
 
-### 6.2 OpenAPI 3.1 Specifications
+For complete payload structures, pagination rules, error envelopes, and idempotency conventions, see [API Conventions Specification](file:///docs/API_CONVENTIONS.md).
+
+### 7.2 OpenAPI 3.1 Specifications
 Each independent service publishes a formal OpenAPI contract in `docs/openapi/`:
-- `docs/openapi/evaluation-v1.yaml`
-- `docs/openapi/classroom-v1.yaml`
-- `docs/openapi/personalized-v1.yaml`
+- `docs/openapi/classroom-service.v1.yaml` (Drafted and verified in Step 4)
+- `docs/openapi/evaluation-v1.yaml` (Scheduled for Step 5)
+- `docs/openapi/personalized-v1.yaml` (Scheduled for Step 5)
 
 These definitions allow external developers and LMS teams to generate client SDKs and validate payloads independently of our frontend UI.
 
-### 6.3 LTI 1.3 Advantage Integration Architecture
+---
+
+## 8. LTI 1.3 Advantage Integration Architecture
+
 Expanding on the design in `AE-216` (`docs/LTI_1_3_GRADE_PASSBACK.md`):
-- **IMS LTI 1.3 Core:** OAuth 2.0 / OIDC stateful launch flow (`/api/lti/login`, `/api/lti/launch`).
-- **Assignment and Grade Services (AGS v2p0):** Headless grade passback publishing finalized student marks directly to LMS gradebooks (Moodle, Canvas) using JSON-LD payloads.
-- **Names and Role Provisioning Services (NRPS v2p0):** Headless roster synchronization mapping LMS student IDs to internal student identities.
+
+1. **IMS LTI 1.3 Core:**
+   - OAuth 2.0 / OIDC stateful launch flow (`/api/lti/login`, `/api/lti/launch`).
+   - Secure verification of platform tool registration, platform public keys (JWKS), and signed JWT state.
+2. **Assignment and Grade Services (AGS v2p0):**
+   - Headless grade passback publishing finalized student marks directly to LMS gradebooks (Moodle, Canvas) using JSON-LD payloads.
+   - **Current Implementation State:** Safe stub mode (`LTI_STUB_MODE=true`) verifies token structures and payload validation without requiring an active external LMS socket. Production socket connectivity is scheduled for post-architecture deployment.
+3. **Names and Role Provisioning Services (NRPS v2p0):**
+   - Headless roster synchronization mapping LMS student IDs (`sub`, `lis_person_sourcedid`) to internal student identities.
 
 ---
 
-## 7. Database Isolation & Connection Architecture
+## 9. Database Isolation & Connection Architecture
 
-### 7.1 Multi-Database Connection Architecture
+### 9.1 Multi-Database Connection Architecture
 To guarantee genuine database isolation and prevent connection hijacking:
 - `src/lib/classroomDb.ts`: Uses `mongoose.createConnection(process.env.MONGODB_CLASSROOM_URI)`. Models are compiled on this dedicated connection instance.
 - `src/lib/personalizedDb.ts`: Uses `mongoose.createConnection(process.env.MONGODB_PERSONALIZED_URI)`. Models are compiled on this dedicated connection instance.
@@ -213,7 +263,7 @@ To guarantee genuine database isolation and prevent connection hijacking:
 
 ---
 
-## 8. Security, AI Privacy & Vulnerability Remediation
+## 10. Security, Authorization & Vulnerability Remediation
 
 | Vulnerability / Defect | Root Cause | Remediation in Target Implementation |
 |---|---|---|
@@ -229,15 +279,15 @@ To guarantee genuine database isolation and prevent connection hijacking:
 
 ---
 
-## 9. Questions & Decisions for Prof. Jawahar's Review & Sign-Off
+## 11. Decisions Submitted for Prof. Jawahar's Review & Sign-Off
 
-To ensure exact alignment before proceeding to platform implementation, the following key architectural questions are submitted for Prof. Jawahar's direction:
+To ensure exact alignment before proceeding to platform implementation, the following key architectural decisions are submitted for Prof. Jawahar's direction:
 
-### Decision 1: Guest Join vs Registered Student Role for Graded Submissions
+### Decision 1: Guest Access Policy for Graded Submissions
 - **Context:** Students can enter live classroom sessions quickly using a 6-digit PIN or QR code as an anonymous guest.
-- **Question:** Should anonymous guest participants be permitted to upload physical handwritten answer sheets for formal grading, or should anonymous guest access be restricted strictly to Mentimeter-style live polling, requiring registered student accounts for graded answer-sheet submissions?
+- **Question:** Should anonymous guest participants be permitted to upload physical handwritten answer sheets for formal grading, or should anonymous guest access be restricted strictly to Mentimeter-style live polling, requiring registered student accounts (or post-session roll-number claims) for graded answer-sheet submissions?
 - **Engineering Recommendation:** 
-  - Allow guest access for real-time engagement polls.
+  - Allow anonymous guest access for real-time engagement polls.
   - Require a registered student identity (or post-session claim with roll number) for long-form answer-sheet evaluation, ensuring results tie directly into academic records and grade passback.
 
 ### Decision 2: Human-in-the-Loop Review for AI Handwriting Evaluations
@@ -250,62 +300,90 @@ To ensure exact alignment before proceeding to platform implementation, the foll
 - **Question:** Should we maintain completely separate logins during Phase 1 with the shared platform login introduced as an opt-in configuration in Phase 2?
 - **Engineering Recommendation:** Implement independent product authentication first to guarantee system decoupling, followed by the optional signed platform token adapter.
 
+### Decision 4: LTI 1.3 Integration Expectations
+- **Context:** Integration with institutional LMS (Canvas, Moodle).
+- **Question:** Should Phase 1 platform implementation deliver the verified safe stub mode with AGS/NRPS payload contracts, followed by live LMS socket certification in Phase 2?
+- **Engineering Recommendation:** Deliver verified stub mode with OpenAPI schemas in Phase 1; conduct live Moodle/Canvas socket validation once testbed credentials are provisioned.
+
+### Decision 5: Independent Service & Deployment Boundaries
+- **Context:** Operating products as standalone microservice containers.
+- **Question:** Should we deploy independent container images (`docker-compose.products.yml`) on separate ports (3000, 3001, 3002) with dedicated database instances, while retaining the root proxy for unified discovery?
+- **Engineering Recommendation:** Approve the independent container architecture, ensuring each product has isolated secrets, databases, and runtime processes.
+
 ---
 
-## 10. Decomposed Implementation Roadmap (Post-Approval PR Blocks)
+## 12. Decomposed Implementation Roadmap (Step 5 PR Sequence)
 
-Following mentor and stakeholder approval of this document, implementation will be executed in targeted, reviewable pull requests:
+Following mentor and stakeholder approval of this document, implementation will be executed in targeted, independently reviewable pull requests in the exact order below:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 4: Architecture Note v2 Review & Sign-Off (Current Step)         │
+│ Phase 4: Architecture Note v2 Review & Sign-Off (Current Gate)         │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 5.1: Core AI Privacy & Model Parameterization PR                 │
-│ - isRealStudentData gating, GEMINI_MODEL env, DRAFT evaluation status  │
+│ PR 1: AI Service Boundary                                              │
+│ - Centralized model-provider integration outside business logic        │
+│ - Gating with isRealStudentData, GEMINI_MODEL env, DRAFT review state  │
+│ - Cost and usage instrumentation, no client-side API keys              │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 5.2: Classroom Core & Live Polling PR                            │
-│ - Mentimeter-style live polling, SSE distribution stream               │
-│ - Retain handwriting submission pipeline (clean of test backdoors)     │
+│ PR 2: Classroom Polls Core                                             │
+│ - Live classroom participation capability, 6-digit PIN & QR links      │
+│ - Live response distributions & participation stats (SSE stream)       │
+│ - Session isolation, guest participant token, brute-force protection   │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 5.3: Personalised Learning Question Bank & Security PR           │
-│ - Strip answer keys from student payloads, course allocation check     │
+│ PR 3: Handwriting Pipeline (Subject to Decision 1 & 2 Approval)        │
+│ - Timed handwritten answer-sheet upload, image validation & storage    │
+│ - OCR extraction, AI draft evaluation, staff approval gate             │
+│ - Complete removal of test backdoors                                   │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 5.4: Identity, Auth Hardening & Database Isolation PR            │
-│ - Dual login model, no email auto-linking, separate mongoose pools     │
-│ - Role hardening (no default PROFESSOR), brute-force protection        │
+│ PR 4: Personalised Learning Question Bank                              │
+│ - Course-based organization, taxonomy, difficulty metadata             │
+│ - Strip answer keys/rubrics from student payloads, course allocation   │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 5.5: Unified Landing Page, Proxy Routing & HTTP E2E Tests PR     │
-│ - Keep logged-in user redirects, proxy rule hardening, HTTP test suite │
+│ PR 5: Identity & Dual Login Model                                      │
+│ - Separate product login and account management by default             │
+│ - Optional signed platform login, configurable per product             │
+│ - No email auto-linking, separate Mongoose connection pools            │
+│ - Role hardening (no default PROFESSOR), brute-force rate limiting     │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Phase 5.6: Independent Container Deployment PR                         │
-│ - Validated Dockerfiles & docker-compose.products.yml per product      │
+│ PR 6: Landing Page & Proxy Routing                                     │
+│ - Preserve logged-in user redirects (/professor, /student)             │
+│ - Feature flag gating on discovery hub, proxy middleware hardening     │
+│ - HTTP-level E2E tests for registration and authenticated product usage│
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│ PR 7: Independent Container Deployment                                 │
+│ - Standalone Dockerfiles and docker-compose.products.yml per product   │
+│ - Isolated env variables and secrets, independent health checks        │
+│ - Verified deployment tests proving zero cross-product secret leakage  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 11. Sign-Off & Approvals
+## 13. Sign-Off & Approvals Status
 
 | Stakeholder / Role | Status | Notes / Signature |
 |---|---|---|
-| **Laxmi Narayana Murthy Vemuri** (Mentor) | `PENDING REVIEW` | Waiting for review of dual-login, Git sequence, and isolation design. |
-| **Prof. C.V. Jawahar** (Lead Advisor) | `PENDING REVIEW` | Waiting for review of guest-join decision, AI review gate, and poll/handwriting dual focus. |
-| **Engineering Implementation Team** | `SIGNED` | Architecture Note v2.1 authored and ready for implementation upon sign-off. |
+| **Laxmi Narayana Murthy Vemuri** (Mentor) | `PENDING REVIEW` | Waiting for review of dual-login, Git sequence, OpenAPI specs, and isolation design. |
+| **Prof. C.V. Jawahar** (Lead Advisor) | `PENDING REVIEW` | Waiting for review of 5 key decisions (guest policy, AI review gate, dual login rollout, LTI expectations, deployment boundaries). |
+| **Engineering Implementation Team** | `SIGNED (v2.2.0)` | Architecture Note v2.2 authored and ready for implementation upon sign-off. |
