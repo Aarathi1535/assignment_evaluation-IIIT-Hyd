@@ -24,6 +24,25 @@ export interface StudentResultItemDto {
     maxMarks?: number;
 }
 
+export interface ReleasedExamScoreDto {
+    studentId: string;
+    scriptId: string;
+    score: number;
+    maxMarks: number;
+}
+
+export interface ReleasedExamGradeObservationDto {
+    graderId: string;
+    graderName: string;
+    comparableGroup: string;
+    scorePercentage: number;
+}
+
+export interface ReleasedExamQuestionScoresDto {
+    questions: Array<{ questionNumber: number; maxMarks: number }>;
+    observations: Array<{ questionNumber: number; score: number; maxMarks: number }>;
+}
+
 export interface ReleasedStudentResultDto {
     examId: string;
     examTitle: string;
@@ -415,6 +434,174 @@ export class StudentResultService {
         }
 
         return results;
+    }
+
+    async getPublishedExamScores(exam: IExam): Promise<ReleasedExamScoreDto[]> {
+        if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
+            return [];
+        }
+
+        const scripts = await AnswerScript.find({
+            exam: exam._id,
+            isActive: true,
+            student: { $type: 'objectId' }
+        }).sort({ _id: 1 });
+        const studentIds = scripts.flatMap(script => script.student ? [script.student] : []);
+        const activeStudents = await User.find({
+            _id: { $in: studentIds },
+            role: UserRole.STUDENT,
+            isActive: true
+        }).select('_id').lean();
+        const activeStudentIds = new Set(activeStudents.map(student => student._id.toString()));
+        const releasedScores: ReleasedExamScoreDto[] = [];
+
+        for (const script of scripts) {
+            if (!script.student || !activeStudentIds.has(script.student.toString())) {
+                continue;
+            }
+            const result = await this.evaluateReleaseConditions(script.student, exam, script);
+            if (result.isReleased && result.total !== undefined && result.maxMarks !== undefined &&
+                Number.isFinite(result.total) && Number.isFinite(result.maxMarks) &&
+                result.total >= 0 && result.total <= result.maxMarks && result.maxMarks > 0) {
+                releasedScores.push({
+                    studentId: script.student.toString(),
+                    scriptId: script._id.toString(),
+                    score: result.total,
+                    maxMarks: result.maxMarks
+                });
+            }
+        }
+
+        return releasedScores;
+    }
+
+    async getPublishedExamQuestionScores(
+        exam: IExam,
+        releasedScriptIds: readonly string[]
+    ): Promise<ReleasedExamQuestionScoresDto> {
+        if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
+            return { questions: [], observations: [] };
+        }
+
+        const rubrics = await Rubric.find({ exam: exam._id })
+            .select('questions version isActive')
+            .sort({ version: -1, createdAt: -1 })
+            .lean();
+        const currentRubricId = exam.rubric?.toString();
+        const currentRubric = rubrics.find(rubric =>
+            currentRubricId && rubric._id.toString() === currentRubricId
+        ) || rubrics.find(rubric => rubric.isActive) || rubrics[0];
+        const orderedRubrics = currentRubric
+            ? [currentRubric, ...rubrics.filter(rubric => rubric._id.toString() !== currentRubric._id.toString())]
+            : rubrics;
+        const rubricById = new Map(orderedRubrics.map(rubric => [rubric._id.toString(), rubric]));
+        const questionsByNumber = new Map<number, { questionNumber: number; maxMarks: number }>();
+
+        for (const question of currentRubric?.questions || []) {
+            if (!Number.isSafeInteger(question.questionNumber) ||
+                !Number.isFinite(question.maxMarks) || question.maxMarks < 0 ||
+                questionsByNumber.has(question.questionNumber)) {
+                continue;
+            }
+            questionsByNumber.set(question.questionNumber, {
+                questionNumber: question.questionNumber,
+                maxMarks: question.maxMarks
+            });
+        }
+
+        const scriptIds = releasedScriptIds.map(id => new mongoose.Types.ObjectId(id));
+        const grades = scriptIds.length > 0
+            ? await Grade.find({
+                answerScript: { $in: scriptIds },
+                isFinal: true
+            }).select('rubric question totalScore').lean()
+            : [];
+        const observations: ReleasedExamQuestionScoresDto['observations'] = [];
+
+        for (const grade of grades) {
+            if (typeof grade.question !== 'number' || !grade.rubric) {
+                continue;
+            }
+            const rubric = rubricById.get(grade.rubric.toString());
+            const question = rubric?.questions.find(item => item.questionNumber === grade.question);
+            if (!question || !Number.isFinite(question.maxMarks) ||
+                question.maxMarks <= 0 || !Number.isFinite(grade.totalScore) ||
+                grade.totalScore < 0 || grade.totalScore > question.maxMarks) {
+                continue;
+            }
+
+            if (!questionsByNumber.has(question.questionNumber)) {
+                questionsByNumber.set(question.questionNumber, {
+                    questionNumber: question.questionNumber,
+                    maxMarks: question.maxMarks
+                });
+            }
+            observations.push({
+                questionNumber: question.questionNumber,
+                score: grade.totalScore,
+                maxMarks: question.maxMarks
+            });
+        }
+
+        return {
+            questions: Array.from(questionsByNumber.values()),
+            observations
+        };
+    }
+
+    async getPublishedExamGradeObservations(exam: IExam): Promise<ReleasedExamGradeObservationDto[]> {
+        const releasedScripts = await this.getPublishedExamScores(exam);
+        if (releasedScripts.length === 0) {
+            return [];
+        }
+
+        const scriptIds = releasedScripts.map(result => new mongoose.Types.ObjectId(result.scriptId));
+        const grades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        }).select('rubric gradedBy question totalScore').lean();
+        const rubricIds = Array.from(new Set(grades.map(grade => grade.rubric.toString())));
+        const rubrics = await Rubric.find({ _id: { $in: rubricIds } }).select('questions').lean();
+        const rubricById = new Map(rubrics.map(rubric => [rubric._id.toString(), rubric]));
+        const taIds = Array.from(new Set(grades.map(grade => grade.gradedBy.toString())));
+        const graders = await User.find({
+            _id: { $in: taIds },
+            role: UserRole.TA,
+            isActive: true
+        }).select('_id name').lean();
+        const graderById = new Map(graders.map(grader => [grader._id.toString(), grader]));
+        const observations: ReleasedExamGradeObservationDto[] = [];
+
+        for (const grade of grades) {
+            const rubric = rubricById.get(grade.rubric.toString());
+            const grader = graderById.get(grade.gradedBy.toString());
+            if (!rubric || !grader || !Number.isFinite(grade.totalScore) || grade.totalScore < 0) {
+                continue;
+            }
+
+            const isWholeScriptGrade = grade.question === undefined || grade.question === null;
+            const question = isWholeScriptGrade
+                ? undefined
+                : rubric.questions.find(item => item.questionNumber === grade.question);
+            if (!isWholeScriptGrade && !question) {
+                continue;
+            }
+            const maxMarks = isWholeScriptGrade
+                ? rubric.questions.reduce((sum, item) => sum + (Number(item.maxMarks) || 0), 0)
+                : Number(question?.maxMarks);
+            if (!Number.isFinite(maxMarks) || maxMarks <= 0 || grade.totalScore > maxMarks) {
+                continue;
+            }
+
+            observations.push({
+                graderId: grader._id.toString(),
+                graderName: grader.name,
+                comparableGroup: `${grade.rubric.toString()}:${isWholeScriptGrade ? 'whole' : grade.question}`,
+                scorePercentage: (grade.totalScore / maxMarks) * 100
+            });
+        }
+
+        return observations;
     }
 
     /**

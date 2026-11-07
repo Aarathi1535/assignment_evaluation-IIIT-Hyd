@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users, Activity, Send, RotateCcw } from 'lucide-react';
+import { FileText, Plus, Calendar, Bookmark, HelpCircle, Search, Trash2, Edit3, CheckCircle2, AlertCircle, Upload, Users, Activity, BarChart3, Send, RotateCcw } from 'lucide-react';
 import { PublishResultsModal } from '@/components/professor/PublishResultsModal';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
@@ -352,6 +352,14 @@ export default function ProfessorExamsPage() {
                             <span>Progress</span>
                           </Button>
                         </Link>
+                        {exam.status === 'PUBLISHED' && (
+                          <Link href={`/professor/exams/${exam._id}/analytics`} className="flex-1 min-w-[90px]">
+                            <Button variant="outline" size="sm" className="w-full h-9 text-xs px-2">
+                              <BarChart3 className="h-3.5 w-3.5 mr-1" />
+                              <span>Analytics</span>
+                            </Button>
+                          </Link>
+                        )}
                         {exam.status === 'PUBLISHED' ? (
                           <div className="flex items-center gap-1.5">
                             <span
