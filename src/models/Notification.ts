@@ -87,6 +87,15 @@ const NotificationSchema = new Schema<INotification>(
 // Compound index for querying a TA's notifications sorted by read state and recency
 NotificationSchema.index({ recipient: 1, read: 1, createdAt: -1 });
 
+// Partial unique index to guarantee idempotency and prevent duplicate publish notifications per student
+NotificationSchema.index(
+    { exam: 1, recipient: 1, type: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { type: NotificationType.PUBLISH, exam: { $exists: true } }
+    }
+);
+
 const Notification: Model<INotification> = mongoose.models.Notification || mongoose.model<INotification>('Notification', NotificationSchema);
 
 export default Notification;
