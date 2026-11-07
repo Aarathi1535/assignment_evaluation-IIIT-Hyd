@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import ExamExportPanel from '@/components/analytics/ExamExportPanel';
 
 interface ScoreDistributionBin {
     startPercentage: number;
@@ -342,6 +343,14 @@ export default function ExamAnalyticsDashboard({ examId }: { examId: string }) {
                                 </Card>
                             ))}
                         </section>
+
+                        <div id="export">
+                            <ExamExportPanel
+                                examId={examId}
+                                examTitle={payload.exam.exam.title}
+                                releasedCount={payload.exam.classStatistics.count}
+                            />
+                        </div>
 
                         <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                             <Card>
