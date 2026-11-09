@@ -83,6 +83,12 @@ export interface ItemizedResultDto {
     total: number;
     maxTotal: number;
 }
+interface ReleaseConditionsBatchData {
+    allocationsByScript?: Map<string, IAllocation[]>;
+    gradesByScript?: Map<string, IGrade[]>;
+    rubricsById?: Map<string, IRubric>;
+}
+
 export class StudentResultService {
     /**
      * Validates that the request is made by an authenticated, active student
@@ -138,7 +144,8 @@ export class StudentResultService {
     private async evaluateReleaseConditions(
         studentId: mongoose.Types.ObjectId,
         exam: { _id?: mongoose.Types.ObjectId | string; isActive: boolean; status: ExamStatus; rubric?: mongoose.Types.ObjectId | null },
-        script: IAnswerScript | null
+        script: IAnswerScript | null,
+        batchData?: ReleaseConditionsBatchData
     ): Promise<{ isReleased: boolean; total?: number; scriptId?: string; maxMarks?: number }> {
         if (!script) {
             return { isReleased: false };
@@ -169,7 +176,9 @@ export class StudentResultService {
         }
 
         // Condition 7: Check allocations and grades completeness
-        const allocations: IAllocation[] = await Allocation.find({ answerScript: script._id });
+        const allocations: IAllocation[] = batchData?.allocationsByScript
+            ? (batchData.allocationsByScript.get(script._id.toString()) || [])
+            : await Allocation.find({ answerScript: script._id });
         const hasUnfinishedAllocations = allocations.some(
             a => a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
         );
@@ -177,7 +186,9 @@ export class StudentResultService {
             return { isReleased: false };
         }
 
-        const grades: IGrade[] = await Grade.find({ answerScript: script._id });
+        const grades: IGrade[] = batchData?.gradesByScript
+            ? (batchData.gradesByScript.get(script._id.toString()) || [])
+            : await Grade.find({ answerScript: script._id });
         if (grades.length === 0) {
             return { isReleased: false };
         }
@@ -217,7 +228,9 @@ export class StudentResultService {
                 return { isReleased: false };
             }
 
-            const rubric: IRubric | null = await Rubric.findById(wholeScriptGrade.rubric);
+            const rubric: IRubric | null = batchData?.rubricsById
+                ? (batchData.rubricsById.get(wholeScriptGrade.rubric.toString()) || null)
+                : await Rubric.findById(wholeScriptGrade.rubric);
             if (!rubric || !rubric.questions || rubric.questions.length === 0) {
                 return { isReleased: false };
             }
@@ -266,7 +279,9 @@ export class StudentResultService {
         }
 
         const persistedRubricId = rubricIdStrings[0];
-        const rubric: IRubric | null = await Rubric.findById(persistedRubricId);
+        const rubric: IRubric | null = batchData?.rubricsById
+            ? (batchData.rubricsById.get(persistedRubricId) || null)
+            : await Rubric.findById(persistedRubricId);
         if (!rubric || !rubric.questions || rubric.questions.length === 0) {
             return { isReleased: false };
         }
@@ -455,11 +470,56 @@ export class StudentResultService {
         const activeStudentIds = new Set(activeStudents.map(student => student._id.toString()));
         const releasedScores: ReleasedExamScoreDto[] = [];
 
+        // Batch-load allocations, grades, and rubrics once across all scripts of this exam (O(1) queries instead of O(N))
+        const scriptIds = scripts.map(s => s._id);
+        const [allAllocations, allGrades, allRubrics] = await Promise.all([
+            Allocation.find({ answerScript: { $in: scriptIds } }).lean(),
+            Grade.find({ answerScript: { $in: scriptIds } }).lean(),
+            Rubric.find({ exam: exam._id }).lean()
+        ]);
+
+        const allocationsByScript = new Map<string, IAllocation[]>();
+        for (const alloc of allAllocations) {
+            const key = alloc.answerScript.toString();
+            const list = allocationsByScript.get(key) || [];
+            list.push(alloc as IAllocation);
+            allocationsByScript.set(key, list);
+        }
+
+        const gradesByScript = new Map<string, IGrade[]>();
+        for (const grade of allGrades) {
+            const key = grade.answerScript.toString();
+            const list = gradesByScript.get(key) || [];
+            list.push(grade as IGrade);
+            gradesByScript.set(key, list);
+        }
+
+        const rubricsById = new Map<string, IRubric>();
+        for (const rubric of allRubrics) {
+            rubricsById.set(rubric._id.toString(), rubric as IRubric);
+        }
+
+        const missingRubricIds = allGrades
+            .map(g => g.rubric?.toString())
+            .filter((id): id is string => Boolean(id) && !rubricsById.has(id!));
+        if (missingRubricIds.length > 0) {
+            const extraRubrics = await Rubric.find({ _id: { $in: Array.from(new Set(missingRubricIds)) } }).lean();
+            for (const rubric of extraRubrics) {
+                rubricsById.set(rubric._id.toString(), rubric as IRubric);
+            }
+        }
+
+        const batchData: ReleaseConditionsBatchData = {
+            allocationsByScript,
+            gradesByScript,
+            rubricsById
+        };
+
         for (const script of scripts) {
             if (!script.student || !activeStudentIds.has(script.student.toString())) {
                 continue;
             }
-            const result = await this.evaluateReleaseConditions(script.student, exam, script);
+            const result = await this.evaluateReleaseConditions(script.student, exam, script, batchData);
             if (result.isReleased && result.total !== undefined && result.maxMarks !== undefined &&
                 Number.isFinite(result.total) && Number.isFinite(result.maxMarks) &&
                 result.total >= 0 && result.total <= result.maxMarks && result.maxMarks > 0) {

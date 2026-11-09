@@ -52,6 +52,8 @@ interface GraderMetric {
     name: string;
     comparisonCount: number;
     meanAbsoluteDeviationPercentagePoints: number;
+    signedMeanDeviationPercentagePoints?: number;
+    meanSignedDeviationPercentagePoints?: number;
     sampleSizeStatus: 'SUFFICIENT' | 'INSUFFICIENT';
 }
 
@@ -140,6 +142,11 @@ function GraderConsistencyChart({
                         <span className="text-sm font-semibold text-slate-900">{grader.name}</span>
                         <span className="text-xs tabular-nums text-slate-700">
                             {grader.meanAbsoluteDeviationPercentagePoints.toFixed(1)} percentage points
+                            {grader.signedMeanDeviationPercentagePoints !== undefined && (
+                                <span className="text-slate-500">
+                                    {' '}(signed: {grader.signedMeanDeviationPercentagePoints > 0 ? '+' : ''}{grader.signedMeanDeviationPercentagePoints.toFixed(1)} pp)
+                                </span>
+                            )}
                             {' '}({grader.comparisonCount} comparisons)
                         </span>
                     </div>

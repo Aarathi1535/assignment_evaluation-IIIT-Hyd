@@ -42,6 +42,8 @@ export interface GraderConsistencyMetric {
     graderId: string;
     comparisonCount: number;
     meanAbsoluteDeviationPercentagePoints: number;
+    signedMeanDeviationPercentagePoints: number;
+    meanSignedDeviationPercentagePoints?: number;
     sampleSizeStatus: 'SUFFICIENT' | 'INSUFFICIENT';
 }
 
@@ -177,26 +179,32 @@ export function calculateGraderConsistency(
         groups.set(observation.comparableGroup, group);
     }
 
-    const deviationsByGrader = new Map<string, number[]>();
+    const deviationsByGrader = new Map<string, { absolute: number[]; signed: number[] }>();
     for (const group of groups.values()) {
         if (new Set(group.map(observation => observation.graderId)).size < 2) {
             continue;
         }
         const groupMean = group.reduce((sum, observation) => sum + observation.scorePercentage, 0) / group.length;
         for (const observation of group) {
-            const deviations = deviationsByGrader.get(observation.graderId) || [];
-            deviations.push(Math.abs(observation.scorePercentage - groupMean));
-            deviationsByGrader.set(observation.graderId, deviations);
+            const entry = deviationsByGrader.get(observation.graderId) || { absolute: [], signed: [] };
+            entry.absolute.push(Math.abs(observation.scorePercentage - groupMean));
+            entry.signed.push(observation.scorePercentage - groupMean);
+            deviationsByGrader.set(observation.graderId, entry);
         }
     }
 
-    return Array.from(deviationsByGrader, ([graderId, deviations]): GraderConsistencyMetric => ({
-        graderId,
-        comparisonCount: deviations.length,
-        meanAbsoluteDeviationPercentagePoints:
-            deviations.reduce((sum, deviation) => sum + deviation, 0) / deviations.length,
-        sampleSizeStatus: deviations.length >= minimumSampleSize
-            ? 'SUFFICIENT'
-            : 'INSUFFICIENT'
-    })).sort((left, right) => left.graderId.localeCompare(right.graderId));
+    return Array.from(deviationsByGrader, ([graderId, entry]): GraderConsistencyMetric => {
+        const meanAbsolute = entry.absolute.reduce((sum, deviation) => sum + deviation, 0) / entry.absolute.length;
+        const meanSigned = entry.signed.reduce((sum, deviation) => sum + deviation, 0) / entry.signed.length;
+        return {
+            graderId,
+            comparisonCount: entry.absolute.length,
+            meanAbsoluteDeviationPercentagePoints: meanAbsolute,
+            signedMeanDeviationPercentagePoints: meanSigned,
+            meanSignedDeviationPercentagePoints: meanSigned,
+            sampleSizeStatus: entry.absolute.length >= minimumSampleSize
+                ? 'SUFFICIENT'
+                : 'INSUFFICIENT'
+        };
+    }).sort((left, right) => left.graderId.localeCompare(right.graderId));
 }
