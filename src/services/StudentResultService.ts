@@ -10,6 +10,7 @@ import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation'
 import StudentMapping from '../models/StudentMapping';
 import Rubric, { IRubric } from '../models/Rubric';
 import RegradeRequest from '../models/RegradeRequest';
+import ScriptFlag, { FlagStatus } from '../models/ScriptFlag';
 
 export type ResultReleaseStatus = 'RELEASED' | 'NOT_AVAILABLE';
 
@@ -116,7 +117,7 @@ export class StudentResultService {
      * - No associated allocation remains PENDING or IN_PROGRESS
      * - Derives maxMarks strictly from the persisted rubric version referenced by Grade.rubric
      */
-    private async evaluateReleaseConditions(
+    public async evaluateReleaseConditions(
         studentId: mongoose.Types.ObjectId,
         exam: { _id?: mongoose.Types.ObjectId | string; isActive: boolean; status: ExamStatus; rubric?: mongoose.Types.ObjectId | null },
         script: IAnswerScript | null
@@ -126,7 +127,11 @@ export class StudentResultService {
         }
 
         // Condition 4: Script belongs to student
-        if (!script.student || !script.student.equals(studentId)) {
+        const rawStudent = script.student;
+        const scriptStudentId = rawStudent && typeof rawStudent === 'object' && '_id' in rawStudent
+            ? (rawStudent as { _id: mongoose.Types.ObjectId })._id
+            : rawStudent;
+        if (!scriptStudentId || scriptStudentId.toString() !== studentId.toString()) {
             return { isReleased: false };
         }
 
@@ -141,6 +146,15 @@ export class StudentResultService {
             return { isReleased: false };
         }
         if (script.needsManualId) {
+            return { isReleased: false };
+        }
+
+        // Condition 5b: No open script flags
+        const openFlagCount = await ScriptFlag.countDocuments({
+            answerScript: script._id,
+            status: FlagStatus.OPEN
+        });
+        if (openFlagCount > 0) {
             return { isReleased: false };
         }
 
