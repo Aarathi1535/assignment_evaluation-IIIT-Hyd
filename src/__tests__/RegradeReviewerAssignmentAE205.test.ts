@@ -6,6 +6,8 @@ import Exam, { ExamStatus } from '../models/Exam';
 import User, { UserRole } from '../models/User';
 import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import RegradeRequest, { RegradeStatus } from '../models/RegradeRequest';
+import Grade from '../models/Grade';
+import Rubric from '../models/Rubric';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
 
@@ -101,7 +103,7 @@ describe('AE-205 regrade reviewer assignment', () => {
             reason: 'Please review the question score.',
             status: RegradeStatus.OPEN
         });
-        return { professor, ta, otherTa, student, script, regrade };
+        return { professor, ta, otherTa, student, course, exam, script, regrade };
     }
 
     function assign(id: string, reviewerId: string) {
@@ -182,5 +184,85 @@ describe('AE-205 regrade reviewer assignment', () => {
         expect(unassignedQueue.status).toBe(200);
         expect((await unassignedQueue.json()).data.requests).toHaveLength(0);
         expect(deniedPages.status).toBe(403);
+    });
+
+    it('rejects student attempting to assign reviewers with 403 Forbidden', async () => {
+        const fixture = await createFixture();
+        mockSessionUser = { id: fixture.student._id.toString(), role: UserRole.STUDENT };
+
+        const response = await assign(fixture.regrade._id.toString(), fixture.ta._id.toString());
+        expect(response.status).toBe(403);
+    });
+
+    it('blocks assigning a TA who was the original grader for this question', async () => {
+        const fixture = await createFixture();
+        const rubric = await Rubric.create({
+            exam: fixture.exam._id,
+            createdBy: fixture.professor._id,
+            scoreStep: 1,
+            questions: [{ questionNumber: 1, maxMarks: 10, criteria: [{ criterionName: 'Acc', points: 10 }] }],
+            isActive: true
+        });
+        await Grade.create({
+            answerScript: fixture.script._id,
+            rubric: rubric._id,
+            gradedBy: fixture.ta._id, // TA originally graded this!
+            question: 1,
+            totalScore: 7,
+            isFinal: true
+        });
+
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        const response = await assign(fixture.regrade._id.toString(), fixture.ta._id.toString());
+        expect(response.status).toBe(400);
+        const body = await response.json();
+        expect(body.message).toContain('Reviewer cannot be the original grader');
+    });
+
+    it('revokes reviewer access to answer pages when the regrade is resolved', async () => {
+        const fixture = await createFixture();
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        await assign(fixture.regrade._id.toString(), fixture.ta._id.toString());
+
+        // While OPEN, TA can access pages
+        mockSessionUser = { id: fixture.ta._id.toString(), role: UserRole.TA };
+        const openPages = await getPages(
+            new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
+            { params: Promise.resolve({ id: fixture.script._id.toString() }) }
+        );
+        expect(openPages.status).toBe(200);
+
+        // Resolve regrade request
+        await RegradeRequest.updateOne(
+            { _id: fixture.regrade._id },
+            { $set: { status: RegradeStatus.RESOLVED, isOpen: false } }
+        );
+
+        // Once RESOLVED, access must be revoked (403 Forbidden)
+        const resolvedPages = await getPages(
+            new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
+            { params: Promise.resolve({ id: fixture.script._id.toString() }) }
+        );
+        expect(resolvedPages.status).toBe(403);
+    });
+
+    it('revokes reviewer access to answer pages when TA is removed from course staff', async () => {
+        const fixture = await createFixture();
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        await assign(fixture.regrade._id.toString(), fixture.ta._id.toString());
+
+        // Remove TA from course teaching assistants
+        await Course.updateOne(
+            { _id: fixture.course._id },
+            { $set: { teachingAssistants: [] } }
+        );
+
+        // Even though regrade request assignedTo is still TA, TA is no longer course staff
+        mockSessionUser = { id: fixture.ta._id.toString(), role: UserRole.TA };
+        const removedPages = await getPages(
+            new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
+            { params: Promise.resolve({ id: fixture.script._id.toString() }) }
+        );
+        expect(removedPages.status).toBe(403);
     });
 });

@@ -6,10 +6,36 @@ import { UserRole } from '../../../../../constants/permissions';
 import AnswerScript from '../../../../../models/AnswerScript';
 import IngestionPage from '../../../../../models/IngestionPage';
 import Page from '../../../../../models/Page';
-import RegradeRequest from '../../../../../models/RegradeRequest';
+import RegradeRequest, { RegradeStatus } from '../../../../../models/RegradeRequest';
 import ExamRepository from '../../../../../repositories/ExamRepository';
 import AllocationService from '../../../../../services/AllocationService';
 import { HttpError } from '../../../../../lib/errors';
+import Course from '../../../../../models/Course';
+import Exam from '../../../../../models/Exam';
+
+async function hasActiveRegradeAccess(
+  answerScriptId: mongoose.Types.ObjectId,
+  examId: mongoose.Types.ObjectId,
+  userId: string
+): Promise<boolean> {
+  const openRegrade = await RegradeRequest.findOne({
+    answerScript: answerScriptId,
+    assignedTo: new mongoose.Types.ObjectId(userId),
+    status: { $in: [RegradeStatus.OPEN, RegradeStatus.REVIEWING] },
+    isOpen: true
+  }).select('_id');
+  if (!openRegrade) return false;
+
+  const examDoc = await Exam.findById(examId).select('course');
+  if (!examDoc || !examDoc.course) return false;
+
+  const courseDoc = await Course.findById(examDoc.course).select('professor teachingAssistants');
+  if (!courseDoc) return false;
+
+  const isStaff = courseDoc.professor.toString() === userId ||
+    courseDoc.teachingAssistants.some((ta: mongoose.Types.ObjectId) => ta.toString() === userId);
+  return Boolean(isStaff);
+}
 
 /**
  * GET /api/scripts/[id]/pages
@@ -70,10 +96,7 @@ export async function GET(
         user.id,
         user.role
       );
-      const assignedRegrade = await RegradeRequest.exists({
-        answerScript: script._id,
-        assignedTo: user.id
-      });
+      const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
       if (!exam && !assignedRegrade) {
         return NextResponse.json(
           {
@@ -89,10 +112,7 @@ export async function GET(
         script._id,
         user.id
       );
-      const assignedRegrade = await RegradeRequest.exists({
-        answerScript: script._id,
-        assignedTo: user.id
-      });
+      const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
       if (!allocation && !assignedRegrade) {
         return NextResponse.json(
           {

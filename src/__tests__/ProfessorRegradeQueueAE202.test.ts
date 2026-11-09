@@ -155,7 +155,7 @@ describe('AE-202 professor regrade queue', () => {
         expect((await response.json()).data).toBeNull();
     });
 
-    it('rejects TA access and validates queue filters', async () => {
+    it('rejects student access with 403 and validates queue filters', async () => {
         const fixture = await createFixture();
         mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
 
@@ -165,5 +165,34 @@ describe('AE-202 professor regrade queue', () => {
         mockSessionUser = { id: fixture.student._id.toString(), role: UserRole.STUDENT };
         const studentResponse = await get('http://localhost:3000/api/professor/regrade-requests');
         expect(studentResponse.status).toBe(403);
+    });
+
+    it('sends course staff reviewers list only to the professor, not to TAs', async () => {
+        const fixture = await createFixture();
+        const ta = await User.create({
+            name: 'TA Queue Reviewer',
+            email: `ta-queue-${Date.now()}@example.edu`,
+            password: 'Password@123',
+            role: UserRole.TA,
+            isActive: true
+        });
+        await Course.updateOne({ _id: fixture.exam.course }, { $push: { teachingAssistants: ta._id } });
+        await RegradeRequest.updateOne({ _id: fixture.regrade._id }, { $set: { assignedTo: ta._id } });
+
+        // Professor gets reviewers list
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        const profRes = await get('http://localhost:3000/api/professor/regrade-requests');
+        const profPayload = await profRes.json();
+        expect(profRes.status).toBe(200);
+        expect(profPayload.data.requests[0].reviewers.length).toBeGreaterThan(0);
+        expect(profPayload.data.requests[0].canManageAssignment).toBe(true);
+
+        // TA gets empty reviewers list (no course staff emails exposed)
+        mockSessionUser = { id: ta._id.toString(), role: UserRole.TA };
+        const taRes = await get('http://localhost:3000/api/professor/regrade-requests');
+        const taPayload = await taRes.json();
+        expect(taRes.status).toBe(200);
+        expect(taPayload.data.requests[0].reviewers).toEqual([]);
+        expect(taPayload.data.requests[0].canManageAssignment).toBe(false);
     });
 });

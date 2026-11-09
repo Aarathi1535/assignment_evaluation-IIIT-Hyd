@@ -7,7 +7,9 @@ import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAu
 import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
-import RegradeRequest from '../../../../../../../models/RegradeRequest';
+import RegradeRequest, { RegradeStatus } from '../../../../../../../models/RegradeRequest';
+import Course from '../../../../../../../models/Course';
+import Exam from '../../../../../../../models/Exam';
 import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
 import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
@@ -161,10 +163,29 @@ export const GET = withServerTiming(async (
         page.answerScript,
         auth.user.id
       );
-      const assignedRegrade = await RegradeRequest.exists({
-        answerScript: page.answerScript,
-        assignedTo: auth.user.id
-      });
+
+      let assignedRegrade = false;
+      if (!allocation) {
+        const openRegrade = await RegradeRequest.findOne({
+          answerScript: page.answerScript,
+          assignedTo: new mongoose.Types.ObjectId(auth.user.id),
+          status: { $in: [RegradeStatus.OPEN, RegradeStatus.REVIEWING] },
+          isOpen: true
+        }).select('exam');
+
+        if (openRegrade) {
+          const examDoc = await Exam.findById(openRegrade.exam).select('course');
+          if (examDoc && examDoc.course) {
+            const courseDoc = await Course.findById(examDoc.course).select('professor teachingAssistants');
+            if (courseDoc && (
+              courseDoc.professor.toString() === auth.user.id ||
+              courseDoc.teachingAssistants.some((ta: mongoose.Types.ObjectId) => ta.toString() === auth.user.id)
+            )) {
+              assignedRegrade = true;
+            }
+          }
+        }
+      }
 
       if (!allocation && !assignedRegrade) {
         return NextResponse.json(
