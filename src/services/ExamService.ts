@@ -830,6 +830,20 @@ class ExamService {
             );
         }
 
+        // Validate that exam.totalMarks matches rubric total marks if a rubric exists
+        const RubricModule = await import('../models/Rubric');
+        const Rubric = mongoose.models.Rubric || RubricModule.default;
+        const rubric = await Rubric.findOne({ exam: new mongoose.Types.ObjectId(id) });
+        if (rubric && rubric.questions && rubric.questions.length > 0) {
+            const rubricTotal = rubric.questions.reduce((sum: number, q: { maxMarks?: number }) => sum + (Number(q.maxMarks) || 0), 0);
+            if (Math.abs(rubricTotal - examBefore.totalMarks) > 0.001) {
+                throw new HttpError(
+                    `Cannot publish exam: Exam totalMarks (${examBefore.totalMarks}) does not match rubric total (${rubricTotal})`,
+                    400
+                );
+            }
+        }
+
         const publishedAt = new Date();
         const publishedBy = new mongoose.Types.ObjectId(actingUserId);
 

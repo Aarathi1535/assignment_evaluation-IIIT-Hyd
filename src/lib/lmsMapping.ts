@@ -3,6 +3,8 @@ import Course from '../models/Course';
 import { IExam, ExamStatus } from '../models/Exam';
 import User, { IUser } from '../models/User';
 import StudentMapping from '../models/StudentMapping';
+import Rubric from '../models/Rubric';
+import { HttpError } from './errors';
 import studentResultService from '../services/StudentResultService';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
 import { csvCell } from './gradeExport';
@@ -89,13 +91,25 @@ export async function mapLmsStudentIdsToGrades(
     lmsInputs?: LmsStudentInput[]
 ): Promise<LmsMappingResult> {
     if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
-        throw new Error('Grade mapping is available only for published exams');
+        throw new HttpError('Grade mapping is available only for published exams', 409);
+    }
+
+    if (lmsInputs !== undefined) {
+        if (!Array.isArray(lmsInputs)) {
+            throw new HttpError('lmsInputs must be an array', 400);
+        }
+        if (lmsInputs.length > 2000) {
+            throw new HttpError('lmsInputs exceeds maximum size of 2000 students', 400);
+        }
     }
 
     // 1. Resolve Course to enforce course-scoping boundary
     const course = await Course.findById(exam.course).select('courseCode enrolledStudents isActive').lean();
-    if (!course || !course.isActive) {
-        throw new Error('Associated course not found or inactive');
+    if (!course) {
+        throw new HttpError('Associated course not found', 404);
+    }
+    if (!course.isActive) {
+        throw new HttpError('Associated course is inactive', 409);
     }
 
     const enrolledStudentIds = new Set(
@@ -152,13 +166,21 @@ export async function mapLmsStudentIdsToGrades(
     }
 
     const records: LmsGradeMappingRecord[] = [];
-    const maxGrade = exam.totalMarks;
+    // Ensure maxGrade uses rubric total as single source of truth consistent with StudentResultService
+    const rubric = await Rubric.findOne({ exam: exam._id });
+    const rubricTotal = rubric?.questions?.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
+    const maxGrade = (rubricTotal !== undefined && rubricTotal > 0)
+        ? rubricTotal
+        : (releasedScores.length > 0 && releasedScores[0].maxMarks > 0)
+            ? releasedScores[0].maxMarks
+            : exam.totalMarks;
 
     // Mode A: External LMS input mapping list provided
     if (lmsInputs && lmsInputs.length > 0) {
         // Track frequency of LMS IDs to detect duplicate LMS inputs
         const lmsIdCounts = new Map<string, number>();
         for (const input of lmsInputs) {
+            if (!input || typeof input !== 'object') continue;
             const trimmed = typeof input.lmsStudentId === 'string' ? input.lmsStudentId.trim() : '';
             if (trimmed) {
                 lmsIdCounts.set(trimmed, (lmsIdCounts.get(trimmed) || 0) + 1);
@@ -177,6 +199,14 @@ export async function mapLmsStudentIdsToGrades(
         const studentIdMatchCount = new Map<string, number>();
 
         for (const input of lmsInputs) {
+            if (!input || typeof input !== 'object') {
+                resolvedMatches.push({
+                    input: { lmsStudentId: '' },
+                    status: 'INVALID_IDENTIFIER',
+                    validationMessage: 'LMS student input entry is null or invalid'
+                });
+                continue;
+            }
             if (!isValidLmsIdentifier(input.lmsStudentId)) {
                 resolvedMatches.push({
                     input,
@@ -409,26 +439,28 @@ export function buildLmsCsv(
 ): string {
     if (format === 'canvas') {
         // Documented Canvas LMS Gradebook Format
-        // Row 1: Student,ID,SIS User ID,SIS Login ID,Section,Final Score
+        // Columns: Student, ID, SIS User ID, SIS Login ID, Section, <Assignment Name> (<Points>)
         // Row 2:     Points Possible,,,,,30
-        const header = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Section', `${result.examTitle} (${result.totalMarks})`, 'Status'];
-        const pointsRow = ['    Points Possible', '', '', '', '', result.totalMarks, ''];
+        // Canvas uses 'ID' for its internal numeric ID; leaving it blank allows matching on SIS User ID or SIS Login ID.
+        // Any additional trailing column like 'Status' would be parsed by Canvas as a new assignment, so omit it.
+        const header = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Section', `${result.examTitle} (${result.totalMarks})`];
+        const pointsRow = ['    Points Possible', '', '', '', '', result.totalMarks];
 
         const rows: (string | number)[][] = result.records.map(r => {
             const name = r.studentName || '';
-            const internalId = r.studentId || '';
-            const sisUserId = r.rollNumber || r.lmsStudentId || '';
+            const trimmedLmsId = (r.lmsStudentId || '').trim();
+            const canvasId = /^\d+$/.test(trimmedLmsId) ? trimmedLmsId : '';
+            const sisUserId = r.rollNumber || (!/^\d+$/.test(trimmedLmsId) ? trimmedLmsId : '');
             const sisLoginId = r.email || '';
             const gradeVal = r.grade !== null ? r.grade : '';
 
             return [
                 name,
-                internalId,
+                canvasId,
                 sisUserId,
                 sisLoginId,
                 result.courseCode,
-                gradeVal,
-                r.status
+                gradeVal
             ];
         });
 

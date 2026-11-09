@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { HttpError } from '../lib/errors';
+import { writeAuditLog } from '../lib/audit';
 import { ExamStatus, IExam } from '../models/Exam';
 import ExamRepository from '../repositories/ExamRepository';
 import {
@@ -34,7 +35,7 @@ export interface LtiScoreResult {
     email?: string;
     scoreGiven: number | null;
     scoreMaximum: number;
-    status: 'SUCCESS' | 'SKIPPED' | 'FAILED';
+    status: 'NOT_SENT' | 'SUCCESS' | 'SKIPPED' | 'FAILED';
     reason?: string;
     payload?: LtiScorePayload;
 }
@@ -47,6 +48,7 @@ export interface LtiGradePassbackExecutionResult {
     status: 'STUB_COMPLETED' | 'DRY_RUN' | 'PARTIAL_SUCCESS' | 'FAILED';
     totalProcessed: number;
     successfulScores: number;
+    notSentScores?: number;
     skippedScores: number;
     failedScores: number;
     lineItemUrl?: string;
@@ -56,7 +58,7 @@ export interface LtiGradePassbackExecutionResult {
 
 export class LtiGradePassbackService {
     /**
-     * Validates that a provided LineItem URL has a valid HTTPS protocol.
+     * Validates that a provided LineItem URL has a valid HTTPS protocol and rejects localhost.
      */
     validateLineItemUrl(url?: string): boolean {
         if (!url) {
@@ -64,7 +66,13 @@ export class LtiGradePassbackService {
         }
         try {
             const parsed = new URL(url);
-            return parsed.protocol === 'https:' || parsed.hostname === 'localhost';
+            if (parsed.protocol !== 'https:') {
+                return false;
+            }
+            if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+                return false;
+            }
+            return true;
         } catch {
             return false;
         }
@@ -86,7 +94,25 @@ export class LtiGradePassbackService {
         }
 
         if (options.lineItemUrl && !this.validateLineItemUrl(options.lineItemUrl)) {
-            throw new HttpError('Invalid lineItemUrl: Must be a valid HTTPS URL', 400);
+            throw new HttpError('Invalid lineItemUrl: Must be a valid HTTPS URL (localhost is rejected)', 400);
+        }
+
+        if (options.students !== undefined) {
+            if (!Array.isArray(options.students)) {
+                throw new HttpError('options.students must be an array', 400);
+            }
+            if (options.students.length > 2000) {
+                throw new HttpError('options.students exceeds maximum limit of 2000 entries', 400);
+            }
+            if (options.students.some(s => !s || typeof s !== 'object')) {
+                throw new HttpError('options.students cannot contain null or non-object entries', 400);
+            }
+        }
+
+        if (options.comment !== undefined) {
+            if (typeof options.comment !== 'string' || options.comment.length > 1000) {
+                throw new HttpError('Comment must be a string up to 1000 characters', 400);
+            }
         }
 
         // 1. Authorize exam access and enforce ownership/course scoping
@@ -104,14 +130,28 @@ export class LtiGradePassbackService {
 
         // 3. Construct LTI 1.3 AGS Score payloads for each record
         const scores: LtiScoreResult[] = [];
-        let successfulScores = 0;
+        let readyCount = 0;
         let skippedScores = 0;
         let failedScores = 0;
 
+        const isModeB = !options.students || options.students.length === 0;
         const defaultComment = options.comment || `Final published grade for ${exam.title}`;
 
         for (const record of mappingResult.records) {
-            if (record.status === 'MAPPED' && record.grade !== null) {
+            if (isModeB) {
+                // Mode B lacks external LMS sub identifiers; mark as not ready
+                scores.push({
+                    studentId: record.studentId,
+                    lmsStudentId: record.lmsStudentId,
+                    studentName: record.studentName,
+                    email: record.email,
+                    scoreGiven: record.grade,
+                    scoreMaximum: record.maxGrade,
+                    status: 'SKIPPED',
+                    reason: 'LTI platform sub claim is not resolved. Mode B grade passback requires prior LTI 1.3 launch or NRPS roster synchronization.'
+                });
+                skippedScores++;
+            } else if (record.status === 'MAPPED' && record.grade !== null) {
                 const payload: LtiScorePayload = {
                     userId: record.lmsStudentId,
                     scoreGiven: record.grade,
@@ -129,10 +169,11 @@ export class LtiGradePassbackService {
                     email: record.email,
                     scoreGiven: record.grade,
                     scoreMaximum: record.maxGrade,
-                    status: 'SUCCESS',
+                    status: 'NOT_SENT',
+                    reason: 'Safe stub mode: AGS 2.0 Score payload validated but not dispatched to external LMS',
                     payload
                 });
-                successfulScores++;
+                readyCount++;
             } else if (record.status === 'UNMAPPED') {
                 scores.push({
                     studentId: record.studentId,
@@ -164,10 +205,34 @@ export class LtiGradePassbackService {
         let overallStatus: LtiGradePassbackExecutionResult['status'] = 'STUB_COMPLETED';
         if (options.dryRun) {
             overallStatus = 'DRY_RUN';
-        } else if (successfulScores === 0 && totalProcessed > 0) {
-            overallStatus = 'FAILED';
+        } else if (readyCount === 0 && totalProcessed > 0) {
+            overallStatus = isModeB ? 'STUB_COMPLETED' : 'FAILED';
         } else if (failedScores > 0 || skippedScores > 0) {
             overallStatus = 'PARTIAL_SUCCESS';
+        }
+
+        if (!options.dryRun && actingUserId) {
+            try {
+                await writeAuditLog({
+                    user: actingUserId,
+                    action: 'LTI_GRADE_PASSBACK_SIMULATED',
+                    outcome: 'SUCCESS',
+                    entityId: exam._id,
+                    entityType: 'Exam',
+                    details: {
+                        examId: exam._id.toString(),
+                        courseCode: mappingResult.courseCode,
+                        lineItemUrl: options.lineItemUrl,
+                        totalProcessed,
+                        notSentScores: readyCount,
+                        skippedScores,
+                        failedScores,
+                        stubMode: true
+                    }
+                });
+            } catch (auditErr) {
+                console.error('Failed to record audit log for LTI grade passback simulation:', auditErr);
+            }
         }
 
         return {
@@ -177,12 +242,13 @@ export class LtiGradePassbackService {
             stubMode: true,
             status: overallStatus,
             totalProcessed,
-            successfulScores,
+            successfulScores: readyCount,
+            notSentScores: readyCount,
             skippedScores,
             failedScores,
             lineItemUrl: options.lineItemUrl,
             scores,
-            message: 'LTI 1.3 grade passback simulated in safe stub mode. No external LMS endpoints were contacted.'
+            message: 'LTI 1.3 grade passback simulated in safe stub mode. Validated payloads generated; no external LMS endpoints were contacted.'
         };
     }
 }

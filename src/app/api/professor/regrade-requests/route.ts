@@ -46,25 +46,15 @@ export async function GET(request: NextRequest) {
     try {
         await connectDB();
 
-        let ownedExamIds: mongoose.Types.ObjectId[] = [];
-        if (auth.user.role === UserRole.ADMIN) {
-            const ownedExams = await Exam.find(examId ? { _id: examId } : {}).select('_id').lean();
-            ownedExamIds = ownedExams.map(exam => exam._id);
-        } else if (auth.user.role === UserRole.PROFESSOR) {
-            const profCourses = await Course.find({
-                professor: new mongoose.Types.ObjectId(auth.user.id),
-                isActive: true
-            }).select('_id').lean();
-            const profCourseIds = profCourses.map(c => c._id);
-            const ownedExams = await Exam.find({
-                $or: [
-                    { createdBy: new mongoose.Types.ObjectId(auth.user.id) },
-                    { course: { $in: profCourseIds } }
-                ],
-                ...(examId ? { _id: examId } : {})
-            }).select('_id').lean();
-            ownedExamIds = ownedExams.map(exam => exam._id);
-        }
+        const ownedExams = auth.user.role === UserRole.ADMIN
+            ? await Exam.find(examId ? { _id: examId } : {}).select('_id').lean()
+            : auth.user.role === UserRole.PROFESSOR
+                ? await Exam.find({
+                    createdBy: auth.user.id,
+                    ...(examId ? { _id: examId } : {})
+                }).select('_id').lean()
+                : [];
+        const ownedExamIds = ownedExams.map(exam => exam._id);
         const baseFilter = examId ? { exam: new mongoose.Types.ObjectId(examId) } : {};
         const accessFilter = auth.user.role === UserRole.ADMIN
             ? baseFilter
@@ -148,10 +138,7 @@ export async function GET(request: NextRequest) {
             const student = studentById.get(item.student.toString());
             const course = exam ? courseById.get(exam.course.toString()) : undefined;
             const isExamOwner = auth.user.role === UserRole.ADMIN ||
-                (auth.user.role === UserRole.PROFESSOR && (
-                    exam?.createdBy.toString() === auth.user.id ||
-                    course?.professor.toString() === auth.user.id
-                ));
+                (auth.user.role === UserRole.PROFESSOR && exam?.createdBy.toString() === auth.user.id);
             const assignedTo = item.assignedTo ? candidateById.get(item.assignedTo.toString()) : undefined;
             const reviewers = course
                 ? [...new Set([

@@ -52,23 +52,9 @@ export async function PATCH(
             return NextResponse.json({ success: false, message: 'Resolved requests cannot be assigned', data: null }, { status: 409 });
         }
 
-        let exam = null;
-        if (auth.user.role === UserRole.ADMIN) {
-            exam = await Exam.findById(regrade.exam).select('_id createdBy course');
-        } else if (auth.user.role === UserRole.PROFESSOR) {
-            const profCourses = await Course.find({
-                professor: new mongoose.Types.ObjectId(auth.user.id),
-                isActive: true
-            }).select('_id').lean();
-            const profCourseIds = profCourses.map(c => c._id);
-            exam = await Exam.findOne({
-                _id: regrade.exam,
-                $or: [
-                    { createdBy: new mongoose.Types.ObjectId(auth.user.id) },
-                    { course: { $in: profCourseIds } }
-                ]
-            }).select('_id createdBy course');
-        }
+        const exam = auth.user.role === UserRole.ADMIN
+            ? await Exam.findById(regrade.exam).select('_id createdBy course')
+            : await Exam.findOne({ _id: regrade.exam, createdBy: auth.user.id }).select('_id createdBy course');
         if (!exam) {
             return NextResponse.json({ success: false, message: 'Regrade request not found', data: null }, { status: 404 });
         }
@@ -94,7 +80,8 @@ export async function PATCH(
             ]);
             const isCourseTa = Boolean(course?.teachingAssistants.some(ta => ta.equals(reviewerId)));
             const isExamProfessor = candidate?.role === UserRole.PROFESSOR &&
-                (candidate._id.equals(exam.createdBy) || Boolean(course?.professor.equals(candidate._id)));
+                candidate._id.equals(exam.createdBy) &&
+                Boolean(course?.professor.equals(exam.createdBy));
             const isAuthorizedTa = candidate?.role === UserRole.TA && isCourseTa;
             if (!candidate || (!isAuthorizedTa && !isExamProfessor)) {
                 return NextResponse.json(

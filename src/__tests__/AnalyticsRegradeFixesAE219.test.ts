@@ -193,8 +193,8 @@ describe('AE-219: Priority Analytics and Regrade Bug Fixes', () => {
         });
     });
 
-    describe('Bug 2: Course-Level Authorization for Professors who did not create the Exam record', () => {
-        it('allows course instructor to view, assign, and decide regrades even if exam was created by admin', async () => {
+    describe('Bug 2: Strict Creator-Only Scoping for Regrade Decisions and Assignment', () => {
+        it('enforces creator-only scoping so non-creating professors cannot access or decide regrades (matching analytics and export)', async () => {
             const suffix = `b2-${Date.now()}`;
             const admin = await User.create({
                 name: 'Administrator',
@@ -285,17 +285,27 @@ describe('AE-219: Priority Analytics and Regrade Bug Fixes', () => {
                 status: RegradeStatus.OPEN
             });
 
-            // 1. Course Professor can access the regrade queue
+            // 1. Course Professor (non-creator) is denied access with 404 (creator-only scope)
             mockSessionUser = { id: courseProf._id.toString(), role: UserRole.PROFESSOR };
             const queueRes = await getProfessorQueue(
                 new NextRequest(`http://localhost/api/professor/regrade-requests?examId=${exam._id}`)
             );
-            const queueBody = await queueRes.json();
-            expect(queueRes.status).toBe(200);
-            expect(queueBody.data.requests).toHaveLength(1);
-            expect(queueBody.data.requests[0].canManageAssignment).toBe(true);
+            expect(queueRes.status).toBe(404);
 
-            // 2. Unrelated professor is denied access
+            const courseProfDecide = await decideRegrade(
+                new NextRequest(`http://localhost/api/professor/regrade-requests/${regrade._id}`, {
+                    method: 'PATCH',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        outcome: RegradeDecisionOutcome.APPROVED,
+                        reason: 'Course prof attempting decision.'
+                    })
+                }),
+                { params: Promise.resolve({ id: regrade._id.toString() }) }
+            );
+            expect(courseProfDecide.status).toBe(404);
+
+            // 2. Unrelated professor is also denied access with 404
             mockSessionUser = { id: otherProf._id.toString(), role: UserRole.PROFESSOR };
             const deniedQueue = await getProfessorQueue(
                 new NextRequest(`http://localhost/api/professor/regrade-requests?examId=${exam._id}`)
@@ -315,8 +325,8 @@ describe('AE-219: Priority Analytics and Regrade Bug Fixes', () => {
             );
             expect(deniedDecision.status).toBe(404);
 
-            // 3. Course Professor can decide the regrade request
-            mockSessionUser = { id: courseProf._id.toString(), role: UserRole.PROFESSOR };
+            // 3. Admin / Creator can access and decide the regrade request
+            mockSessionUser = { id: admin._id.toString(), role: UserRole.ADMIN };
             const decideRes = await decideRegrade(
                 new NextRequest(`http://localhost/api/professor/regrade-requests/${regrade._id}`, {
                     method: 'PATCH',

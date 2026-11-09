@@ -535,6 +535,28 @@ describe('AE-215 LMS student-ID to grade mapping', () => {
                 { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
             );
             expect(missingStudentsRes.status).toBe(400);
+
+            // 3. Malformed JSON -> 400
+            const malformedJsonRes = await lmsExportPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/export/lms`, {
+                    method: 'POST',
+                    body: '{ invalid json'
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(malformedJsonRes.status).toBe(400);
+
+            // 4. Inactive Course -> 409 Conflict
+            await Course.findByIdAndUpdate(fixture.courseA._id, { isActive: false });
+            const inactiveCourseRes = await lmsExportPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/export/lms`, {
+                    method: 'POST',
+                    body: JSON.stringify({ students: [] })
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(inactiveCourseRes.status).toBe(409);
+            await Course.findByIdAndUpdate(fixture.courseA._id, { isActive: true });
         });
     });
 });

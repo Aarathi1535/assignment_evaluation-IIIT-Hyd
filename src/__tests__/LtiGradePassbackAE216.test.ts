@@ -23,7 +23,8 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
     describe('Service unit tests & URL validation', () => {
         it('validates lineItemUrl HTTPS protocol requirements', () => {
             expect(ltiGradePassbackService.validateLineItemUrl('https://canvas.instructure.com/api/lti/courses/1/line_items/2')).toBe(true);
-            expect(ltiGradePassbackService.validateLineItemUrl('http://localhost:3000/api/lti/lineitems/1')).toBe(true);
+            expect(ltiGradePassbackService.validateLineItemUrl('http://localhost:3000/api/lti/lineitems/1')).toBe(false);
+            expect(ltiGradePassbackService.validateLineItemUrl('https://localhost:3000/api/lti/lineitems/1')).toBe(false);
             expect(ltiGradePassbackService.validateLineItemUrl(undefined)).toBe(true);
 
             // Insecure or invalid protocols
@@ -228,9 +229,10 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             expect(result.lineItemUrl).toBe('https://canvas.example.edu/api/lti/courses/1/line_items/99');
             expect(result.message).toContain('safe stub mode');
 
-            // Verify LTI-AGS 2.0 Score payload structure
+            // Verify LTI-AGS 2.0 Score payload structure in safe stub mode (marked NOT_SENT)
             const scoreEntry = result.scores[0];
-            expect(scoreEntry.status).toBe('SUCCESS');
+            expect(scoreEntry.status).toBe('NOT_SENT');
+            expect(scoreEntry.reason).toContain('Safe stub mode');
             expect(scoreEntry.scoreGiven).toBe(28);
             expect(scoreEntry.scoreMaximum).toBe(30);
 
@@ -439,7 +441,7 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             );
             expect(malformedJsonRes.status).toBe(400);
 
-            // 3. Insecure LineItem URL
+            // 3. Insecure or localhost LineItem URL
             const insecureUrlRes = await ltiPassbackPOST(
                 new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
                     method: 'POST',
@@ -451,7 +453,49 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             );
             expect(insecureUrlRes.status).toBe(400);
 
-            // 4. Unpublished Exam -> 409 Conflict
+            const localhostUrlRes = await ltiPassbackPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        lineItemUrl: 'http://localhost:3000/api/lineitems'
+                    })
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(localhostUrlRes.status).toBe(400);
+
+            // 4. Invalid students payload: object instead of array or null entry
+            const objStudentsRes = await ltiPassbackPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
+                    method: 'POST',
+                    body: JSON.stringify({ students: {} })
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(objStudentsRes.status).toBe(400);
+
+            const nullEntryStudentsRes = await ltiPassbackPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
+                    method: 'POST',
+                    body: JSON.stringify({ students: [null] })
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(nullEntryStudentsRes.status).toBe(400);
+
+            // 5. Inactive Course -> 409 Conflict
+            await Course.findByIdAndUpdate(fixture.courseA._id, { isActive: false });
+            const inactiveCourseRes = await ltiPassbackPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
+                    method: 'POST',
+                    body: JSON.stringify({ students: [{ lmsStudentId: 'ROLL-2026-01' }] })
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(inactiveCourseRes.status).toBe(409);
+            await Course.findByIdAndUpdate(fixture.courseA._id, { isActive: true });
+
+            // 6. Unpublished Exam -> 409 Conflict
             await Exam.findByIdAndUpdate(fixture.exam._id, { status: ExamStatus.DRAFT });
             const unpublishedRes = await ltiPassbackPOST(
                 new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {

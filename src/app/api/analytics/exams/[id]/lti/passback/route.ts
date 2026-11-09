@@ -80,7 +80,7 @@ export async function POST(
         const text = await request.text();
         if (text.trim().length > 0) {
             const parsed = JSON.parse(text);
-            if (typeof parsed === 'object' && parsed !== null) {
+            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
                 options = parsed as LtiGradePassbackOptions;
             } else {
                 return NextResponse.json(
@@ -94,6 +94,36 @@ export async function POST(
             { success: false, message: 'Invalid JSON payload in request body', data: null },
             { status: 400, headers: SECURITY_HEADERS }
         );
+    }
+
+    if (options.students !== undefined) {
+        if (!Array.isArray(options.students)) {
+            return NextResponse.json(
+                { success: false, message: 'The "students" field must be an array', data: null },
+                { status: 400, headers: SECURITY_HEADERS }
+            );
+        }
+        if (options.students.length > 2000) {
+            return NextResponse.json(
+                { success: false, message: 'The students array exceeds the maximum limit of 2000 entries', data: null },
+                { status: 400, headers: SECURITY_HEADERS }
+            );
+        }
+        if (options.students.some(s => !s || typeof s !== 'object')) {
+            return NextResponse.json(
+                { success: false, message: 'Students array cannot contain null or non-object entries', data: null },
+                { status: 400, headers: SECURITY_HEADERS }
+            );
+        }
+    }
+
+    if (options.comment !== undefined) {
+        if (typeof options.comment !== 'string' || options.comment.length > 1000) {
+            return NextResponse.json(
+                { success: false, message: 'The "comment" field must be a string up to 1000 characters', data: null },
+                { status: 400, headers: SECURITY_HEADERS }
+            );
+        }
     }
 
     try {

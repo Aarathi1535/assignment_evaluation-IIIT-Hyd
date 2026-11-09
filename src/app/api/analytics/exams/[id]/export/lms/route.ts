@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { Permission, UserRole } from '../../../../../../../constants/permissions';
 import { requirePermission } from '../../../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../../../lib/db';
+import { HttpError } from '../../../../../../../lib/errors';
 import { ExamStatus } from '../../../../../../../models/Exam';
 import ExamRepository from '../../../../../../../repositories/ExamRepository';
 import {
@@ -104,27 +105,56 @@ export async function POST(
         );
     }
 
+    let body: unknown;
     try {
-        const body = await request.json();
-        if (!body || typeof body !== 'object') {
+        const text = await request.text();
+        if (!text.trim()) {
+            return NextResponse.json(
+                { success: false, message: 'Request body cannot be empty', data: null },
+                { status: 400, headers: SECURITY_HEADERS }
+            );
+        }
+        body = JSON.parse(text);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
             return NextResponse.json(
                 { success: false, message: 'Request body must be a valid JSON object', data: null },
                 { status: 400, headers: SECURITY_HEADERS }
             );
         }
+    } catch {
+        return NextResponse.json(
+            { success: false, message: 'Invalid JSON payload in request body', data: null },
+            { status: 400, headers: SECURITY_HEADERS }
+        );
+    }
 
-        const { students, format = 'standard' } = body as {
-            students?: LmsStudentInput[];
-            format?: 'canvas' | 'standard';
-        };
+    const { students, format = 'standard' } = body as {
+        students?: LmsStudentInput[];
+        format?: 'canvas' | 'standard';
+    };
 
-        if (!Array.isArray(students)) {
-            return NextResponse.json(
-                { success: false, message: 'A "students" array is required in request body', data: null },
-                { status: 400, headers: SECURITY_HEADERS }
-            );
-        }
+    if (!Array.isArray(students)) {
+        return NextResponse.json(
+            { success: false, message: 'A "students" array is required in request body', data: null },
+            { status: 400, headers: SECURITY_HEADERS }
+        );
+    }
 
+    if (students.length > 2000) {
+        return NextResponse.json(
+            { success: false, message: 'The students array exceeds the maximum limit of 2000 entries', data: null },
+            { status: 400, headers: SECURITY_HEADERS }
+        );
+    }
+
+    if (students.some(s => !s || typeof s !== 'object')) {
+        return NextResponse.json(
+            { success: false, message: 'Students array cannot contain null or non-object entries', data: null },
+            { status: 400, headers: SECURITY_HEADERS }
+        );
+    }
+
+    try {
         await connectDB();
         const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
         if (!exam) {
@@ -164,6 +194,12 @@ export async function POST(
             { status: 200, headers: SECURITY_HEADERS }
         );
     } catch (error: unknown) {
+        if (error instanceof HttpError) {
+            return NextResponse.json(
+                { success: false, message: error.message, data: null },
+                { status: error.statusCode || 500, headers: SECURITY_HEADERS }
+            );
+        }
         console.error('Failed to process LMS grade mapping:', error);
         return NextResponse.json(
             { success: false, message: 'Could not process LMS grade mapping', data: null },

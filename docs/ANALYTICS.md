@@ -10,7 +10,7 @@ The analytics system provides professors and administrators with actionable peda
 
 ## 2. Statistical Capabilities & Mathematical Foundations
 
-All analytics calculations are implemented as pure, deterministic functions in [`src/lib/stats.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/lib/stats.ts) and validated against independently verified, hand-computed fixtures ([`src/__tests__/fixtures/analyticsFixtures.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/__tests__/fixtures/analyticsFixtures.ts)).
+All analytics calculations are implemented as pure, deterministic functions in [`src/lib/stats.ts`](src/lib/stats.ts) and validated against independently verified, hand-computed fixtures ([`src/__tests__/fixtures/analyticsFixtures.ts`](src/__tests__/fixtures/analyticsFixtures.ts)).
 
 ### 2.1 Class Descriptive Statistics
 
@@ -83,7 +83,7 @@ To help instructors monitor grading drift across Teaching Assistants, the platfo
 
 ## 3. Data Pipeline & Grade Inclusion Rules
 
-Analytics metrics are computed strictly from released student results via [`StudentResultService.getPublishedExamScores`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/services/StudentResultService.ts).
+Analytics metrics are computed strictly from released student results via [`StudentResultService.getPublishedExamScores`](src/services/StudentResultService.ts).
 
 ```
 +-----------------------------------------------------------------------------+
@@ -141,7 +141,7 @@ The following are excluded:
 
 ## 4. Export Workflows & Formats
 
-Grade export is available via `GET /api/analytics/exams/[id]/export` and the professor UI ([`ExamExportPanel.tsx`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/components/analytics/ExamExportPanel.tsx)).
+Grade export is available via `GET /api/analytics/exams/[id]/export` and the professor UI ([`ExamExportPanel.tsx`](src/components/analytics/ExamExportPanel.tsx)).
 
 ### 4.1 Supported Export Formats
 
@@ -157,15 +157,15 @@ Grade export is available via `GET /api/analytics/exams/[id]/export` and the pro
 - **Headers**:
   `Student ID`, `Roll Number`, `Student Name`, `Email`, `Anonymous ID`, `Q1`, `Q2`, ..., `Total Score`, `Max Marks`, `Percentage`
 - **Sorting**: Natural numeric sort by Roll Number if present, otherwise alphabetical by Student Name.
-- **Headless XLSX Engine**: Built without third-party dependencies using native OpenXML PKZIP 2.0 generation ([`buildXlsx` in `src/lib/gradeExport.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/lib/gradeExport.ts)).
+- **Headless XLSX Engine**: Built without third-party dependencies using native OpenXML PKZIP 2.0 generation ([`buildXlsx` in `src/lib/gradeExport.ts`](src/lib/gradeExport.ts)).
 
 ### 4.3 Spreadsheet Formula Injection Protection
-To prevent CSV Formula Injection (CSV Command Injection / CWE-1236), all cell values in CSV and XLSX exports are sanitized via [`sanitizeSpreadsheetCell`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/lib/gradeExport.ts):
+To prevent CSV Formula Injection (CSV Command Injection / CWE-1236), all cell values in CSV and XLSX exports are sanitized via [`sanitizeSpreadsheetCell`](src/lib/gradeExport.ts):
 - Any cell value beginning with `=`, `+`, `-`, `@`, `\t` (tab), or `\r` (carriage return) is automatically escaped by prefixing an apostrophe (`'`).
 - In CSV output, fields containing quotes or commas are enclosed in double quotes according to RFC 4180.
 
 ### 4.4 LMS Student-ID Mapping & Canvas Format
-Implemented via [`mapLmsStudentIdsToGrades` in `src/lib/lmsMapping.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/lib/lmsMapping.ts):
+Implemented via [`mapLmsStudentIdsToGrades` in `src/lib/lmsMapping.ts`](src/lib/lmsMapping.ts):
 
 - **Standard LMS Schema**:
   `LMS Student ID`, `Student Name`, `Email`, `Roll Number`, `Grade`, `Max Grade`, `Status`, `Validation Notes`
@@ -182,7 +182,7 @@ Implemented via [`mapLmsStudentIdsToGrades` in `src/lib/lmsMapping.ts`](file:///
   - `INVALID_GRADE`: Score out of bounds ($< 0$ or $> \text{maxMarks}$).
 
 ### 4.5 LTI 1.3 Grade Passback Architecture & Stub
-- **Design & Contract**: Full LTI 1.3 Assignment and Grade Services (AGS 2.0) architecture defined in [`docs/LTI_1_3_GRADE_PASSBACK.md`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/docs/LTI_1_3_GRADE_PASSBACK.md).
+- **Design & Contract**: Full LTI 1.3 Assignment and Grade Services (AGS 2.0) architecture defined in [`docs/LTI_1_3_GRADE_PASSBACK.md`](docs/LTI_1_3_GRADE_PASSBACK.md).
 - **Endpoint**: `POST /api/analytics/exams/[id]/lti/passback`
 - **Stub Mode**: Operates in safe stub mode (`stubMode: true`). It verifies permissions, validates identifiers via `mapLmsStudentIdsToGrades`, shapes AGS 2.0 JSON score payloads, and records simulated dispatch without opening outbound network sockets.
 
@@ -192,7 +192,7 @@ Implemented via [`mapLmsStudentIdsToGrades` in `src/lib/lmsMapping.ts`](file:///
 
 The professor export panel is integrated directly into the exam analytics page:
 
-- **Location**: [`src/components/analytics/ExamExportPanel.tsx`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/components/analytics/ExamExportPanel.tsx) rendered on `/professor/exams/[id]/analytics`.
+- **Location**: [`src/components/analytics/ExamExportPanel.tsx`](src/components/analytics/ExamExportPanel.tsx) rendered on `/professor/exams/[id]/analytics`.
 - **Format Selection**: Segmented format radio options (CSV, XLSX, Standard LMS, Canvas LMS).
 - **Interactive States**:
   - **Idle**: Format selector and "Download Export" button.
@@ -208,7 +208,7 @@ The professor export panel is integrated directly into the exam analytics page:
 When a student submits a regrade request and a professor or TA approves the request with a revised score via `PATCH /api/professor/regrade-requests/[id]`:
 
 1. **Grade Document Update**:
-   [`Grade.findOneAndUpdate`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/app/api/professor/regrade-requests/[id]/route.ts) updates the question grade document with the revised total score and proportionately adjusted criterion marks.
+   [`Grade.findOneAndUpdate`](src/app/api/professor/regrade-requests/[id]/route.ts) updates the question grade document with the revised total score and proportionately adjusted criterion marks.
 2. **Audit Event**:
    An immutable audit log entry (`REGRADE_DECIDED`) is written recording the student ID, exam ID, question number, outcome, original score, and revised score.
 3. **Immediate Analytics Recalculation**:
@@ -322,8 +322,8 @@ When a student submits a regrade request and a professor or TA approves the requ
 ## 8. Authorization & Security Architecture
 
 1. **Course-Level Scoping**:
-   - Access to exam analytics and exports is governed by [`ExamRepository.getExamById`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/repositories/ExamRepository.ts).
-   - Professors may only access exams they created (`createdBy: user.id`) OR exams belonging to courses where they are the designated instructor (`course.professor: user.id`).
+   - Access to exam analytics and exports is governed by [`ExamRepository.getExamById`](src/repositories/ExamRepository.ts).
+   - Professors may only access exams they created (`createdBy: user.id`). Access is strictly scoped to the creating instructor (or admins).
    - Unauthorized attempts by professors teaching different courses fail closed with `404 Not Found` to prevent revealing the existence of other course exams.
 2. **Student Privacy**:
    - Students cannot access the analytics API or export endpoints.

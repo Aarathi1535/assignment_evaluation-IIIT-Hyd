@@ -5,7 +5,6 @@ import { UserRole } from '../../../../../constants/permissions';
 import { requireAuth } from '../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../lib/db';
 import { writeAuditLog } from '../../../../../lib/audit';
-import Course from '../../../../../models/Course';
 import Exam from '../../../../../models/Exam';
 import Grade from '../../../../../models/Grade';
 import RegradeRequest, { RegradeDecisionOutcome, RegradeStatus } from '../../../../../models/RegradeRequest';
@@ -116,23 +115,10 @@ export async function PATCH(
                 { status: 404 }
             );
         }
-        let exam = null;
-        if (auth.user.role === UserRole.ADMIN || isAssignedReviewer) {
-            exam = await Exam.findById(regrade.exam).select('_id createdBy course totalMarks rubric title');
-        } else if (auth.user.role === UserRole.PROFESSOR) {
-            const profCourses = await Course.find({
-                professor: new mongoose.Types.ObjectId(auth.user.id),
-                isActive: true
-            }).select('_id').lean();
-            const profCourseIds = profCourses.map(c => c._id);
-            exam = await Exam.findOne({
-                _id: regrade.exam,
-                $or: [
-                    { createdBy: new mongoose.Types.ObjectId(auth.user.id) },
-                    { course: { $in: profCourseIds } }
-                ]
-            }).select('_id createdBy course totalMarks rubric title');
-        }
+        const exam = auth.user.role === UserRole.ADMIN || isAssignedReviewer
+            ? await Exam.findById(regrade.exam).select('_id createdBy course totalMarks rubric title')
+            : await Exam.findOne({ _id: regrade.exam, createdBy: auth.user.id })
+                .select('_id createdBy course totalMarks rubric title');
         if (!exam) {
             return NextResponse.json(
                 { success: false, message: 'Regrade request not found', data: null },
