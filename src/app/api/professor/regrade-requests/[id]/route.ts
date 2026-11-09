@@ -117,9 +117,6 @@ export async function PATCH(
             );
         }
 
-        const isExamOwner = auth.user.role === UserRole.ADMIN ||
-            (auth.user.role === UserRole.PROFESSOR && exam.createdBy.toString() === auth.user.id);
-
         const course = await Course.findById(exam.course).select('professor teachingAssistants isActive');
         if (!course || !course.isActive) {
             return NextResponse.json(
@@ -128,7 +125,11 @@ export async function PATCH(
             );
         }
 
-        const isCourseStaff = course.professor.toString() === auth.user.id ||
+        const isCourseProfessor = course.professor.toString() === auth.user.id;
+        const isExamOwner = auth.user.role === UserRole.ADMIN ||
+            (auth.user.role === UserRole.PROFESSOR && isCourseProfessor);
+
+        const isCourseStaff = isCourseProfessor ||
             course.teachingAssistants.some(ta => ta.toString() === auth.user.id);
 
         const isAssignedReviewer = regrade.assignedTo?.toString() === auth.user.id;

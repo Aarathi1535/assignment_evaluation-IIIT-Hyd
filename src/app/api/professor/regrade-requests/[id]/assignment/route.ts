@@ -53,9 +53,20 @@ export async function PATCH(
             return NextResponse.json({ success: false, message: 'Resolved requests cannot be assigned', data: null }, { status: 409 });
         }
 
-        const exam = auth.user.role === UserRole.ADMIN
-            ? await Exam.findById(regrade.exam).select('_id createdBy course')
-            : await Exam.findOne({ _id: regrade.exam, createdBy: auth.user.id }).select('_id createdBy course');
+        let exam = null;
+        if (auth.user.role === UserRole.ADMIN) {
+            exam = await Exam.findById(regrade.exam).select('_id createdBy course');
+        } else if (auth.user.role === UserRole.PROFESSOR) {
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(auth.user.id),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map(c => c._id);
+            exam = await Exam.findOne({
+                _id: regrade.exam,
+                course: { $in: profCourseIds }
+            }).select('_id createdBy course');
+        }
         if (!exam) {
             return NextResponse.json({ success: false, message: 'Regrade request not found', data: null }, { status: 404 });
         }
@@ -71,7 +82,7 @@ export async function PATCH(
 
         let reviewer: IUser | null = null;
         let isOriginalGrader = false;
-        let isExamProfessor = false;
+        let isCourseProfessor = false;
         if (reviewerId) {
             const [course, candidate, grade] = await Promise.all([
                 Course.findById(exam.course).select('professor teachingAssistants'),
@@ -91,19 +102,18 @@ export async function PATCH(
                 }).select('gradedBy')
             ]);
             const isCourseTa = Boolean(course?.teachingAssistants.some(ta => ta.equals(reviewerId)));
-            isExamProfessor = Boolean(candidate?.role === UserRole.PROFESSOR &&
-                candidate._id.equals(exam.createdBy) &&
-                course?.professor.equals(exam.createdBy));
+            isCourseProfessor = Boolean(candidate?.role === UserRole.PROFESSOR &&
+                course?.professor.equals(candidate._id));
             const isAuthorizedTa = candidate?.role === UserRole.TA && isCourseTa;
-            if (!candidate || (!isAuthorizedTa && !isExamProfessor)) {
+            if (!candidate || (!isAuthorizedTa && !isCourseProfessor)) {
                 return NextResponse.json(
-                    { success: false, message: 'Reviewer must be an active TA assigned to the course or the exam owner', data: null },
+                    { success: false, message: 'Reviewer must be an active TA assigned to the course or the course professor', data: null },
                     { status: 400 }
                 );
             }
 
             isOriginalGrader = Boolean(grade?.gradedBy && grade.gradedBy.toString() === reviewerId);
-            if (isOriginalGrader && !isExamProfessor) {
+            if (isOriginalGrader && !isCourseProfessor) {
                 return NextResponse.json(
                     { success: false, message: 'Reviewer cannot be the original grader for this question', data: null },
                     { status: 400 }
@@ -147,7 +157,7 @@ export async function PATCH(
                 previousAssignee,
                 assignedTo: reviewerId,
                 reviewerName: reviewer?.name || null,
-                ...(isOriginalGrader && isExamProfessor ? { note: 'Assigned reviewer is original grader and exam professor' } : {})
+                ...(isOriginalGrader && isCourseProfessor ? { note: 'Assigned reviewer is original grader and course professor' } : {})
             }
         });
         if (!audited) {
