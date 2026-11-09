@@ -73,7 +73,7 @@ describe('AE-209 audit CSV export', () => {
             isActive: true
         });
         const unrelatedTarget = new mongoose.Types.ObjectId();
-        await AuditLog.create([
+        await AuditLog.collection.insertMany([
             {
                 user: actor._id,
                 action: '=HYPERLINK("https://example.invalid","Action")',
@@ -93,12 +93,28 @@ describe('AE-209 audit CSV export', () => {
                 entityId: exam._id,
                 entityType: 'Exam',
                 createdAt: new Date('2026-01-01T11:00:00.000Z')
+            },
+            {
+                user: actor._id,
+                action: '\t@TAB_INJECTION',
+                outcome: 'SUCCESS',
+                entityId: exam._id,
+                entityType: 'Exam',
+                createdAt: new Date('2026-01-01T11:30:00.000Z')
+            },
+            {
+                user: actor._id,
+                action: '\r+CR_INJECTION',
+                outcome: 'SUCCESS',
+                entityId: exam._id,
+                entityType: 'Exam',
+                createdAt: new Date('2026-01-01T11:45:00.000Z')
             }
         ]);
         return { professor, otherProfessor, exam };
     }
 
-    it('streams a chronological exam CSV with safe formula escaping and no audit mutation', async () => {
+    it('streams a chronological exam CSV with safe formula escaping including tab and CR, and records AUDIT_LOGS_EXPORTED', async () => {
         const fixture = await createFixture();
         mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
         const countBefore = await AuditLog.countDocuments({});
@@ -114,9 +130,17 @@ describe('AE-209 audit CSV export', () => {
         expect(csv.startsWith('actor,actor_role,action,outcome,timestamp,target_type,target_id\r\n')).toBe(true);
         expect(csv).toContain(`"'=HYPERLINK(""https://example.invalid"",""Actor"")"`);
         expect(csv).toContain(`"'=HYPERLINK(""https://example.invalid"",""Action"")"`);
+        // Tab and Carriage Return formula injection neutralization
+        expect(csv).toContain(`"'\t@TAB_INJECTION"`);
+        expect(csv).toContain(`"'\r+CR_INJECTION"`);
         expect(csv.indexOf('HYPERLINK')).toBeLessThan(csv.indexOf('EXAM_UPDATED'));
         expect(csv).not.toContain('do-not-export-this-value');
-        expect(await AuditLog.countDocuments({})).toBe(countBefore);
+
+        // Audit entry AUDIT_LOGS_EXPORTED recorded on export
+        expect(await AuditLog.countDocuments({})).toBe(countBefore + 1);
+        const exportLog = await AuditLog.findOne({ action: 'AUDIT_LOGS_EXPORTED' });
+        expect(exportLog).not.toBeNull();
+        expect(exportLog?.entityId?.toString()).toBe(fixture.exam._id.toString());
     });
 
     it('requires a valid exam and enforces ownership and role access', async () => {

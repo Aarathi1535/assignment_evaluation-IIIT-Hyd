@@ -9,7 +9,7 @@ export async function POST() {
     if (!auth.authorized) {
         return auth.response;
     }
-    if (auth.user.role !== UserRole.ADMIN && auth.user.role !== UserRole.PROFESSOR) {
+    if (auth.user.role !== UserRole.ADMIN) {
         return NextResponse.json(
             { success: false, message: 'Forbidden', data: null },
             { status: 403, headers: { 'Cache-Control': 'private, no-store' } }
