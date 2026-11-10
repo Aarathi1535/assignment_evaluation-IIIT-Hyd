@@ -9,6 +9,8 @@ import User from '../models/User';
 import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
+import Allocation, { AllocationStatus } from '../models/Allocation';
+import StudentResultService from '../services/StudentResultService';
 import { GET } from '../app/api/analytics/exams/[id]/graders/route';
 import {
     calculateGraderConsistency,
@@ -35,7 +37,6 @@ describe('AE-211 TA grading consistency metric', () => {
                 comparisonCount: 2,
                 meanAbsoluteDeviationPercentagePoints: 5,
                 signedMeanDeviationPercentagePoints: -5,
-                meanSignedDeviationPercentagePoints: -5,
                 sampleSizeStatus: 'INSUFFICIENT'
             },
             {
@@ -43,7 +44,6 @@ describe('AE-211 TA grading consistency metric', () => {
                 comparisonCount: 2,
                 meanAbsoluteDeviationPercentagePoints: 5,
                 signedMeanDeviationPercentagePoints: 5,
-                meanSignedDeviationPercentagePoints: 5,
                 sampleSizeStatus: 'INSUFFICIENT'
             }
         ]);
@@ -65,7 +65,6 @@ describe('AE-211 TA grading consistency metric', () => {
                 comparisonCount: MIN_GRADER_CONSISTENCY_SAMPLE_SIZE,
                 meanAbsoluteDeviationPercentagePoints: 8,
                 signedMeanDeviationPercentagePoints: -8,
-                meanSignedDeviationPercentagePoints: -8,
                 sampleSizeStatus: 'SUFFICIENT'
             },
             {
@@ -73,7 +72,6 @@ describe('AE-211 TA grading consistency metric', () => {
                 comparisonCount: MIN_GRADER_CONSISTENCY_SAMPLE_SIZE,
                 meanAbsoluteDeviationPercentagePoints: 8,
                 signedMeanDeviationPercentagePoints: 8,
-                meanSignedDeviationPercentagePoints: 8,
                 sampleSizeStatus: 'SUFFICIENT'
             }
         ]);
@@ -346,5 +344,100 @@ describe('AE-211 TA grading consistency metric', () => {
             { params: Promise.resolve({ id: nonExistentId }) }
         );
         expect(notFoundResponse.status).toBe(404);
+    });
+
+    it('treats missing allocation status as PENDING and excludes script from released scores', async () => {
+        const professor = await User.create({
+            name: 'Batch Professor',
+            email: 'batch-professor@example.test',
+            password: 'password123',
+            role: UserRole.PROFESSOR,
+            isActive: true
+        });
+        const ta = await User.create({
+            name: 'Batch TA',
+            email: 'batch-ta@example.test',
+            password: 'password123',
+            role: UserRole.TA,
+            isActive: true
+        });
+        const student = await User.create({
+            name: 'Batch Student',
+            email: 'batch-student@example.test',
+            password: 'password123',
+            role: UserRole.STUDENT,
+            isActive: true
+        });
+        const course = await Course.create({
+            courseCode: 'BATCH-211',
+            courseName: 'Batch Testing',
+            academicYear: '2026-2027',
+            semester: 1,
+            professor: professor._id,
+            enrolledStudents: [student._id],
+            teachingAssistants: [ta._id],
+            isActive: true
+        });
+        const exam = await Exam.create({
+            title: 'Batch Exam',
+            course: course._id,
+            createdBy: professor._id,
+            examDate: new Date('2026-11-04'),
+            totalMarks: 10,
+            numberOfQuestions: 1,
+            status: ExamStatus.PUBLISHED,
+            isActive: true
+        });
+        const rubric = await Rubric.create({
+            exam: exam._id,
+            createdBy: professor._id,
+            scoreStep: 0.5,
+            questions: [{
+                questionNumber: 1,
+                maxMarks: 10,
+                criteria: [{ criterionName: 'Accuracy', points: 10 }]
+            }],
+            isActive: true
+        });
+        const script = await AnswerScript.create({
+            exam: exam._id,
+            student: student._id,
+            identificationStatus: IdentificationStatus.IDENTIFIED,
+            isActive: true,
+            needsManualId: false,
+            hasIdentificationConflict: false
+        });
+        await Grade.create({
+            answerScript: script._id,
+            rubric: rubric._id,
+            gradedBy: ta._id,
+            question: 1,
+            marksAwarded: [{ criterionName: 'Accuracy', score: 8 }],
+            totalScore: 8,
+            isFinal: true
+        });
+
+        // Allocation with missing status (simulating unset status in document)
+        const rawAlloc = await Allocation.collection.insertOne({
+            answerScript: script._id,
+            assignedTo: ta._id,
+            allocatedBy: professor._id,
+            question: 1,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+
+        const scores = await StudentResultService.getPublishedExamScores(exam);
+        expect(scores).toHaveLength(0);
+
+        // Update allocation to COMPLETED
+        await Allocation.collection.updateOne(
+            { _id: rawAlloc.insertedId },
+            { $set: { status: AllocationStatus.COMPLETED } }
+        );
+
+        const scoresAfterCompletion = await StudentResultService.getPublishedExamScores(exam);
+        expect(scoresAfterCompletion).toHaveLength(1);
+        expect(scoresAfterCompletion[0].score).toBe(8);
     });
 });

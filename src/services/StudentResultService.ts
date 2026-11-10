@@ -180,7 +180,7 @@ export class StudentResultService {
             ? (batchData.allocationsByScript.get(script._id.toString()) || [])
             : await Allocation.find({ answerScript: script._id });
         const hasUnfinishedAllocations = allocations.some(
-            a => a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
+            a => !a.status || a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
         );
         if (hasUnfinishedAllocations) {
             return { isReleased: false };

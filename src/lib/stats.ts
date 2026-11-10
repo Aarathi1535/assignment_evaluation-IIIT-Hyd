@@ -43,7 +43,6 @@ export interface GraderConsistencyMetric {
     comparisonCount: number;
     meanAbsoluteDeviationPercentagePoints: number;
     signedMeanDeviationPercentagePoints: number;
-    meanSignedDeviationPercentagePoints?: number;
     sampleSizeStatus: 'SUFFICIENT' | 'INSUFFICIENT';
 }
 
@@ -154,10 +153,12 @@ export function calculateQuestionPerformance(
 }
 
 /**
- * Measures each TA's mean absolute distance from the pooled percentage score
- * within comparable rubric-question groups. Groups with only one TA are omitted.
- * Fewer than five comparable scores are marked insufficient; this cohort proxy
- * is not formal inter-rater reliability because students are not double-graded.
+ * Measures each TA's mean absolute distance and signed mean deviation from the pooled
+ * percentage score within comparable rubric-question groups. Groups with only one TA are omitted.
+ * Absolute deviation measures distance from cohort mean, while signed mean deviation measures
+ * grader bias (positive = lenient, negative = strict). Fewer than five comparable scores are
+ * marked insufficient; this cohort proxy is not formal inter-rater reliability because students
+ * are not double-graded.
  */
 export function calculateGraderConsistency(
     observations: readonly GraderScoreObservation[],
@@ -201,7 +202,6 @@ export function calculateGraderConsistency(
             comparisonCount: entry.absolute.length,
             meanAbsoluteDeviationPercentagePoints: meanAbsolute,
             signedMeanDeviationPercentagePoints: meanSigned,
-            meanSignedDeviationPercentagePoints: meanSigned,
             sampleSizeStatus: entry.absolute.length >= minimumSampleSize
                 ? 'SUFFICIENT'
                 : 'INSUFFICIENT'

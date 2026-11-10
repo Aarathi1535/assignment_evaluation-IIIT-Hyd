@@ -53,7 +53,6 @@ interface GraderMetric {
     comparisonCount: number;
     meanAbsoluteDeviationPercentagePoints: number;
     signedMeanDeviationPercentagePoints?: number;
-    meanSignedDeviationPercentagePoints?: number;
     sampleSizeStatus: 'SUFFICIENT' | 'INSUFFICIENT';
 }
 
@@ -370,7 +369,7 @@ export default function ExamAnalyticsDashboard({ examId }: { examId: string }) {
                             <Card>
                                 <h2 className="mb-2 text-lg font-bold text-slate-950">TA grading consistency</h2>
                                 <p className="mb-5 text-sm text-slate-700">
-                                    Mean absolute deviation from comparable question cohort averages. Lower values are closer to the cohort mean.
+                                    Mean absolute deviation measures spread from comparable question cohort averages (lower values are closer to the cohort mean). Signed mean deviation measures grader bias (positive values indicate more lenient grading, negative values indicate stricter grading).
                                 </p>
                                 <GraderConsistencyChart
                                     graders={payload.graders.graders}
