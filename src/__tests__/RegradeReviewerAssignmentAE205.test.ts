@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { Readable } from 'node:stream';
+import mongoose from 'mongoose';
 import AuditLog from '../models/AuditLog';
 import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
@@ -8,6 +10,9 @@ import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import RegradeRequest, { RegradeStatus } from '../models/RegradeRequest';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
+import Batch, { BatchStatus } from '../models/Batch';
+import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
+import DerivedStorageService from '../services/DerivedStorageService';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
 
@@ -25,12 +30,19 @@ describe('AE-205 regrade reviewer assignment', () => {
     let assignReviewer: typeof import('../app/api/professor/regrade-requests/[id]/assignment/route').PATCH;
     let getRequests: typeof import('../app/api/professor/regrade-requests/route').GET;
     let getPages: typeof import('../app/api/scripts/[id]/pages/route').GET;
+    let getImage: typeof import('../app/api/ingest/[id]/pages/[pageId]/image/route').GET;
 
     beforeAll(async () => {
         assignReviewer = (await import('../app/api/professor/regrade-requests/[id]/assignment/route')).PATCH;
         getRequests = (await import('../app/api/professor/regrade-requests/route')).GET;
         getPages = (await import('../app/api/scripts/[id]/pages/route')).GET;
+        getImage = (await import('../app/api/ingest/[id]/pages/[pageId]/image/route')).GET;
         await RegradeRequest.init();
+
+        vi.spyOn(DerivedStorageService, 'openDerivedPage').mockResolvedValue({
+            stream: Readable.from([Buffer.from('fake-derived-image')]),
+            size: 19
+        });
     });
 
     afterEach(() => {
@@ -103,7 +115,24 @@ describe('AE-205 regrade reviewer assignment', () => {
             reason: 'Please review the question score.',
             status: RegradeStatus.OPEN
         });
-        return { professor, ta, otherTa, student, course, exam, script, regrade };
+        const batch = await Batch.create({
+            batchId: `batch-${suffix}`,
+            exam: exam._id,
+            uploadedBy: professor._id,
+            totalFiles: 1,
+            status: BatchStatus.DONE
+        });
+        const page = await IngestionPage.create({
+            batchId: batch.batchId,
+            job: new mongoose.Types.ObjectId(),
+            fileId: `file-${suffix}`,
+            pageNumber: 1,
+            fileIndex: 0,
+            storageKey: `derived/pages/${batch.batchId}/p1.png`,
+            answerScript: script._id,
+            status: PageProcessingStatus.PROCESSED
+        });
+        return { professor, ta, otherTa, student, course, exam, script, regrade, batch, page };
     }
 
     function assign(id: string, reviewerId: string) {
@@ -172,7 +201,7 @@ describe('AE-205 regrade reviewer assignment', () => {
         expect(queuePayload.data.requests).toHaveLength(1);
         expect(queuePayload.data.requests[0].id).toBe(fixture.regrade._id.toString());
         expect(pages.status).toBe(200);
-        expect((await pages.json()).data).toEqual([]);
+        expect((await pages.json()).data).toHaveLength(1);
 
         mockSessionUser = { id: fixture.otherTa._id.toString(), role: UserRole.TA };
         const unassignedQueue = await getRequests(new NextRequest('http://localhost:3000/api/professor/regrade-requests'));
@@ -264,5 +293,77 @@ describe('AE-205 regrade reviewer assignment', () => {
             { params: Promise.resolve({ id: fixture.script._id.toString() }) }
         );
         expect(removedPages.status).toBe(403);
+    });
+
+    it('enforces image-route authorization: assigned reviewer TA can access while OPEN, revoked when resolved, course inactive, or TA removed', async () => {
+        const fixture = await createFixture();
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        await assign(fixture.regrade._id.toString(), fixture.ta._id.toString());
+
+        // 1. While regrade is OPEN and course is active, assigned reviewer TA can access image
+        mockSessionUser = { id: fixture.ta._id.toString(), role: UserRole.TA };
+        const openImage = await getImage(
+            new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
+            { params: Promise.resolve({ id: fixture.batch.batchId, pageId: fixture.page._id.toString() }) }
+        );
+        expect(openImage.status).toBe(200);
+
+        // 2. Unassigned TA receives 404
+        mockSessionUser = { id: fixture.otherTa._id.toString(), role: UserRole.TA };
+        const unassignedImage = await getImage(
+            new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
+            { params: Promise.resolve({ id: fixture.batch.batchId, pageId: fixture.page._id.toString() }) }
+        );
+        expect(unassignedImage.status).toBe(404);
+
+        // 3. When course is inactive (course.isActive: false), reviewer access is denied
+        await Course.updateOne(
+            { _id: fixture.course._id },
+            { $set: { isActive: false } }
+        );
+        mockSessionUser = { id: fixture.ta._id.toString(), role: UserRole.TA };
+        const inactivePages = await getPages(
+            new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
+            { params: Promise.resolve({ id: fixture.script._id.toString() }) }
+        );
+        expect(inactivePages.status).toBe(403);
+
+        const inactiveImage = await getImage(
+            new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
+            { params: Promise.resolve({ id: fixture.batch.batchId, pageId: fixture.page._id.toString() }) }
+        );
+        expect(inactiveImage.status).toBe(404);
+
+        // Re-activate course
+        await Course.updateOne(
+            { _id: fixture.course._id },
+            { $set: { isActive: true } }
+        );
+
+        // 4. When regrade request is RESOLVED, reviewer image access is revoked
+        await RegradeRequest.updateOne(
+            { _id: fixture.regrade._id },
+            { $set: { status: RegradeStatus.RESOLVED, isOpen: false } }
+        );
+        const resolvedImage = await getImage(
+            new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
+            { params: Promise.resolve({ id: fixture.batch.batchId, pageId: fixture.page._id.toString() }) }
+        );
+        expect(resolvedImage.status).toBe(404);
+
+        // 5. When TA is removed from course staff, image access is revoked
+        await RegradeRequest.updateOne(
+            { _id: fixture.regrade._id },
+            { $set: { status: RegradeStatus.OPEN, isOpen: true } }
+        );
+        await Course.updateOne(
+            { _id: fixture.course._id },
+            { $set: { teachingAssistants: [] } }
+        );
+        const removedImage = await getImage(
+            new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
+            { params: Promise.resolve({ id: fixture.batch.batchId, pageId: fixture.page._id.toString() }) }
+        );
+        expect(removedImage.status).toBe(404);
     });
 });

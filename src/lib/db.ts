@@ -70,3 +70,15 @@ export async function connectDB() {
 
   return mongooseCache.conn;
 }
+
+export function isTransactionCapable(conn: typeof mongoose.connection = mongoose.connection): boolean {
+  const client = (conn as unknown as { client?: { topology?: { description?: { type?: string } } } })?.client;
+  const topology = client?.topology;
+  const topologyType = (topology?.description?.type as string | undefined) ?? 'Unknown';
+  return [
+    'ReplicaSetWithPrimary',
+    'ReplicaSetNoPrimary',
+    'Sharded',
+    'LoadBalanced',
+  ].includes(topologyType);
+}

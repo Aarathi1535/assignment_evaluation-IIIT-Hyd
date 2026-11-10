@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import { UserRole } from '../../../../../constants/permissions';
 import { requireAuth } from '../../../../../lib/apiAuth';
-import { connectDB } from '../../../../../lib/db';
+import { connectDB, isTransactionCapable } from '../../../../../lib/db';
 import { writeAuditLog } from '../../../../../lib/audit';
 import Exam from '../../../../../models/Exam';
 import Course from '../../../../../models/Course';
@@ -215,16 +215,7 @@ export async function PATCH(
         }
 
         // Setup transaction if capable
-        const client = (mongoose.connection as unknown as { client?: { topology?: { description?: { type?: string } } } })?.client;
-        const topology = client?.topology;
-        const topologyType = (topology?.description?.type as string | undefined) ?? 'Unknown';
-        const transactionCapable = [
-            'ReplicaSetWithPrimary',
-            'ReplicaSetNoPrimary',
-            'Sharded',
-            'LoadBalanced',
-        ].includes(topologyType);
-
+        const transactionCapable = isTransactionCapable();
         const session = transactionCapable ? await mongoose.startSession() : null;
         if (session) {
             session.startTransaction();
