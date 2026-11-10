@@ -44,6 +44,17 @@ export async function GET(
         return auth.response;
     }
 
+    if (auth.user.role === 'STUDENT') {
+        const { isStudentResultsEnabled } = await import('../../../../../config/env');
+        if (!isStudentResultsEnabled()) {
+            return NextResponse.json({
+                success: false,
+                message: 'Not found',
+                data: null
+            }, { status: 404 });
+        }
+    }
+
     const { id } = await context.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
         return NextResponse.json({

@@ -91,9 +91,27 @@ RegradeRequestSchema.index(
     { unique: true, partialFilterExpression: { isOpen: true } }
 );
 
+RegradeRequestSchema.post('init', function () {
+    (this as unknown as { _originalStatus?: RegradeStatus })._originalStatus = this.status;
+});
+
 RegradeRequestSchema.pre('validate', function () {
+    const original = (this as unknown as { _originalStatus?: RegradeStatus })._originalStatus;
+    if (!this.isNew && this.isModified('status') && original) {
+        if (!isValidRegradeTransition(original, this.status)) {
+            throw new Error(`Invalid regrade status transition from ${original} to ${this.status}`);
+        }
+    }
     this.isOpen = this.status !== RegradeStatus.RESOLVED;
 });
+
+export function transitionRegradeStatus(doc: IRegradeRequest, nextStatus: RegradeStatus): void {
+    if (!isValidRegradeTransition(doc.status, nextStatus)) {
+        throw new Error(`Invalid regrade status transition from ${doc.status} to ${nextStatus}`);
+    }
+    doc.status = nextStatus;
+    doc.isOpen = nextStatus !== RegradeStatus.RESOLVED;
+}
 
 RegradeRequestSchema.pre(['updateOne', 'findOneAndUpdate'], function () {
     const update = this.getUpdate() as Record<string, unknown> | null;

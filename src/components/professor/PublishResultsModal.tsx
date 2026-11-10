@@ -137,8 +137,8 @@ function PublishResultsModalContent({
   const handlePublish = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
-    // Prevent duplicate submissions and block if error present
-    if (publishing || isSubmittingRef.current || !confirmed || !!error) {
+    // Prevent duplicate submissions
+    if (publishing || isSubmittingRef.current || !confirmed) {
       return;
     }
 
@@ -254,11 +254,21 @@ function PublishResultsModalContent({
             <>
               {error && (
                 <div
-                  className="p-3 bg-rose-50 border border-rose-200 rounded-brand text-rose-800 text-sm flex items-start gap-2"
+                  className="p-3 bg-rose-50 border border-rose-200 rounded-brand text-rose-800 text-sm flex items-start justify-between gap-2"
                   data-testid="publish-error-message"
                 >
-                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
-                  <div className="flex-1 font-medium">{error}</div>
+                  <div className="flex items-start gap-2 flex-1">
+                    <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="flex-1 font-medium">{error}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setError(null)}
+                    className="text-xs font-semibold text-rose-700 underline hover:text-rose-900 shrink-0 cursor-pointer"
+                    data-testid="dismiss-publish-error-btn"
+                  >
+                    Dismiss
+                  </button>
                 </div>
               )}
 

@@ -1,5 +1,5 @@
 // Route-level security audit test suite verifying student access constraints across all VIEW_COURSES routes (AE-199)
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
@@ -37,6 +37,10 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         ingestionSummaryGET = (await import('../app/api/exams/[id]/ingestion-summary/route')).GET;
         rubricsGET = (await import('../app/api/rubrics/route')).GET;
         rubricByIdGET = (await import('../app/api/rubrics/[id]/route')).GET;
+    });
+
+    beforeEach(() => {
+        process.env.STUDENT_RESULTS_ENABLED = 'true';
     });
 
     afterEach(() => {
@@ -182,6 +186,13 @@ describe('AE-199: Security audit of VIEW_COURSES routes for student access', () 
         expect(windowBody.data).toHaveProperty('regradeWindowClosesAt');
 
         // 6. GET /api/rubrics and /api/rubrics/[id] return rubric without leaking student scripts or storage keys
+        const rubricsListResponse = await rubricsGET(new NextRequest(`http://localhost:3000/api/rubrics?exam=${publishedExam._id}`));
+        expect(rubricsListResponse.status).toBe(200);
+        const rubricsListBody = await rubricsListResponse.json();
+        const rawRubricsListText = JSON.stringify(rubricsListBody);
+        expect(rawRubricsListText).not.toContain('storageKey');
+        expect(rawRubricsListText).not.toContain('filePath');
+
         const rubricResponse = await rubricByIdGET(
             new NextRequest(`http://localhost:3000/api/rubrics/${rubric._id}`),
             { params: Promise.resolve({ id: rubric._id.toString() }) }

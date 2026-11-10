@@ -5,7 +5,6 @@ import { Permission } from '../../../../constants/permissions';
 import { connectDB } from '../../../../lib/db';
 import { HttpError, isDuplicateKeyError } from '../../../../lib/errors';
 import { requirePermission } from '../../../../lib/apiAuth';
-import Exam, { ExamStatus } from '../../../../models/Exam';
 import Grade from '../../../../models/Grade';
 import RegradeRequest, { IRegradeRequest } from '../../../../models/RegradeRequest';
 import Rubric from '../../../../models/Rubric';
@@ -60,13 +59,14 @@ export async function GET() {
             auth.user.role
         );
 
-        // Filter to exams the student can currently see (active and PUBLISHED)
-        const visibleExams = await Exam.find({
-            isActive: true,
-            status: ExamStatus.PUBLISHED
-        }).select('_id title').lean();
-        const visibleExamMap = new Map(visibleExams.map(exam => [exam._id.toString(), exam.title]));
-        const visibleExamIds = visibleExams.map(exam => exam._id);
+        // Filter to exams where results are currently published and released to the student
+        const studentResults = await StudentResultService.getStudentResults(
+            auth.user.id,
+            auth.user.role
+        );
+        const releasedExams = studentResults.filter(r => r.status === 'RELEASED');
+        const visibleExamMap = new Map(releasedExams.map(r => [r.examId, r.examTitle]));
+        const visibleExamIds = releasedExams.map(r => new mongoose.Types.ObjectId(r.examId));
 
         const requests = await RegradeRequest.find({
             student: student._id,

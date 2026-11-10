@@ -243,6 +243,11 @@ class ExamService {
             }
 
             if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
+                const otherFields = { ...data };
+                delete otherFields.status;
+                if (Object.keys(otherFields).length > 0) {
+                    await ExamRepository.updateExam(id, otherFields, actingUserId, actingUserRole);
+                }
                 return await this.publishExam(id, actingUserId, actingUserRole, context);
             }
         }
@@ -1220,6 +1225,10 @@ class ExamService {
                 );
             }
             throw error;
+        } finally {
+            if (session) {
+                session.endSession();
+            }
         }
     }
     async updateRegradeWindow(

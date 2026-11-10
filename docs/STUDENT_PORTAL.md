@@ -15,6 +15,8 @@ Both endpoints require the authenticated application session and course-view per
 
 The results page calls `GET /api/student/results`. It shows the student's own exam records and whether each result is `RELEASED` or `NOT_AVAILABLE`. Scores and script links are returned only when the exam is active and published, the script is active and correctly identified, all required grading is final, and grading allocations are complete. Unpublished exams are not presented as released results.
 
+Newly raised open script flags (e.g. academic integrity, grading discrepancies) immediately hide the student's published result: `evaluateReleaseConditions` evaluates to unreleased (`NOT_AVAILABLE`), returning HTTP 404 on itemized feedback, page manifests, and image endpoints until all flags on the script are resolved or escalated by course staff.
+
 The server-side `STUDENT_RESULTS_ENABLED` setting must be `true` for student result access. When the feature is disabled, result access returns a not-found response. The results list, detailed result, and viewer endpoints derive the student identity from the authenticated session; a client-supplied student ID is not an authorization input.
 
 `GET /api/student/results/[scriptId]` returns itemized marks and feedback for an eligible result. Attempts to access a missing, unreleased, or another student's script are rejected rather than returning its result.
