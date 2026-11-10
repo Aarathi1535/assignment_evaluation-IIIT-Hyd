@@ -6,18 +6,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { FormInput } from '@/components/ui/FormInput';
-import { FormSelect } from '@/components/ui/FormSelect';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/Card';
 import { registerSchema, RegisterInput } from '@/validations/authValidation';
 import { UserPlus, AlertCircle, CheckCircle2 } from 'lucide-react';
-
-const roleOptions = [
-  { value: 'STUDENT', label: 'Student' },
-  { value: 'TA', label: 'Teaching Assistant (TA)' },
-  { value: 'PROFESSOR', label: 'Professor' },
-  { value: 'ADMIN', label: 'Administrator' },
-];
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -125,13 +117,6 @@ export default function RegisterPage() {
                 placeholder="••••••••"
                 error={errors.password?.message}
                 {...register('password')}
-              />
-
-              <FormSelect
-                label="Role"
-                options={roleOptions}
-                error={errors.role?.message}
-                {...register('role')}
               />
             </div>
 
