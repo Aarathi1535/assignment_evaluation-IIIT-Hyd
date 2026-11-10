@@ -93,7 +93,7 @@ All list queries support standardized pagination parameters and return comprehen
 ```
 
 ### 3.3 Error Response Envelope
-All error responses adhere to RFC 7807 Problem Details principles, returning a deterministic structure with machine-readable error codes:
+All error responses adhere to a standardized application JSON error envelope, returning a deterministic structure with machine-readable error codes and contextual debugging details:
 
 ```json
 {
@@ -122,7 +122,7 @@ Services return exact semantic HTTP status codes. Status code must match the int
 | Code | Meaning | Usage across Learning Platform APIs |
 |---|---|---|
 | `200 OK` | Request succeeded | `GET`, `PATCH`, `PUT` queries and safe operational triggers. |
-| `201 Created` | Resource created | `POST` creation (e.g. create session, submit answer sheet). Includes `Location` header. |
+| `201 Created` | Resource created | `POST` creation (e.g. create session, join session, submit answer sheet). Includes `Location` header. |
 | `204 No Content` | Succeeded with no body | `DELETE` operations or acknowledgement commands. |
 | `400 Bad Request` | Malformed request body | Validation failure, invalid date formatting, unparseable JSON. |
 | `401 Unauthorized` | Missing / invalid credentials | Expired JWT, missing Bearer header, unverified guest token. |
@@ -149,7 +149,7 @@ For web browser clients operating within product subdomains, HTTP-only, SameSite
 - Personalised Learning: `personalized_token`
 
 ### 5.2 Session-Scoped Guest Participant Token
-Guest joins (`POST /api/v1/classroom/sessions/{code}/join`) return an ephemeral, session-bound JWT:
+Guest joins (`POST /api/v1/classroom/join/{code}`) return an ephemeral, session-bound JWT:
 ```json
 {
   "sub": "part_9f82a10b",

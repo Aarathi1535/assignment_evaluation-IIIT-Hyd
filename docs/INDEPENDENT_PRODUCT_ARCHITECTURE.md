@@ -1,6 +1,6 @@
 # Independent Product Architecture
 
-> **Note**: For the comprehensive Architecture Note v2 covering dual authentication, LTI 1.3, OpenAPI, headless APIs, and guest-join decisions, see [ARCHITECTURE_NOTE_v2.md](file:///docs/ARCHITECTURE_NOTE_v2.md).
+> **Note**: For the comprehensive Architecture Note v2 covering dual authentication, LTI 1.3, OpenAPI, headless APIs, and guest-join decisions, see [ARCHITECTURE_NOTE_v2.md](./ARCHITECTURE_NOTE_v2.md).
 
 This document specifies the decoupled, multi-product architecture of the IIIT Hyderabad Learning Platform.
 
@@ -26,9 +26,9 @@ The platform is partitioned into three independently operating products accessib
 │  Assignment Eval │     │  Classroom Act.  │     │  Personalised    │
 ├──────────────────┤     ├──────────────────┤     ├──────────────────┤
 │ Port: 3000       │     │ Port: 3001       │     │ Port: 3002       │
-│ DB: MONGODB_URI  │     │ DB: CLASSROOM_URI│     │ DB: PERSONAL_URI │
+│ DB: MONGODB_URI  │     │ DB: MONGODB_CL...│     │ DB: MONGODB_PE...│
 │ Auth: NextAuth   │     │ Auth: ClassToken │     │ Auth: PersonToken│
-│ Storage: Local/S3│     │ Storage: Uploads │     │ Storage: GCS/Loc │
+│ Storage: GCS Eval│     │ Storage: GCS Cls │     │ Storage: GCS Pers│
 └──────────────────┘     └──────────────────┘     └──────────────────┘
 ```
 
@@ -42,7 +42,7 @@ The platform is partitioned into three independently operating products accessib
 - **User Management**: `src/models/User.ts` (ADMIN, PROFESSOR, TA, STUDENT)
 - **Authentication**: NextAuth credentials provider (`/api/auth/[...nextauth]`)
 - **APIs**: `/api/grading/*`, `/api/exams/*`, `/api/courses/*`, `/api/analytics/*`, `/api/export/*`
-- **Storage**: `data/submissions/`, `data/rubrics/`
+- **Storage**: Cloud Storage (`gs://iiit-eval-platform-originals`, `gs://iiit-eval-platform-derived`) via dedicated service account `sa-eval-service`
 - **Status**: Preserved existing implementation.
 
 ### Product 2: Classroom Activity
@@ -55,7 +55,7 @@ The platform is partitioned into three independently operating products accessib
   - Independent JWT tokens via `src/lib/classroomAuth.ts` (`classroom_token` cookie or `x-classroom-token` header).
   - Independent endpoints: `/api/classroom/auth/register`, `/api/classroom/auth/login`, `/api/classroom/auth/me`, `/api/classroom/auth/logout`.
 - **APIs**: `/api/classroom/*` (sessions, questions, submissions, review, stream, image).
-- **Storage**: `data/classroom-uploads/` via `ClassroomStorageService.ts`.
+- **Storage**: Cloud Storage (`gs://iiit-classroom-sheets`, `gs://iiit-classroom-thumbnails`) via dedicated service account `sa-classroom-service`.
 
 ### Product 3: Personalised Learning
 - **Access URL**: `/personalized` (Portal), `/personalized/login`, `/personalized/register`, `/student/personalized` (Daily Practice), `/professor/personalized` (Taxonomy & Question Bank)
@@ -66,7 +66,7 @@ The platform is partitioned into three independently operating products accessib
   - Independent JWT tokens via `src/lib/personalizedAuth.ts` (`personalized_token` cookie or `x-personalized-token` header).
   - Independent endpoints: `/api/personalized/auth/register`, `/api/personalized/auth/login`, `/api/personalized/auth/me`, `/api/personalized/auth/logout`.
 - **APIs**: `/api/personalized/*` (today, submit, schedules, questions, syllabus, taxonomy).
-- **Storage**: `data/personalized-uploads/` or Google Cloud Storage via `CloudStorageService.ts`.
+- **Storage**: Cloud Storage (`gs://iiit-personalized-assets`) via dedicated service account `sa-personalized-service`.
 
 ---
 

@@ -1,8 +1,8 @@
 # Architecture Note v2: Independent Product Architecture
 
-**Document Version:** 2.2.0  
-**Date:** 2026-11-07  
-**Status:** DRAFT (Submitted for Mentor & Stakeholder Sign-Off — Implementation Gated)  
+**Document Version:** 2.2.0
+**Date:** 2026-11-10
+**Status:** REVISED DRAFT (Addressing Mentor Review Points 3–10 — Submitted for Sign-Off)
 **Authors:** Learning Platform Engineering Team  
 **Reviewers:** Laxmi Narayana Murthy Vemuri (Mentor), Prof. C.V. Jawahar (Lead Advisor)
 
@@ -73,36 +73,51 @@ To guarantee zero regression of Assignment Evaluation features (including AE-190
    │ Product 1: Evaluation│  │ Product 2: Classroom │  │ Product 3: Personal  │
    ├──────────────────────┤  ├──────────────────────┤  ├──────────────────────┤
    │ Port: 3000           │  │ Port: 3001           │  │ Port: 3002           │
-   │ DB: MONGODB_URI      │  │ DB: CLASSROOM_URI    │  │ DB: PERSONALIZED_URI │
-   │ Auth: NextAuth       │  │ Auth: Classroom JWT  │  │ Auth: Personal JWT   │
-   │ Storage: eval-data/  │  │ Storage: class-data/ │  │ Storage: pers-data/  │
+   │ DB: MONGODB_URI      │  │ DB: MONGODB_         │  │ DB: MONGODB_         │
+   │                      │  │     CLASSROOM_URI    │  │     PERSONALIZED_URI │
+   │ Auth: NextAuth (IdP) │  │ Auth: Classroom JWT  │  │ Auth: Personal JWT   │
+   │ Storage: GCS Bucket  │  │ Storage: GCS Bucket  │  │ Storage: GCS Bucket  │
+   │   gs://iiit-eval-    │  │   gs://iiit-class-   │  │   gs://iiit-pers-    │
+   │        platform-prod │  │        room-prod     │  │        onalized-prod │
+   │ IAM: sa-eval@...     │  │ IAM: sa-class@...    │  │ IAM: sa-pers@...     │
    │ APIs: /api/v1/eval   │  │ APIs: /api/v1/class  │  │ APIs: /api/v1/pers   │
    └──────────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
 
-### 3.1 Prototype Reality vs Target Architecture ("Working Towards")
+### 3.1 Cloud Storage Isolation & IAM Service Accounts
+In accordance with mentor directives, physical file and image storage is isolated per product using dedicated Google Cloud Storage buckets and service accounts:
+- **Assignment Evaluation:** `gs://iiit-eval-platform-prod` accessed exclusively via service account `sa-eval@iiit-eval-platform.iam.gserviceaccount.com`.
+- **Classroom Activity:** `gs://iiit-classroom-prod` accessed exclusively via service account `sa-class@iiit-eval-platform.iam.gserviceaccount.com`.
+- **Personalised Learning:** `gs://iiit-personalized-prod` accessed exclusively via service account `sa-pers@iiit-eval-platform.iam.gserviceaccount.com`.
+
+Local directory paths (`eval-data/`, `class-data/`, `pers-data/`) are used strictly as local development fallbacks; production deployments enforce strict bucket-level IAM policies preventing any service from reading or modifying another product's artifacts.
+
+### 3.2 Prototype Reality vs Target Architecture ("Working Towards")
 As noted in the mentor review on PR #323, the initial prototype demonstrated high module reuse and passing unit tests, but true process, routing, and database isolation remain in a "Working Towards" state:
 - All 36 business routes currently compile within the root Next.js build runtime.
 - Database connections in the prototype shared the global Mongoose instance initialized by `instrumentation.ts`.
 - Middleware rules in `proxy.ts` previously bypassed route-level role checks.
 - Dockerfiles currently package the shared Next.js application image.
 
-The decomposed roadmap in Section 11 systematically refactors these components into true standalone boundaries.
+The decomposed roadmap in Section 12 systematically refactors these components into true standalone boundaries.
 
 ---
 
 ## 4. Authentication & Identity Strategy (The Clarified Login Decision)
 
-### 4.1 Dual Authentication Model
-In accordance with mentor instructions, the platform supports both **independent local credentials** and an **optional shared platform identity**:
+### 4.1 Dual Authentication Model & Asymmetric Platform Signing
+In accordance with mentor review directives (Point 3), the platform architecture strictly separates local product credentials from optional federated identity and mandates **asymmetric cryptographic signing**:
 
 ```
                   ┌──────────────────────────────────────────────┐
-                  │          Identity Provider (IdP)             │
-                  │   Central / Shared Platform Identity Server  │
+                  │    Identity Provider (IdP): NextAuth (Eval)  │
+                  │       (Future Target: IIIT CAS / Keycloak)   │
                   └──────────────────────┬───────────────────────┘
-                                         │ Explicitly signed Platform Token
-                                         ▼ (HMAC/RSA with PLATFORM_PUBLIC_KEY)
+                                         │ Asymmetrically signed Token (RS256 / EdDSA)
+                                         │ Claims: iss, aud, sub, exp, jti
+                                         │ Private key: PLATFORM_PRIVATE_KEY (IdP only)
+                                         │ Public key: PLATFORM_PUBLIC_KEY (on consumers)
+                                         ▼
          ┌───────────────────────────────┼───────────────────────────────┐
          │ (Configurable via env)        │ (Configurable via env)        │ (Configurable via env)
          ▼                               ▼                               ▼
@@ -115,28 +130,39 @@ In accordance with mentor instructions, the platform supports both **independent
 └──────────────────┘            └──────────────────┘            └──────────────────┘
 ```
 
-1. **Independent Product Accounts & Logins by Default:**
-   - Products maintain separate, isolated user collections: `User` (Evaluation), `ClassroomUser` (Classroom), and `PersonalizedUser` (Personalised).
-   - Passwords are encrypted independently using high-factor bcrypt (`12` rounds).
-   - Each product handles its own registration and authentication lifecycle (`/login`, `/classroom/login`, `/personalized/login`).
-2. **Optional Shared Platform Login (Explicitly Signed):**
-   - When enabled, a shared platform token can authenticate a user across products without requiring separate logins.
-   - The token must be cryptographically signed by the central platform identity provider and verified against `PLATFORM_SHARED_SECRET` or `PLATFORM_PUBLIC_KEY`.
-   - **Independent Product Configuration:** Shared login must be independently toggleable per product (e.g., `CLASSROOM_ENABLE_SHARED_AUTH=true`, `PERSONALIZED_ENABLE_SHARED_AUTH=true`). A product with this disabled accepts only its native credentials.
-3. **Strict Account Isolation (Never Automatic Email Linking):**
+1. **Independent Product Accounts & Logins by Default (Phase 1):**
+   - Products maintain separate, isolated user collections: `User` (Evaluation), `ClassroomUser` (Classroom), and `PersonalizedUser` (Personalised) managed across dedicated database connections.
+   - Passwords are **hashed** independently using salted bcrypt with cost factor `12` (never stored in plaintext or reversibly encrypted).
+   - Each product handles its own registration, credential verification, and session lifecycle (`/login`, `/classroom/login`, `/personalized/login`).
+2. **Optional Shared Platform Login via Asymmetric Signing (Phase 2):**
+   - When enabled, a shared platform token can authenticate a user across products without requiring multiple logins.
+   - **Asymmetric Signing Only (`RS256` or `EdDSA`):** The central Identity Provider holds the private key (`PLATFORM_PRIVATE_KEY`) to sign platform tokens. Consumer services hold only the public key (`PLATFORM_PUBLIC_KEY` or JWKS endpoint) for verification. Symmetric HMAC shared secrets (`PLATFORM_SHARED_SECRET`) are strictly forbidden, ensuring that a compromise of any consuming service does not allow token forgery for other services.
+   - **Identity Provider Identity:** The Assignment Evaluation NextAuth service functions as the initial OAuth2/OIDC Identity Provider, structured to allow a seamless drop-in transition to institutional IIIT CAS or Keycloak SSO.
+   - **Mandatory Claims Enforcement:**
+     - `iss`: Canonical issuer URL (e.g. `https://eval.iiit.ac.in/auth`).
+     - `aud`: Explicit target audience (e.g. `classroom-service`, `personalized-service`). Consuming products MUST validate that `aud` matches their specific service identifier; mismatched tokens must be rejected with `403 Forbidden` to prevent token replay across product boundaries.
+     - `sub`: Unique platform user identity.
+     - `exp`: Short-lived expiration (maximum 15 minutes, with sliding refresh).
+     - `jti`: Unique cryptographically random JWT ID recorded to enable instant token revocation and replay protection.
+   - **Independent Product Configuration:** Shared login must be independently configurable per product via environment flags (`CLASSROOM_ENABLE_SHARED_AUTH=false`, `PERSONALIZED_ENABLE_SHARED_AUTH=false`). When disabled (default in Phase 1), products accept only their native credentials.
+3. **Strict Account Isolation & Explicit Federation Link Table:**
    - Products must **never automatically link, merge, or grant cross-access** simply because email addresses match.
-   - An account registered in Classroom Activity with `alice@iiit.ac.in` has zero implicit connection to `alice@iiit.ac.in` in Assignment Evaluation or Personalised Learning unless explicitly federated via the signed platform token.
+   - Linking a local product account with a platform identity requires an explicit entry in a dedicated federation mapping table (`UserFederationLink`: `{ platformUserId, localUserId, product, linkedAt, linkedBy }`), created only upon explicit user confirmation or verified institutional administrative sync.
 
 ### 4.2 Student Guest-Join & Session Security
-In live classroom environments, students frequently join sessions via mobile devices scanning QR codes or entering 6-digit access codes:
+In live classroom environments, students enter sessions via mobile devices scanning QR codes or entering 6-digit access codes:
 
-1. **Session-Scoped Participant Token:**
-   - When a student joins via `POST /api/v1/classroom/sessions/{code}/join`, the server validates the active session PIN, records participant registration, and issues an ephemeral, cryptographically signed `classroom_participant_token` containing `{ sessionId, participantId, studentIdentifier }`.
-2. **Elimination of Anonymous Hijacking & Answer Overwriting:**
-   - Form submissions to `POST /api/v1/classroom/submissions/upload-sheet` and poll responses require the signed participant token (passed via cookie or `Authorization: Bearer <token>`). Submissions omitting the token or attempting to forge `participantId` are rejected with `401 Unauthorized`.
-   - Duplicate name entries within the same live session require a disambiguating identifier (e.g. roll number) rather than silently returning an existing student's token and allowing answer overwriting.
-3. **No Cross-Product Leakage:**
-   - Guest participant tokens are strictly rejected by Assignment Evaluation and Personalised Learning APIs (`403 Forbidden`).
+1. **Endpoint & 6-Digit PIN Brute-Force Rate Limiting:**
+   - Students join via `POST /api/v1/classroom/join/{code}` (returning `201 Created`).
+   - The join endpoint implements strict rate limiting (maximum 10 join attempts per minute per IP, with exponential backoff on repeated failures) to prevent brute-force guessing of active 6-digit session PINs.
+2. **Participant Token for Live Polls:**
+   - Upon valid PIN entry, the server issues an ephemeral, cryptographically signed `classroom_participant_token` containing `{ sessionId, participantId, studentIdentifier }`.
+   - Anonymous guest access is permitted **strictly for real-time engagement polls** (Mentimeter-style).
+3. **Signed-in Student Requirement for Graded Submissions:**
+   - Graded handwritten answer-sheet uploads (`POST /api/v1/classroom/submissions/upload-sheet`) require an authenticated student account.
+   - Unverified post-session roll-number claims are dropped to eliminate identity spoofing and accidental grade misattribution.
+4. **No Cross-Product Leakage:**
+   - Ephemeral classroom participant tokens are strictly rejected by Assignment Evaluation and Personalised Learning APIs (`403 Forbidden`).
 
 ---
 
@@ -209,9 +235,21 @@ The platform establishes four strictly separated stages for automated processing
 4. **Stage 4 — Finalized Results & Passback:**
    - Transition to `APPROVED`. Scores become visible in student results and eligible for LTI 1.3 LMS grade passback.
 
-### 6.1 AI Privacy & Model Safety Rules
-- **Privacy Gate (`isRealStudentData`):** Defaults to `true`. Student handwriting images and extracted text containing student PII are masked and withheld from external LLM APIs unless explicitly consented and anonymized.
-- **Model Parameterization:** Deprecated model names (`gemini-1.5-flash`, `gemini-2.5-flash`) are eliminated. The active model is governed by the `GEMINI_MODEL` environment variable, defaulting to current LTS models.
+### 6.1 AI Privacy Policy & Handwriting Pipeline Contradiction Resolution
+As highlighted in mentor review (Point 5), a blanket ban on real student data (`isRealStudentData = true`) creates an operational contradiction with the handwriting evaluation pipeline, which inherently requires processing handwritten answer images. To resolve this contradiction without compromising student privacy or institutional compliance, the architecture establishes four concrete safeguards:
+
+1. **Enterprise Vertex AI in Institute GCP Tenant:**
+   - All AI handwriting OCR and evaluation requests are routed exclusively through Google Cloud Vertex AI provisioned within the institute's dedicated Google Cloud project.
+   - Enterprise Vertex AI contracts provide strict **Zero Data Retention (ZDR)** guarantees: student handwriting images, extracted text, and prompt inputs are never stored by Google for model training or foundation model improvement.
+2. **Per-Course Student Data Consent:**
+   - During course registration or session onboarding, students provide affirmative consent for their handwritten submissions to be processed by the institute's private AI evaluation pipeline.
+3. **Strict 30-Day Raw Image Retention Policy:**
+   - Student handwriting images uploaded to Cloud Storage (`gs://iiit-classroom-prod/submissions/...`) are automatically purged after **30 days** via Cloud Storage Object Lifecycle Management.
+   - Only verified textual annotations, finalized rubric grades, and audit trail records are retained permanently in the institutional database.
+4. **Model Parameterization & Deprecation Governance:**
+   - Google Gemini models do **not** follow an LTS (Long-Term Support) release designation.
+   - The active model version is pinned explicitly via configuration to `gemini-2.0-flash` (governed by the `GEMINI_MODEL` environment variable, with `gemini-1.5-pro` as optional secondary fallback).
+   - Upstream model lifecycle dates are tracked proactively, and model upgrades require running the regression evaluation harness against calibrated baseline test scripts before production adoption.
 
 ---
 
@@ -222,14 +260,14 @@ To satisfy Prof. Jawahar's requirement that services operate independently and i
 ### 7.1 Versioned `/v1` Endpoints
 All products expose clean, versioned headless REST APIs decoupled from Next.js server-side page rendering:
 - **Assignment Evaluation:** `/api/v1/evaluation/*` (with `/api/exams/*` and `/api/grading/*` maintained for backward compatibility).
-- **Classroom Activity:** `/api/v1/classroom/*` (sessions, join, submit, poll, review, stream).
+- **Classroom Activity:** `/api/v1/classroom/*` (sessions, `/join/{code}`, `/sessions/{id}/submissions/review-queue`, `/submissions/{id}/reject`, `/polls/{id}/close`, stream).
 - **Personalised Learning:** `/api/v1/personalized/*` (daily, questions, schedules, evaluate).
 
-For complete payload structures, pagination rules, error envelopes, and idempotency conventions, see [API Conventions Specification](file:///docs/API_CONVENTIONS.md).
+For complete payload structures, pagination rules, error envelopes, and idempotency conventions, see [API Conventions Specification](./API_CONVENTIONS.md).
 
 ### 7.2 OpenAPI 3.1 Specifications
 Each independent service publishes a formal OpenAPI contract in `docs/openapi/`:
-- `docs/openapi/classroom-service.v1.yaml` (Drafted and verified in Step 4)
+- `docs/openapi/classroom-service.v1.yaml` (Drafted, contract gaps resolved, and verified clean with `redocly lint` in Step 4)
 - `docs/openapi/evaluation-v1.yaml` (Scheduled for Step 5)
 - `docs/openapi/personalized-v1.yaml` (Scheduled for Step 5)
 
@@ -245,8 +283,8 @@ Expanding on the design in `AE-216` (`docs/LTI_1_3_GRADE_PASSBACK.md`):
    - OAuth 2.0 / OIDC stateful launch flow (`/api/lti/login`, `/api/lti/launch`).
    - Secure verification of platform tool registration, platform public keys (JWKS), and signed JWT state.
 2. **Assignment and Grade Services (AGS v2p0):**
-   - Headless grade passback publishing finalized student marks directly to LMS gradebooks (Moodle, Canvas) using JSON-LD payloads.
-   - **Current Implementation State:** Safe stub mode (`LTI_STUB_MODE=true`) verifies token structures and payload validation without requiring an active external LMS socket. Production socket connectivity is scheduled for post-architecture deployment.
+   - Headless grade passback publishing finalized student marks directly to LMS gradebooks (Moodle, Canvas) via outbound HTTPS REST calls sending JSON-LD payloads to the LMS platform's LineItem URL. (Note: LTI grade synchronization uses standard outbound HTTPS REST requests, not network sockets).
+   - **Current Implementation State:** Safe stub mode (`LTI_STUB_MODE=true`) verifies token structures, request formatting, and payload validation in CI/staging without requiring live outbound network connectivity to an LMS server. Production outbound HTTPS dispatch is scheduled for post-architecture deployment.
 3. **Names and Role Provisioning Services (NRPS v2p0):**
    - Headless roster synchronization mapping LMS student IDs (`sub`, `lis_person_sourcedid`) to internal student identities.
 
@@ -255,7 +293,7 @@ Expanding on the design in `AE-216` (`docs/LTI_1_3_GRADE_PASSBACK.md`):
 ## 9. Database Isolation & Connection Architecture
 
 ### 9.1 Multi-Database Connection Architecture
-To guarantee genuine database isolation and prevent connection hijacking:
+To guarantee genuine database isolation and prevent connection hijacking across services:
 - `src/lib/classroomDb.ts`: Uses `mongoose.createConnection(process.env.MONGODB_CLASSROOM_URI)`. Models are compiled on this dedicated connection instance.
 - `src/lib/personalizedDb.ts`: Uses `mongoose.createConnection(process.env.MONGODB_PERSONALIZED_URI)`. Models are compiled on this dedicated connection instance.
 - `src/lib/db.ts`: Preserves the primary connection for Assignment Evaluation (`MONGODB_URI`).
@@ -265,30 +303,34 @@ To guarantee genuine database isolation and prevent connection hijacking:
 
 ## 10. Security, Authorization & Vulnerability Remediation
 
+> [!NOTE]
+> Several baseline vulnerabilities listed below (including open registration role elevation and lack of brute-force rate limiting) were preexisting defects inherited from the `main` branch baseline, tracked under issue `AE-257`.
+
 | Vulnerability / Defect | Root Cause | Remediation in Target Implementation |
 |---|---|---|
-| **Default PROFESSOR Role on Register** | Open registration accepted any role parameter or defaulted to PROFESSOR. | Public registration strictly creates `STUDENT` accounts. `PROFESSOR` and `TA` roles require an authenticated admin invitation code or domain whitelist check. |
-| **Weak Password & Brute-Force** | Single-character passwords allowed; zero login rate limiting. | Minimum 8 characters with complexity checks. Exponential backoff and maximum 5 failed attempts per 15-minute window per IP/user. |
-| **Inactive User Authentication** | `isActive` flag ignored during credential validation. | Explicit check `if (!user.isActive) throw new UnauthorizedException('Account disabled')`. |
+| **Default PROFESSOR Role on Register** | Open registration accepted any role parameter or defaulted to PROFESSOR (`AE-257`). | Public registration strictly creates `STUDENT` accounts. `PROFESSOR` and `TA` roles require an authenticated admin invitation code or domain whitelist check. |
+| **Weak Password & Brute-Force** | Single-character passwords allowed; zero login rate limiting (`AE-257`). | Minimum 8 characters with complexity checks. Exponential backoff and maximum 5 failed attempts per 15-minute window per IP/user. |
+| **Inactive User Authentication** | `isActive` flag ignored during credential validation. | Explicit check returning `NextResponse.json({ error: { code: 'ACCOUNT_DISABLED', message: 'Account is deactivated' } }, { status: 401 })`. |
 | **Hard-coded Secret Fallbacks** | Secret fallbacks (`dev-secret`) enabled token cross-use across products. | Removal of all hardcoded literals. System throws configuration errors at boot if `CLASSROOM_JWT_SECRET`, `PERSONALIZED_JWT_SECRET`, or `NEXTAUTH_SECRET` are unset. |
 | **Session Bleed in Middleware** | Evaluation session was accepted by product endpoints without role checks. | Product tokens verified independently; Evaluation sessions must possess explicit permissions (`VIEW_COURSES`, `MANAGE_EXAMS`) to access administrative product paths. |
 | **Unenrolled Question Access** | Endpoint `/api/personalized/questions` returned reference answers and answer keys to unenrolled students. | Strip `referenceAnswer`, `correctOptionIndex`, and rubric grading criteria from student payloads. Enforce course enrollment checks. |
 | **Cross-Professor Generation** | Professor could trigger question generation on unassigned course IDs. | Validate professor course allocation before initiating Gemini question generation. |
-| **AI Student Data Leak** | Real handwriting images sent to LLM without gating. | Enforce `isRealStudentData` flag. Default to `true`. Mask student PII and reject LLM transmission unless explicit consent/anonymization is applied. |
-| **Deprecated Gemini Model** | Hardcoded `gemini-1.5-flash` / `gemini-2.5-flash`. | Model names parameterized via `GEMINI_MODEL` environment variable, defaulting to current LTS models. |
+| **AI Student Data Leak** | Real handwriting images sent to LLM without gating. | Enforce Vertex AI enterprise boundary with zero data retention, 30-day raw image purging, and course consent. |
+| **Deprecated Gemini Model** | Hardcoded `gemini-1.5-flash` / `gemini-2.5-flash`. | Model names parameterized via `GEMINI_MODEL` environment variable, defaulting to `gemini-2.0-flash` with scheduled retirement tracking. |
 
 ---
 
 ## 11. Decisions Submitted for Prof. Jawahar's Review & Sign-Off
 
-To ensure exact alignment before proceeding to platform implementation, the following key architectural decisions are submitted for Prof. Jawahar's direction:
+To ensure exact alignment before proceeding to platform implementation, the following six key architectural decisions are submitted for Prof. Jawahar's direction:
 
 ### Decision 1: Guest Access Policy for Graded Submissions
-- **Context:** Students can enter live classroom sessions quickly using a 6-digit PIN or QR code as an anonymous guest.
-- **Question:** Should anonymous guest participants be permitted to upload physical handwritten answer sheets for formal grading, or should anonymous guest access be restricted strictly to Mentimeter-style live polling, requiring registered student accounts (or post-session roll-number claims) for graded answer-sheet submissions?
+- **Context:** Students can enter live classroom sessions quickly using a 6-digit PIN or QR code.
+- **Question:** Should anonymous guest participants be permitted to upload physical handwritten answer sheets for formal grading, or should anonymous guest access be restricted strictly to Mentimeter-style live polling, requiring registered, authenticated student accounts for graded answer-sheet submissions?
 - **Engineering Recommendation:** 
-  - Allow anonymous guest access for real-time engagement polls.
-  - Require a registered student identity (or post-session claim with roll number) for long-form answer-sheet evaluation, ensuring results tie directly into academic records and grade passback.
+  - Restrict anonymous guest access strictly to real-time engagement polls.
+  - Require authenticated student accounts for graded handwritten answer-sheet submissions (dropping unverified post-session roll-number claims) to prevent grade misattribution and preserve academic integrity.
+  - Protect the 6-digit PIN join endpoint with IP-based rate limiting to prevent brute-force session guessing.
 
 ### Decision 2: Human-in-the-Loop Review for AI Handwriting Evaluations
 - **Context:** Automated OCR and rubric matching evaluate student handwriting images.
@@ -296,19 +338,24 @@ To ensure exact alignment before proceeding to platform implementation, the foll
 - **Engineering Recommendation:** Enforce human-in-the-loop review for all handwritten submissions initially, marking results as draft until approved by staff.
 
 ### Decision 3: Shared Platform Login Rollout Schedule
-- **Context:** Students and instructors may prefer a single set of credentials while each product remains technically independent.
-- **Question:** Should we maintain completely separate logins during Phase 1 with the shared platform login introduced as an opt-in configuration in Phase 2?
-- **Engineering Recommendation:** Implement independent product authentication first to guarantee system decoupling, followed by the optional signed platform token adapter.
+- **Context:** Students and instructors benefit from single sign-on across products, but products must remain technically decoupled.
+- **Question:** What is the rollout order for authentication? Should we implement independent product authentication first (Phase 1) and introduce the shared-login adapter in PR 5 behind a per-product feature flag (Phase 2), disabled by default?
+- **Engineering Recommendation:** Implement independent product authentication first to guarantee system decoupling, followed by the optional asymmetric signed platform token adapter in Phase 2 behind per-product flags (`CLASSROOM_ENABLE_SHARED_AUTH`, `PERSONALIZED_ENABLE_SHARED_AUTH`), default off.
 
 ### Decision 4: LTI 1.3 Integration Expectations
 - **Context:** Integration with institutional LMS (Canvas, Moodle).
-- **Question:** Should Phase 1 platform implementation deliver the verified safe stub mode with AGS/NRPS payload contracts, followed by live LMS socket certification in Phase 2?
-- **Engineering Recommendation:** Deliver verified stub mode with OpenAPI schemas in Phase 1; conduct live Moodle/Canvas socket validation once testbed credentials are provisioned.
+- **Question:** Should Phase 1 platform implementation deliver the verified safe stub mode with AGS/NRPS payload contracts, followed by live LMS outbound HTTPS certification in Phase 2?
+- **Engineering Recommendation:** Deliver verified stub mode with OpenAPI schemas in Phase 1; conduct live Moodle/Canvas HTTPS passback validation once testbed credentials are provisioned.
 
 ### Decision 5: Independent Service & Deployment Boundaries
 - **Context:** Operating products as standalone microservice containers.
 - **Question:** Should we deploy independent container images (`docker-compose.products.yml`) on separate ports (3000, 3001, 3002) with dedicated database instances, while retaining the root proxy for unified discovery?
 - **Engineering Recommendation:** Approve the independent container architecture, ensuring each product has isolated secrets, databases, and runtime processes.
+
+### Decision 6: Enterprise AI Privacy Policy & Retention for Handwriting Pipeline
+- **Context:** Automated handwriting OCR and scoring require processing student handwriting images, which conflicts with a naive blanket ban on student data.
+- **Question:** Does Prof. Jawahar approve deploying Vertex AI in the institute's Google Cloud project (with zero data retention for training), requiring per-course student consent, enforcing a 30-day raw handwriting image purge in Cloud Storage, and pinning `gemini-2.0-flash` with scheduled retirement tracking?
+- **Engineering Recommendation:** Approve Decision 6 to enable handwriting OCR and AI-assisted scoring safely under institutional compliance.
 
 ---
 
@@ -384,6 +431,6 @@ Following mentor and stakeholder approval of this document, implementation will 
 
 | Stakeholder / Role | Status | Notes / Signature |
 |---|---|---|
-| **Laxmi Narayana Murthy Vemuri** (Mentor) | `PENDING REVIEW` | Waiting for review of dual-login, Git sequence, OpenAPI specs, and isolation design. |
-| **Prof. C.V. Jawahar** (Lead Advisor) | `PENDING REVIEW` | Waiting for review of 5 key decisions (guest policy, AI review gate, dual login rollout, LTI expectations, deployment boundaries). |
-| **Engineering Implementation Team** | `SIGNED (v2.2.0)` | Architecture Note v2.2 authored and ready for implementation upon sign-off. |
+| **Laxmi Narayana Murthy Vemuri** (Mentor) | `PENDING REVIEW` | Reviewing dual-login asymmetric signing, Git sequence, OpenAPI specs, and service isolation design. |
+| **Prof. C.V. Jawahar** (Lead Advisor) | `PENDING REVIEW` | Reviewing 6 key decisions (guest policy, AI review gate, dual login rollout, LTI expectations, deployment boundaries, enterprise AI privacy policy). |
+| **Engineering Implementation Team** | `SIGNED (v2.2.0)` | Architecture Note v2.2 revised and submitted for sign-off. |

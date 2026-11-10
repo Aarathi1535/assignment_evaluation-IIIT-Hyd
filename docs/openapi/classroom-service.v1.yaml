@@ -2,18 +2,20 @@ openapi: 3.1.0
 info:
   title: IIIT Hyderabad Classroom Activity Service API
   version: 1.0.0
+  license:
+    name: Proprietary - IIIT Hyderabad Internal Educational License
+    identifier: Proprietary
   description: >
     Headless REST API for Classroom Activity (Product 2). Supports dual capabilities:
     1) Primary Workflow: Timed handwritten answer-sheet uploads, OCR extraction, and human-in-the-loop AI draft verification.
     2) Complementary Workflow: Mentimeter-inspired live engagement polls, QR/PIN guest joining, and real-time response distribution streaming.
   contact:
     name: IIIT Hyderabad Learning Platform Engineering Team
-    email: learning-platform@iiit.ac.in
 servers:
-  - url: http://localhost:3001/api/v1/classroom
-    description: Dedicated Classroom Service (Independent Container Mode)
-  - url: http://localhost:3000/api/v1/classroom
-    description: Monolith Reverse Proxy (Development Mode)
+  - url: https://classroom.iiit.ac.in/api/v1
+    description: Production Classroom Activity Service
+  - url: https://staging-classroom.iiit.ac.in/api/v1
+    description: Staging Classroom Activity Service
 
 paths:
   /sessions:
@@ -59,15 +61,20 @@ paths:
             enum: [SCHEDULED, ACTIVE, CLOSED, ARCHIVED]
       responses:
         '200':
-          description: List of classroom sessions
+          description: List of classroom sessions returned successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedSessionsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
 
   /sessions/{id}:
     get:
       summary: Get classroom session details
+      description: Retrieve session state, access codes, and participant metrics.
       operationId: getSessionById
       security:
         - ClassroomAuth: []
@@ -76,15 +83,21 @@ paths:
         - $ref: '#/components/parameters/SessionIdParam'
       responses:
         '200':
+          description: Classroom session details returned successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
         '404':
           $ref: '#/components/responses/NotFoundError'
 
     patch:
       summary: Update session state (activate, close, extend window)
+      description: Instructors modify status or extend the timer on an active session.
       operationId: updateSessionState
       security:
         - ClassroomAuth: []
@@ -98,16 +111,26 @@ paths:
               $ref: '#/components/schemas/UpdateSessionRequest'
       responses:
         '200':
+          description: Session state updated successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
         '409':
           $ref: '#/components/responses/ConflictError'
 
   /sessions/{id}/code:
     post:
       summary: Generate or regenerate session PIN and QR join code
+      description: Re-issues a 6-digit access code and QR URL for participant check-in.
       operationId: regenerateSessionCode
       security:
         - ClassroomAuth: []
@@ -115,6 +138,7 @@ paths:
         - $ref: '#/components/parameters/SessionIdParam'
       responses:
         '200':
+          description: Session access PIN and QR code generated successfully
           content:
             application/json:
               schema:
@@ -132,18 +156,26 @@ paths:
                       qrCodeUrl:
                         type: string
                         format: uri
-                        example: "https://classroom.iiit.ac.in/join?code=482910"
+                        example: "https://classroom.iiit.ac.in/join/482910"
                       expiresAt:
                         type: string
                         format: date-time
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
-  /sessions/{code}/join:
+  /join/{code}:
     post:
       summary: Guest or student join via 6-digit session PIN or QR scan
       description: >
-        Enables students and guests to join an active classroom session. Issues an ephemeral,
+        Public entry point for students and guests to join an active classroom session. Issues an ephemeral,
         session-scoped participant JWT token. Requires roll number disambiguation if duplicate display names exist.
+        Rate-limited to protect 6-digit PIN keyspace against brute-force enumeration.
       operationId: joinClassroomSession
+      security: []
       parameters:
         - name: code
           in: path
@@ -159,16 +191,28 @@ paths:
             schema:
               $ref: '#/components/schemas/JoinSessionRequest'
       responses:
-        '200':
+        '201':
           description: Successfully joined. Returns session-scoped participant token.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/JoinSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
         '404':
           description: Session code not found or session has ended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
         '409':
           description: Duplicate participant name requires explicit roll number disambiguator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
 
   /sessions/{id}/polls:
     post:
@@ -187,10 +231,19 @@ paths:
               $ref: '#/components/schemas/CreatePollRequest'
       responses:
         '201':
+          description: Poll created successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PollResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /polls/{id}/publish:
     post:
@@ -207,10 +260,48 @@ paths:
             type: string
       responses:
         '200':
+          description: Poll successfully published and pushed to participant screens
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PollResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /polls/{id}/close:
+    post:
+      summary: Close an active live poll
+      description: Concludes voting on the active poll and aggregates final response metrics.
+      operationId: closePoll
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Poll successfully closed and voting locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
 
   /polls/{id}/responses:
     post:
@@ -242,6 +333,7 @@ paths:
                   example: [0]
       responses:
         '200':
+          description: Poll response recorded successfully
           content:
             application/json:
               schema:
@@ -253,8 +345,18 @@ paths:
                   message:
                     type: string
                     example: "Response recorded"
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
         '409':
           description: Poll is closed or participant already responded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
 
   /sessions/{id}/live-stats:
     get:
@@ -267,10 +369,17 @@ paths:
         - $ref: '#/components/parameters/SessionIdParam'
       responses:
         '200':
+          description: Aggregated participation metrics and current poll results returned
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/LiveSessionStatsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /sessions/{id}/events:
     get:
@@ -284,11 +393,17 @@ paths:
         - $ref: '#/components/parameters/SessionIdParam'
       responses:
         '200':
-          description: SSE text stream
+          description: Active SSE text stream connection established
           content:
             text/event-stream:
               schema:
                 type: string
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /submissions/upload-sheet:
     post:
@@ -300,6 +415,8 @@ paths:
       security:
         - ClassroomAuth: []
         - GuestParticipantAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyHeader'
       requestBody:
         required: true
         content:
@@ -330,12 +447,29 @@ paths:
                 $ref: '#/components/schemas/SubmissionStatusResponse'
         '400':
           description: Invalid image format or corrupted file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
         '403':
-          description: Classroom activity window has closed.
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          description: Classroom activity window has closed (SESSION_EXPIRED).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorPayload'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
 
   /submissions/{id}:
     get:
       summary: Get submission status, extracted text, and evaluation state
+      description: Inspect OCR processing state, AI draft score recommendation, or approved marks.
       operationId: getSubmissionStatus
       security:
         - ClassroomAuth: []
@@ -347,10 +481,17 @@ paths:
             type: string
       responses:
         '200':
+          description: Submission details and evaluation state returned successfully
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SubmissionStatusResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /submissions/{id}/approve:
     patch:
@@ -384,14 +525,94 @@ paths:
                   example: "Well reasoned derivation of recurrence relation."
       responses:
         '200':
+          description: Evaluation verified, approved, and finalized
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SubmissionStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /submissions/{id}/reject:
+    patch:
+      summary: Professor rejects an invalid or illegible answer-sheet submission
+      description: Marks a submission as REJECTED with an audited rejection reason.
+      operationId: rejectSubmission
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - rejectionReason
+              properties:
+                rejectionReason:
+                  type: string
+                  example: "Image is out of focus, blurry, and text cannot be recognized."
+      responses:
+        '200':
+          description: Submission rejected and marked with REJECTED status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmissionStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /sessions/{id}/submissions/review-queue:
+    get:
+      summary: List submissions awaiting staff review in the evaluation queue
+      description: Returns a paginated queue of submissions in DRAFT_EVALUATED status requiring human verification.
+      operationId: listReviewQueue
+      security:
+        - ClassroomAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdParam'
+        - $ref: '#/components/parameters/PageQuery'
+        - $ref: '#/components/parameters/LimitQuery'
+      responses:
+        '200':
+          description: Paginated queue of submissions pending evaluation review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSubmissionsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
   /sessions/{id}/results:
     get:
       summary: Complete professor-facing session results and gradebook export
+      description: Returns comprehensive individual participant results, poll counts, and approved scores.
       operationId: getSessionResults
       security:
         - ClassroomAuth: []
@@ -399,29 +620,17 @@ paths:
         - $ref: '#/components/parameters/SessionIdParam'
       responses:
         '200':
+          description: Complete session results and participant scores returned successfully
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  data:
-                    type: object
-                    properties:
-                      sessionId:
-                        type: string
-                      totalSubmissions:
-                        type: integer
-                      approvedSubmissions:
-                        type: integer
-                      averageScore:
-                        type: number
-                      participants:
-                        type: array
-                        items:
-                          type: object
+                $ref: '#/components/schemas/SessionResultsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
 
 components:
   securitySchemes:
@@ -457,6 +666,15 @@ components:
         type: integer
         default: 20
         maximum: 100
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+        example: "7b864d42-0f18-4b72-881b-5136814d8b67"
+      description: Unique UUID token ensuring safe retries for mutating upload operations.
 
   schemas:
     CreateSessionRequest:
@@ -485,7 +703,7 @@ components:
         requireRegisteredForGrading:
           type: boolean
           default: true
-          description: Pending Prof. Jawahar decision on whether guests can upload graded handwritten answer sheets.
+          description: Requires authenticated student identity for graded handwritten answer-sheet submissions.
 
     UpdateSessionRequest:
       type: object
@@ -525,8 +743,7 @@ components:
             participantCount:
               type: integer
             activePollId:
-              type: string
-              nullable: true
+              type: [string, 'null']
 
     PaginatedSessionsResponse:
       type: object
@@ -564,7 +781,7 @@ components:
         studentRollNumber:
           type: string
           example: "2024101001"
-          description: Optional for anonymous polls; required if duplicate name exists or if graded upload policy is activated.
+          description: Required if duplicate name exists in session or when participating in verified submissions.
 
     JoinSessionResponse:
       type: object
@@ -642,8 +859,7 @@ components:
             handwrittenSheetsUploaded:
               type: integer
             currentPoll:
-              type: object
-              nullable: true
+              type: [object, 'null']
               properties:
                 pollId:
                   type: string
@@ -678,40 +894,107 @@ components:
               type: string
               enum: [RECEIVED, OCR_PROCESSING, DRAFT_EVALUATED, APPROVED, REJECTED]
             extractedText:
-              type: string
-              nullable: true
+              type: [string, 'null']
             aiScoreDraft:
-              type: number
-              nullable: true
+              type: [number, 'null']
             verifiedScore:
-              type: number
-              nullable: true
+              type: [number, 'null']
             approvedBy:
-              type: string
-              nullable: true
+              type: [string, 'null']
             approvedAt:
-              type: string
+              type: [string, 'null']
               format: date-time
-              nullable: true
+
+    PaginatedSubmissionsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmissionStatusResponse'
+        meta:
+          type: object
+          properties:
+            pagination:
+              type: object
+              properties:
+                page:
+                  type: integer
+                limit:
+                  type: integer
+                totalCount:
+                  type: integer
+                totalPages:
+                  type: integer
+
+    ParticipantResult:
+      type: object
+      required:
+        - participantId
+        - displayName
+      properties:
+        participantId:
+          type: string
+        displayName:
+          type: string
+        studentRollNumber:
+          type: [string, 'null']
+        pollResponseCount:
+          type: integer
+        handwrittenScore:
+          type: [number, 'null']
+        submissionStatus:
+          type: [string, 'null']
+          enum: [RECEIVED, OCR_PROCESSING, DRAFT_EVALUATED, APPROVED, REJECTED, 'null']
+
+    SessionResultsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            sessionId:
+              type: string
+            totalSubmissions:
+              type: integer
+            approvedSubmissions:
+              type: integer
+            averageScore:
+              type: number
+            participants:
+              type: array
+              items:
+                $ref: '#/components/schemas/ParticipantResult'
 
     ErrorPayload:
       type: object
+      required:
+        - success
+        - error
       properties:
         success:
           type: boolean
           example: false
         error:
           type: object
+          required:
+            - code
+            - message
           properties:
             code:
               type: string
-              example: "SESSION_CLOSED"
+              example: "SESSION_EXPIRED"
             message:
               type: string
-              example: "This classroom session has ended."
+              example: "This classroom session has ended and is closed for submissions."
             details:
-              type: object
-              nullable: true
+              type: [object, 'null']
         meta:
           type: object
           properties:
@@ -748,6 +1031,18 @@ components:
             $ref: '#/components/schemas/ErrorPayload'
     ConflictError:
       description: State conflict or duplicate active resource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'
+    TooManyRequestsError:
+      description: Rate limit exceeded; client must back off before retrying
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorPayload'
+    UnprocessableEntityError:
+      description: Semantic or idempotency key mismatch
       content:
         application/json:
           schema:
