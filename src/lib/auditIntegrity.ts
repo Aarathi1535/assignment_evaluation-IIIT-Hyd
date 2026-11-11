@@ -11,12 +11,15 @@ export interface AuditIntegrityRecord {
     ipAddress?: string;
     createdAt: Date;
     sequence?: number;
+    previousSeal?: string;
     integritySeal?: string;
     integrityKeyId?: string;
 }
 
 export interface AuditIntegrityState {
     lastSequence: number;
+    cutoverSequence?: number;
+    lastRecordHmac?: string;
     integritySeal?: string;
     integrityKeyId?: string;
 }
@@ -51,11 +54,32 @@ function canonicalize(value: unknown): unknown {
     return value;
 }
 
-function auditRecordBytes(record: AuditIntegrityRecord, sequence: number, keyId: string): Buffer {
+function auditRecordBytes(
+    record: AuditIntegrityRecord,
+    sequence: number,
+    keyId: string,
+    version: number = 2
+): Buffer {
+    if (version === 1) {
+        return Buffer.from(JSON.stringify({
+            version: 1,
+            sequence,
+            keyId,
+            user: record.user.toString(),
+            action: record.action,
+            outcome: record.outcome || null,
+            entityId: record.entityId?.toString() || null,
+            entityType: record.entityType || null,
+            details: canonicalize(record.details ?? null),
+            ipAddress: record.ipAddress || null,
+            createdAt: record.createdAt.toISOString()
+        }), 'utf8');
+    }
     return Buffer.from(JSON.stringify({
-        version: 1,
+        version: 2,
         sequence,
         keyId,
+        previousSeal: record.previousSeal || (sequence === 1 ? 'GENESIS' : null),
         user: record.user.toString(),
         action: record.action,
         outcome: record.outcome || null,
@@ -78,7 +102,7 @@ export function createAuditIntegritySeal(
         uploader: record.user.toString(),
         timestamp: record.createdAt.getTime()
     };
-    const seal = generateHmacSeal(auditRecordBytes(record, sequence, keyId), metadata, keyId);
+    const seal = generateHmacSeal(auditRecordBytes(record, sequence, keyId, 2), metadata, keyId);
     return { hmac: seal.hmac, keyId: seal.keyId };
 }
 
@@ -99,21 +123,47 @@ export function verifyAuditIntegritySeal(
         uploader: record.user.toString(),
         timestamp: record.createdAt.getTime()
     };
-    const result = verifyHmacSeal(
-        auditRecordBytes(record, record.sequence, record.integrityKeyId),
+
+    // Try version 2 (with previousSeal chaining)
+    const v2Result = verifyHmacSeal(
+        auditRecordBytes(record, record.sequence, record.integrityKeyId, 2),
         metadata,
         record.integritySeal,
         record.integrityKeyId
     );
-    return { valid: result.valid };
+    if (v2Result.valid) {
+        return { valid: true };
+    }
+
+    // Fallback to version 1 for legacy seals
+    const v1Result = verifyHmacSeal(
+        auditRecordBytes(record, record.sequence, record.integrityKeyId, 1),
+        metadata,
+        record.integritySeal,
+        record.integrityKeyId
+    );
+    return { valid: v1Result.valid };
 }
 
-function integrityStateBytes(lastSequence: number, keyId: string): Buffer {
-    return Buffer.from(JSON.stringify({ version: 1, lastSequence, keyId }), 'utf8');
+function integrityStateBytes(
+    lastSequence: number,
+    keyId: string,
+    lastRecordHmac?: string,
+    cutoverSequence: number = 1
+): Buffer {
+    return Buffer.from(JSON.stringify({
+        version: 2,
+        lastSequence,
+        cutoverSequence,
+        lastRecordHmac: lastRecordHmac || null,
+        keyId
+    }), 'utf8');
 }
 
 export function createAuditIntegrityStateSeal(
-    lastSequence: number
+    lastSequence: number,
+    lastRecordHmac?: string,
+    cutoverSequence: number = 1
 ): Pick<HmacSealResult, 'hmac' | 'keyId'> {
     const keyId = process.env.ORIGINAL_STORAGE_KEY_ID || 'v1';
     const metadata = {
@@ -122,7 +172,11 @@ export function createAuditIntegrityStateSeal(
         uploader: 'audit-integrity-service',
         timestamp: 0
     };
-    const seal = generateHmacSeal(integrityStateBytes(lastSequence, keyId), metadata, keyId);
+    const seal = generateHmacSeal(
+        integrityStateBytes(lastSequence, keyId, lastRecordHmac, cutoverSequence),
+        metadata,
+        keyId
+    );
     return { hmac: seal.hmac, keyId: seal.keyId };
 }
 
@@ -137,8 +191,21 @@ export function verifyAuditIntegrityStateSeal(state: AuditIntegrityState): boole
         uploader: 'audit-integrity-service',
         timestamp: 0
     };
+
+    // Try version 2 (binding lastRecordHmac and cutoverSequence)
+    const v2Result = verifyHmacSeal(
+        integrityStateBytes(state.lastSequence, state.integrityKeyId, state.lastRecordHmac, state.cutoverSequence ?? 1),
+        metadata,
+        state.integritySeal,
+        state.integrityKeyId
+    );
+    if (v2Result.valid) {
+        return true;
+    }
+
+    // Fallback to version 1
     return verifyHmacSeal(
-        integrityStateBytes(state.lastSequence, state.integrityKeyId),
+        Buffer.from(JSON.stringify({ version: 1, lastSequence: state.lastSequence, keyId: state.integrityKeyId }), 'utf8'),
         metadata,
         state.integritySeal,
         state.integrityKeyId

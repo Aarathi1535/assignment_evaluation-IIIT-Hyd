@@ -4,6 +4,7 @@ import { Permission, UserRole } from '../../../../constants/permissions';
 import { requirePermission } from '../../../../lib/apiAuth';
 import { buildExamAuditLogFilter } from '../../../../lib/auditQueries';
 import { connectDB } from '../../../../lib/db';
+import { writeAuditLog } from '../../../../lib/audit';
 import AuditLog from '../../../../models/AuditLog';
 import Exam from '../../../../models/Exam';
 
@@ -13,7 +14,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function csvCell(value: unknown): string {
     const raw = value === null || value === undefined ? '' : String(value);
-    const spreadsheetSafe = /^[\s\uFEFF]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+    const spreadsheetSafe = /^[\s\uFEFF]*[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
     return `"${spreadsheetSafe.replace(/"/g, '""')}"`;
 }
 
@@ -103,6 +104,16 @@ export async function GET(request: NextRequest) {
             async cancel() {
                 await cursor.close();
             }
+        });
+
+        await writeAuditLog({
+            user: auth.user.id,
+            action: 'AUDIT_LOGS_EXPORTED',
+            outcome: 'SUCCESS',
+            entityId: examObjectId,
+            entityType: 'Exam',
+            details: { examId },
+            ipAddress: request.headers.get('x-forwarded-for') || undefined
         });
 
         return new NextResponse(body, {
