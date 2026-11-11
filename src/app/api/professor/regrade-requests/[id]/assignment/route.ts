@@ -53,7 +53,7 @@ export async function PATCH(
         }
 
         const manage = await canManageExam(auth.user, regrade.exam);
-        if (!manage.canManage) {
+        if (!manage.canManage || !manage.exam) {
             return NextResponse.json({ success: false, message: 'Regrade request not found', data: null }, { status: 404 });
         }
         const exam = manage.exam;

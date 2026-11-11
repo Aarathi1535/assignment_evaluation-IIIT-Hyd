@@ -191,11 +191,6 @@ export async function canManageExam(
     return { canManage: false, exam: null, course: null, errorStatus: 401, errorMessage: 'Unauthorized' };
   }
 
-  const role = user.role?.toUpperCase();
-  if (role !== UserRole.ADMIN && role !== UserRole.PROFESSOR) {
-    return { canManage: false, exam: null, course: null, errorStatus: 403, errorMessage: 'Forbidden' };
-  }
-
   if (!examOrId) {
     return { canManage: false, exam: null, course: null, errorStatus: 400, errorMessage: 'Invalid exam ID' };
   }
@@ -222,22 +217,33 @@ export async function canManageExam(
     return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Course not found or inactive' };
   }
 
+  const role = user.role?.toUpperCase();
   if (role === UserRole.ADMIN) {
     return { canManage: true, exam, course, errorStatus: 200, errorMessage: '' };
   }
 
   // Role is PROFESSOR: user must be the assigned professor of the course
-  const profRef = course.professor as { _id?: mongoose.Types.ObjectId } | mongoose.Types.ObjectId;
-  const courseProfId = profRef && '_id' in profRef && profRef._id ? profRef._id.toString() : profRef?.toString();
-  if (courseProfId !== user.id) {
-    return {
-      canManage: false,
-      exam,
-      course,
-      errorStatus: 403,
-      errorMessage: 'Forbidden: Only the assigned professor of this course can manage this exam'
-    };
+  if (role === UserRole.PROFESSOR) {
+    const profRef = course.professor as { _id?: mongoose.Types.ObjectId } | mongoose.Types.ObjectId;
+    const courseProfId = profRef && '_id' in profRef && profRef._id ? profRef._id.toString() : profRef?.toString();
+    if (courseProfId !== user.id) {
+      return {
+        canManage: false,
+        exam,
+        course,
+        errorStatus: 403,
+        errorMessage: 'Forbidden: Only the assigned professor of this course can manage this exam'
+      };
+    }
+
+    return { canManage: true, exam, course, errorStatus: 200, errorMessage: '' };
   }
 
-  return { canManage: true, exam, course, errorStatus: 200, errorMessage: '' };
+  return {
+    canManage: false,
+    exam,
+    course,
+    errorStatus: 403,
+    errorMessage: 'Forbidden: Role cannot manage this exam'
+  };
 }
