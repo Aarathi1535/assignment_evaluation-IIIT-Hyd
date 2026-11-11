@@ -2,11 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { Permission, UserRole } from '../../../../../../constants/permissions';
-import { requirePermission } from '../../../../../../lib/apiAuth';
+import { requirePermission, canManageExam } from '../../../../../../lib/apiAuth';
 import { writeAuditLog } from '../../../../../../lib/audit';
 import { connectDB } from '../../../../../../lib/db';
 import Course from '../../../../../../models/Course';
-import Exam from '../../../../../../models/Exam';
 import Grade from '../../../../../../models/Grade';
 import RegradeRequest, { RegradeStatus } from '../../../../../../models/RegradeRequest';
 import User, { type IUser } from '../../../../../../models/User';
@@ -53,23 +52,11 @@ export async function PATCH(
             return NextResponse.json({ success: false, message: 'Resolved requests cannot be assigned', data: null }, { status: 409 });
         }
 
-        let exam = null;
-        if (auth.user.role === UserRole.ADMIN) {
-            exam = await Exam.findById(regrade.exam).select('_id createdBy course');
-        } else if (auth.user.role === UserRole.PROFESSOR) {
-            const profCourses = await Course.find({
-                professor: new mongoose.Types.ObjectId(auth.user.id),
-                isActive: true
-            }).select('_id').lean();
-            const profCourseIds = profCourses.map(c => c._id);
-            exam = await Exam.findOne({
-                _id: regrade.exam,
-                course: { $in: profCourseIds }
-            }).select('_id createdBy course');
-        }
-        if (!exam) {
+        const manage = await canManageExam(auth.user, regrade.exam);
+        if (!manage.canManage) {
             return NextResponse.json({ success: false, message: 'Regrade request not found', data: null }, { status: 404 });
         }
+        const exam = manage.exam;
 
         const reviewerId = parsed.data.reviewerId || null;
         const previousAssignee = regrade.assignedTo?.toString() || null;

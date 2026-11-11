@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../lib/db';
-import { requireGradingOrAnnotationAccess } from '../../../../../lib/apiAuth';
+import { requireGradingOrAnnotationAccess, canManageExam } from '../../../../../lib/apiAuth';
 import { UserRole } from '../../../../../constants/permissions';
 import AnswerScript from '../../../../../models/AnswerScript';
 import IngestionPage from '../../../../../models/IngestionPage';
 import Page from '../../../../../models/Page';
 import RegradeRequest, { RegradeStatus } from '../../../../../models/RegradeRequest';
-import ExamRepository from '../../../../../repositories/ExamRepository';
 import AllocationService from '../../../../../services/AllocationService';
 import { HttpError } from '../../../../../lib/errors';
 import Course from '../../../../../models/Course';
@@ -91,26 +90,10 @@ export async function GET(
       userRole === UserRole.PROFESSOR || userRole === UserRole.ADMIN;
 
     if (isProfessorOrAdmin) {
-      const exam = await ExamRepository.getExamById(
-        script.exam.toString(),
-        user.id,
-        user.role
-      );
-      if (exam) {
-        const courseDoc = await Course.findById(exam.course).select('isActive');
-        if (!courseDoc || !courseDoc.isActive) {
-          return NextResponse.json(
-            {
-              success: false,
-              message: 'Forbidden: Course is inactive or not found',
-              data: null,
-            },
-            { status: 403 }
-          );
-        }
-      }
+      const manage = await canManageExam(user, script.exam);
+      const isExamManager = manage.canManage;
       const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
-      if (!exam && !assignedRegrade) {
+      if (!isExamManager && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,

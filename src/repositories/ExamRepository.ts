@@ -57,7 +57,12 @@ class ExamRepository {
 
         const query: QueryFilter<IExam> = { _id: id, isActive: true };
 
+        const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+
         if (actingUserRole === 'ADMIN' || actingUserRole === SYSTEM_ROLE) {
+            const activeCourses = await Course.find({ isActive: true }).select('_id').lean();
+            const activeCourseIds = activeCourses.map((c: { _id: mongoose.Types.ObjectId }) => c._id);
+            query.course = { $in: activeCourseIds };
             return query;
         }
 
@@ -65,14 +70,18 @@ class ExamRepository {
             if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
                 return null;
             }
-            query.createdBy = new mongoose.Types.ObjectId(actingUserId);
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map((c: { _id: mongoose.Types.ObjectId }) => c._id);
+            query.course = { $in: profCourseIds };
             return query;
         }
 
         if (actingUserRole === 'STUDENT') {
             query.status = ExamStatus.PUBLISHED;
 
-            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
             const enrolledCourses = await Course.find({ enrolledStudents: new mongoose.Types.ObjectId(actingUserId), isActive: true });
             const enrolledCourseIds = enrolledCourses.map(c => c._id);
 

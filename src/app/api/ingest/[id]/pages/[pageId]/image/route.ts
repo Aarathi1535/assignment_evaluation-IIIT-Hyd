@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
-import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
+import { requireGradingOrAnnotationAccess, canManageExam } from '../../../../../../../lib/apiAuth';
 import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
@@ -133,6 +133,12 @@ export const GET = withServerTiming(async (
       }
     } else {
       batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
+      if (isAdmin && batch?.exam) {
+        const manage = await canManageExam(auth.user, batch.exam);
+        if (!manage.canManage) {
+          batch = null;
+        }
+      }
     }
 
     if (!batch) {

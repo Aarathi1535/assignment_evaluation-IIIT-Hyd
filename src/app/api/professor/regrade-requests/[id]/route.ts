@@ -2,11 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { UserRole } from '../../../../../constants/permissions';
-import { requireAuth } from '../../../../../lib/apiAuth';
+import { requireAuth, canManageExam } from '../../../../../lib/apiAuth';
 import { connectDB, isTransactionCapable } from '../../../../../lib/db';
 import { writeAuditLog } from '../../../../../lib/audit';
-import Exam from '../../../../../models/Exam';
-import Course from '../../../../../models/Course';
 import Grade from '../../../../../models/Grade';
 import RegradeRequest, { RegradeDecisionOutcome, RegradeStatus } from '../../../../../models/RegradeRequest';
 import Rubric from '../../../../../models/Rubric';
@@ -109,28 +107,20 @@ export async function PATCH(
             );
         }
 
-        const exam = await Exam.findById(regrade.exam).select('_id createdBy totalMarks rubric title course isActive');
-        if (!exam || !exam.isActive) {
+        const manage = await canManageExam(auth.user, regrade.exam);
+        const exam = manage.exam;
+        const course = manage.course;
+        if (!exam || !course) {
             return NextResponse.json(
                 { success: false, message: 'Regrade request not found', data: null },
                 { status: 404 }
             );
         }
 
-        const course = await Course.findById(exam.course).select('professor teachingAssistants isActive');
-        if (!course || !course.isActive) {
-            return NextResponse.json(
-                { success: false, message: 'Regrade request not found', data: null },
-                { status: 404 }
-            );
-        }
-
+        const isExamOwner = manage.canManage;
         const isCourseProfessor = course.professor.toString() === auth.user.id;
-        const isExamOwner = auth.user.role === UserRole.ADMIN ||
-            (auth.user.role === UserRole.PROFESSOR && isCourseProfessor);
-
         const isCourseStaff = isCourseProfessor ||
-            course.teachingAssistants.some(ta => ta.toString() === auth.user.id);
+            course.teachingAssistants.some((ta: mongoose.Types.ObjectId) => ta.toString() === auth.user.id);
 
         const isAssignedReviewer = regrade.assignedTo?.toString() === auth.user.id;
         if (!isExamOwner && (!isCourseStaff || !isAssignedReviewer)) {

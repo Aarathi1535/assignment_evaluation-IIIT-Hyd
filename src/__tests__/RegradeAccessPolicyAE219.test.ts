@@ -24,11 +24,13 @@ describe('AE-219 regrade access policy', () => {
     let getRequests: typeof import('../app/api/professor/regrade-requests/route').GET;
     let assignReviewer: typeof import('../app/api/professor/regrade-requests/[id]/assignment/route').PATCH;
     let patchDecision: typeof import('../app/api/professor/regrade-requests/[id]/route').PATCH;
+    let getScriptPages: typeof import('../app/api/scripts/[id]/pages/route').GET;
 
     beforeAll(async () => {
         getRequests = (await import('../app/api/professor/regrade-requests/route')).GET;
         assignReviewer = (await import('../app/api/professor/regrade-requests/[id]/assignment/route')).PATCH;
         patchDecision = (await import('../app/api/professor/regrade-requests/[id]/route')).PATCH;
+        getScriptPages = (await import('../app/api/scripts/[id]/pages/route')).GET;
         await RegradeRequest.init();
     });
 
@@ -79,6 +81,14 @@ describe('AE-219 regrade access policy', () => {
             email: `student-${suffix}@example.edu`,
             password: 'Password@123',
             role: UserRole.STUDENT,
+            isActive: true
+        });
+
+        const admin = await User.create({
+            name: 'System Admin',
+            email: `admin-${suffix}@example.edu`,
+            password: 'Password@123',
+            role: UserRole.ADMIN,
             isActive: true
         });
 
@@ -149,6 +159,7 @@ describe('AE-219 regrade access policy', () => {
             courseProfessor,
             examCreator,
             unrelatedProfessor,
+            admin,
             ta,
             student,
             course,
@@ -185,6 +196,13 @@ describe('AE-219 regrade access policy', () => {
                 body: JSON.stringify(body)
             }),
             { params: Promise.resolve({ id: regradeId }) }
+        );
+    }
+
+    function callScriptPages(scriptId: string) {
+        return getScriptPages(
+            new NextRequest(`http://localhost:3000/api/scripts/${scriptId}/pages`, { method: 'GET' }),
+            { params: Promise.resolve({ id: scriptId }) }
         );
     }
 
@@ -295,5 +313,84 @@ describe('AE-219 regrade access policy', () => {
             revisedScore: 18
         });
         expect(decideRes.status).toBe(404);
+    });
+
+    it('allows an admin to list, assign, and decide regrades, and view script pages', async () => {
+        const fixture = await createFixture();
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+
+        // 1. Can list in queue
+        const queueRes = await callGetQueue(fixture.exam._id.toString());
+        expect(queueRes.status).toBe(200);
+        const queueData = await queueRes.json();
+        expect(queueData.data.requests).toHaveLength(1);
+
+        // 2. Can assign reviewer
+        const assignRes = await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString());
+        expect(assignRes.status).toBe(200);
+
+        // 3. Can decide regrade
+        const decideRes = await callDecide(fixture.regrade._id.toString(), {
+            outcome: RegradeDecisionOutcome.APPROVED,
+            reason: 'Admin approved the regrade.',
+            revisedScore: 18
+        });
+        expect(decideRes.status).toBe(200);
+
+        // 4. Can view script pages
+        const pagesRes = await callScriptPages(fixture.script._id.toString());
+        expect(pagesRes.status).toBe(200);
+    });
+
+    it('allows course professor to view script pages while denying the former exam creator', async () => {
+        const fixture = await createFixture();
+
+        // Course professor gets 200 on script pages
+        mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
+        const profPagesRes = await callScriptPages(fixture.script._id.toString());
+        expect(profPagesRes.status).toBe(200);
+
+        // Former creator (no longer course professor) gets 403 on script pages
+        mockSessionUser = { id: fixture.examCreator._id.toString(), role: UserRole.PROFESSOR };
+        const creatorPagesRes = await callScriptPages(fixture.script._id.toString());
+        expect(creatorPagesRes.status).toBe(403);
+    });
+
+    it('uniformly denies queue, assignment, decision, and script pages when course is inactive', async () => {
+        const fixture = await createFixture();
+        await Course.updateOne({ _id: fixture.course._id }, { $set: { isActive: false } });
+
+        // For Course Professor:
+        mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
+        expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
+        expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
+        expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+
+        // For Admin:
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+        expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
+        expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
+        expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+    });
+
+    it('uniformly denies queue, assignment, decision, and script pages when exam is inactive', async () => {
+        const fixture = await createFixture();
+        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { isActive: false } });
+
+        // For Course Professor:
+        mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
+        expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
+        expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
+        expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+
+        // For Admin:
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+        expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
+        expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
+        expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
     });
 });
