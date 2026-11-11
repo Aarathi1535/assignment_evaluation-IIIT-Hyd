@@ -24,7 +24,7 @@ The server-side `STUDENT_RESULTS_ENABLED` setting must be `true` for student res
 ## Notifications
 
 When a professor publishes an exam's results (`POST /api/exams/[id]/publish` via AE-190/AE-191):
-- System notifications (`RESULTS_PUBLISHED`) and email alerts are queued and dispatched to enrolled students whose answer scripts have finalized grades with no open flags (AE-192).
+- System notifications (`PUBLISH`) and email alerts are queued and dispatched to enrolled students whose answer scripts have finalized grades with no open flags (AE-192).
 - Notifications are deduplicated and recorded in the database, remaining accessible in the student's notification center.
 
 ## Regrade window configuration
@@ -58,7 +58,7 @@ The itemized result page always renders a request form for eligible rubric quest
 
 - `POST /api/student/regrade-requests` submits a request with the script ID, question number, and reason. The reason must contain 10–2000 characters after trimming. The server derives the student from the session and rejects duplicate active requests for the same student, exam, and question with HTTP 409 Conflict.
 - `GET /api/student/regrade-requests` returns only the signed-in student's requests.
-- The student status page at `/student/regrade-requests` displays the exam, question, reason, submission time, and request status (`open`, `reviewing`, `resolved`, or `rejected`). Note that transitions to `reviewing` and `resolved` are handled by professor/TA grading workflows scheduled for Week 11; student submissions initialize in the `open` state. The UI includes loading, empty, error, and retry states.
+- The student status page at `/student/regrade-requests` displays the exam, question, reason, submission time, and request status (`open`, `reviewing`, or `resolved`). Note that transitions to `reviewing` and `resolved` are handled by professor/TA grading workflows scheduled for Week 11; student submissions initialize in the `open` state. The UI includes loading, empty, error, and retry states.
 
 Both regrade endpoints require the request-regrade permission and return private, non-cacheable responses.
 
@@ -67,7 +67,8 @@ Both regrade endpoints require the request-regrade permission and return private
 When a professor unpublishes an exam (`POST /api/exams/[id]/unpublish` via AE-193):
 - **Access Revocation**: Student result listings (`GET /api/student/results`) immediately revert the exam to unreleased (`NOT_AVAILABLE` or omitted). Itemized result details (`GET /api/student/results/[scriptId]`), page manifests, and watermarked page image streams return HTTP 404 Not Found.
 - **Regrade Submissions Blocked**: Students cannot submit new regrade requests for an unpublished exam.
-- **Preserved Records**: Previously delivered publication notifications in the student inbox and previously submitted regrade request status records remain visible for tracking and auditing purposes.
+- **Regrade Requests Hidden from Students**: Regrade requests submitted while the exam was published are not visible to students after an exam is unpublished, as student regrade queries scope strictly to exams with released results. The regrade records remain preserved in the database for professor tracking and audit history.
+- **Preserved Notifications**: Previously delivered publication notifications in the student inbox remain visible for notification history.
 - **Local Artifacts**: Previously exported or downloaded watermarked PDFs stored locally on student devices cannot be revoked or recalled over the network.
 
 ## Deployment prerequisites
