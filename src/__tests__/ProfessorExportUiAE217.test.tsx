@@ -38,7 +38,7 @@ describe('AE-217 Professor Export UI with format picker', () => {
         };
     }
 
-    it('renders format picker with CSV, XLSX, Standard LMS, and Canvas LMS options', () => {
+    it('renders format picker with CSV, XLSX, Standard LMS, and Canvas-style CSV options', () => {
         render(<ExamExportPanel examId="exam-123" examTitle="Midterm Exam" releasedCount={45} />);
 
         expect(screen.getByRole('heading', { name: /Export Exam Grades/i })).toBeTruthy();
@@ -48,7 +48,7 @@ describe('AE-217 Professor Export UI with format picker', () => {
         expect(screen.getByText('CSV Spreadsheet')).toBeTruthy();
         expect(screen.getByText('Excel Workbook')).toBeTruthy();
         expect(screen.getByText('Standard LMS Gradebook')).toBeTruthy();
-        expect(screen.getByText('Canvas LMS Gradebook')).toBeTruthy();
+        expect(screen.getByText('Canvas-style CSV (untested)')).toBeTruthy();
 
         // Default selected format is XLSX
         const xlsxRadio = screen.getByTestId('radio-format-xlsx') as HTMLInputElement;
