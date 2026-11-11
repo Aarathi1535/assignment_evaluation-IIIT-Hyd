@@ -7,6 +7,7 @@ import AnswerScript from '../models/AnswerScript';
 import User, { UserRole, IUser } from '../models/User';
 import crypto from 'crypto';
 import { HttpError, isDuplicateKeyError } from '../lib/errors';
+import { isTransactionCapable } from '../lib/db';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
 
 export interface AuditContext {
@@ -17,18 +18,6 @@ export interface AuditContext {
 
 export interface EnrollContext extends AuditContext {
     rollNumbers?: Record<string, string | null | undefined>;
-}
-
-function isTransactionCapable(): boolean {
-    const client = (mongoose.connection as unknown as { client?: { topology?: { description?: { type?: string } } } })?.client;
-    const topology = client?.topology;
-    const topologyType = (topology?.description?.type as string | undefined) ?? 'Unknown';
-    return [
-        'ReplicaSetWithPrimary',
-        'ReplicaSetNoPrimary',
-        'Sharded',
-        'LoadBalanced',
-    ].includes(topologyType);
 }
 
 class ExamService {
