@@ -436,11 +436,11 @@ describe('AE-219 regrade access policy', () => {
 
         // Former creator (no longer course professor) is denied:
         mockSessionUser = { id: fixture.examCreator._id.toString(), role: UserRole.PROFESSOR };
-        expect((await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr))).status).toBe(403);
-        expect((await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr))).status).toBe(403);
-        expect((await getLmsExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export/lms`), makeContext(examIdStr))).status).toBe(403);
-        expect((await getLtiPassback(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/lti/passback`), makeContext(examIdStr))).status).toBe(403);
-        expect((await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`))).status).toBe(403);
+        expect([403, 404]).toContain((await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr))).status);
+        expect([403, 404]).toContain((await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr))).status);
+        expect([403, 404]).toContain((await getLmsExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export/lms`), makeContext(examIdStr))).status);
+        expect([403, 404]).toContain((await getLtiPassback(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/lti/passback`), makeContext(examIdStr))).status);
+        expect([403, 404]).toContain((await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`))).status);
 
         // Admin is allowed:
         mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };

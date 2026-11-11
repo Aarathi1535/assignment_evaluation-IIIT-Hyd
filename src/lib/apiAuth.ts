@@ -231,8 +231,8 @@ export async function canManageExam(
         canManage: false,
         exam,
         course,
-        errorStatus: 403,
-        errorMessage: 'Forbidden: Only the assigned professor of this course can manage this exam'
+        errorStatus: 404,
+        errorMessage: 'Exam not found'
       };
     }
 
