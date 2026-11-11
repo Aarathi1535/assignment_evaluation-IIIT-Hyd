@@ -9,6 +9,8 @@ import Grade, { IGrade } from '../models/Grade';
 import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
 import StudentMapping from '../models/StudentMapping';
 import Rubric, { IRubric } from '../models/Rubric';
+import RegradeRequest from '../models/RegradeRequest';
+import ScriptFlag, { FlagStatus } from '../models/ScriptFlag';
 
 export type ResultReleaseStatus = 'RELEASED' | 'NOT_AVAILABLE';
 
@@ -53,9 +55,13 @@ export interface ItemizedResultDto {
     exam: {
         title: string;
         totalMarks: number;
+        regradeWindowOpensAt?: Date | null;
+        regradeWindowClosesAt?: Date | null;
     };
     mode: 'QUESTION' | 'WHOLE';
     questions: QuestionResultDto[];
+    eligibleQuestionNumbers: number[];
+    openQuestionNumbers?: number[];
     total: number;
     maxTotal: number;
 }
@@ -111,7 +117,7 @@ export class StudentResultService {
      * - No associated allocation remains PENDING or IN_PROGRESS
      * - Derives maxMarks strictly from the persisted rubric version referenced by Grade.rubric
      */
-    private async evaluateReleaseConditions(
+    public async evaluateReleaseConditions(
         studentId: mongoose.Types.ObjectId,
         exam: { _id?: mongoose.Types.ObjectId | string; isActive: boolean; status: ExamStatus; rubric?: mongoose.Types.ObjectId | null },
         script: IAnswerScript | null
@@ -121,7 +127,11 @@ export class StudentResultService {
         }
 
         // Condition 4: Script belongs to student
-        if (!script.student || !script.student.equals(studentId)) {
+        const rawStudent = script.student;
+        const scriptStudentId = rawStudent && typeof rawStudent === 'object' && '_id' in rawStudent
+            ? (rawStudent as { _id: mongoose.Types.ObjectId })._id
+            : rawStudent;
+        if (!scriptStudentId || scriptStudentId.toString() !== studentId.toString()) {
             return { isReleased: false };
         }
 
@@ -136,6 +146,15 @@ export class StudentResultService {
             return { isReleased: false };
         }
         if (script.needsManualId) {
+            return { isReleased: false };
+        }
+
+        // Condition 5b: No open script flags
+        const openFlagCount = await ScriptFlag.countDocuments({
+            answerScript: script._id,
+            status: FlagStatus.OPEN
+        });
+        if (openFlagCount > 0) {
             return { isReleased: false };
         }
 
@@ -492,6 +511,7 @@ export class StudentResultService {
         const mode: 'QUESTION' | 'WHOLE' = isWholeScript ? 'WHOLE' : 'QUESTION';
 
         const rubricCache = new Map<string, IRubric>();
+        let eligibleQuestionNumbers: number[] = [];
         const getRubric = async (rubricId: mongoose.Types.ObjectId | string): Promise<IRubric> => {
             const idStr = rubricId.toString();
             const cached = rubricCache.get(idStr);
@@ -518,6 +538,9 @@ export class StudentResultService {
                     throw new HttpError('Not found', 404);
                 }
                 const rubric = await getRubric(grade.rubric);
+                if (eligibleQuestionNumbers.length === 0) {
+                    eligibleQuestionNumbers = rubric.questions.map(question => question.questionNumber);
+                }
                 const rubricQuestion = rubric.questions?.find(
                     q => q.questionNumber === grade.question
                 );
@@ -562,6 +585,7 @@ export class StudentResultService {
                 throw new HttpError('Not found', 404);
             }
             const rubric = await getRubric(grade.rubric);
+            eligibleQuestionNumbers = rubric.questions.map(question => question.questionNumber);
             const allRubricCriteria = (rubric.questions || []).flatMap(q => q.criteria || []);
             const totalRubricMarks = (rubric.questions || []).reduce(
                 (sum, q) => sum + (Number(q.maxMarks) || 0),
@@ -604,13 +628,29 @@ export class StudentResultService {
         ) / 100;
         const maxTotal = questions.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
 
+        let openQuestionNumbers: number[] = [];
+        try {
+            const openRequests = await RegradeRequest.find({
+                student: script.student,
+                exam: exam._id,
+                isOpen: true
+            }).select('questionNumber').lean();
+            openQuestionNumbers = openRequests.map(r => r.questionNumber);
+        } catch {
+            openQuestionNumbers = [];
+        }
+
         return {
             exam: {
                 title: exam.title,
                 totalMarks: exam.totalMarks,
+                regradeWindowOpensAt: exam.regradeWindowOpensAt,
+                regradeWindowClosesAt: exam.regradeWindowClosesAt,
             },
             mode,
             questions,
+            eligibleQuestionNumbers,
+            openQuestionNumbers,
             total,
             maxTotal,
         };
@@ -619,4 +659,3 @@ export class StudentResultService {
 
 const studentResultService = new StudentResultService();
 export default studentResultService;
-

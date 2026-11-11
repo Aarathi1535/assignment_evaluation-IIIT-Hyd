@@ -10,6 +10,7 @@ import {
   FileText,
 } from 'lucide-react';
 import type { ItemizedResultDto } from '@/services/StudentResultService';
+import { RegradeRequestForm } from '@/components/student/RegradeRequestForm';
 
 export interface ItemizedFeedbackPanelProps {
   scriptId: string;
@@ -198,6 +199,16 @@ export function ItemizedFeedbackPanel({
             </div>
           );
         })}
+      </div>
+
+      <div className="px-4 pb-4">
+        <RegradeRequestForm
+          scriptId={scriptId}
+          questionNumbers={data.eligibleQuestionNumbers}
+          openQuestionNumbers={data.openQuestionNumbers}
+          regradeWindowOpensAt={data.exam.regradeWindowOpensAt}
+          regradeWindowClosesAt={data.exam.regradeWindowClosesAt}
+        />
       </div>
     </aside>
   );

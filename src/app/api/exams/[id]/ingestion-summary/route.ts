@@ -54,7 +54,7 @@ export async function GET(
     // 2. Fetch scripts if a category filter is requested for drill-down
     const url = new URL(req.url);
     const categoryParam = url.searchParams.get('category');
-    
+
     let scripts: ReviewDashboardScript[] | null = null;
     if (categoryParam) {
       if (!['total', 'unmatched', 'blank', 'duplicate', 'conflict'].includes(categoryParam)) {
