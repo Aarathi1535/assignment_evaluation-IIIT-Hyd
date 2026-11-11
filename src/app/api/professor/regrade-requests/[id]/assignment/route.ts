@@ -63,7 +63,7 @@ export async function PATCH(
         if (reviewerId === previousAssignee) {
             return NextResponse.json({
                 success: true,
-                data: { id: regrade._id.toString(), assignedTo: previousAssignee }
+                data: { id: regrade._id.toString(), status: regrade.status, assignedTo: previousAssignee }
             }, { status: 200 });
         }
 
@@ -113,6 +113,7 @@ export async function PATCH(
         const assignedAt = new Date();
         const assignee = reviewer?._id ?? null;
         const assignedBy = new mongoose.Types.ObjectId(auth.user.id);
+        const nextStatus = assignee ? RegradeStatus.REVIEWING : RegradeStatus.OPEN;
         const updated = await RegradeRequest.findOneAndUpdate(
             {
                 _id: regrade._id,
@@ -120,7 +121,13 @@ export async function PATCH(
                 assignedTo: previousAssignee ? new mongoose.Types.ObjectId(previousAssignee) : null
             },
             {
-                $set: { assignedTo: assignee, assignedBy, assignedAt },
+                $set: {
+                    assignedTo: assignee,
+                    assignedBy,
+                    assignedAt,
+                    status: nextStatus,
+                    isOpen: true
+                },
                 $push: { assignmentHistory: { assignee, assignedBy, assignedAt } }
             },
             { returnDocument: 'after', runValidators: true }
@@ -159,7 +166,9 @@ export async function PATCH(
                     $set: {
                         assignedTo: previousAssignee ? new mongoose.Types.ObjectId(previousAssignee) : null,
                         assignedBy: regrade.assignedBy || null,
-                        assignedAt: regrade.assignedAt || null
+                        assignedAt: regrade.assignedAt || null,
+                        status: regrade.status,
+                        isOpen: true
                     },
                     $pull: { assignmentHistory: { assignedAt } }
                 }
@@ -177,6 +186,7 @@ export async function PATCH(
             success: true,
             data: {
                 id: updated._id.toString(),
+                status: updated.status,
                 assignedTo: reviewer ? {
                     id: reviewer._id.toString(),
                     name: reviewer.name,

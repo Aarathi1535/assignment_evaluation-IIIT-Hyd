@@ -248,6 +248,7 @@ export async function GET(
                     details: {
                         userId: authUserId,
                         scriptId,
+                        examId: script.exam?.toString(),
                         pageId,
                         traceCode,
                         rollNumber: rollNumber || null,

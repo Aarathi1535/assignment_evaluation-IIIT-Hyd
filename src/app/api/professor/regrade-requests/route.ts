@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
 
         const rubricIds = [
             ...new Set(exams.map(exam => exam.rubric?.toString()).filter((value): value is string => Boolean(value))),
-            ...new Set(grades.map(grade => grade.rubric.toString()))
+            ...new Set(grades.map(grade => grade.rubric?.toString()).filter((value): value is string => Boolean(value)))
         ];
         const [rubrics, courses] = await Promise.all([
             Rubric.find({ _id: { $in: rubricIds } }).select('exam questions').lean(),

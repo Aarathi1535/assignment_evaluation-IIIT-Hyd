@@ -235,6 +235,11 @@ class ExamService {
             }
         }
 
+        // Prevent modifying totalMarks on already published exams
+        if (examBefore.status === ExamStatus.PUBLISHED && data.totalMarks !== undefined && data.totalMarks !== examBefore.totalMarks) {
+            throw new HttpError('Cannot update totalMarks on a published exam', 400);
+        }
+
         // Validate gradingDeadline rules (freeze rule on grading commencement and chronology against examDate)
         if (data.gradingDeadline !== undefined) {
             const { AllocationService } = await import('./AllocationService');
@@ -817,6 +822,20 @@ class ExamService {
                 `Cannot publish exam: There are ${openFlagCount} open flag(s) that must be resolved or escalated first`,
                 400
             );
+        }
+
+        // Validate that exam.totalMarks matches rubric total marks if a rubric exists
+        const RubricModule = await import('../models/Rubric');
+        const Rubric = mongoose.models.Rubric || RubricModule.default;
+        const rubric = await Rubric.findOne({ exam: new mongoose.Types.ObjectId(id) });
+        if (rubric && rubric.questions && rubric.questions.length > 0) {
+            const rubricTotal = rubric.questions.reduce((sum: number, q: { maxMarks?: number }) => sum + (Number(q.maxMarks) || 0), 0);
+            if (Math.abs(rubricTotal - examBefore.totalMarks) > 0.001) {
+                throw new HttpError(
+                    `Cannot publish exam: Exam totalMarks (${examBefore.totalMarks}) does not match rubric total (${rubricTotal})`,
+                    400
+                );
+            }
         }
 
         const publishedAt = new Date();

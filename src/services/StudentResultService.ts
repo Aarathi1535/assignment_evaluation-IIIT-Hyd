@@ -24,6 +24,25 @@ export interface StudentResultItemDto {
     maxMarks?: number;
 }
 
+export interface ReleasedExamScoreDto {
+    studentId: string;
+    scriptId: string;
+    score: number;
+    maxMarks: number;
+}
+
+export interface ReleasedExamGradeObservationDto {
+    graderId: string;
+    graderName: string;
+    comparableGroup: string;
+    scorePercentage: number;
+}
+
+export interface ReleasedExamQuestionScoresDto {
+    questions: Array<{ questionNumber: number; maxMarks: number }>;
+    observations: Array<{ questionNumber: number; score: number; maxMarks: number }>;
+}
+
 export interface ReleasedStudentResultDto {
     examId: string;
     examTitle: string;
@@ -64,6 +83,12 @@ export interface ItemizedResultDto {
     total: number;
     maxTotal: number;
 }
+interface ReleaseConditionsBatchData {
+    allocationsByScript?: Map<string, IAllocation[]>;
+    gradesByScript?: Map<string, IGrade[]>;
+    rubricsById?: Map<string, IRubric>;
+}
+
 export class StudentResultService {
     /**
      * Validates that the request is made by an authenticated, active student
@@ -119,7 +144,8 @@ export class StudentResultService {
     private async evaluateReleaseConditions(
         studentId: mongoose.Types.ObjectId,
         exam: { _id?: mongoose.Types.ObjectId | string; isActive: boolean; status: ExamStatus; rubric?: mongoose.Types.ObjectId | null },
-        script: IAnswerScript | null
+        script: IAnswerScript | null,
+        batchData?: ReleaseConditionsBatchData
     ): Promise<{ isReleased: boolean; total?: number; scriptId?: string; maxMarks?: number }> {
         if (!script) {
             return { isReleased: false };
@@ -150,15 +176,19 @@ export class StudentResultService {
         }
 
         // Condition 7: Check allocations and grades completeness
-        const allocations: IAllocation[] = await Allocation.find({ answerScript: script._id });
+        const allocations: IAllocation[] = batchData?.allocationsByScript
+            ? (batchData.allocationsByScript.get(script._id.toString()) || [])
+            : await Allocation.find({ answerScript: script._id });
         const hasUnfinishedAllocations = allocations.some(
-            a => a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
+            a => !a.status || a.status === AllocationStatus.PENDING || a.status === AllocationStatus.IN_PROGRESS
         );
         if (hasUnfinishedAllocations) {
             return { isReleased: false };
         }
 
-        const grades: IGrade[] = await Grade.find({ answerScript: script._id });
+        const grades: IGrade[] = batchData?.gradesByScript
+            ? (batchData.gradesByScript.get(script._id.toString()) || [])
+            : await Grade.find({ answerScript: script._id });
         if (grades.length === 0) {
             return { isReleased: false };
         }
@@ -198,7 +228,9 @@ export class StudentResultService {
                 return { isReleased: false };
             }
 
-            const rubric: IRubric | null = await Rubric.findById(wholeScriptGrade.rubric);
+            const rubric: IRubric | null = batchData?.rubricsById
+                ? (batchData.rubricsById.get(wholeScriptGrade.rubric.toString()) || null)
+                : await Rubric.findById(wholeScriptGrade.rubric);
             if (!rubric || !rubric.questions || rubric.questions.length === 0) {
                 return { isReleased: false };
             }
@@ -247,7 +279,9 @@ export class StudentResultService {
         }
 
         const persistedRubricId = rubricIdStrings[0];
-        const rubric: IRubric | null = await Rubric.findById(persistedRubricId);
+        const rubric: IRubric | null = batchData?.rubricsById
+            ? (batchData.rubricsById.get(persistedRubricId) || null)
+            : await Rubric.findById(persistedRubricId);
         if (!rubric || !rubric.questions || rubric.questions.length === 0) {
             return { isReleased: false };
         }
@@ -415,6 +449,219 @@ export class StudentResultService {
         }
 
         return results;
+    }
+
+    async getPublishedExamScores(exam: IExam): Promise<ReleasedExamScoreDto[]> {
+        if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
+            return [];
+        }
+
+        const scripts = await AnswerScript.find({
+            exam: exam._id,
+            isActive: true,
+            student: { $type: 'objectId' }
+        }).sort({ _id: 1 });
+        const studentIds = scripts.flatMap(script => script.student ? [script.student] : []);
+        const activeStudents = await User.find({
+            _id: { $in: studentIds },
+            role: UserRole.STUDENT,
+            isActive: true
+        }).select('_id').lean();
+        const activeStudentIds = new Set(activeStudents.map(student => student._id.toString()));
+        const releasedScores: ReleasedExamScoreDto[] = [];
+
+        // Batch-load allocations, grades, and rubrics once across all scripts of this exam (O(1) queries instead of O(N))
+        const scriptIds = scripts.map(s => s._id);
+        const [allAllocations, allGrades, allRubrics] = await Promise.all([
+            Allocation.find({ answerScript: { $in: scriptIds } }).lean(),
+            Grade.find({ answerScript: { $in: scriptIds } }).lean(),
+            Rubric.find({ exam: exam._id }).lean()
+        ]);
+
+        const allocationsByScript = new Map<string, IAllocation[]>();
+        for (const alloc of allAllocations) {
+            const key = alloc.answerScript.toString();
+            const list = allocationsByScript.get(key) || [];
+            list.push(alloc as IAllocation);
+            allocationsByScript.set(key, list);
+        }
+
+        const gradesByScript = new Map<string, IGrade[]>();
+        for (const grade of allGrades) {
+            const key = grade.answerScript.toString();
+            const list = gradesByScript.get(key) || [];
+            list.push(grade as IGrade);
+            gradesByScript.set(key, list);
+        }
+
+        const rubricsById = new Map<string, IRubric>();
+        for (const rubric of allRubrics) {
+            rubricsById.set(rubric._id.toString(), rubric as IRubric);
+        }
+
+        const missingRubricIds = allGrades
+            .map(g => g.rubric?.toString())
+            .filter((id): id is string => Boolean(id) && !rubricsById.has(id!));
+        if (missingRubricIds.length > 0) {
+            const extraRubrics = await Rubric.find({ _id: { $in: Array.from(new Set(missingRubricIds)) } }).lean();
+            for (const rubric of extraRubrics) {
+                rubricsById.set(rubric._id.toString(), rubric as IRubric);
+            }
+        }
+
+        const batchData: ReleaseConditionsBatchData = {
+            allocationsByScript,
+            gradesByScript,
+            rubricsById
+        };
+
+        for (const script of scripts) {
+            if (!script.student || !activeStudentIds.has(script.student.toString())) {
+                continue;
+            }
+            const result = await this.evaluateReleaseConditions(script.student, exam, script, batchData);
+            if (result.isReleased && result.total !== undefined && result.maxMarks !== undefined &&
+                Number.isFinite(result.total) && Number.isFinite(result.maxMarks) &&
+                result.total >= 0 && result.total <= result.maxMarks && result.maxMarks > 0) {
+                releasedScores.push({
+                    studentId: script.student.toString(),
+                    scriptId: script._id.toString(),
+                    score: result.total,
+                    maxMarks: result.maxMarks
+                });
+            }
+        }
+
+        return releasedScores;
+    }
+
+    async getPublishedExamQuestionScores(
+        exam: IExam,
+        releasedScriptIds: readonly string[]
+    ): Promise<ReleasedExamQuestionScoresDto> {
+        if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
+            return { questions: [], observations: [] };
+        }
+
+        const rubrics = await Rubric.find({ exam: exam._id })
+            .select('questions version isActive')
+            .sort({ version: -1, createdAt: -1 })
+            .lean();
+        const currentRubricId = exam.rubric?.toString();
+        const currentRubric = rubrics.find(rubric =>
+            currentRubricId && rubric._id.toString() === currentRubricId
+        ) || rubrics.find(rubric => rubric.isActive) || rubrics[0];
+        const orderedRubrics = currentRubric
+            ? [currentRubric, ...rubrics.filter(rubric => rubric._id.toString() !== currentRubric._id.toString())]
+            : rubrics;
+        const rubricById = new Map(orderedRubrics.map(rubric => [rubric._id.toString(), rubric]));
+        const questionsByNumber = new Map<number, { questionNumber: number; maxMarks: number }>();
+
+        for (const question of currentRubric?.questions || []) {
+            if (!Number.isSafeInteger(question.questionNumber) ||
+                !Number.isFinite(question.maxMarks) || question.maxMarks < 0 ||
+                questionsByNumber.has(question.questionNumber)) {
+                continue;
+            }
+            questionsByNumber.set(question.questionNumber, {
+                questionNumber: question.questionNumber,
+                maxMarks: question.maxMarks
+            });
+        }
+
+        const scriptIds = releasedScriptIds.map(id => new mongoose.Types.ObjectId(id));
+        const grades = scriptIds.length > 0
+            ? await Grade.find({
+                answerScript: { $in: scriptIds },
+                isFinal: true
+            }).select('rubric question totalScore').lean()
+            : [];
+        const observations: ReleasedExamQuestionScoresDto['observations'] = [];
+
+        for (const grade of grades) {
+            if (typeof grade.question !== 'number' || !grade.rubric) {
+                continue;
+            }
+            const rubric = rubricById.get(grade.rubric.toString());
+            const question = rubric?.questions.find(item => item.questionNumber === grade.question);
+            if (!question || !Number.isFinite(question.maxMarks) ||
+                question.maxMarks <= 0 || !Number.isFinite(grade.totalScore) ||
+                grade.totalScore < 0 || grade.totalScore > question.maxMarks) {
+                continue;
+            }
+
+            if (!questionsByNumber.has(question.questionNumber)) {
+                questionsByNumber.set(question.questionNumber, {
+                    questionNumber: question.questionNumber,
+                    maxMarks: question.maxMarks
+                });
+            }
+            observations.push({
+                questionNumber: question.questionNumber,
+                score: grade.totalScore,
+                maxMarks: question.maxMarks
+            });
+        }
+
+        return {
+            questions: Array.from(questionsByNumber.values()),
+            observations
+        };
+    }
+
+    async getPublishedExamGradeObservations(exam: IExam): Promise<ReleasedExamGradeObservationDto[]> {
+        const releasedScripts = await this.getPublishedExamScores(exam);
+        if (releasedScripts.length === 0) {
+            return [];
+        }
+
+        const scriptIds = releasedScripts.map(result => new mongoose.Types.ObjectId(result.scriptId));
+        const grades = await Grade.find({
+            answerScript: { $in: scriptIds },
+            isFinal: true
+        }).select('rubric gradedBy question totalScore').lean();
+        const rubricIds = Array.from(new Set(grades.map(grade => grade.rubric.toString())));
+        const rubrics = await Rubric.find({ _id: { $in: rubricIds } }).select('questions').lean();
+        const rubricById = new Map(rubrics.map(rubric => [rubric._id.toString(), rubric]));
+        const taIds = Array.from(new Set(grades.map(grade => grade.gradedBy.toString())));
+        const graders = await User.find({
+            _id: { $in: taIds },
+            role: UserRole.TA,
+            isActive: true
+        }).select('_id name').lean();
+        const graderById = new Map(graders.map(grader => [grader._id.toString(), grader]));
+        const observations: ReleasedExamGradeObservationDto[] = [];
+
+        for (const grade of grades) {
+            const rubric = rubricById.get(grade.rubric.toString());
+            const grader = graderById.get(grade.gradedBy.toString());
+            if (!rubric || !grader || !Number.isFinite(grade.totalScore) || grade.totalScore < 0) {
+                continue;
+            }
+
+            const isWholeScriptGrade = grade.question === undefined || grade.question === null;
+            const question = isWholeScriptGrade
+                ? undefined
+                : rubric.questions.find(item => item.questionNumber === grade.question);
+            if (!isWholeScriptGrade && !question) {
+                continue;
+            }
+            const maxMarks = isWholeScriptGrade
+                ? rubric.questions.reduce((sum, item) => sum + (Number(item.maxMarks) || 0), 0)
+                : Number(question?.maxMarks);
+            if (!Number.isFinite(maxMarks) || maxMarks <= 0 || grade.totalScore > maxMarks) {
+                continue;
+            }
+
+            observations.push({
+                graderId: grader._id.toString(),
+                graderName: grader.name,
+                comparableGroup: `${grade.rubric.toString()}:${isWholeScriptGrade ? 'whole' : grade.question}`,
+                scorePercentage: (grade.totalScore / maxMarks) * 100
+            });
+        }
+
+        return observations;
     }
 
     /**
