@@ -9,6 +9,7 @@ import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
 import StudentMapping from '../models/StudentMapping';
+import AuditLog from '../models/AuditLog';
 import {
     GET as ltiPassbackGET,
     POST as ltiPassbackPOST
@@ -143,6 +144,7 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
                     student: student1._id,
                     anonymousId: `ANON-LTI-1-${suffix}`,
                     rollNumber: 'ROLL-2026-01',
+                    ltiSub: 'canvas-sub-user-01',
                     isVerified: true
                 },
                 {
@@ -150,6 +152,7 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
                     student: student2._id,
                     anonymousId: `ANON-LTI-2-${suffix}`,
                     rollNumber: 'ROLL-2026-02',
+                    ltiSub: 'canvas-sub-user-02',
                     isVerified: true
                 }
             ]);
@@ -222,9 +225,10 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             );
 
             expect(result.stubMode).toBe(true);
-            expect(result.status).toBe('STUB_COMPLETED');
+            expect(result.status).toBe('NOT_SENT');
             expect(result.totalProcessed).toBe(1);
-            expect(result.successfulScores).toBe(1);
+            expect(result.successfulScores).toBe(0);
+            expect(result.notSentScores).toBe(1);
             expect(result.failedScores).toBe(0);
             expect(result.lineItemUrl).toBe('https://canvas.example.edu/api/lti/courses/1/line_items/99');
             expect(result.message).toContain('safe stub mode');
@@ -237,7 +241,7 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             expect(scoreEntry.scoreMaximum).toBe(30);
 
             const payload = scoreEntry.payload!;
-            expect(payload.userId).toBe('ROLL-2026-01');
+            expect(payload.userId).toBe('canvas-sub-user-01');
             expect(payload.scoreGiven).toBe(28);
             expect(payload.scoreMaximum).toBe(30);
             expect(payload.activityProgress).toBe('Completed');
@@ -267,7 +271,8 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             expect(result.stubMode).toBe(true);
             expect(result.status).toBe('DRY_RUN');
             expect(result.totalProcessed).toBe(5);
-            expect(result.successfulScores).toBe(1);
+            expect(result.successfulScores).toBe(0);
+            expect(result.notSentScores).toBe(1);
             expect(result.skippedScores).toBe(1); // Student 2 (unfinalized grade)
             expect(result.failedScores).toBe(3);  // 1 unknown + 2 duplicate entries
 
@@ -300,6 +305,62 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             expect(result.scores[0].status).toBe('FAILED');
             expect(result.scores[0].reason).toContain('not found');
             expect(result.scores[0].studentName).toBeUndefined();
+        });
+
+        it('handles Mode B (all unresolved LTI sub) returning NOT_SENT, 0 successfulScores, and writing an audit entry', async () => {
+            const fixture = await createFixture();
+            // Clear ltiSub so all records in Mode B have unresolved LTI sub
+            await StudentMapping.updateMany({ exam: fixture.exam._id }, { $set: { ltiSub: null } });
+
+            const result = await ltiGradePassbackService.executeGradePassback(
+                fixture.exam._id.toString(),
+                {}, // Empty options -> Mode B (roster-derived passback)
+                fixture.professor._id.toString(),
+                UserRole.PROFESSOR
+            );
+
+            expect(result.stubMode).toBe(true);
+            expect(result.status).toBe('NOT_SENT');
+            expect(result.successfulScores).toBe(0);
+            expect(result.notSentScores).toBe(0);
+            expect(result.skippedScores).toBeGreaterThan(0);
+            expect(result.scores.every(s => s.status === 'SKIPPED')).toBe(true);
+            expect(result.scores[0].reason).toContain('LTI platform sub claim is not resolved');
+
+            // Verify audit entry was written
+            const auditEntry = await AuditLog.findOne({
+                entityId: fixture.exam._id,
+                action: 'LTI_GRADE_PASSBACK_SIMULATED'
+            }).lean();
+            expect(auditEntry).not.toBeNull();
+            expect(auditEntry?.details?.status).toBe('NOT_SENT');
+            expect(auditEntry?.details?.mode).toBe('MODE_B');
+        });
+
+        it('handles Mode A students without resolved LTI sub by marking them as SKIPPED', async () => {
+            const fixture = await createFixture();
+            // Clear ltiSub for student 1
+            await StudentMapping.updateOne({ exam: fixture.exam._id, student: fixture.student1._id }, { $set: { ltiSub: null } });
+
+            const result = await ltiGradePassbackService.executeGradePassback(
+                fixture.exam._id.toString(),
+                {
+                    students: [
+                        { lmsStudentId: 'ROLL-2026-01' }
+                    ]
+                },
+                fixture.professor._id.toString(),
+                UserRole.PROFESSOR
+            );
+
+            expect(result.stubMode).toBe(true);
+            expect(result.status).toBe('NOT_SENT');
+            expect(result.totalProcessed).toBe(1);
+            expect(result.successfulScores).toBe(0);
+            expect(result.notSentScores).toBe(0);
+            expect(result.skippedScores).toBe(1);
+            expect(result.scores[0].status).toBe('SKIPPED');
+            expect(result.scores[0].reason).toContain('LTI platform sub claim is not resolved');
         });
 
         it('enforces API authorization on GET and POST stub routes', async () => {
@@ -404,7 +465,9 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             const postBody = await ownerPost.json();
             expect(postBody.success).toBe(true);
             expect(postBody.stubMode).toBe(true);
-            expect(postBody.data.successfulScores).toBe(1);
+            expect(postBody.data.status).toBe('NOT_SENT');
+            expect(postBody.data.successfulScores).toBe(0);
+            expect(postBody.data.notSentScores).toBe(1);
         });
 
         it('validates request inputs: malformed JSON, invalid exam ID, insecure lineItemUrl', async () => {

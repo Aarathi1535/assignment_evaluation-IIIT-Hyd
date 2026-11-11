@@ -78,8 +78,8 @@ As agreed with project leadership and mentors:
 3. **Identifier Resolution (LTI `sub` Requirement)**:
    - In LTI 1.3 AGS 2.0, the `userId` in the Score payload **must be the platform user's immutable LTI `sub`** (subject identifier assigned by the LMS platform).
    - Internal roll numbers, emails, or MongoDB ObjectIds are **not** valid LTI platform `sub` identifiers.
-   - **Mode A (External LMS Mapping)**: When the caller supplies `students` with explicit LMS student identifiers (`lmsStudentId` representing the platform `sub`), these are resolved to internal enrolled students via `src/lib/lmsMapping.ts`.
-   - **Mode B (Roster Auto-Generation)**: When no external mapping is supplied, the platform does not currently persist the platform `sub` claim. Records in Mode B are marked as `SKIPPED` (not ready) rather than sending invalid roll numbers or emails that would be misassigned or rejected by a real LMS.
+   - **Mode A (External LMS Mapping)**: When the caller supplies `students`, identifiers are resolved against enrolled course students. AGS `userId` requires the platform user's immutable LTI `sub`. Records that do not map to a stored LTI `sub` are marked as `SKIPPED` rather than sending roll numbers or emails that would be misassigned or rejected by the LMS.
+   - **Mode B (Roster Auto-Generation)**: When no external mapping is supplied, records without a stored platform `sub` are marked as `SKIPPED` (not ready).
    - Only **finalized, published grades** (`isFinal: true` on identified, non-conflicting answer scripts) are selected.
 4. **Payload Construction**:
    - Each mapped grade is translated into an LTI-AGS 2.0 `Score` JSON structure:
@@ -96,7 +96,7 @@ As agreed with project leadership and mentors:
      ```
    - `scoreMaximum` is derived from the exam's rubric total marks (the single source of truth matching evaluated student grades).
 5. **Score Dispatch (Stub vs. Production)**:
-   - **Stub Mode (AE-216)**: Validates payload schemas, enforces course and exam boundaries, attaches generated `Score` payloads, marks valid records as `NOT_SENT` (since no network socket is opened), and writes an audit log entry (`LTI_GRADE_PASSBACK_SIMULATED`) recording the simulation parameters.
+   - **Stub Mode (AE-216)**: Validates payload schemas, enforces course and exam boundaries, attaches generated `Score` payloads, marks valid records as `NOT_SENT` (since no network socket is opened; `successfulScores` is 0), and writes an audit log entry (`LTI_GRADE_PASSBACK_SIMULATED`) recording the simulation parameters.
    - **Production (Future)**: Dispatches scores to the platform's LineItem score URL (`${lineitemUrl}/scores`) via HTTPS with exponential backoff and idempotency keys.
 
 ---

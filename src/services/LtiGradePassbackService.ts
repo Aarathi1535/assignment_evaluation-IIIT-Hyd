@@ -45,7 +45,7 @@ export interface LtiGradePassbackExecutionResult {
     examTitle: string;
     courseCode: string;
     stubMode: true;
-    status: 'STUB_COMPLETED' | 'DRY_RUN' | 'PARTIAL_SUCCESS' | 'FAILED';
+    status: 'STUB_COMPLETED' | 'DRY_RUN' | 'PARTIAL_SUCCESS' | 'FAILED' | 'NOT_SENT';
     totalProcessed: number;
     successfulScores: number;
     notSentScores?: number;
@@ -139,41 +139,92 @@ export class LtiGradePassbackService {
 
         for (const record of mappingResult.records) {
             if (isModeB) {
-                // Mode B lacks external LMS sub identifiers; mark as not ready
-                scores.push({
-                    studentId: record.studentId,
-                    lmsStudentId: record.lmsStudentId,
-                    studentName: record.studentName,
-                    email: record.email,
-                    scoreGiven: record.grade,
-                    scoreMaximum: record.maxGrade,
-                    status: 'SKIPPED',
-                    reason: 'LTI platform sub claim is not resolved. Mode B grade passback requires prior LTI 1.3 launch or NRPS roster synchronization.'
-                });
-                skippedScores++;
+                if (!record.ltiSub) {
+                    // Mode B lacks external LMS sub identifiers; mark as not ready
+                    scores.push({
+                        studentId: record.studentId,
+                        lmsStudentId: record.lmsStudentId,
+                        studentName: record.studentName,
+                        email: record.email,
+                        scoreGiven: record.grade,
+                        scoreMaximum: record.maxGrade,
+                        status: 'SKIPPED',
+                        reason: 'LTI platform sub claim is not resolved. Mode B grade passback requires prior LTI 1.3 launch or NRPS roster synchronization.'
+                    });
+                    skippedScores++;
+                } else if (record.grade !== null) {
+                    const payload: LtiScorePayload = {
+                        userId: record.ltiSub,
+                        scoreGiven: record.grade,
+                        scoreMaximum: record.maxGrade,
+                        comment: defaultComment,
+                        timestamp: new Date().toISOString(),
+                        activityProgress: 'Completed',
+                        gradingProgress: 'FullyGraded'
+                    };
+                    scores.push({
+                        studentId: record.studentId,
+                        lmsStudentId: record.lmsStudentId,
+                        studentName: record.studentName,
+                        email: record.email,
+                        scoreGiven: record.grade,
+                        scoreMaximum: record.maxGrade,
+                        status: 'NOT_SENT',
+                        reason: 'Safe stub mode: AGS 2.0 Score payload validated but not dispatched to external LMS',
+                        payload
+                    });
+                    readyCount++;
+                } else {
+                    scores.push({
+                        studentId: record.studentId,
+                        lmsStudentId: record.lmsStudentId,
+                        studentName: record.studentName,
+                        email: record.email,
+                        scoreGiven: null,
+                        scoreMaximum: record.maxGrade,
+                        status: 'SKIPPED',
+                        reason: record.validationMessage || 'Student grade not finalized or unreleased'
+                    });
+                    skippedScores++;
+                }
             } else if (record.status === 'MAPPED' && record.grade !== null) {
-                const payload: LtiScorePayload = {
-                    userId: record.lmsStudentId,
-                    scoreGiven: record.grade,
-                    scoreMaximum: record.maxGrade,
-                    comment: defaultComment,
-                    timestamp: new Date().toISOString(),
-                    activityProgress: 'Completed',
-                    gradingProgress: 'FullyGraded'
-                };
+                if (!record.ltiSub) {
+                    // Mode A: AGS userId must be the platform's LTI sub. If input identifier did not resolve to a stored sub, skip record
+                    scores.push({
+                        studentId: record.studentId,
+                        lmsStudentId: record.lmsStudentId,
+                        studentName: record.studentName,
+                        email: record.email,
+                        scoreGiven: record.grade,
+                        scoreMaximum: record.maxGrade,
+                        status: 'SKIPPED',
+                        reason: 'LTI platform sub claim is not resolved. AGS Mode A score submission requires a mapped LTI platform sub identifier.'
+                    });
+                    skippedScores++;
+                } else {
+                    const payload: LtiScorePayload = {
+                        userId: record.ltiSub,
+                        scoreGiven: record.grade,
+                        scoreMaximum: record.maxGrade,
+                        comment: defaultComment,
+                        timestamp: new Date().toISOString(),
+                        activityProgress: 'Completed',
+                        gradingProgress: 'FullyGraded'
+                    };
 
-                scores.push({
-                    studentId: record.studentId,
-                    lmsStudentId: record.lmsStudentId,
-                    studentName: record.studentName,
-                    email: record.email,
-                    scoreGiven: record.grade,
-                    scoreMaximum: record.maxGrade,
-                    status: 'NOT_SENT',
-                    reason: 'Safe stub mode: AGS 2.0 Score payload validated but not dispatched to external LMS',
-                    payload
-                });
-                readyCount++;
+                    scores.push({
+                        studentId: record.studentId,
+                        lmsStudentId: record.lmsStudentId,
+                        studentName: record.studentName,
+                        email: record.email,
+                        scoreGiven: record.grade,
+                        scoreMaximum: record.maxGrade,
+                        status: 'NOT_SENT',
+                        reason: 'Safe stub mode: AGS 2.0 Score payload validated but not dispatched to external LMS',
+                        payload
+                    });
+                    readyCount++;
+                }
             } else if (record.status === 'UNMAPPED') {
                 scores.push({
                     studentId: record.studentId,
@@ -202,13 +253,15 @@ export class LtiGradePassbackService {
         }
 
         const totalProcessed = scores.length;
-        let overallStatus: LtiGradePassbackExecutionResult['status'] = 'STUB_COMPLETED';
+        let overallStatus: LtiGradePassbackExecutionResult['status'] = 'NOT_SENT';
         if (options.dryRun) {
             overallStatus = 'DRY_RUN';
-        } else if (readyCount === 0 && totalProcessed > 0) {
-            overallStatus = isModeB ? 'STUB_COMPLETED' : 'FAILED';
-        } else if (failedScores > 0 || skippedScores > 0) {
+        } else if (readyCount === 0 && totalProcessed > 0 && failedScores === totalProcessed) {
+            overallStatus = 'FAILED';
+        } else if (failedScores > 0) {
             overallStatus = 'PARTIAL_SUCCESS';
+        } else {
+            overallStatus = 'NOT_SENT';
         }
 
         if (!options.dryRun && actingUserId) {
@@ -223,6 +276,8 @@ export class LtiGradePassbackService {
                         examId: exam._id.toString(),
                         courseCode: mappingResult.courseCode,
                         lineItemUrl: options.lineItemUrl,
+                        mode: isModeB ? 'MODE_B' : 'MODE_A',
+                        status: overallStatus,
                         totalProcessed,
                         notSentScores: readyCount,
                         skippedScores,
@@ -235,6 +290,12 @@ export class LtiGradePassbackService {
             }
         }
 
+        const message = (isModeB && readyCount === 0)
+            ? `LTI 1.3 AGS 2.0 Mode B passback: All ${totalProcessed} student records were skipped because LTI platform sub claims are unresolved. Passback was not sent. An audit entry was recorded.`
+            : (readyCount === 0 && skippedScores === totalProcessed)
+                ? `LTI 1.3 AGS 2.0 passback: All ${totalProcessed} student records were skipped because LTI platform sub claims are unresolved. Passback was not sent. An audit entry was recorded.`
+                : 'LTI 1.3 grade passback simulated in safe stub mode. Validated payloads generated; no external LMS endpoints were contacted.';
+
         return {
             examId: exam._id.toString(),
             examTitle: exam.title,
@@ -242,13 +303,13 @@ export class LtiGradePassbackService {
             stubMode: true,
             status: overallStatus,
             totalProcessed,
-            successfulScores: readyCount,
+            successfulScores: 0,
             notSentScores: readyCount,
             skippedScores,
             failedScores,
             lineItemUrl: options.lineItemUrl,
             scores,
-            message: 'LTI 1.3 grade passback simulated in safe stub mode. Validated payloads generated; no external LMS endpoints were contacted.'
+            message
         };
     }
 }

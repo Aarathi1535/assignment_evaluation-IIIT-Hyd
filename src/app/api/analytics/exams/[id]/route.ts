@@ -9,6 +9,7 @@ import {
     calculateScoreDistribution
 } from '../../../../../lib/stats';
 import { ExamStatus } from '../../../../../models/Exam';
+import Rubric from '../../../../../models/Rubric';
 import ExamRepository from '../../../../../repositories/ExamRepository';
 import StudentResultService from '../../../../../services/StudentResultService';
 
@@ -60,6 +61,20 @@ export async function GET(
             releasedScores.map(result => result.scriptId)
         );
 
+        let examMaxMarks = exam.totalMarks;
+        if (exam.rubric) {
+            const rubric = await Rubric.findById(exam.rubric).lean();
+            if (rubric && Array.isArray(rubric.questions)) {
+                const rubricTotal = rubric.questions.reduce(
+                    (sum: number, q: { maxMarks?: number }) => sum + (Number(q.maxMarks) || 0),
+                    0
+                );
+                if (rubricTotal > 0) {
+                    examMaxMarks = rubricTotal;
+                }
+            }
+        }
+
         return NextResponse.json(
             {
                 success: true,
@@ -67,7 +82,7 @@ export async function GET(
                     exam: {
                         id: exam._id.toString(),
                         title: exam.title,
-                        maxMarks: exam.totalMarks
+                        maxMarks: examMaxMarks
                     },
                     classStatistics: {
                         count: statistics.count,

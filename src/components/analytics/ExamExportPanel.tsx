@@ -47,10 +47,10 @@ export const EXPORT_FORMATS: FormatOption[] = [
     },
     {
         id: 'canvas',
-        name: 'Canvas LMS Gradebook',
+        name: 'Canvas-style CSV (untested)',
         extension: '.csv',
-        description: 'Formatted for Canvas LMS Gradebook import with standard SIS columns and points possible header.',
-        badge: 'Canvas'
+        description: 'Canvas-style gradebook format with standard SIS columns. Note: format is untested against a live Canvas LMS instance.',
+        badge: 'Untested'
     }
 ];
 

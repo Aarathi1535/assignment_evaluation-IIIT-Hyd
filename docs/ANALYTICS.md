@@ -150,7 +150,7 @@ Grade export is available via `GET /api/analytics/exams/[id]/export` and the pro
 | `format=csv` | `.csv` | `text/csv; charset=utf-8` | RFC 4180 compliant CSV of student grades |
 | `format=xlsx` | `.xlsx` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | Native OpenXML Excel spreadsheet |
 | `format=lms` | `.csv` | `text/csv; charset=utf-8` | Standard LMS gradebook mapping CSV |
-| `format=canvas` | `.csv` | `text/csv; charset=utf-8` | Canvas LMS Gradebook upload CSV |
+| `format=canvas` | `.csv` | `text/csv; charset=utf-8` | Canvas-style CSV (untested) |
 
 ### 4.2 Standard Grade Export (CSV / XLSX)
 
@@ -193,7 +193,7 @@ Implemented via [`mapLmsStudentIdsToGrades` in `src/lib/lmsMapping.ts`](src/lib/
 The professor export panel is integrated directly into the exam analytics page:
 
 - **Location**: [`src/components/analytics/ExamExportPanel.tsx`](src/components/analytics/ExamExportPanel.tsx) rendered on `/professor/exams/[id]/analytics`.
-- **Format Selection**: Segmented format radio options (CSV, XLSX, Standard LMS, Canvas LMS).
+- **Format Selection**: Segmented format radio options (CSV, XLSX, Standard LMS, Canvas-style CSV (untested)).
 - **Interactive States**:
   - **Idle**: Format selector and "Download Export" button.
   - **Downloading**: Spinner animation, disabled button, and active progress status.
@@ -227,7 +227,7 @@ When a student submits a regrade request and a professor or TA approves the requ
 ### 7.1 Exam Analytics
 - **Route**: `GET /api/analytics/exams/[id]`
 - **Permission**: `Permission.VIEW_ALL_SUBMISSIONS` (Roles: `PROFESSOR`, `ADMIN`)
-- **Query Scoping**: Exam must be created by the acting user OR belong to a course where the user is the course professor.
+- **Query Scoping**: Exam must be created by the acting user (or acting user must be `ADMIN`).
 - **Success Response (200 OK)**:
   ```json
   {
@@ -271,13 +271,13 @@ When a student submits a regrade request and a professor or TA approves the requ
   - `400 Bad Request`: Invalid exam ID format.
   - `401 Unauthorized`: Unauthenticated session.
   - `403 Forbidden`: User lacks professor/admin role.
-  - `404 Not Found`: Exam does not exist or user is not authorized for this course.
+  - `404 Not Found`: Exam does not exist or user is not the creator of the exam.
   - `409 Conflict`: Exam is not in `PUBLISHED` status.
 
 ### 7.2 Exam Grade Export
 - **Route**: `GET /api/analytics/exams/[id]/export`
 - **Query Parameters**:
-  - `format`: `csv` (default), `xlsx`, `lms`, or `canvas`
+  - `format`: `csv` (default), `xlsx`, `lms`, or `canvas` (untested Canvas-style CSV)
 - **Headers**:
   - Content-Disposition: `attachment; filename="exam-[id]-grades.[ext]"`
   - Cache-Control: `private, no-store`

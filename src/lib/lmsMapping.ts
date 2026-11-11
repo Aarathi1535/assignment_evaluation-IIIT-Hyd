@@ -29,6 +29,7 @@ export interface LmsGradeMappingRecord {
     lmsStudentId: string;
     studentId?: string;
     rollNumber?: string;
+    ltiSub?: string;
     studentName?: string;
     email?: string;
     grade: number | null;
@@ -129,22 +130,25 @@ export async function mapLmsStudentIdsToGrades(
             ? User.find({ _id: { $in: enrolledObjectIds }, isActive: true }).select('_id name email role').lean()
             : [],
         enrolledObjectIds.length > 0
-            ? StudentMapping.find({ exam: exam._id, student: { $in: enrolledObjectIds } }).select('student rollNumber anonymousId').lean()
+            ? StudentMapping.find({ exam: exam._id, student: { $in: enrolledObjectIds } }).select('student rollNumber anonymousId ltiSub').lean()
             : []
     ]);
 
     // Build lookup maps strictly scoped to enrolled students
     const userById = new Map<string, IUser>();
     const userByEmail = new Map<string, IUser>();
-    const mappingByStudentId = new Map<string, { rollNumber?: string | null; anonymousId?: string }>();
+    const mappingByStudentId = new Map<string, { rollNumber?: string | null; anonymousId?: string; ltiSub?: string | null }>();
     const studentIdByRollNumber = new Map<string, string>();
     const studentIdByAnonymousId = new Map<string, string>();
+    const studentIdByLtiSub = new Map<string, string>();
 
     for (const mapping of studentMappings) {
         const sid = mapping.student.toString();
+        const sub = mapping.ltiSub;
         mappingByStudentId.set(sid, {
             rollNumber: mapping.rollNumber,
-            anonymousId: mapping.anonymousId
+            anonymousId: mapping.anonymousId,
+            ltiSub: sub
         });
         if (mapping.rollNumber) {
             const normalized = normalizeRollNumber(mapping.rollNumber);
@@ -154,6 +158,9 @@ export async function mapLmsStudentIdsToGrades(
         }
         if (mapping.anonymousId) {
             studentIdByAnonymousId.set(mapping.anonymousId.trim(), sid);
+        }
+        if (sub && typeof sub === 'string' && sub.trim()) {
+            studentIdByLtiSub.set(sub.trim(), sid);
         }
     }
 
@@ -167,8 +174,14 @@ export async function mapLmsStudentIdsToGrades(
 
     const records: LmsGradeMappingRecord[] = [];
     // Ensure maxGrade uses rubric total as single source of truth consistent with StudentResultService
-    const rubric = await Rubric.findOne({ exam: exam._id });
-    const rubricTotal = rubric?.questions?.reduce((sum, q) => sum + (Number(q.maxMarks) || 0), 0);
+    const rubricRef = exam.rubric;
+    const rubricId = rubricRef && typeof rubricRef === 'object' && '_id' in rubricRef
+        ? (rubricRef as { _id: mongoose.Types.ObjectId })._id
+        : rubricRef;
+    const rubric = (rubricRef && typeof rubricRef === 'object' && 'questions' in rubricRef && Array.isArray((rubricRef as { questions?: unknown[] }).questions))
+        ? (rubricRef as { questions?: Array<{ maxMarks?: number }> })
+        : (rubricId ? await Rubric.findById(rubricId).lean() : await Rubric.findOne({ exam: exam._id }).lean());
+    const rubricTotal = rubric?.questions?.reduce((sum: number, q: { maxMarks?: number }) => sum + (Number(q.maxMarks) || 0), 0);
     const maxGrade = (rubricTotal !== undefined && rubricTotal > 0)
         ? rubricTotal
         : (releasedScores.length > 0 && releasedScores[0].maxMarks > 0)
@@ -227,15 +240,25 @@ export async function mapLmsStudentIdsToGrades(
             }
 
             // Attempt resolution:
-            // 1. By internal studentId (if valid ObjectId and enrolled)
+            // 1. By LTI platform sub (if student was mapped to an LTI platform sub)
             let matchedUser: IUser | undefined;
-            if (input.studentId && mongoose.Types.ObjectId.isValid(input.studentId) && enrolledStudentIds.has(input.studentId)) {
-                matchedUser = userById.get(input.studentId);
-            } else if (mongoose.Types.ObjectId.isValid(trimmedLmsId) && enrolledStudentIds.has(trimmedLmsId)) {
-                matchedUser = userById.get(trimmedLmsId);
+            if (studentIdByLtiSub.has(trimmedLmsId)) {
+                const sid = studentIdByLtiSub.get(trimmedLmsId)!;
+                if (enrolledStudentIds.has(sid)) {
+                    matchedUser = userById.get(sid);
+                }
             }
 
-            // 2. By rollNumber
+            // 2. By internal studentId (if valid ObjectId and enrolled)
+            if (!matchedUser) {
+                if (input.studentId && mongoose.Types.ObjectId.isValid(input.studentId) && enrolledStudentIds.has(input.studentId)) {
+                    matchedUser = userById.get(input.studentId);
+                } else if (mongoose.Types.ObjectId.isValid(trimmedLmsId) && enrolledStudentIds.has(trimmedLmsId)) {
+                    matchedUser = userById.get(trimmedLmsId);
+                }
+            }
+
+            // 3. By rollNumber
             if (!matchedUser) {
                 const rollToLookup = input.rollNumber || trimmedLmsId;
                 const normalized = normalizeRollNumber(rollToLookup);
@@ -247,7 +270,7 @@ export async function mapLmsStudentIdsToGrades(
                 }
             }
 
-            // 3. By email
+            // 4. By email
             if (!matchedUser) {
                 const emailToLookup = (input.email || trimmedLmsId).toLowerCase().trim();
                 const u = userByEmail.get(emailToLookup);
@@ -256,7 +279,7 @@ export async function mapLmsStudentIdsToGrades(
                 }
             }
 
-            // 4. By anonymousId
+            // 5. By anonymousId
             if (!matchedUser) {
                 const sid = studentIdByAnonymousId.get(trimmedLmsId);
                 if (sid && enrolledStudentIds.has(sid)) {
@@ -351,6 +374,7 @@ export async function mapLmsStudentIdsToGrades(
                 lmsStudentId: rawLmsId,
                 studentId: sid,
                 rollNumber: mapping?.rollNumber || undefined,
+                ltiSub: mapping?.ltiSub || (studentIdByLtiSub.has(rawLmsId) ? rawLmsId : undefined),
                 studentName: item.user?.name,
                 email: item.user?.email,
                 grade: score,
@@ -371,6 +395,7 @@ export async function mapLmsStudentIdsToGrades(
                     lmsStudentId,
                     studentId: sid,
                     rollNumber: mapping?.rollNumber || undefined,
+                    ltiSub: mapping?.ltiSub || undefined,
                     studentName: user.name,
                     email: user.email,
                     grade: null,
@@ -383,6 +408,7 @@ export async function mapLmsStudentIdsToGrades(
                     lmsStudentId,
                     studentId: sid,
                     rollNumber: mapping?.rollNumber || undefined,
+                    ltiSub: mapping?.ltiSub || undefined,
                     studentName: user.name,
                     email: user.email,
                     grade: score,
@@ -395,6 +421,7 @@ export async function mapLmsStudentIdsToGrades(
                     lmsStudentId,
                     studentId: sid,
                     rollNumber: mapping?.rollNumber || undefined,
+                    ltiSub: mapping?.ltiSub || undefined,
                     studentName: user.name,
                     email: user.email,
                     grade: score,
@@ -438,10 +465,12 @@ export function buildLmsCsv(
     format: 'canvas' | 'standard' = 'standard'
 ): string {
     if (format === 'canvas') {
-        // Documented Canvas LMS Gradebook Format
+        // Canvas-style CSV format (untested)
         // Columns: Student, ID, SIS User ID, SIS Login ID, Section, <Assignment Name> (<Points>)
         // Row 2:     Points Possible,,,,,30
-        // Canvas uses 'ID' for its internal numeric ID; leaving it blank allows matching on SIS User ID or SIS Login ID.
+        // Canvas uses 'ID' for its internal numeric user ID; IIIT numeric roll numbers must NOT be placed into 'ID'.
+        // Leaving 'ID' blank prevents Canvas from mis-matching against its internal user IDs and allows matching
+        // on SIS User ID (roll number) or SIS Login ID (email).
         // Any additional trailing column like 'Status' would be parsed by Canvas as a new assignment, so omit it.
         const header = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Section', `${result.examTitle} (${result.totalMarks})`];
         const pointsRow = ['    Points Possible', '', '', '', '', result.totalMarks];
@@ -449,8 +478,8 @@ export function buildLmsCsv(
         const rows: (string | number)[][] = result.records.map(r => {
             const name = r.studentName || '';
             const trimmedLmsId = (r.lmsStudentId || '').trim();
-            const canvasId = /^\d+$/.test(trimmedLmsId) ? trimmedLmsId : '';
-            const sisUserId = r.rollNumber || (!/^\d+$/.test(trimmedLmsId) ? trimmedLmsId : '');
+            const canvasId = ''; // Canvas internal ID left blank to avoid collision with numeric roll numbers
+            const sisUserId = r.rollNumber || trimmedLmsId;
             const sisLoginId = r.email || '';
             const gradeVal = r.grade !== null ? r.grade : '';
 

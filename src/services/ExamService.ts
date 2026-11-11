@@ -246,6 +246,11 @@ class ExamService {
             }
         }
 
+        // Prevent modifying totalMarks on already published exams
+        if (examBefore.status === ExamStatus.PUBLISHED && data.totalMarks !== undefined && data.totalMarks !== examBefore.totalMarks) {
+            throw new HttpError('Cannot update totalMarks on a published exam', 400);
+        }
+
         // Validate gradingDeadline rules (freeze rule on grading commencement and chronology against examDate)
         if (data.gradingDeadline !== undefined) {
             const { AllocationService } = await import('./AllocationService');
