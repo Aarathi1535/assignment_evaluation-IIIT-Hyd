@@ -161,7 +161,7 @@ export class CoverSheetService {
 
         const writer = new zxing.QRCodeWriter();
         const hints = new Map<zxing.EncodeHintType, unknown>();
-        hints.set(zxing.EncodeHintType.MARGIN, 2);
+        hints.set(zxing.EncodeHintType.MARGIN, 4);
 
         for (const student of students) {
             // A4 page dimensions in points: 595.28 x 841.89
