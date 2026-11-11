@@ -147,7 +147,7 @@ In accordance with mentor review directives (Point 3), the platform architecture
    - **Independent Product Configuration:** Shared login must be independently configurable per product via environment flags (`CLASSROOM_ENABLE_SHARED_AUTH=false`, `PERSONALIZED_ENABLE_SHARED_AUTH=false`). When disabled (default in Phase 1), products accept only their native credentials.
 3. **Strict Account Isolation & Explicit Federation Link Table:**
    - Products must **never automatically link, merge, or grant cross-access** simply because email addresses match.
-   - Linking a local product account with a platform identity requires an explicit entry in a dedicated federation mapping table (`UserFederationLink`: `{ platformUserId, localUserId, product, linkedAt, linkedBy }`), created only upon explicit user confirmation or verified institutional administrative sync.
+   - Linking a local product account with a platform identity requires an explicit entry in a dedicated federation mapping table (`UserFederationLink`: `{ platformUserId, localUserId, product, linkedAt, linkedBy }`), created only by a deliberate action while the user is actively signed in to both accounts, never by matching emails.
 
 ### 4.2 Student Guest-Join & Session Security
 In live classroom environments, students enter sessions via mobile devices scanning QR codes or entering 6-digit access codes:
