@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { Permission, UserRole } from '../../../../../../../constants/permissions';
-import { requirePermission } from '../../../../../../../lib/apiAuth';
+import { canManageExam, requirePermission } from '../../../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../../../lib/db';
 import { HttpError } from '../../../../../../../lib/errors';
 import {
@@ -39,17 +39,33 @@ export async function GET(
         );
     }
 
-    return NextResponse.json(
-        {
-            success: true,
-            stubMode: true,
-            message: 'LTI 1.3 Assignment and Grade Services (AGS 2.0) passback endpoint is in safe stub mode.',
-            examId: id,
-            supportedMethods: ['GET', 'POST'],
-            documentation: 'docs/LTI_1_3_GRADE_PASSBACK.md'
-        },
-        { status: 200, headers: SECURITY_HEADERS }
-    );
+    try {
+        await connectDB();
+        const manage = await canManageExam(auth.user, id);
+        if (!manage.canManage || !manage.exam) {
+            return NextResponse.json(
+                { success: false, message: manage.errorMessage || 'Exam not found', data: null },
+                { status: manage.errorStatus === 200 ? 404 : manage.errorStatus, headers: SECURITY_HEADERS }
+            );
+        }
+
+        return NextResponse.json(
+            {
+                success: true,
+                stubMode: true,
+                message: 'LTI 1.3 Assignment and Grade Services (AGS 2.0) passback endpoint is in safe stub mode.',
+                examId: id,
+                supportedMethods: ['GET', 'POST'],
+                documentation: 'docs/LTI_1_3_GRADE_PASSBACK.md'
+            },
+            { status: 200, headers: SECURITY_HEADERS }
+        );
+    } catch {
+        return NextResponse.json(
+            { success: false, message: 'Could not process LTI request', data: null },
+            { status: 500, headers: SECURITY_HEADERS }
+        );
+    }
 }
 
 export async function POST(

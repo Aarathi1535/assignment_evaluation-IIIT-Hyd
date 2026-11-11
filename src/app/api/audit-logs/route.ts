@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { Permission, UserRole } from '../../../constants/permissions';
-import { requirePermission } from '../../../lib/apiAuth';
+import { canManageExam, requirePermission } from '../../../lib/apiAuth';
 import { buildExamAuditLogFilter } from '../../../lib/auditQueries';
 import { connectDB } from '../../../lib/db';
 import AuditLog from '../../../models/AuditLog';
-import Exam from '../../../models/Exam';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,17 +76,12 @@ export async function GET(request: NextRequest) {
     try {
         await connectDB();
 
-        let examObjectId: mongoose.Types.ObjectId | undefined;
         if (examId) {
-            examObjectId = new mongoose.Types.ObjectId(examId);
-            const examFilter = auth.user.role === UserRole.ADMIN
-                ? { _id: examObjectId }
-                : { _id: examObjectId, createdBy: auth.user.id };
-            const examExists = await Exam.exists(examFilter);
-            if (!examExists) {
+            const manage = await canManageExam(auth.user, examId);
+            if (!manage.canManage || !manage.exam) {
                 return NextResponse.json(
-                    { success: false, message: 'Exam not found', data: null },
-                    { status: 404, headers: { 'Cache-Control': 'private, no-store' } }
+                    { success: false, message: manage.errorMessage || 'Exam not found', data: null },
+                    { status: manage.errorStatus === 200 ? 404 : manage.errorStatus, headers: { 'Cache-Control': 'private, no-store' } }
                 );
             }
         }

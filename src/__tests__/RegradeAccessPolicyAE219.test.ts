@@ -25,12 +25,24 @@ describe('AE-219 regrade access policy', () => {
     let assignReviewer: typeof import('../app/api/professor/regrade-requests/[id]/assignment/route').PATCH;
     let patchDecision: typeof import('../app/api/professor/regrade-requests/[id]/route').PATCH;
     let getScriptPages: typeof import('../app/api/scripts/[id]/pages/route').GET;
+    let getAnalytics: typeof import('../app/api/analytics/exams/[id]/route').GET;
+    let getGraders: typeof import('../app/api/analytics/exams/[id]/graders/route').GET;
+    let getExport: typeof import('../app/api/analytics/exams/[id]/export/route').GET;
+    let getLmsExport: typeof import('../app/api/analytics/exams/[id]/export/lms/route').GET;
+    let getLtiPassback: typeof import('../app/api/analytics/exams/[id]/lti/passback/route').GET;
+    let getAuditExport: typeof import('../app/api/audit-logs/export/route').GET;
 
     beforeAll(async () => {
         getRequests = (await import('../app/api/professor/regrade-requests/route')).GET;
         assignReviewer = (await import('../app/api/professor/regrade-requests/[id]/assignment/route')).PATCH;
         patchDecision = (await import('../app/api/professor/regrade-requests/[id]/route')).PATCH;
         getScriptPages = (await import('../app/api/scripts/[id]/pages/route')).GET;
+        getAnalytics = (await import('../app/api/analytics/exams/[id]/route')).GET;
+        getGraders = (await import('../app/api/analytics/exams/[id]/graders/route')).GET;
+        getExport = (await import('../app/api/analytics/exams/[id]/export/route')).GET;
+        getLmsExport = (await import('../app/api/analytics/exams/[id]/export/lms/route')).GET;
+        getLtiPassback = (await import('../app/api/analytics/exams/[id]/lti/passback/route')).GET;
+        getAuditExport = (await import('../app/api/audit-logs/export/route')).GET;
         await RegradeRequest.init();
     });
 
@@ -392,5 +404,70 @@ describe('AE-219 regrade access policy', () => {
         expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
         expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
         expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+    });
+
+    it('allows course professor and admin to access analytics, export, LMS, LTI, and audit routes; denies former creator', async () => {
+        const fixture = await createFixture();
+        // Set exam to PUBLISHED so published-only checks pass
+        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { status: ExamStatus.PUBLISHED } });
+
+        const examIdStr = fixture.exam._id.toString();
+        const makeContext = (id: string) => ({ params: Promise.resolve({ id }) });
+
+        // Course professor access:
+        mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
+        const profAnalytics = await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr));
+        expect([200, 409]).toContain(profAnalytics.status); // 200 or 409 if no released scores
+
+        const profGraders = await getGraders(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/graders`), makeContext(examIdStr));
+        expect([200, 409]).toContain(profGraders.status);
+
+        const profExport = await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr));
+        expect(profExport.status).toBe(200);
+
+        const profLms = await getLmsExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export/lms`), makeContext(examIdStr));
+        expect(profLms.status).toBe(200);
+
+        const profLti = await getLtiPassback(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/lti/passback`), makeContext(examIdStr));
+        expect(profLti.status).toBe(200);
+
+        const profAudit = await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`));
+        expect(profAudit.status).toBe(200);
+
+        // Former creator (no longer course professor) is denied:
+        mockSessionUser = { id: fixture.examCreator._id.toString(), role: UserRole.PROFESSOR };
+        expect((await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr))).status).toBe(403);
+        expect((await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr))).status).toBe(403);
+        expect((await getLmsExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export/lms`), makeContext(examIdStr))).status).toBe(403);
+        expect((await getLtiPassback(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/lti/passback`), makeContext(examIdStr))).status).toBe(403);
+        expect((await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`))).status).toBe(403);
+
+        // Admin is allowed:
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+        expect((await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr))).status).toBe(200);
+        expect((await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`))).status).toBe(200);
+    });
+
+    it('uniformly returns 404 for analytics, export, LMS, LTI, and audit routes when course or exam is inactive', async () => {
+        const fixture = await createFixture();
+        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { status: ExamStatus.PUBLISHED } });
+        const examIdStr = fixture.exam._id.toString();
+        const makeContext = (id: string) => ({ params: Promise.resolve({ id }) });
+
+        // Deactivate course
+        await Course.updateOne({ _id: fixture.course._id }, { $set: { isActive: false } });
+
+        mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
+        expect((await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr))).status).toBe(404);
+        expect((await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr))).status).toBe(404);
+        expect((await getLmsExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export/lms`), makeContext(examIdStr))).status).toBe(404);
+        expect((await getLtiPassback(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/lti/passback`), makeContext(examIdStr))).status).toBe(404);
+        expect((await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`))).status).toBe(404);
+
+        // Admin also gets 404 when course is inactive
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+        expect((await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr))).status).toBe(404);
+        expect((await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr))).status).toBe(404);
+        expect((await getAuditExport(new NextRequest(`http://localhost:3000/api/audit-logs/export?examId=${examIdStr}`))).status).toBe(404);
     });
 });
