@@ -443,4 +443,36 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
         const auditRows = await AuditLog.find({ entityId: exam._id, action: 'EXAM_PUBLISHED' });
         expect(auditRows.length).toBe(1);
     });
+
+    it('11. Reject mixed PUBLISHED PUT requests: requests containing status: PUBLISHED together with other fields return 400 without updating', async () => {
+        mockSessionUser = { id: prof._id.toString(), role: UserRole.PROFESSOR };
+
+        const testPendingExam = await Exam.create({
+            title: 'Unpublished Exam Title',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-10-15'),
+            totalMarks: 50,
+            status: ExamStatus.REVIEW_PENDING,
+            numberOfQuestions: 1,
+            isActive: true,
+        });
+
+        const examPUT = (await import('../app/api/exams/[id]/route')).PUT;
+        const reqMixed = new NextRequest(`http://localhost:3000/api/exams/${testPendingExam._id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: ExamStatus.PUBLISHED, title: 'Attempted Renamed Title' }),
+            headers: { 'Content-Type': 'application/json' },
+        });
+
+        const resMixed = await examPUT(reqMixed, { params: Promise.resolve({ id: testPendingExam._id.toString() }) });
+        expect(resMixed.status).toBe(400);
+        const bodyMixed = await resMixed.json();
+        expect(bodyMixed.message).toContain('Cannot update status to PUBLISHED alongside other fields');
+
+        // Verify exam title was NOT changed and status was NOT updated to PUBLISHED
+        const unupdatedExam = await Exam.findById(testPendingExam._id);
+        expect(unupdatedExam!.title).toBe('Unpublished Exam Title');
+        expect(unupdatedExam!.status).toBe(ExamStatus.REVIEW_PENDING);
+    });
 });

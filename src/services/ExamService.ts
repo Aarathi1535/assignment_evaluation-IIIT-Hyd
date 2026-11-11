@@ -229,6 +229,19 @@ class ExamService {
         // Prevent ownership changes through update APIs
         delete data.createdBy;
 
+        // Reject requests containing status: 'PUBLISHED' together with other fields with HTTP 400 before updating anything
+        const isStatusPublished = data.status !== undefined && (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED');
+        if (isStatusPublished) {
+            const otherFields = { ...data };
+            delete otherFields.status;
+            if (Object.keys(otherFields).length > 0) {
+                throw new HttpError(
+                    'Cannot update status to PUBLISHED alongside other fields; use POST /api/exams/[id]/publish or update other fields separately',
+                    400
+                );
+            }
+        }
+
         // Validate status transition
         if (data.status !== undefined && data.status !== examBefore.status) {
             const { isValidTransition } = await import('../validations/examValidation');
@@ -243,11 +256,6 @@ class ExamService {
             }
 
             if (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED') {
-                const otherFields = { ...data };
-                delete otherFields.status;
-                if (Object.keys(otherFields).length > 0) {
-                    await ExamRepository.updateExam(id, otherFields, actingUserId, actingUserRole);
-                }
                 return await this.publishExam(id, actingUserId, actingUserRole, context);
             }
         }
