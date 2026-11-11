@@ -129,18 +129,19 @@ export async function GET(request: NextRequest) {
             const exam = examById.get(item.exam.toString());
             const grade = grades.find(candidate =>
                 candidate.answerScript.toString() === item.answerScript.toString() &&
-                candidate.question === item.questionNumber
+                (candidate.question === item.questionNumber || candidate.question === null || candidate.question === undefined)
             );
             const rubric = grade
                 ? rubrics.find(candidate => candidate._id.toString() === grade.rubric.toString())
                 : rubricByExam.get(item.exam.toString());
-            const question = rubric?.questions.find(candidate => candidate.questionNumber === item.questionNumber);
+            const question = rubric?.questions.find(candidate => candidate.questionNumber === item.questionNumber)
+                || (rubric?.questions.length === 1 ? rubric.questions[0] : undefined);
             const student = studentById.get(item.student.toString());
             const course = exam ? courseById.get(exam.course.toString()) : undefined;
             const isExamOwner = auth.user.role === UserRole.ADMIN ||
                 (auth.user.role === UserRole.PROFESSOR && exam?.createdBy.toString() === auth.user.id);
             const assignedTo = item.assignedTo ? candidateById.get(item.assignedTo.toString()) : undefined;
-            const reviewers = course
+            const reviewers = (course && isExamOwner)
                 ? [...new Set([
                     course.professor.toString(),
                     ...course.teachingAssistants.map(ta => ta.toString())

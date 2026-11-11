@@ -26,9 +26,7 @@ export interface AuditTrailIntegrityResult {
 
 export class AuditIntegrityService {
     async verifyAuditTrail(): Promise<AuditTrailIntegrityResult> {
-        const integrityState = await AuditLogIntegrityState.findById('global')
-            .select('lastSequence +integritySeal +integrityKeyId')
-            .lean();
+        const integrityState = await AuditLogIntegrityState.findById('global').lean();
         const diagnostics: AuditTrailIntegrityResult['diagnostics'] = [];
         let omittedDiagnostics = 0;
         const addDiagnostic = (diagnostic: AuditTrailIntegrityResult['diagnostics'][number]) => {
@@ -45,11 +43,13 @@ export class AuditIntegrityService {
         let invalidSeals = 0;
         let missingSequences = 0;
         let highestSequence = 0;
-        let expectedSequence = 1;
+        const cutoverSequence = integrityState?.cutoverSequence ?? 1;
+        let expectedSequence = cutoverSequence;
+        let lastSealedRecordHmac: string | undefined = undefined;
 
         const cursor = AuditLog.find({})
-            .select('+integritySeal +integrityKeyId')
-            .sort({ sequence: 1, _id: 1 })
+            .select('+previousSeal +integritySeal +integrityKeyId')
+            .sort({ sequence: 1, createdAt: 1, _id: 1 })
             .lean()
             .cursor();
 
@@ -58,12 +58,28 @@ export class AuditIntegrityService {
             const integrityRecord: AuditIntegrityRecord = record;
             const sequence = integrityRecord.sequence;
 
-            if (!Number.isSafeInteger(sequence) || !sequence || sequence < 1) {
-                unsealedRecords += 1;
-                addDiagnostic({ code: 'UNSEALED_RECORD' });
+            // Legacy pre-cutover records or records with no sequence
+            if (!Number.isSafeInteger(sequence) || !sequence || sequence < cutoverSequence) {
+                // If cutover is active and an unsealed record was created after cutover date, it is an invalid injection
+                if (integrityState?.cutoverDate && integrityRecord.createdAt &&
+                    new Date(integrityRecord.createdAt) > new Date(integrityState.cutoverDate)) {
+                    invalidSeals += 1;
+                    addDiagnostic({ code: 'UNSEALED_RECORD_AFTER_CUTOVER' });
+                } else {
+                    unsealedRecords += 1;
+                    addDiagnostic({ code: 'UNSEALED_RECORD' });
+                }
                 continue;
             }
 
+            // Post-cutover records must have an integrity seal and key ID
+            if (!integrityRecord.integritySeal || !integrityRecord.integrityKeyId) {
+                invalidSeals += 1;
+                addDiagnostic({ code: 'UNSEALED_RECORD_AFTER_CUTOVER', sequence });
+                continue;
+            }
+
+            // Sequence order & gap check
             if (sequence > expectedSequence) {
                 const gap = sequence - expectedSequence;
                 missingSequences += gap;
@@ -72,14 +88,18 @@ export class AuditIntegrityService {
                 invalidSeals += 1;
                 addDiagnostic({ code: 'SEQUENCE_ORDER_INVALID', sequence });
             }
+
+            // Chaining check: previousSeal must match the preceding record's seal
+            if (lastSealedRecordHmac && integrityRecord.previousSeal &&
+                integrityRecord.previousSeal !== lastSealedRecordHmac) {
+                invalidSeals += 1;
+                addDiagnostic({ code: 'CHAIN_BROKEN', sequence });
+            }
+
             expectedSequence = Math.max(expectedSequence, sequence + 1);
             highestSequence = Math.max(highestSequence, sequence);
+            lastSealedRecordHmac = integrityRecord.integritySeal;
 
-            if (!integrityRecord.integritySeal || !integrityRecord.integrityKeyId) {
-                unsealedRecords += 1;
-                addDiagnostic({ code: 'UNSEALED_RECORD', sequence });
-                continue;
-            }
             if (verifyAuditIntegritySeal(integrityRecord).valid) {
                 sealedRecords += 1;
             } else {
@@ -108,13 +128,19 @@ export class AuditIntegrityService {
         } else if (highestSequence > recordedHighWater) {
             invalidSeals += 1;
             addDiagnostic({ code: 'INTEGRITY_STATE_BEHIND', sequence: recordedHighWater });
+        } else if (integrityState?.lastRecordHmac && lastSealedRecordHmac &&
+            integrityState.lastRecordHmac !== lastSealedRecordHmac) {
+            invalidSeals += 1;
+            addDiagnostic({ code: 'STATE_SEAL_RECORD_MISMATCH', sequence: highestSequence });
         }
 
-        const status = invalidSeals > 0 || missingSequences > 0
-            ? 'MISMATCH'
-            : unsealedRecords > 0
-                ? 'UNSEALED'
-                : 'INTACT';
+        let status: AuditTrailIntegrityStatus = 'INTACT';
+        if (invalidSeals > 0 || missingSequences > 0) {
+            status = 'MISMATCH';
+        } else if (sealedRecords === 0 && unsealedRecords > 0) {
+            status = 'UNSEALED';
+        }
+
         return {
             status,
             valid: status === 'INTACT',

@@ -3,9 +3,10 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import { UserRole } from '../../../../../constants/permissions';
 import { requireAuth } from '../../../../../lib/apiAuth';
-import { connectDB } from '../../../../../lib/db';
+import { connectDB, isTransactionCapable } from '../../../../../lib/db';
 import { writeAuditLog } from '../../../../../lib/audit';
 import Exam from '../../../../../models/Exam';
+import Course from '../../../../../models/Course';
 import Grade from '../../../../../models/Grade';
 import RegradeRequest, { RegradeDecisionOutcome, RegradeStatus } from '../../../../../models/RegradeRequest';
 import Rubric from '../../../../../models/Rubric';
@@ -108,23 +109,36 @@ export async function PATCH(
             );
         }
 
+        const exam = await Exam.findById(regrade.exam).select('_id createdBy totalMarks rubric title course isActive');
+        if (!exam || !exam.isActive) {
+            return NextResponse.json(
+                { success: false, message: 'Regrade request not found', data: null },
+                { status: 404 }
+            );
+        }
+
+        const isExamOwner = auth.user.role === UserRole.ADMIN ||
+            (auth.user.role === UserRole.PROFESSOR && exam.createdBy.toString() === auth.user.id);
+
+        const course = await Course.findById(exam.course).select('professor teachingAssistants isActive');
+        if (!course || !course.isActive) {
+            return NextResponse.json(
+                { success: false, message: 'Regrade request not found', data: null },
+                { status: 404 }
+            );
+        }
+
+        const isCourseStaff = course.professor.toString() === auth.user.id ||
+            course.teachingAssistants.some(ta => ta.toString() === auth.user.id);
+
         const isAssignedReviewer = regrade.assignedTo?.toString() === auth.user.id;
-        if (auth.user.role === UserRole.TA && !isAssignedReviewer) {
+        if (!isExamOwner && (!isCourseStaff || !isAssignedReviewer)) {
             return NextResponse.json(
                 { success: false, message: 'Regrade request not found', data: null },
                 { status: 404 }
             );
         }
-        const exam = auth.user.role === UserRole.ADMIN || isAssignedReviewer
-            ? await Exam.findById(regrade.exam).select('_id createdBy course totalMarks rubric title')
-            : await Exam.findOne({ _id: regrade.exam, createdBy: auth.user.id })
-                .select('_id createdBy course totalMarks rubric title');
-        if (!exam) {
-            return NextResponse.json(
-                { success: false, message: 'Regrade request not found', data: null },
-                { status: 404 }
-            );
-        }
+
         if (regrade.status === RegradeStatus.RESOLVED || regrade.decision) {
             return NextResponse.json(
                 { success: false, message: 'This regrade request has already been resolved', data: null },
@@ -134,17 +148,32 @@ export async function PATCH(
 
         const grade = await Grade.findOne({
             answerScript: regrade.answerScript,
-            question: regrade.questionNumber,
+            $or: [
+                { question: regrade.questionNumber },
+                { question: null },
+                { question: { $exists: false } }
+            ],
             isFinal: true
-        }).select('totalScore rubric marksAwarded');
+        }).select('totalScore rubric marksAwarded gradedBy');
         if (!grade) {
             return NextResponse.json(
                 { success: false, message: 'The finalized grade for this question was not found', data: null },
                 { status: 409 }
             );
         }
+
+        // Requirement 3: Block deciding by original grader unless it's the professor / exam owner
+        const isOriginalGrader = Boolean(grade.gradedBy && grade.gradedBy.toString() === auth.user.id);
+        if (isOriginalGrader && !isExamOwner) {
+            return NextResponse.json(
+                { success: false, message: 'Reviewers cannot decide regrade requests for questions they graded', data: null },
+                { status: 403 }
+            );
+        }
+
         const rubric = await Rubric.findOne({ _id: grade.rubric, exam: exam._id }).select('scoreStep questions');
-        const question = rubric?.questions.find(item => item.questionNumber === regrade.questionNumber);
+        const question = rubric?.questions.find(item => item.questionNumber === regrade.questionNumber)
+            || (rubric?.questions.length === 1 ? rubric.questions[0] : undefined);
         if (!rubric || !question || !Number.isFinite(rubric.scoreStep) || rubric.scoreStep <= 0) {
             return NextResponse.json(
                 { success: false, message: 'The question rubric is unavailable', data: null },
@@ -185,69 +214,80 @@ export async function PATCH(
             );
         }
 
-        const updated = await RegradeRequest.findOneAndUpdate(
-            {
+        // Setup transaction if capable
+        const transactionCapable = isTransactionCapable();
+        const session = transactionCapable ? await mongoose.startSession() : null;
+        if (session) {
+            session.startTransaction();
+        }
+
+        try {
+            const updateFilter: Record<string, unknown> = {
                 _id: regrade._id,
                 status: { $in: [RegradeStatus.OPEN, RegradeStatus.REVIEWING] },
                 decision: { $exists: false }
-            },
-            {
-                $set: {
-                    status: RegradeStatus.RESOLVED,
-                    isOpen: false,
-                    handledBy: new mongoose.Types.ObjectId(auth.user.id),
-                    resolutionNotes: reason,
-                    decision: {
-                        outcome,
-                        reason,
-                        reviewer: new mongoose.Types.ObjectId(auth.user.id),
-                        decidedAt,
-                        originalScore: grade.totalScore,
-                        ...(outcome === RegradeDecisionOutcome.APPROVED
-                            ? { revisedScore: approvedScore, gradeAppliedAt: decidedAt }
-                            : {})
-                    }
-                }
-            },
-            { returnDocument: 'after', runValidators: true }
-        );
-        if (!updated) {
-            return NextResponse.json(
-                { success: false, message: 'This regrade request has already been resolved', data: null },
-                { status: 409 }
-            );
-        }
+            };
+            if (!isExamOwner) {
+                updateFilter.assignedTo = new mongoose.Types.ObjectId(auth.user.id);
+            }
 
-        let updatedGrade: typeof grade | null = null;
-        if (approvedScore !== undefined && approvedScore !== grade.totalScore) {
-            updatedGrade = await Grade.findOneAndUpdate(
-                { _id: grade._id, isFinal: true, totalScore: grade.totalScore },
-                { $set: { marksAwarded: updatedMarks, totalScore: approvedScore } },
-                { returnDocument: 'after', runValidators: true }
-            );
-            if (!updatedGrade) {
-                await RegradeRequest.updateOne(
-                    { _id: updated._id, status: RegradeStatus.RESOLVED, 'decision.decidedAt': decidedAt },
-                    {
-                        $set: { status: priorStatus, isOpen: true },
-                        $unset: { decision: 1, handledBy: 1, resolutionNotes: 1 }
+            const updated = await RegradeRequest.findOneAndUpdate(
+                updateFilter,
+                {
+                    $set: {
+                        status: RegradeStatus.RESOLVED,
+                        isOpen: false,
+                        handledBy: new mongoose.Types.ObjectId(auth.user.id),
+                        resolutionNotes: reason,
+                        decision: {
+                            outcome,
+                            reason,
+                            reviewer: new mongoose.Types.ObjectId(auth.user.id),
+                            decidedAt,
+                            originalScore: grade.totalScore,
+                            ...(outcome === RegradeDecisionOutcome.APPROVED
+                                ? { revisedScore: approvedScore, gradeAppliedAt: decidedAt }
+                                : {})
+                        }
                     }
-                );
+                },
+                { returnDocument: 'after', runValidators: true, session: session || undefined }
+            );
+            if (!updated) {
+                if (session) await session.abortTransaction();
                 return NextResponse.json(
-                    { success: false, message: 'The grade changed during review; reload and try again', data: null },
+                    { success: false, message: 'This regrade request has already been resolved or reassigned', data: null },
                     { status: 409 }
                 );
             }
-        }
 
-        const audited = await writeAuditLog({
-            user: auth.user.id,
-            action: 'REGRADE_DECIDED',
-            outcome: 'SUCCESS',
-            entityId: regrade._id,
-            entityType: 'RegradeRequest',
-            ipAddress: request.headers.get('x-forwarded-for') || undefined,
-            details: {
+            let updatedGrade: typeof grade | null = null;
+            if (approvedScore !== undefined && approvedScore !== grade.totalScore) {
+                updatedGrade = await Grade.findOneAndUpdate(
+                    { _id: grade._id, isFinal: true, totalScore: grade.totalScore },
+                    { $set: { marksAwarded: updatedMarks, totalScore: approvedScore } },
+                    { returnDocument: 'after', runValidators: true, session: session || undefined }
+                );
+                if (!updatedGrade) {
+                    if (session) {
+                        await session.abortTransaction();
+                    } else {
+                        await RegradeRequest.updateOne(
+                            { _id: updated._id, status: RegradeStatus.RESOLVED, 'decision.decidedAt': decidedAt },
+                            {
+                                $set: { status: priorStatus, isOpen: true },
+                                $unset: { decision: 1, handledBy: 1, resolutionNotes: 1 }
+                            }
+                        );
+                    }
+                    return NextResponse.json(
+                        { success: false, message: 'The grade changed during review; reload and try again', data: null },
+                        { status: 409 }
+                    );
+                }
+            }
+
+            const auditDetails: Record<string, unknown> = {
                 examId: exam._id.toString(),
                 studentId: regrade.student.toString(),
                 questionNumber: regrade.questionNumber,
@@ -259,70 +299,106 @@ export async function PATCH(
                 revisedMarks: outcome === RegradeDecisionOutcome.APPROVED
                     ? updatedMarks.map(mark => ({ criterionName: mark.criterionName, score: mark.score }))
                     : null
+            };
+            if (isOriginalGrader && isExamOwner) {
+                auditDetails.note = 'Original grader is exam professor; self-review permitted for course owner';
             }
-        });
-        if (!audited) {
-            if (updatedGrade) {
-                const gradeRollback = await Grade.updateOne(
-                    { _id: updatedGrade._id, totalScore: approvedScore, updatedAt: updatedGrade.updatedAt },
-                    { $set: { marksAwarded: grade.marksAwarded, totalScore: grade.totalScore } }
-                );
-                if (gradeRollback.modifiedCount !== 1) {
-                    console.error('Failed to roll back unaudited grade change', { requestId: id });
-                }
-            }
-            const rollback = await RegradeRequest.updateOne(
-                {
-                    _id: updated._id,
-                    status: RegradeStatus.RESOLVED,
-                    'decision.reviewer': auth.user.id,
-                    'decision.decidedAt': decidedAt
-                },
-                {
-                    $set: { status: priorStatus, isOpen: true },
-                    $unset: { decision: 1, handledBy: 1, resolutionNotes: 1 }
-                }
-            );
-            if (rollback.modifiedCount !== 1) {
-                console.error('Failed to roll back unaudited regrade decision', { requestId: id });
-            }
-            return NextResponse.json(
-                { success: false, message: 'Could not record the decision audit event', data: null },
-                { status: 500 }
-            );
-        }
 
-        let notificationDelivery: 'SENT' | 'FAILED' = 'SENT';
-        try {
-            const notification = renderNotificationTemplate(NotificationType.REGRADE, {
-                examTitle: exam.title,
-                question: regrade.questionNumber,
-                outcome,
-                score: approvedScore
+            const audited = await writeAuditLog({
+                user: auth.user.id,
+                action: 'REGRADE_DECIDED',
+                outcome: 'SUCCESS',
+                entityId: regrade._id,
+                entityType: 'RegradeRequest',
+                ipAddress: request.headers.get('x-forwarded-for') || undefined,
+                details: auditDetails,
+                session: session || undefined
             });
-            await NotificationService.createNotifications([{
-                recipient: regrade.student,
-                type: notification.type,
-                title: notification.title,
-                message: notification.message,
-                exam: exam._id,
-                answerScript: regrade.answerScript,
-                question: regrade.questionNumber
-            }]);
-        } catch (notificationError) {
-            notificationDelivery = 'FAILED';
-            console.error('Regrade decision saved, but student notification delivery failed:', notificationError);
-        }
 
-        return NextResponse.json({
-            success: true,
-            data: {
-                id: updated._id.toString(),
-                status: updated.status,
-                decision: updated.decision,
-                notificationDelivery
+            if (!audited) {
+                if (session) {
+                    await session.abortTransaction();
+                } else {
+                    if (updatedGrade) {
+                        const gradeRollback = await Grade.updateOne(
+                            { _id: updatedGrade._id, totalScore: approvedScore, updatedAt: updatedGrade.updatedAt },
+                            { $set: { marksAwarded: grade.marksAwarded, totalScore: grade.totalScore } }
+                        );
+                        if (gradeRollback.modifiedCount !== 1) {
+                            console.error('Failed to roll back unaudited grade change', { requestId: id });
+                        }
+                    }
+                    const rollback = await RegradeRequest.updateOne(
+                        {
+                            _id: updated._id,
+                            status: RegradeStatus.RESOLVED,
+                            'decision.reviewer': auth.user.id,
+                            'decision.decidedAt': decidedAt
+                        },
+                        {
+                            $set: { status: priorStatus, isOpen: true },
+                            $unset: { decision: 1, handledBy: 1, resolutionNotes: 1 }
+                        }
+                    );
+                    if (rollback.modifiedCount !== 1) {
+                        console.error('Failed to roll back unaudited regrade decision', { requestId: id });
+                    }
+                }
+                return NextResponse.json(
+                    { success: false, message: 'Could not record the decision audit event', data: null },
+                    { status: 500 }
+                );
             }
-        }, { status: 200, headers: { 'Cache-Control': 'private, no-store' } });
+
+            if (session) {
+                await session.commitTransaction();
+            }
+
+            let notificationDelivery: 'SENT' | 'FAILED' = 'SENT';
+            try {
+                const notification = renderNotificationTemplate(NotificationType.REGRADE, {
+                    examTitle: exam.title,
+                    question: regrade.questionNumber,
+                    outcome,
+                    score: approvedScore
+                });
+                await NotificationService.createNotifications([{
+                    recipient: regrade.student,
+                    type: notification.type,
+                    title: notification.title,
+                    message: notification.message,
+                    exam: exam._id,
+                    answerScript: regrade.answerScript,
+                    question: regrade.questionNumber
+                }]);
+            } catch (notificationError) {
+                notificationDelivery = 'FAILED';
+                console.error('Regrade decision saved, but student notification delivery failed:', notificationError);
+            }
+
+            return NextResponse.json({
+                success: true,
+                data: {
+                    id: updated._id.toString(),
+                    status: updated.status,
+                    decision: updated.decision,
+                    notificationDelivery
+                }
+            }, { status: 200, headers: { 'Cache-Control': 'private, no-store' } });
+        } catch (innerError) {
+            if (session) {
+                try {
+                    await session.abortTransaction();
+                } catch {
+                    // Ignore abort error
+                }
+            }
+            throw innerError;
+        } finally {
+            if (session) {
+                session.endSession();
+            }
+        }
     } catch (error: unknown) {
         console.error('Failed to record regrade decision:', error);
         return NextResponse.json(

@@ -7,6 +7,7 @@ import { writeAuditLog } from '../../../../../../lib/audit';
 import { connectDB } from '../../../../../../lib/db';
 import Course from '../../../../../../models/Course';
 import Exam from '../../../../../../models/Exam';
+import Grade from '../../../../../../models/Grade';
 import RegradeRequest, { RegradeStatus } from '../../../../../../models/RegradeRequest';
 import User, { type IUser } from '../../../../../../models/User';
 
@@ -43,7 +44,7 @@ export async function PATCH(
     try {
         await connectDB();
         const regrade = await RegradeRequest.findById(id).select(
-            '_id exam status assignedTo assignedBy assignedAt'
+            '_id exam answerScript questionNumber status assignedTo assignedBy assignedAt'
         );
         if (!regrade) {
             return NextResponse.json({ success: false, message: 'Regrade request not found', data: null }, { status: 404 });
@@ -69,19 +70,30 @@ export async function PATCH(
         }
 
         let reviewer: IUser | null = null;
+        let isOriginalGrader = false;
+        let isExamProfessor = false;
         if (reviewerId) {
-            const [course, candidate] = await Promise.all([
+            const [course, candidate, grade] = await Promise.all([
                 Course.findById(exam.course).select('professor teachingAssistants'),
                 User.findOne({
                     _id: reviewerId,
                     isActive: true,
                     role: { $in: [UserRole.TA, UserRole.PROFESSOR] }
-                }).select('_id role isActive name email')
+                }).select('_id role isActive name email'),
+                Grade.findOne({
+                    answerScript: regrade.answerScript,
+                    $or: [
+                        { question: regrade.questionNumber },
+                        { question: null },
+                        { question: { $exists: false } }
+                    ],
+                    isFinal: true
+                }).select('gradedBy')
             ]);
             const isCourseTa = Boolean(course?.teachingAssistants.some(ta => ta.equals(reviewerId)));
-            const isExamProfessor = candidate?.role === UserRole.PROFESSOR &&
+            isExamProfessor = Boolean(candidate?.role === UserRole.PROFESSOR &&
                 candidate._id.equals(exam.createdBy) &&
-                Boolean(course?.professor.equals(exam.createdBy));
+                course?.professor.equals(exam.createdBy));
             const isAuthorizedTa = candidate?.role === UserRole.TA && isCourseTa;
             if (!candidate || (!isAuthorizedTa && !isExamProfessor)) {
                 return NextResponse.json(
@@ -89,6 +101,15 @@ export async function PATCH(
                     { status: 400 }
                 );
             }
+
+            isOriginalGrader = Boolean(grade?.gradedBy && grade.gradedBy.toString() === reviewerId);
+            if (isOriginalGrader && !isExamProfessor) {
+                return NextResponse.json(
+                    { success: false, message: 'Reviewer cannot be the original grader for this question', data: null },
+                    { status: 400 }
+                );
+            }
+
             reviewer = candidate;
         }
 
@@ -132,7 +153,8 @@ export async function PATCH(
                 examId: exam._id.toString(),
                 previousAssignee,
                 assignedTo: reviewerId,
-                reviewerName: reviewer?.name || null
+                reviewerName: reviewer?.name || null,
+                ...(isOriginalGrader && isExamProfessor ? { note: 'Assigned reviewer is original grader and exam professor' } : {})
             }
         });
         if (!audited) {
