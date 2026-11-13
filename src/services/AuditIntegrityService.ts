@@ -89,18 +89,25 @@ export class AuditIntegrityService {
                 addDiagnostic({ code: 'SEQUENCE_ORDER_INVALID', sequence });
             }
 
-            // Chaining check: previousSeal must match the preceding record's seal
-            if (lastSealedRecordHmac && integrityRecord.previousSeal &&
-                integrityRecord.previousSeal !== lastSealedRecordHmac) {
-                invalidSeals += 1;
-                addDiagnostic({ code: 'CHAIN_BROKEN', sequence });
+            // Chaining check: every record after the cutover (sequence > cutoverSequence)
+            // MUST require previousSeal and match preceding record's seal
+            if (sequence > cutoverSequence) {
+                if (!integrityRecord.previousSeal || (lastSealedRecordHmac && integrityRecord.previousSeal !== lastSealedRecordHmac)) {
+                    invalidSeals += 1;
+                    addDiagnostic({ code: 'CHAIN_BROKEN', sequence });
+                }
+            } else if (sequence === cutoverSequence) {
+                if (integrityRecord.previousSeal && integrityRecord.previousSeal !== 'GENESIS' && lastSealedRecordHmac && integrityRecord.previousSeal !== lastSealedRecordHmac) {
+                    invalidSeals += 1;
+                    addDiagnostic({ code: 'CHAIN_BROKEN', sequence });
+                }
             }
 
             expectedSequence = Math.max(expectedSequence, sequence + 1);
             highestSequence = Math.max(highestSequence, sequence);
             lastSealedRecordHmac = integrityRecord.integritySeal;
 
-            if (verifyAuditIntegritySeal(integrityRecord).valid) {
+            if (verifyAuditIntegritySeal(integrityRecord, cutoverSequence).valid) {
                 sealedRecords += 1;
             } else {
                 invalidSeals += 1;
