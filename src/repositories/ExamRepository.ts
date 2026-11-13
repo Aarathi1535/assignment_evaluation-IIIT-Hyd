@@ -61,20 +61,26 @@ class ExamRepository {
             return query;
         }
 
+        const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+
         if (actingUserRole === 'PROFESSOR') {
             if (!mongoose.Types.ObjectId.isValid(actingUserId)) {
                 return null;
             }
-            query.createdBy = new mongoose.Types.ObjectId(actingUserId);
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map((c: { _id: mongoose.Types.ObjectId }) => c._id);
+            query.course = { $in: profCourseIds };
             return query;
         }
 
         if (actingUserRole === 'STUDENT') {
             query.status = ExamStatus.PUBLISHED;
 
-            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
             const enrolledCourses = await Course.find({ enrolledStudents: new mongoose.Types.ObjectId(actingUserId), isActive: true });
-            const enrolledCourseIds = enrolledCourses.map(c => c._id);
+            const enrolledCourseIds = enrolledCourses.map((c: { _id: mongoose.Types.ObjectId }) => c._id);
 
             const StudentMapping = mongoose.models.StudentMapping || await import('../models/StudentMapping').then(m => m.default);
             const studentMappings = await StudentMapping.find({ student: actingUserId });

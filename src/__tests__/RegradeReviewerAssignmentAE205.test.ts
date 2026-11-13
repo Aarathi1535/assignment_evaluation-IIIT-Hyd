@@ -7,7 +7,7 @@ import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
 import User, { UserRole } from '../models/User';
 import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
-import RegradeRequest, { RegradeStatus } from '../models/RegradeRequest';
+import RegradeRequest, { RegradeDecisionOutcome, RegradeStatus } from '../models/RegradeRequest';
 import Grade from '../models/Grade';
 import Rubric from '../models/Rubric';
 import Batch, { BatchStatus } from '../models/Batch';
@@ -28,12 +28,14 @@ vi.mock('next-auth', async (importOriginal) => {
 
 describe('AE-205 regrade reviewer assignment', () => {
     let assignReviewer: typeof import('../app/api/professor/regrade-requests/[id]/assignment/route').PATCH;
+    let patchDecision: typeof import('../app/api/professor/regrade-requests/[id]/route').PATCH;
     let getRequests: typeof import('../app/api/professor/regrade-requests/route').GET;
     let getPages: typeof import('../app/api/scripts/[id]/pages/route').GET;
     let getImage: typeof import('../app/api/ingest/[id]/pages/[pageId]/image/route').GET;
 
     beforeAll(async () => {
         assignReviewer = (await import('../app/api/professor/regrade-requests/[id]/assignment/route')).PATCH;
+        patchDecision = (await import('../app/api/professor/regrade-requests/[id]/route')).PATCH;
         getRequests = (await import('../app/api/professor/regrade-requests/route')).GET;
         getPages = (await import('../app/api/scripts/[id]/pages/route')).GET;
         getImage = (await import('../app/api/ingest/[id]/pages/[pageId]/image/route')).GET;
@@ -316,7 +318,7 @@ describe('AE-205 regrade reviewer assignment', () => {
         );
         expect(unassignedImage.status).toBe(404);
 
-        // 3. When course is inactive (course.isActive: false), reviewer access is denied
+        // 3. When course is inactive (course.isActive: false), reviewer and professor access to pages, image, and decide is denied with 404
         await Course.updateOne(
             { _id: fixture.course._id },
             { $set: { isActive: false } }
@@ -326,7 +328,7 @@ describe('AE-205 regrade reviewer assignment', () => {
             new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
             { params: Promise.resolve({ id: fixture.script._id.toString() }) }
         );
-        expect(inactivePages.status).toBe(403);
+        expect(inactivePages.status).toBe(404);
 
         const inactiveImage = await getImage(
             new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
@@ -334,11 +336,46 @@ describe('AE-205 regrade reviewer assignment', () => {
         );
         expect(inactiveImage.status).toBe(404);
 
+        const inactiveDecide = await patchDecision(
+            new NextRequest(`http://localhost:3000/api/professor/regrade-requests/${fixture.regrade._id}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ outcome: RegradeDecisionOutcome.REJECTED, reason: 'Course is inactive' })
+            }),
+            { params: Promise.resolve({ id: fixture.regrade._id.toString() }) }
+        );
+        expect(inactiveDecide.status).toBe(404);
+
+        // Also for professor when course is inactive:
+        mockSessionUser = { id: fixture.professor._id.toString(), role: UserRole.PROFESSOR };
+        const profInactivePages = await getPages(
+            new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
+            { params: Promise.resolve({ id: fixture.script._id.toString() }) }
+        );
+        expect(profInactivePages.status).toBe(404);
+
+        const profInactiveImage = await getImage(
+            new NextRequest(`http://localhost:3000/api/ingest/${fixture.batch.batchId}/pages/${fixture.page._id}/image`),
+            { params: Promise.resolve({ id: fixture.batch.batchId, pageId: fixture.page._id.toString() }) }
+        );
+        expect(profInactiveImage.status).toBe(404);
+
+        const profInactiveDecide = await patchDecision(
+            new NextRequest(`http://localhost:3000/api/professor/regrade-requests/${fixture.regrade._id}`, {
+                method: 'PATCH',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ outcome: RegradeDecisionOutcome.REJECTED, reason: 'Course is inactive' })
+            }),
+            { params: Promise.resolve({ id: fixture.regrade._id.toString() }) }
+        );
+        expect(profInactiveDecide.status).toBe(404);
+
         // Re-activate course
         await Course.updateOne(
             { _id: fixture.course._id },
             { $set: { isActive: true } }
         );
+        mockSessionUser = { id: fixture.ta._id.toString(), role: UserRole.TA };
 
         // 4. When regrade request is RESOLVED, reviewer image access is revoked
         await RegradeRequest.updateOne(
