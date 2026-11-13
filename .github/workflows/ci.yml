@@ -30,6 +30,9 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      - name: Lint OpenAPI specifications
+        run: npm run lint:openapi
+
       - name: Type check
         run: npx tsc --noEmit
 
