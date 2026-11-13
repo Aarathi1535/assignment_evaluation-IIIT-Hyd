@@ -82,6 +82,8 @@ describe('AE-186: Dynamic Watermark with Student Credentials (#264)', () => {
         resetWatermarkConcurrencySlots();
         process.env.STUDENT_RESULTS_ENABLED = 'true';
         process.env.WATERMARK_HMAC_SECRET = 'test-watermark-secret-key-12345';
+        process.env.ORIGINAL_STORAGE_HMAC_SECRET = 'test-audit-hmac-secret-at-least-32-chars';
+        process.env.ORIGINAL_STORAGE_KEY_ID = 'v1';
 
         // 1. Users
         studentA = await User.create({

@@ -475,4 +475,44 @@ describe('AE-190: Professor Publish Action Per Exam', () => {
         expect(unupdatedExam!.title).toBe('Unpublished Exam Title');
         expect(unupdatedExam!.status).toBe(ExamStatus.REVIEW_PENDING);
     });
+
+    it('12. Rejects exam publication if exam totalMarks does not match rubric total marks', async () => {
+        mockSessionUser = { id: prof._id.toString(), role: UserRole.PROFESSOR };
+
+        const testExam = await Exam.create({
+            title: 'Mismatched Marks Exam',
+            course: course._id,
+            createdBy: prof._id,
+            examDate: new Date('2026-10-15'),
+            totalMarks: 40, // Exam says 40
+            status: ExamStatus.REVIEW_PENDING,
+            numberOfQuestions: 1,
+            isActive: true,
+        });
+
+        // Rubric has 50 marks total
+        await Rubric.create({
+            exam: testExam._id,
+            createdBy: prof._id,
+            scoreStep: 1,
+            questions: [{
+                questionNumber: 1,
+                maxMarks: 50,
+                criteria: [{ criterionName: 'Correctness', points: 50 }]
+            }],
+            isActive: true
+        });
+
+        const req = new NextRequest(`http://localhost:3000/api/exams/${testExam._id}/publish`, {
+            method: 'POST',
+        });
+        const res = await publishPOST(req, { params: Promise.resolve({ id: testExam._id.toString() }) });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.message).toContain('does not match rubric total');
+
+        // Status should remain REVIEW_PENDING
+        const untouchedExam = await Exam.findById(testExam._id);
+        expect(untouchedExam!.status).toBe(ExamStatus.REVIEW_PENDING);
+    });
 });

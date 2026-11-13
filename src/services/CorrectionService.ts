@@ -789,6 +789,7 @@ class CorrectionService {
                 entityType: 'AnswerScript',
                 details: {
                     batchId,
+                    examId: freshOriginal.exam ? freshOriginal.exam.toString() : undefined,
                     originalScriptId: freshOriginal._id.toString(),
                     splitResult: resultingScriptsData
                 },
@@ -933,6 +934,7 @@ class CorrectionService {
                 entityType: 'AnswerScript',
                 details: {
                     batchId,
+                    examId: freshScript.exam ? freshScript.exam.toString() : undefined,
                     scriptId: freshScript._id.toString(),
                     previousPageOrder,
                     newPageOrder

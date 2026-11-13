@@ -6,6 +6,7 @@ export interface IStudentMapping extends Document {
     student: mongoose.Types.ObjectId;
     anonymousId: string;
     rollNumber?: string | null;
+    ltiSub?: string | null;
     isVerified: boolean;
     verifiedBy?: mongoose.Types.ObjectId;
     createdAt: Date;
@@ -37,6 +38,12 @@ const StudentMappingSchema = new Schema<IStudentMapping>(
             trim: true,
             default: null,
             set: (val: unknown) => normalizeRollNumber(val)
+        },
+        ltiSub: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true
         },
         isVerified: {
             type: Boolean,

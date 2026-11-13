@@ -265,6 +265,12 @@ export default function TaDashboardPage() {
         <Clock className="h-4 w-4 text-slate-500" aria-hidden="true" />
         <span>Refresh Queue</span>
       </Button>
+      <Link href="/ta/regrade-requests">
+        <Button type="button" variant="outline" size="md">
+          <ClipboardList className="h-4 w-4" aria-hidden="true" />
+          <span>Assigned Regrades</span>
+        </Button>
+      </Link>
       {allocations.length > 0 && (
         <Button
           type="button"

@@ -331,6 +331,21 @@ describe('AE-117: Notification Templates', () => {
       expect(res3.title).toBe('Grades Published');
       expect(res3.message).toBe('Grades have been published for Final Exam.');
 
+      const regradeApproved = renderNotificationTemplate(NotificationType.REGRADE, {
+        examTitle: 'Final Exam',
+        question: 2,
+        outcome: 'APPROVED',
+        score: 8.5
+      });
+      expect(regradeApproved.type).toBe(NotificationType.REGRADE);
+      expect(regradeApproved.message).toContain('updated score is 8.5');
+
+      const regradeRejected = renderNotificationTemplate(NotificationType.REGRADE, {
+        question: 2,
+        outcome: 'REJECTED'
+      });
+      expect(regradeRejected.message).toContain('was rejected');
+
       const resUnknown = renderNotificationTemplate('UNKNOWN_TYPE' as any, null);
       expect(resUnknown.title).toBe('Notification');
       expect(resUnknown.message).toBe('You have received a new notification.');
