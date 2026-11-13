@@ -7,6 +7,9 @@ import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAu
 import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
+import RegradeRequest, { RegradeStatus } from '../../../../../../../models/RegradeRequest';
+import Course from '../../../../../../../models/Course';
+import Exam from '../../../../../../../models/Exam';
 import AllocationService from '../../../../../../../services/AllocationService';
 import DerivedStorageService, { DerivedStorageConfigurationError } from '../../../../../../../services/DerivedStorageService';
 import { logGraderTiming } from '../../../../../../../lib/graderPerformance';
@@ -143,6 +146,25 @@ export const GET = withServerTiming(async (
       );
     }
 
+    if (batch.exam) {
+      const Exam = mongoose.models.Exam || (await import('../../../../../../../models/Exam')).default;
+      const examDoc = await Exam.findById(batch.exam).select('course');
+      if (examDoc?.course) {
+        const Course = mongoose.models.Course || (await import('../../../../../../../models/Course')).default;
+        const courseDoc = await Course.findById(examDoc.course).select('isActive');
+        if (!courseDoc || !courseDoc.isActive) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: 'Batch not found or access denied',
+              data: null,
+            },
+            { status: 404 }
+          );
+        }
+      }
+    }
+
     // 4. For TA users, enforce allocation-scoped authorization (AE-123 security fix)
     if (!isProfessorOrAdmin) {
       if (!page.answerScript) {
@@ -161,7 +183,30 @@ export const GET = withServerTiming(async (
         auth.user.id
       );
 
+      let assignedRegrade = false;
       if (!allocation) {
+        const openRegrade = await RegradeRequest.findOne({
+          answerScript: page.answerScript,
+          assignedTo: new mongoose.Types.ObjectId(auth.user.id),
+          status: { $in: [RegradeStatus.OPEN, RegradeStatus.REVIEWING] },
+          isOpen: true
+        }).select('exam');
+
+        if (openRegrade) {
+          const examDoc = await Exam.findById(openRegrade.exam).select('course');
+          if (examDoc && examDoc.course) {
+            const courseDoc = await Course.findById(examDoc.course).select('professor teachingAssistants isActive');
+            if (courseDoc && courseDoc.isActive && (
+              courseDoc.professor.toString() === auth.user.id ||
+              courseDoc.teachingAssistants.some((ta: mongoose.Types.ObjectId) => ta.toString() === auth.user.id)
+            )) {
+              assignedRegrade = true;
+            }
+          }
+        }
+      }
+
+      if (!allocation && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,

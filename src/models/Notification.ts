@@ -4,7 +4,8 @@ export enum NotificationType {
     ASSIGNMENT = 'ASSIGNMENT',
     REASSIGNMENT = 'REASSIGNMENT',
     PUBLISH = 'PUBLISH',
-    FLAG = 'FLAG'
+    FLAG = 'FLAG',
+    REGRADE = 'REGRADE'
 }
 
 export interface INotification extends Document {

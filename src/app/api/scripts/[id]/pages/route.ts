@@ -6,9 +6,36 @@ import { UserRole } from '../../../../../constants/permissions';
 import AnswerScript from '../../../../../models/AnswerScript';
 import IngestionPage from '../../../../../models/IngestionPage';
 import Page from '../../../../../models/Page';
+import RegradeRequest, { RegradeStatus } from '../../../../../models/RegradeRequest';
 import ExamRepository from '../../../../../repositories/ExamRepository';
 import AllocationService from '../../../../../services/AllocationService';
 import { HttpError } from '../../../../../lib/errors';
+import Course from '../../../../../models/Course';
+import Exam from '../../../../../models/Exam';
+
+async function hasActiveRegradeAccess(
+  answerScriptId: mongoose.Types.ObjectId,
+  examId: mongoose.Types.ObjectId,
+  userId: string
+): Promise<boolean> {
+  const openRegrade = await RegradeRequest.findOne({
+    answerScript: answerScriptId,
+    assignedTo: new mongoose.Types.ObjectId(userId),
+    status: { $in: [RegradeStatus.OPEN, RegradeStatus.REVIEWING] },
+    isOpen: true
+  }).select('_id');
+  if (!openRegrade) return false;
+
+  const examDoc = await Exam.findById(examId).select('course');
+  if (!examDoc || !examDoc.course) return false;
+
+  const courseDoc = await Course.findById(examDoc.course).select('professor teachingAssistants isActive');
+  if (!courseDoc || !courseDoc.isActive) return false;
+
+  const isStaff = courseDoc.professor.toString() === userId ||
+    courseDoc.teachingAssistants.some((ta: mongoose.Types.ObjectId) => ta.toString() === userId);
+  return Boolean(isStaff);
+}
 
 /**
  * GET /api/scripts/[id]/pages
@@ -69,7 +96,21 @@ export async function GET(
         user.id,
         user.role
       );
-      if (!exam) {
+      if (exam) {
+        const courseDoc = await Course.findById(exam.course).select('isActive');
+        if (!courseDoc || !courseDoc.isActive) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: 'Forbidden: Course is inactive or not found',
+              data: null,
+            },
+            { status: 403 }
+          );
+        }
+      }
+      const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
+      if (!exam && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,
@@ -84,7 +125,22 @@ export async function GET(
         script._id,
         user.id
       );
-      if (!allocation) {
+      const examDoc = await Exam.findById(script.exam).select('course');
+      if (examDoc?.course) {
+        const courseDoc = await Course.findById(examDoc.course).select('isActive');
+        if (!courseDoc || !courseDoc.isActive) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: 'Forbidden: Course is inactive or not found',
+              data: null,
+            },
+            { status: 403 }
+          );
+        }
+      }
+      const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
+      if (!allocation && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,

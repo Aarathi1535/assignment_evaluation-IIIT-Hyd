@@ -263,6 +263,7 @@ export class ScriptFlagService {
                 entityType: 'AnswerScript',
                 details: {
                     scriptId: scriptObjectId.toString(),
+                    examId: script.exam ? script.exam.toString() : undefined,
                     userId: userObjectId.toString(),
                     question: question ?? null,
                     reason
@@ -312,6 +313,7 @@ export class ScriptFlagService {
                 details: {
                     flagId: flag._id.toString(),
                     answerScript: scriptObjectId.toString(),
+                    examId: script.exam.toString(),
                     exam: script.exam.toString(),
                     question: question ?? null,
                     reason,

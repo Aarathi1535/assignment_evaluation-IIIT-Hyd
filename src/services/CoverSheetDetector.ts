@@ -114,6 +114,16 @@ export class CoverSheetDetector implements ICoverSheetDetector {
                 this.scanRegion(ctx, centerX, centerY, centerW, centerH, reader, detectedCodes);
             }
 
+            // Fallback for high-resolution images: 2x downsample to improve finder pattern detection
+            if (detectedCodes.size === 0 && width >= 400 && height >= 400) {
+                const downW = Math.floor(width / 2);
+                const downH = Math.floor(height / 2);
+                const downCanvas = createCanvas(downW, downH);
+                const downCtx = downCanvas.getContext('2d');
+                downCtx.drawImage(canvas, 0, 0, downW, downH);
+                this.scanRegion(downCtx, 0, 0, downW, downH, reader, detectedCodes);
+            }
+
             const uniqueCodes = Array.from(detectedCodes);
 
             if (uniqueCodes.length === 1) {
@@ -201,6 +211,7 @@ export class CoverSheetDetector implements ICoverSheetDetector {
                 const hybridBitmap = new zxing.BinaryBitmap(new zxing.HybridBinarizer(lumSource));
                 result = reader.decode(hybridBitmap);
             } catch {
+                try { reader.reset(); } catch {}
                 // Fallback to GlobalHistogramBinarizer
                 try {
                     const globalBitmap = new zxing.BinaryBitmap(new zxing.GlobalHistogramBinarizer(lumSource));
@@ -218,6 +229,8 @@ export class CoverSheetDetector implements ICoverSheetDetector {
             }
         } catch {
             // Non-fatal: region did not yield a code
+        } finally {
+            try { reader.reset(); } catch {}
         }
     }
 }

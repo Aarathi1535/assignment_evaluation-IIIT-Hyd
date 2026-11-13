@@ -677,6 +677,7 @@ export class AnnotationPersistenceService {
           entityId: targetPageId,
           entityType: pageDoc ? 'Page' : 'IngestionPage',
           details: {
+            examId: script.exam?.toString(),
             scriptId: script._id.toString(),
             pageNumber: targetPageNumber,
             totalAnnotations: normalizedPageData.annotations.length,
