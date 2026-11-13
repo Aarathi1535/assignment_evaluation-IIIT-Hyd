@@ -5,7 +5,13 @@ import AuditLog, { allocateAuditSequence, reconcileOrphanedIntegrityState } from
 import AuditLogIntegrityState from '../models/AuditLogIntegrityState';
 import User, { UserRole } from '../models/User';
 import { writeAuditLog } from '../lib/audit';
-import { createAuditIntegritySeal, createAuditIntegrityStateSeal } from '../lib/auditIntegrity';
+import {
+    createAuditIntegritySeal,
+    createAuditIntegrityStateSeal,
+    verifyAuditIntegritySeal,
+    verifyAuditIntegrityStateSeal
+} from '../lib/auditIntegrity';
+import { generateHmacSeal } from '../utils/hmacStorage';
 import auditIntegrityService from '../services/AuditIntegrityService';
 
 let mockSessionUser: { id: string; role: UserRole } | null = null;
@@ -580,5 +586,133 @@ describe('AE-208 audit-trail integrity verification', () => {
         mockSessionUser = { id: ta._id.toString(), role: UserRole.TA };
         const deniedTa = await verifyRoute();
         expect(deniedTa.status).toBe(403);
+    });
+
+    it('accepts v1 record seals only strictly below cutoverSequence and rejects them at or above cutoverSequence', async () => {
+        const actor = await createActor();
+        const keyId = 'v1';
+        const date = new Date('2026-11-01T10:00:00.000Z');
+
+        // Create a record sealed with version 1 (unbound / no previousSeal)
+        const sequenceNumber = 5;
+        const v1Bytes = Buffer.from(JSON.stringify({
+            version: 1,
+            sequence: sequenceNumber,
+            keyId,
+            user: actor._id.toString(),
+            action: 'LEGACY_V1_ACTION',
+            outcome: 'SUCCESS',
+            entityId: null,
+            entityType: null,
+            details: null,
+            ipAddress: null,
+            createdAt: date.toISOString()
+        }), 'utf8');
+
+        const v1Seal = generateHmacSeal(
+            v1Bytes,
+            { batchId: 'audit-log', sequenceNumber, uploader: actor._id.toString(), timestamp: date.getTime() },
+            keyId
+        );
+
+        const record = {
+            user: actor._id,
+            action: 'LEGACY_V1_ACTION',
+            outcome: 'SUCCESS' as const,
+            createdAt: date,
+            sequence: sequenceNumber,
+            integritySeal: v1Seal.hmac,
+            integrityKeyId: keyId
+        };
+
+        // Below cutoverSequence (e.g. cutoverSequence = 10): v1 seal is ACCEPTED
+        const belowCutover = verifyAuditIntegritySeal(record, 10);
+        expect(belowCutover.valid).toBe(true);
+
+        // At cutoverSequence (cutoverSequence = 5): v1 seal is REJECTED
+        const atCutover = verifyAuditIntegritySeal(record, 5);
+        expect(atCutover.valid).toBe(false);
+
+        // Above cutoverSequence (cutoverSequence = 1, default): v1 seal is REJECTED
+        const aboveCutover = verifyAuditIntegritySeal(record, 1);
+        expect(aboveCutover.valid).toBe(false);
+    });
+
+    it('accepts v1 integrity state seals only strictly below cutoverSequence and rejects them at or above cutoverSequence', async () => {
+        const keyId = 'v1';
+        const lastSequence = 5;
+        const v1StateBytes = Buffer.from(JSON.stringify({
+            version: 1,
+            lastSequence,
+            keyId
+        }), 'utf8');
+
+        const v1StateSeal = generateHmacSeal(
+            v1StateBytes,
+            { batchId: 'audit-log-integrity-state', sequenceNumber: lastSequence, uploader: 'audit-integrity-service', timestamp: 0 },
+            keyId
+        );
+
+        // When cutoverSequence > lastSequence (e.g. 10): v1 state seal is ACCEPTED
+        expect(verifyAuditIntegrityStateSeal({
+            lastSequence,
+            cutoverSequence: 10,
+            integritySeal: v1StateSeal.hmac,
+            integrityKeyId: keyId
+        })).toBe(true);
+
+        // When cutoverSequence == lastSequence (5): v1 state seal is REJECTED
+        expect(verifyAuditIntegrityStateSeal({
+            lastSequence,
+            cutoverSequence: 5,
+            integritySeal: v1StateSeal.hmac,
+            integrityKeyId: keyId
+        })).toBe(false);
+
+        // When cutoverSequence < lastSequence (1): v1 state seal is REJECTED
+        expect(verifyAuditIntegrityStateSeal({
+            lastSequence,
+            cutoverSequence: 1,
+            integritySeal: v1StateSeal.hmac,
+            integrityKeyId: keyId
+        })).toBe(false);
+    });
+
+    it('requires previousSeal on every record after the cutover and detects missing previousSeal with CHAIN_BROKEN', async () => {
+        const actor = await createActor();
+
+        // 1. Write initial record (sequence 1, genesis)
+        await writeAuditLog({
+            user: actor._id.toString(),
+            action: 'GENESIS_CUTOVER_EVENT',
+            outcome: 'SUCCESS'
+        });
+
+        // 2. Write second record (sequence 2, after cutover)
+        await writeAuditLog({
+            user: actor._id.toString(),
+            action: 'POST_CUTOVER_EVENT',
+            outcome: 'SUCCESS'
+        });
+
+        const initialResult = await auditIntegrityService.verifyAuditTrail();
+        expect(initialResult.status).toBe('INTACT');
+        expect(initialResult.valid).toBe(true);
+        expect(initialResult.checkedRecords).toBe(2);
+
+        // 3. Tamper with record 2 by unsetting previousSeal
+        await AuditLog.collection.updateOne(
+            { sequence: 2 },
+            { $unset: { previousSeal: '' } }
+        );
+
+        // 4. Verification must detect CHAIN_BROKEN on record 2
+        const tamperedResult = await auditIntegrityService.verifyAuditTrail();
+        expect(tamperedResult.status).toBe('MISMATCH');
+        expect(tamperedResult.valid).toBe(false);
+        expect(tamperedResult.invalidSeals).toBeGreaterThan(0);
+        expect(tamperedResult.diagnostics.some(
+            d => d.code === 'CHAIN_BROKEN' && d.sequence === 2
+        )).toBe(true);
     });
 });

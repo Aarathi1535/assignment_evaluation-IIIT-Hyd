@@ -331,6 +331,9 @@ When a student submits a regrade request and a professor or TA approves the requ
 3. **HTTP Cache Control**:
    - All analytics, grader consistency, export, and regrade endpoints enforce `Cache-Control: private, no-store` to prevent caching on shared intermediate proxies.
 
+### 8.4 Audit Trail Integrity & Limitations
+Audit logging for analytics exports and regrade decisions is secured by cryptographic HMAC sealing and chaining (AE-208, documented in [AUDIT_INTEGRITY.md](AUDIT_INTEGRITY.md)). The integrity verifier accepts v1 seals only below `cutoverSequence` and requires `previousSeal` on every record after cutover. Note that restoring both audit records and the state seal from a backup cannot be detected without an external anchor.
+
 ---
 
 ## 9. Configuration & Operational Considerations

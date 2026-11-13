@@ -107,7 +107,8 @@ export function createAuditIntegritySeal(
 }
 
 export function verifyAuditIntegritySeal(
-    record: AuditIntegrityRecord
+    record: AuditIntegrityRecord,
+    cutoverSequence: number = 1
 ): { valid: boolean } {
     if (!record.integritySeal || !record.integrityKeyId ||
         !Number.isSafeInteger(record.sequence) || !record.sequence || record.sequence < 1) {
@@ -135,14 +136,18 @@ export function verifyAuditIntegritySeal(
         return { valid: true };
     }
 
-    // Fallback to version 1 for legacy seals
-    const v1Result = verifyHmacSeal(
-        auditRecordBytes(record, record.sequence, record.integrityKeyId, 1),
-        metadata,
-        record.integritySeal,
-        record.integrityKeyId
-    );
-    return { valid: v1Result.valid };
+    // Fallback to version 1 for legacy seals ONLY strictly below cutoverSequence
+    if (record.sequence < cutoverSequence) {
+        const v1Result = verifyHmacSeal(
+            auditRecordBytes(record, record.sequence, record.integrityKeyId, 1),
+            metadata,
+            record.integritySeal,
+            record.integrityKeyId
+        );
+        return { valid: v1Result.valid };
+    }
+
+    return { valid: false };
 }
 
 function integrityStateBytes(
@@ -193,8 +198,9 @@ export function verifyAuditIntegrityStateSeal(state: AuditIntegrityState): boole
     };
 
     // Try version 2 (binding lastRecordHmac and cutoverSequence)
+    const cutover = state.cutoverSequence ?? 1;
     const v2Result = verifyHmacSeal(
-        integrityStateBytes(state.lastSequence, state.integrityKeyId, state.lastRecordHmac, state.cutoverSequence ?? 1),
+        integrityStateBytes(state.lastSequence, state.integrityKeyId, state.lastRecordHmac, cutover),
         metadata,
         state.integritySeal,
         state.integrityKeyId
@@ -203,11 +209,15 @@ export function verifyAuditIntegrityStateSeal(state: AuditIntegrityState): boole
         return true;
     }
 
-    // Fallback to version 1
-    return verifyHmacSeal(
-        Buffer.from(JSON.stringify({ version: 1, lastSequence: state.lastSequence, keyId: state.integrityKeyId }), 'utf8'),
-        metadata,
-        state.integritySeal,
-        state.integrityKeyId
-    ).valid;
+    // Fallback to version 1 ONLY strictly below cutoverSequence
+    if (state.lastSequence < cutover) {
+        return verifyHmacSeal(
+            Buffer.from(JSON.stringify({ version: 1, lastSequence: state.lastSequence, keyId: state.integrityKeyId }), 'utf8'),
+            metadata,
+            state.integritySeal,
+            state.integrityKeyId
+        ).valid;
+    }
+
+    return false;
 }
