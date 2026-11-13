@@ -89,8 +89,19 @@ export async function GET(
     const isProfessorOrAdmin =
       userRole === UserRole.PROFESSOR || userRole === UserRole.ADMIN;
 
+    const manage = await canManageExam(user, script.exam);
+    if (!manage.exam || !manage.course) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: manage.errorMessage || 'Forbidden: Course is inactive or not found',
+          data: null,
+        },
+        { status: 404 }
+      );
+    }
+
     if (isProfessorOrAdmin) {
-      const manage = await canManageExam(user, script.exam);
       const isExamManager = manage.canManage;
       const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
       if (!isExamManager && !assignedRegrade) {
@@ -108,20 +119,6 @@ export async function GET(
         script._id,
         user.id
       );
-      const examDoc = await Exam.findById(script.exam).select('course');
-      if (examDoc?.course) {
-        const courseDoc = await Course.findById(examDoc.course).select('isActive');
-        if (!courseDoc || !courseDoc.isActive) {
-          return NextResponse.json(
-            {
-              success: false,
-              message: 'Forbidden: Course is inactive or not found',
-              data: null,
-            },
-            { status: 403 }
-          );
-        }
-      }
       const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
       if (!allocation && !assignedRegrade) {
         return NextResponse.json(

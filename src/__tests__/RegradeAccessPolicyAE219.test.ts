@@ -377,14 +377,14 @@ describe('AE-219 regrade access policy', () => {
         expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
         expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
         expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
-        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(404);
 
         // For Admin:
         mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
         expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
         expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
         expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
-        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(404);
     });
 
     it('uniformly denies queue, assignment, decision, and script pages when exam is inactive', async () => {
@@ -396,14 +396,14 @@ describe('AE-219 regrade access policy', () => {
         expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
         expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
         expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
-        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(404);
 
         // For Admin:
         mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
         expect((await callGetQueue(fixture.exam._id.toString())).status).toBe(404);
         expect((await callAssign(fixture.regrade._id.toString(), fixture.ta._id.toString())).status).toBe(404);
         expect((await callDecide(fixture.regrade._id.toString(), { outcome: RegradeDecisionOutcome.REJECTED, reason: 'test' })).status).toBe(404);
-        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(403);
+        expect((await callScriptPages(fixture.script._id.toString())).status).toBe(404);
     });
 
     it('allows course professor and admin to access analytics, export, LMS, LTI, and audit routes; denies former creator', async () => {

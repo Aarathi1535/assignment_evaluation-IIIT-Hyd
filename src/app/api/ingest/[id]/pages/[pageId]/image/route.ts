@@ -153,21 +153,16 @@ export const GET = withServerTiming(async (
     }
 
     if (batch.exam) {
-      const Exam = mongoose.models.Exam || (await import('../../../../../../../models/Exam')).default;
-      const examDoc = await Exam.findById(batch.exam).select('course');
-      if (examDoc?.course) {
-        const Course = mongoose.models.Course || (await import('../../../../../../../models/Course')).default;
-        const courseDoc = await Course.findById(examDoc.course).select('isActive');
-        if (!courseDoc || !courseDoc.isActive) {
-          return NextResponse.json(
-            {
-              success: false,
-              message: 'Batch not found or access denied',
-              data: null,
-            },
-            { status: 404 }
-          );
-        }
+      const manage = await canManageExam(auth.user, batch.exam);
+      if (!manage.exam || !manage.course) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: manage.errorMessage || 'Batch not found or access denied',
+            data: null,
+          },
+          { status: 404 }
+        );
       }
     }
 
