@@ -135,7 +135,11 @@ export const GET = withServerTiming(async (
       const AnswerScript = mongoose.models.AnswerScript || (await import('../../../../../../../models/AnswerScript')).default;
       const script = await AnswerScript.findById(page.answerScript).select('exam');
       if (script?.exam) {
-        examId = script.exam;
+        const Exam = mongoose.models.Exam || (await import('../../../../../../../models/Exam')).default;
+        const examDoc = await Exam.findById(script.exam).select('_id');
+        if (examDoc) {
+          examId = script.exam;
+        }
       }
     }
 
