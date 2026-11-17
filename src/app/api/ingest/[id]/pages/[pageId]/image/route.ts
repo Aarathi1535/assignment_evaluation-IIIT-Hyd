@@ -130,8 +130,17 @@ export const GET = withServerTiming(async (
       );
     }
 
-    if (batch.exam) {
-      const manage = await canManageExam(auth.user, batch.exam);
+    let examId = batch.exam;
+    if (!examId && page.answerScript) {
+      const AnswerScript = mongoose.models.AnswerScript || (await import('../../../../../../../models/AnswerScript')).default;
+      const script = await AnswerScript.findById(page.answerScript).select('exam');
+      if (script?.exam) {
+        examId = script.exam;
+      }
+    }
+
+    if (examId) {
+      const manage = await canManageExam(auth.user, examId);
       if (isProfessorOrAdmin) {
         if (!manage.canManage) {
           return NextResponse.json(
@@ -154,6 +163,17 @@ export const GET = withServerTiming(async (
             { status: 404 }
           );
         }
+      }
+    } else if (isProfessor) {
+      if (batch.uploadedBy && batch.uploadedBy.toString() !== auth.user.id) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Batch not found or access denied',
+            data: null,
+          },
+          { status: 404 }
+        );
       }
     }
 
