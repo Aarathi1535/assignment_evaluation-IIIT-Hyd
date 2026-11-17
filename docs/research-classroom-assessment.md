@@ -27,7 +27,7 @@ In initial explorations, heuristic or non-image-grounded evaluators suffered fro
 
 ## 3. Multimodal Gemini Evaluation Architecture
 
-To resolve this, we introduced a dedicated multimodal evaluation service: [`src/services/ClassroomEvaluationService.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/services/ClassroomEvaluationService.ts), backed by Google Gemini Vision Language Models (VLM).
+To resolve this, we introduced a dedicated multimodal evaluation service: [`src/services/ClassroomEvaluationService.ts`](../src/services/ClassroomEvaluationService.ts), backed by Google Gemini Vision Language Models (VLM).
 
 ```mermaid
 sequenceDiagram
@@ -146,7 +146,7 @@ If Gemini fails (network error, rate limit, timeout, invalid JSON, or unparseabl
 
 ## 7. Test Strategy & Test Matrix
 
-The test suite in [`src/__tests__/ClassroomAssessment.test.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/__tests__/ClassroomAssessment.test.ts) covers 24 rigorous test cases across 6 suites without requiring a live Gemini API connection:
+The test suite in [`src/__tests__/ClassroomAssessment.test.ts`](../src/__tests__/ClassroomAssessment.test.ts) covers 24 rigorous test cases across 6 suites without requiring a live Gemini API connection:
 
 | Test Case | Scenario / Condition | Expected Behavior |
 |---|---|---|

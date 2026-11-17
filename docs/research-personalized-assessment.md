@@ -92,10 +92,10 @@ flowchart TD
 
 ## 3. Data Models
 
-1. **`CourseSyllabus`** ([`src/models/CourseSyllabus.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/models/CourseSyllabus.ts)): Stores extracted units, topics, raw syllabus text, and learning objectives per course.
-2. **`PersonalizedQuestion`** ([`src/models/PersonalizedQuestion.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/models/PersonalizedQuestion.ts)): Stores question prompt, topic, unit, difficulty, expected concepts, hints, reference answer, and rubric criteria.
-3. **`PersonalizedAssessmentSchedule`** ([`src/models/PersonalizedAssessmentSchedule.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/models/PersonalizedAssessmentSchedule.ts)): Stores 16-week schedule configuration, enrolled students, daily window, and pool references.
-4. **`PersonalizedStudentAssignment`** ([`src/models/PersonalizedStudentAssignment.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/models/PersonalizedStudentAssignment.ts)): Stores individual student daily assignments, dynamic state, submitted answers, and timestamp records.
+1. **`CourseSyllabus`** ([`src/models/CourseSyllabus.ts`](../src/models/CourseSyllabus.ts)): Stores extracted units, topics, raw syllabus text, and learning objectives per course.
+2. **`PersonalizedQuestion`** ([`src/models/PersonalizedQuestion.ts`](../src/models/PersonalizedQuestion.ts)): Stores question prompt, topic, unit, difficulty, expected concepts, hints, reference answer, and rubric criteria.
+3. **`PersonalizedAssessmentSchedule`** ([`src/models/PersonalizedAssessmentSchedule.ts`](../src/models/PersonalizedAssessmentSchedule.ts)): Stores 16-week schedule configuration, enrolled students, daily window, and pool references.
+4. **`PersonalizedStudentAssignment`** ([`src/models/PersonalizedStudentAssignment.ts`](../src/models/PersonalizedStudentAssignment.ts)): Stores individual student daily assignments, dynamic state, submitted answers, and timestamp records.
 
 ---
 
@@ -120,7 +120,7 @@ flowchart TD
 
 ## 5. Validation and Testing
 
-All unit, service, invariant, and integration tests in [`src/__tests__/PersonalizedAssessment.test.ts`](file:///c:/Users/AARATHISREE/Desktop/IIIT%20Hyd%20-%20Assignment%20Evaluation/Project%20Repo/assignment-evaluator/src/__tests__/PersonalizedAssessment.test.ts) pass consistently:
+All unit, service, invariant, and integration tests in [`src/__tests__/PersonalizedAssessment.test.ts`](../src/__tests__/PersonalizedAssessment.test.ts) pass consistently:
 - Syllabus upload, validation, and unit extraction
 - AI provider configuration guard (503 when unconfigured)
 - Grounded question generation and deduplication

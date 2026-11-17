@@ -4,7 +4,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "lint:openapi": "npx --yes @redocly/cli lint docs/openapi/classroom-service.v1.yaml",
+    "lint:openapi": "npx --yes @redocly/cli@1.25.7 lint docs/openapi/classroom-service.v1.yaml",
     "test": "vitest run",
     "test:watch": "vitest",
     "repair:derived-pages": "tsx src/scripts/repairDerivedPages.ts",

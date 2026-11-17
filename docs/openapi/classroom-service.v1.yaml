@@ -173,7 +173,7 @@ paths:
       description: >
         Public entry point for students and guests to join an active classroom session. Issues an ephemeral,
         session-scoped participant JWT token. Requires roll number disambiguation if duplicate display names exist.
-        Rate-limited to protect 6-digit PIN keyspace against brute-force enumeration.
+        Rate-limited per session code and per participant to protect 6-digit PIN keyspace against brute-force enumeration without blocking NAT campus Wi-Fi networks.
       operationId: joinClassroomSession
       security: []
       parameters:
@@ -409,12 +409,12 @@ paths:
     post:
       summary: Upload handwritten answer-sheet photo within timed classroom window
       description: >
-        Primary workflow. Student submits physical handwritten solution captured via mobile camera.
+        Primary workflow. Authenticated student submits physical handwritten solution captured via mobile camera.
+        Requires an authenticated student account (guest participant tokens are rejected).
         Enforces strict window checks, file integrity, and queues for OCR + AI-assisted evaluation.
       operationId: uploadAnswerSheet
       security:
         - ClassroomAuth: []
-        - GuestParticipantAuth: []
       parameters:
         - $ref: '#/components/parameters/IdempotencyKeyHeader'
       requestBody:
@@ -948,7 +948,7 @@ components:
           type: [number, 'null']
         submissionStatus:
           type: [string, 'null']
-          enum: [RECEIVED, OCR_PROCESSING, DRAFT_EVALUATED, APPROVED, REJECTED, 'null']
+          enum: [RECEIVED, OCR_PROCESSING, DRAFT_EVALUATED, APPROVED, REJECTED, null]
 
     SessionResultsResponse:
       type: object

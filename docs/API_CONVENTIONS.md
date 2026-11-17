@@ -229,8 +229,8 @@ Student-facing endpoints MUST strip reference answers, grading rubrics, correct 
 - `PersonalizedQuestion`: Remove `referenceAnswer`, `correctOptionIndex`, `generationPrompt`, and model rationale when returning payloads to students.
 - `ClassroomQuestion`: Hide correct answer key until instructor explicitly triggers "reveal" state.
 
-### 8.2 AI Data Leak Prevention Gate
-Before any handwriting image or student text is transmitted to an external LLM (Gemini):
-1. Check `isRealStudentData` flag (defaults to `true`).
-2. When `true`, reject external transmission unless explicit institutional PII anonymization / pseudonymization is verified.
-3. Keep results in `DRAFT_EVALUATED` state until human staff approves.
+### 8.2 AI Data Governance & Human-in-the-Loop Review
+All handwriting OCR and AI-assisted evaluations are governed by institutional enterprise privacy standards (Decision 6):
+1. **Dedicated Enterprise Tenant:** Transmissions route exclusively through Google Cloud Vertex AI provisioned inside the institute's dedicated Google Cloud project (`iiit-eval-platform`), subject to enterprise data governance where customer data is not used for foundation model training without customer instruction.
+2. **Student Consent & Storage Purge:** Student data processing requires per-course student affirmative consent, and raw handwriting images are automatically purged after 30 days via Cloud Storage object lifecycle policies.
+3. **Human-in-the-Loop Approval:** Automated OCR and rubric evaluations strictly remain in `DRAFT_EVALUATED` state until human instructional staff reviews and approves them.

@@ -48,7 +48,7 @@ To guarantee zero regression of Assignment Evaluation features (including AE-190
 | Step | Action Item | Target / Destination | Current Status | Ownership / Details |
 |---|---|---|---|---|
 | **1** | Convert PR #323 to Draft | `refactor/independent-product-architecture` | **COMPLETED** | Draft mode active. Self-merge strictly prohibited. |
-| **2** | Merge PR #321 (`hotfix/ingestion-summary-staff-auth`) | `main` | **COMPLETED** | Merged manually into `main` at commit `b5def10`. Verifies staff-only 403 on ingestion summary. |
+| **2** | Merge PR #321 (`hotfix/ingestion-summary-staff-auth`) | `main` | **COMPLETED** | Merged manually into `main` at commit `b5def10` (merged, not deployed). Verifies staff-only 403 on ingestion summary. |
 | **3.1** | Land PRs #288–#299 into `feature/exam-eval-platform` | `feature/exam-eval-platform` | **COMPLETED** | Fast-forwarded to tip of stack (`docs/AE-200-student-portal` at `779f1e4`). |
 | **3.2** | Merge `main` and open consolidated PR #324 | `main` | **COMPLETED** | PR #324 opened as Draft at commit `24e88d0`. All 73 focused tests and 181 comprehensive tests passing. |
 | **3.3** | Upstream merge `feature/exam-eval-platform` into AE-202...AE-220 | Ticket branches | **COMPLETED** | Merged cleanly once through stack with zero force-pushes (`805643e` -> `c399d89` -> `77dfdff` -> `d1af2ce` -> `60cb4c4`). |
@@ -137,7 +137,10 @@ In accordance with mentor review directives (Point 3), the platform architecture
 2. **Optional Shared Platform Login via Asymmetric Signing (Phase 2):**
    - When enabled, a shared platform token can authenticate a user across products without requiring multiple logins.
    - **Asymmetric Signing Only (`RS256` or `EdDSA`):** The central Identity Provider holds the private key (`PLATFORM_PRIVATE_KEY`) to sign platform tokens. Consumer services hold only the public key (`PLATFORM_PUBLIC_KEY` or JWKS endpoint) for verification. Symmetric HMAC shared secrets (`PLATFORM_SHARED_SECRET`) are strictly forbidden, ensuring that a compromise of any consuming service does not allow token forgery for other services.
-   - **Identity Provider Identity:** The Assignment Evaluation NextAuth service functions as the initial OAuth2/OIDC Identity Provider, structured to allow a seamless drop-in transition to institutional IIIT CAS or Keycloak SSO.
+   - **Provider Token Endpoint & JWKS Infrastructure:** Because standard NextAuth.js is designed solely for web session cookies within a single application and cannot issue tokens to external services or publish public keys out-of-the-box, custom OIDC/OAuth2 provider endpoints must be built in Assignment Evaluation:
+     - `GET /.well-known/jwks.json`: Public JSON Web Key Set endpoint publishing rotating RSA public keys.
+     - `POST /api/auth/oauth/token`: Token exchange endpoint validating authorization codes and client credentials to issue signed RS256/EdDSA JWTs.
+   - **Identity Provider Identity:** The Assignment Evaluation service functions as the initial OAuth2/OIDC Identity Provider, structured to allow a seamless drop-in transition to institutional IIIT CAS or Keycloak SSO.
    - **Mandatory Claims Enforcement:**
      - `iss`: Canonical issuer URL (e.g. `https://eval.iiit.ac.in/auth`).
      - `aud`: Explicit target audience (e.g. `classroom-service`, `personalized-service`). Consuming products MUST validate that `aud` matches their specific service identifier; mismatched tokens must be rejected with `403 Forbidden` to prevent token replay across product boundaries.
@@ -147,19 +150,30 @@ In accordance with mentor review directives (Point 3), the platform architecture
    - **Independent Product Configuration:** Shared login must be independently configurable per product via environment flags (`CLASSROOM_ENABLE_SHARED_AUTH=false`, `PERSONALIZED_ENABLE_SHARED_AUTH=false`). When disabled (default in Phase 1), products accept only their native credentials.
 3. **Strict Account Isolation & Explicit Federation Link Table:**
    - Products must **never automatically link, merge, or grant cross-access** simply because email addresses match.
-   - Linking a local product account with a platform identity requires an explicit entry in a dedicated federation mapping table (`UserFederationLink`: `{ platformUserId, localUserId, product, linkedAt, linkedBy }`), created only by a deliberate action while the user is actively signed in to both accounts, never by matching emails.
+   - **Two-Party Linking via State/Nonce Round-Trip:** Linking a local product account with a platform identity requires an explicit, cryptographically proven round-trip:
+     1. The user initiates linking from the consumer product settings (e.g. `/classroom/settings/security`).
+     2. The consumer service generates a cryptographically random, single-use `state` and `nonce`, stored in the user's active consumer session with a 10-minute TTL.
+     3. The browser redirects to the IdP authorization endpoint (`/api/auth/oauth/authorize`) with `state`, `nonce`, and consumer `client_id`.
+     4. The user authenticates at the IdP (or confirms an existing active IdP session) and explicitly consents to account linking.
+     5. The IdP redirects back to the consumer callback URL with an authorization code and matching `state`.
+     6. The consumer callback verifies `state` (preventing CSRF), exchanges the code for tokens via back-channel POST to `/api/auth/oauth/token`, verifies the ID token signature against IdP JWKS (`/.well-known/jwks.json`), and confirms that the token's `nonce` claim matches the session nonce.
+     7. Upon successful cryptographic verification, the consumer records the link in a dedicated mapping table (`UserFederationLink`: `{ platformUserId, localUserId, product, linkedAt, linkedBy }`).
+   - **Self-Service Unlinking:**
+     1. The user can click "Unlink Platform Account" in local product settings or the central dashboard.
+     2. The consumer service deletes or invalidates the corresponding `UserFederationLink` row.
+     3. Future platform SSO requests for that user are rejected, reverting the account to native local credentials without deleting either underlying user account or historic activity.
 
 ### 4.2 Student Guest-Join & Session Security
 In live classroom environments, students enter sessions via mobile devices scanning QR codes or entering 6-digit access codes:
 
 1. **Endpoint & 6-Digit PIN Brute-Force Rate Limiting:**
    - Students join via `POST /api/v1/classroom/join/{code}` (returning `201 Created`).
-   - The join endpoint implements strict rate limiting (maximum 10 join attempts per minute per IP, with exponential backoff on repeated failures) to prevent brute-force guessing of active 6-digit session PINs.
+   - The join endpoint implements strict rate limiting **per session code** (e.g. maximum 5 failed attempts per session code before transient cooldown) and **per participant session**, rather than a coarse per-IP rate limit (which would block an entire lecture hall sharing a single campus Wi-Fi NAT gateway).
 2. **Participant Token for Live Polls:**
    - Upon valid PIN entry, the server issues an ephemeral, cryptographically signed `classroom_participant_token` containing `{ sessionId, participantId, studentIdentifier }`.
    - Anonymous guest access is permitted **strictly for real-time engagement polls** (Mentimeter-style).
 3. **Signed-in Student Requirement for Graded Submissions:**
-   - Graded handwritten answer-sheet uploads (`POST /api/v1/classroom/submissions/upload-sheet`) require an authenticated student account.
+   - Graded handwritten answer-sheet uploads (`POST /api/v1/classroom/submissions/upload-sheet`) require an authenticated student account (`ClassroomAuth`). Guest participant tokens are rejected with `401 Unauthorized` / `403 Forbidden`.
    - Unverified post-session roll-number claims are dropped to eliminate identity spoofing and accidental grade misattribution.
 4. **No Cross-Product Leakage:**
    - Ephemeral classroom participant tokens are strictly rejected by Assignment Evaluation and Personalised Learning APIs (`403 Forbidden`).
@@ -239,8 +253,8 @@ The platform establishes four strictly separated stages for automated processing
 As highlighted in mentor review (Point 5), a blanket ban on real student data (`isRealStudentData = true`) creates an operational contradiction with the handwriting evaluation pipeline, which inherently requires processing handwritten answer images. To resolve this contradiction without compromising student privacy or institutional compliance, the architecture establishes four concrete safeguards:
 
 1. **Enterprise Vertex AI in Institute GCP Tenant:**
-   - All AI handwriting OCR and evaluation requests are routed exclusively through Google Cloud Vertex AI provisioned within the institute's dedicated Google Cloud project.
-   - Enterprise Vertex AI contracts provide strict **Zero Data Retention (ZDR)** guarantees: student handwriting images, extracted text, and prompt inputs are never stored by Google for model training or foundation model improvement.
+   - All AI handwriting OCR and evaluation requests are routed exclusively through Google Cloud Vertex AI provisioned within the institute's dedicated Google Cloud project (`iiit-eval-platform`).
+   - Under Google Cloud's enterprise data governance terms and Cloud Data Processing Addendum (CDPA), student handwriting images, extracted text, and prompt inputs are treated strictly as customer content: Google does not use customer data to train or fine-tune foundation models without customer instruction. Data is encrypted in transit and at rest, processed in the institute's regional tenant, and retained operationally only as necessary to fulfill API requests, avoiding unsupported absolute zero-retention claims.
 2. **Per-Course Student Data Consent:**
    - During course registration or session onboarding, students provide affirmative consent for their handwritten submissions to be processed by the institute's private AI evaluation pipeline.
 3. **Strict 30-Day Raw Image Retention Policy:**
@@ -248,8 +262,8 @@ As highlighted in mentor review (Point 5), a blanket ban on real student data (`
    - Only verified textual annotations, finalized rubric grades, and audit trail records are retained permanently in the institutional database.
 4. **Model Parameterization & Deprecation Governance:**
    - Google Gemini models do **not** follow an LTS (Long-Term Support) release designation.
-   - The active model version is pinned explicitly via configuration to `gemini-2.0-flash` (governed by the `GEMINI_MODEL` environment variable, with `gemini-1.5-pro` as optional secondary fallback).
-   - Upstream model lifecycle dates are tracked proactively, and model upgrades require running the regression evaluation harness against calibrated baseline test scripts before production adoption.
+   - The active model version is pinned explicitly via configuration to `gemini-2.5-flash` (governed by the `GEMINI_MODEL` environment variable, matching `GeminiAIService.ts:113`).
+   - In accordance with Google's official Vertex AI model lifecycle, `gemini-2.5-flash` is the current supported GA model. Upstream model lifecycle milestones and retirement dates are tracked proactively, and model upgrades require running the regression evaluation harness against calibrated baseline test scripts before production adoption.
 
 ---
 
@@ -304,19 +318,19 @@ To guarantee genuine database isolation and prevent connection hijacking across 
 ## 10. Security, Authorization & Vulnerability Remediation
 
 > [!NOTE]
-> Several baseline vulnerabilities listed below (including open registration role elevation and lack of brute-force rate limiting) were preexisting defects inherited from the `main` branch baseline, tracked under issue `AE-257`.
+> Preexisting baseline authentication vulnerabilities on `main` (weak password constraints and lack of login rate limiting, originally tracked under issues #269 and #271) have already been resolved on `main` by PR #329. The open registration role-elevation vulnerability (where registration defaulted to `PROFESSOR` or accepted arbitrary roles) was new prototype code introduced in the product registration routes on this branch (`/api/classroom/auth/register` and `/api/personalized/auth/register`).
 
 | Vulnerability / Defect | Root Cause | Remediation in Target Implementation |
 |---|---|---|
-| **Default PROFESSOR Role on Register** | Open registration accepted any role parameter or defaulted to PROFESSOR (`AE-257`). | Public registration strictly creates `STUDENT` accounts. `PROFESSOR` and `TA` roles require an authenticated admin invitation code or domain whitelist check. |
-| **Weak Password & Brute-Force** | Single-character passwords allowed; zero login rate limiting (`AE-257`). | Minimum 8 characters with complexity checks. Exponential backoff and maximum 5 failed attempts per 15-minute window per IP/user. |
+| **Default PROFESSOR Role on Register** | Product registration routes introduced in prototype accepted role parameters or defaulted to PROFESSOR. | Public registration strictly creates `STUDENT` accounts. `PROFESSOR` and `TA` roles require an authenticated admin invitation code or domain whitelist check. |
+| **Weak Password & Brute-Force** | Baseline allowed short passwords and had zero login rate limiting (resolved on `main` via PR #329). | Minimum 8 characters with complexity checks. Exponential backoff and maximum 5 failed attempts per 15-minute window per IP/user. |
 | **Inactive User Authentication** | `isActive` flag ignored during credential validation. | Explicit check returning `NextResponse.json({ error: { code: 'ACCOUNT_DISABLED', message: 'Account is deactivated' } }, { status: 401 })`. |
 | **Hard-coded Secret Fallbacks** | Secret fallbacks (`dev-secret`) enabled token cross-use across products. | Removal of all hardcoded literals. System throws configuration errors at boot if `CLASSROOM_JWT_SECRET`, `PERSONALIZED_JWT_SECRET`, or `NEXTAUTH_SECRET` are unset. |
 | **Session Bleed in Middleware** | Evaluation session was accepted by product endpoints without role checks. | Product tokens verified independently; Evaluation sessions must possess explicit permissions (`VIEW_COURSES`, `MANAGE_EXAMS`) to access administrative product paths. |
 | **Unenrolled Question Access** | Endpoint `/api/personalized/questions` returned reference answers and answer keys to unenrolled students. | Strip `referenceAnswer`, `correctOptionIndex`, and rubric grading criteria from student payloads. Enforce course enrollment checks. |
 | **Cross-Professor Generation** | Professor could trigger question generation on unassigned course IDs. | Validate professor course allocation before initiating Gemini question generation. |
-| **AI Student Data Leak** | Real handwriting images sent to LLM without gating. | Enforce Vertex AI enterprise boundary with zero data retention, 30-day raw image purging, and course consent. |
-| **Deprecated Gemini Model** | Hardcoded `gemini-1.5-flash` / `gemini-2.5-flash`. | Model names parameterized via `GEMINI_MODEL` environment variable, defaulting to `gemini-2.0-flash` with scheduled retirement tracking. |
+| **AI Student Data Leak** | Real handwriting images sent to LLM without gating. | Enforce Vertex AI enterprise boundary in institute project, 30-day raw image purging, and affirmative student consent. |
+| **Deprecated Gemini Model** | Hardcoded legacy model names. | Model names parameterized via `GEMINI_MODEL` environment variable, defaulting to `gemini-2.5-flash` with proactive retirement tracking. |
 
 ---
 
@@ -330,7 +344,7 @@ To ensure exact alignment before proceeding to platform implementation, the foll
 - **Engineering Recommendation:** 
   - Restrict anonymous guest access strictly to real-time engagement polls.
   - Require authenticated student accounts for graded handwritten answer-sheet submissions (dropping unverified post-session roll-number claims) to prevent grade misattribution and preserve academic integrity.
-  - Protect the 6-digit PIN join endpoint with IP-based rate limiting to prevent brute-force session guessing.
+  - Protect the 6-digit PIN join endpoint with per-session-code and per-participant rate limiting to prevent brute-force session guessing without blocking campus Wi-Fi networks.
 
 ### Decision 2: Human-in-the-Loop Review for AI Handwriting Evaluations
 - **Context:** Automated OCR and rubric matching evaluate student handwriting images.
@@ -354,7 +368,7 @@ To ensure exact alignment before proceeding to platform implementation, the foll
 
 ### Decision 6: Enterprise AI Privacy Policy & Retention for Handwriting Pipeline
 - **Context:** Automated handwriting OCR and scoring require processing student handwriting images, which conflicts with a naive blanket ban on student data.
-- **Question:** Does Prof. Jawahar approve deploying Vertex AI in the institute's Google Cloud project (with zero data retention for training), requiring per-course student consent, enforcing a 30-day raw handwriting image purge in Cloud Storage, and pinning `gemini-2.0-flash` with scheduled retirement tracking?
+- **Question:** Does Prof. Jawahar approve deploying Vertex AI in the institute's Google Cloud project (`iiit-eval-platform`) under enterprise data governance (customer data not used for model training), requiring per-course student consent, enforcing a 30-day raw handwriting image purge in Cloud Storage, and pinning `gemini-2.5-flash` with scheduled retirement tracking?
 - **Engineering Recommendation:** Approve Decision 6 to enable handwriting OCR and AI-assisted scoring safely under institutional compliance.
 
 ---
@@ -403,9 +417,10 @@ Following mentor and stakeholder approval of this document, implementation will 
 ┌────────────────────────────────────────────────────────────────────────┐
 │ PR 5: Identity & Dual Login Model                                      │
 │ - Separate product login and account management by default             │
-│ - Optional signed platform login, configurable per product             │
+│ - Custom IdP token endpoint (/api/auth/oauth/token) & JWKS publisher   │
+│ - Explicit two-party linking via state/nonce round-trip & unlinking    │
 │ - No email auto-linking, separate Mongoose connection pools            │
-│ - Role hardening (no default PROFESSOR), brute-force rate limiting     │
+│ - Role hardening (no default PROFESSOR), session-scoped rate limiting  │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    │
                                    ▼

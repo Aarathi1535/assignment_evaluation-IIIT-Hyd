@@ -42,7 +42,7 @@ The platform is partitioned into three independently operating products accessib
 - **User Management**: `src/models/User.ts` (ADMIN, PROFESSOR, TA, STUDENT)
 - **Authentication**: NextAuth credentials provider (`/api/auth/[...nextauth]`)
 - **APIs**: `/api/grading/*`, `/api/exams/*`, `/api/courses/*`, `/api/analytics/*`, `/api/export/*`
-- **Storage**: Cloud Storage (`gs://iiit-eval-platform-originals`, `gs://iiit-eval-platform-derived`) via dedicated service account `sa-eval-service`
+- **Storage**: Local filesystem (`uploads/`) currently; planned Cloud Storage (`gs://iiit-eval-platform-prod`) via dedicated service account `sa-eval@iiit-eval-platform.iam.gserviceaccount.com` for production Cloud Run deployment.
 - **Status**: Preserved existing implementation.
 
 ### Product 2: Classroom Activity
@@ -55,7 +55,7 @@ The platform is partitioned into three independently operating products accessib
   - Independent JWT tokens via `src/lib/classroomAuth.ts` (`classroom_token` cookie or `x-classroom-token` header).
   - Independent endpoints: `/api/classroom/auth/register`, `/api/classroom/auth/login`, `/api/classroom/auth/me`, `/api/classroom/auth/logout`.
 - **APIs**: `/api/classroom/*` (sessions, questions, submissions, review, stream, image).
-- **Storage**: Cloud Storage (`gs://iiit-classroom-sheets`, `gs://iiit-classroom-thumbnails`) via dedicated service account `sa-classroom-service`.
+- **Storage**: Local filesystem (`uploads/classroom/`) currently; planned Cloud Storage (`gs://iiit-classroom-prod`) via dedicated service account `sa-class@iiit-eval-platform.iam.gserviceaccount.com` for production Cloud Run deployment.
 
 ### Product 3: Personalised Learning
 - **Access URL**: `/personalized` (Portal), `/personalized/login`, `/personalized/register`, `/student/personalized` (Daily Practice), `/professor/personalized` (Taxonomy & Question Bank)
@@ -66,7 +66,7 @@ The platform is partitioned into three independently operating products accessib
   - Independent JWT tokens via `src/lib/personalizedAuth.ts` (`personalized_token` cookie or `x-personalized-token` header).
   - Independent endpoints: `/api/personalized/auth/register`, `/api/personalized/auth/login`, `/api/personalized/auth/me`, `/api/personalized/auth/logout`.
 - **APIs**: `/api/personalized/*` (today, submit, schedules, questions, syllabus, taxonomy).
-- **Storage**: Cloud Storage (`gs://iiit-personalized-assets`) via dedicated service account `sa-personalized-service`.
+- **Storage**: Local filesystem (`uploads/personalized/`) currently; planned Cloud Storage (`gs://iiit-personalized-prod`) via dedicated service account `sa-pers@iiit-eval-platform.iam.gserviceaccount.com` for production Cloud Run deployment.
 
 ---
 
