@@ -8,7 +8,7 @@ import { HttpError, isDuplicateKeyError } from '../lib/errors';
 
 class AuthService {
     async register(data: RegisterInput, ipAddress?: string): Promise<Omit<IUser, 'password'>> {
-        const { email, password, name, role } = data;
+        const { email, password, name } = data;
 
         const existingUser = await User.findOne({ email: email.toLowerCase() });
         if (existingUser) {
@@ -22,7 +22,8 @@ class AuthService {
                 name,
                 email,
                 password: hashedPassword,
-                role: role as UserRole
+                // Never trust a role from the request: public sign-up is student-only.
+                role: UserRole.STUDENT
             });
 
             // Write Audit Log

@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import { HttpError, isDuplicateKeyError } from '../lib/errors';
 import { isTransactionCapable } from '../lib/db';
 import { normalizeRollNumber } from '../utils/studentMappingUtils';
+import studentResultService from './StudentResultService';
 
 export interface AuditContext {
     actingUserId?: string;
@@ -216,6 +217,19 @@ class ExamService {
 
         // Prevent ownership changes through update APIs
         delete data.createdBy;
+
+        // Reject requests containing status: 'PUBLISHED' together with other fields with HTTP 400 before updating anything
+        const isStatusPublished = data.status !== undefined && (data.status === ExamStatus.PUBLISHED || String(data.status).toUpperCase() === 'PUBLISHED');
+        if (isStatusPublished) {
+            const otherFields = { ...data };
+            delete otherFields.status;
+            if (Object.keys(otherFields).length > 0) {
+                throw new HttpError(
+                    'Cannot update status to PUBLISHED alongside other fields; use POST /api/exams/[id]/publish or update other fields separately',
+                    400
+                );
+            }
+        }
 
         // Validate status transition
         if (data.status !== undefined && data.status !== examBefore.status) {
@@ -712,7 +726,6 @@ class ExamService {
 
         const StudentMapping = mongoose.models.StudentMapping || (await import('../models/StudentMapping')).default;
         const AnswerScript = mongoose.models.AnswerScript || (await import('../models/AnswerScript')).default;
-        const Grade = mongoose.models.Grade || (await import('../models/Grade')).default;
         const ScriptFlagModule = await import('../models/ScriptFlag');
         const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
 
@@ -723,7 +736,6 @@ class ExamService {
         });
 
         const scripts = await AnswerScript.find({ exam: exam._id, isActive: true });
-        const scriptIds = scripts.map((s: { _id: unknown }) => s._id);
 
         const scriptsWithOpenFlags = await ScriptFlag.distinct('answerScript', {
             exam: exam._id,
@@ -731,25 +743,30 @@ class ExamService {
         });
         const openFlagScriptIdSet = new Set(scriptsWithOpenFlags.map((sid: unknown) => String(sid)));
 
-        const finalGrades = await Grade.find({
-            answerScript: { $in: scriptIds },
-            isFinal: true
-        });
-        const finalGradeScriptIdSet = new Set(finalGrades.map((g: { answerScript: unknown }) => String(g.answerScript)));
-
         let readyToRelease = 0;
         let notReady = 0;
 
         for (const script of scripts) {
             const sId = String(script._id);
-            const hasFinalGrade = finalGradeScriptIdSet.has(sId);
             const hasOpenFlag = openFlagScriptIdSet.has(sId);
 
-            if (hasFinalGrade && !hasOpenFlag) {
-                readyToRelease++;
-            } else {
-                notReady++;
+            if (!hasOpenFlag && script.student) {
+                const { isReleased } = await studentResultService.evaluateReleaseConditions(
+                    script.student as mongoose.Types.ObjectId,
+                    {
+                        _id: exam._id,
+                        isActive: exam.isActive,
+                        status: ExamStatus.PUBLISHED,
+                        rubric: exam.rubric
+                    },
+                    script
+                );
+                if (isReleased) {
+                    readyToRelease++;
+                    continue;
+                }
             }
+            notReady++;
         }
 
         if (totalEnrolled > scripts.length) {
@@ -925,14 +942,22 @@ class ExamService {
                     // Ignore abort error
                 }
             } else {
-                // Fail-closed compensation if standalone
-                await Exam.findByIdAndUpdate(id, {
-                    $set: {
-                        status: ExamStatus.REVIEW_PENDING,
-                        publishedBy: null,
-                        publishedAt: null
+                // Fail-closed compensation if standalone: only revert if the current record
+                // still has the status written by this operation to prevent overwriting concurrent updates.
+                await Exam.findOneAndUpdate(
+                    {
+                        _id: id,
+                        status: ExamStatus.PUBLISHED,
+                        publishedAt: publishedAt
+                    },
+                    {
+                        $set: {
+                            status: ExamStatus.REVIEW_PENDING,
+                            publishedBy: null,
+                            publishedAt: null
+                        }
                     }
-                });
+                );
             }
             throw error;
         } finally {
@@ -963,7 +988,6 @@ class ExamService {
 
         // 2. Identify active scripts for this exam
         const AnswerScript = mongoose.models.AnswerScript || (await import('../models/AnswerScript')).default;
-        const Grade = mongoose.models.Grade || (await import('../models/Grade')).default;
         const ScriptFlagModule = await import('../models/ScriptFlag');
         const ScriptFlag = mongoose.models.ScriptFlag || ScriptFlagModule.default;
 
@@ -981,21 +1005,20 @@ class ExamService {
         });
         const openFlagScriptIdSet = new Set(scriptsWithOpenFlags.map((sid: unknown) => String(sid)));
 
-        // Find scripts that have finalized grades
-        const finalGrades = await Grade.find({
-            answerScript: { $in: scriptIds },
-            isFinal: true
-        });
-        const finalGradeScriptIdSet = new Set(finalGrades.map((g: { answerScript: unknown }) => String(g.answerScript)));
-
-        // Only students whose script is final and has no open flags
+        // Only students whose script satisfies all release conditions (evaluated by single source of truth)
         const candidateStudentIdSet = new Set<string>();
         for (const script of scripts) {
             const sId = String(script._id);
-            if (finalGradeScriptIdSet.has(sId) && !openFlagScriptIdSet.has(sId)) {
-                if (script.student) {
-                    candidateStudentIdSet.add(script.student.toString());
-                }
+            if (!script.student || openFlagScriptIdSet.has(sId)) {
+                continue;
+            }
+            const { isReleased } = await studentResultService.evaluateReleaseConditions(
+                script.student as mongoose.Types.ObjectId,
+                exam,
+                script
+            );
+            if (isReleased) {
+                candidateStudentIdSet.add(script.student.toString());
             }
         }
 
@@ -1200,16 +1223,28 @@ class ExamService {
                     // Ignore abort error
                 }
             } else {
-                // Fail-closed compensation if standalone
-                await Exam.findByIdAndUpdate(id, {
-                    $set: {
-                        status: ExamStatus.PUBLISHED,
-                        unpublishedBy: null,
-                        unpublishedAt: null
+                // Fail-closed compensation if standalone: only revert if the current record
+                // still has the status written by this operation to prevent overwriting concurrent updates.
+                await Exam.findOneAndUpdate(
+                    {
+                        _id: id,
+                        status: ExamStatus.REVIEW_PENDING,
+                        unpublishedAt: unpublishedAt
+                    },
+                    {
+                        $set: {
+                            status: ExamStatus.PUBLISHED,
+                            unpublishedBy: null,
+                            unpublishedAt: null
+                        }
                     }
-                });
+                );
             }
             throw error;
+        } finally {
+            if (session) {
+                session.endSession();
+            }
         }
     }
     async updateRegradeWindow(

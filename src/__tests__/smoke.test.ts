@@ -65,12 +65,47 @@ describe('Smoke Tests', () => {
       expect(data.message).toBe('Validation failed');
     });
 
+    it.each(['ADMIN', 'PROFESSOR', 'TA'])(
+      'should refuse public registration as %s and create no account',
+      async (role) => {
+        const email = `selfreg-${role.toLowerCase()}@university.edu`;
+        const req = new Request('http://localhost:3000/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({ name: 'Self Registered', email, password: 'secure-password-1', role }),
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const res = await registerPOST(req as any);
+        expect(res.status).toBe(400);
+        expect(await User.findOne({ email })).toBeNull();
+      }
+    );
+
+    it('should create a STUDENT when no role is sent', async () => {
+      const email = 'selfreg-norole@university.edu';
+      const req = new Request('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Self Registered', email, password: 'secure-password-1' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const res = await registerPOST(req as any);
+      expect(res.status).toBe(201);
+      const data = await res.json();
+      expect(data.data.role).toBe('STUDENT');
+      expect((await User.findOne({ email }))?.role).toBe('STUDENT');
+    });
+
+    it('should store STUDENT even if AuthService is called with another role', async () => {
+      const email = 'selfreg-service@university.edu';
+      await AuthService.register({ name: 'Service Caller', email, password: 'secure-password-1', role: 'ADMIN' } as any);
+      expect((await User.findOne({ email }))?.role).toBe('STUDENT');
+    });
+
     it('should prevent duplicate registration', async () => {
       const payload = {
-        name: 'Default Admin',
-        email: 'admin@university.edu',
-        password: 'admin-secure-password',
-        role: 'ADMIN',
+        name: 'Default Student',
+        email: 'student-dup@university.edu',
+        password: 'student-secure-password',
+        role: 'STUDENT',
       };
 
       // Register the first time (should succeed)

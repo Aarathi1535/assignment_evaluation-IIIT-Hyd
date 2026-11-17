@@ -185,7 +185,7 @@ describe('Audit Logging Utility & Service Tests (AE-033)', () => {
                 name: 'New Registered User',
                 email: 'newregister@university.edu',
                 password: 'password123',
-                role: UserRole.STUDENT
+                role: 'STUDENT' as const
             };
 
             const user = await AuthService.register(registerData, '192.168.1.5');
