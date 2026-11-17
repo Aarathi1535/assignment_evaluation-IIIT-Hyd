@@ -47,15 +47,17 @@ export async function GET(request: NextRequest) {
         await connectDB();
 
         let ownedExamIds: mongoose.Types.ObjectId[] = [];
+        const activeCourses = await Course.find({ isActive: true }).select('_id').lean();
+        const activeCourseIds = activeCourses.map(c => c._id);
+        const activeExams = await Exam.find({
+            course: { $in: activeCourseIds },
+            isActive: true,
+            ...(examId ? { _id: examId } : {})
+        }).select('_id').lean();
+        const activeExamIds = activeExams.map(exam => exam._id);
+
         if (auth.user.role === UserRole.ADMIN) {
-            const activeCourses = await Course.find({ isActive: true }).select('_id').lean();
-            const activeCourseIds = activeCourses.map(c => c._id);
-            const ownedExams = await Exam.find({
-                course: { $in: activeCourseIds },
-                isActive: true,
-                ...(examId ? { _id: examId } : {})
-            }).select('_id').lean();
-            ownedExamIds = ownedExams.map(exam => exam._id);
+            ownedExamIds = activeExamIds;
         } else if (auth.user.role === UserRole.PROFESSOR) {
             const profCourses = await Course.find({
                 professor: new mongoose.Types.ObjectId(auth.user.id),
@@ -69,13 +71,15 @@ export async function GET(request: NextRequest) {
             }).select('_id').lean();
             ownedExamIds = ownedExams.map(exam => exam._id);
         }
+
         const baseFilter = examId ? { exam: new mongoose.Types.ObjectId(examId) } : {};
         const accessFilter = auth.user.role === UserRole.ADMIN
-            ? { ...baseFilter, exam: { $in: ownedExamIds } }
+            ? { ...baseFilter, exam: { $in: activeExamIds } }
             : auth.user.role === UserRole.TA
-                ? { ...baseFilter, assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
+                ? { ...baseFilter, exam: { $in: activeExamIds }, assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
                 : {
                     ...baseFilter,
+                    exam: { $in: activeExamIds },
                     $or: [
                         { exam: { $in: ownedExamIds } },
                         { assignedTo: new mongoose.Types.ObjectId(auth.user.id) }

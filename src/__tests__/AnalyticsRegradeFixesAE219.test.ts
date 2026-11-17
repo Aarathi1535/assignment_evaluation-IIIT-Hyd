@@ -290,7 +290,7 @@ describe('AE-219: Priority Analytics and Regrade Bug Fixes', () => {
             const queueRes = await getProfessorQueue(
                 new NextRequest(`http://localhost/api/professor/regrade-requests?examId=${exam._id}`)
             );
-            expect([200, 404]).toContain(queueRes.status);
+            expect(queueRes.status).toBe(200);
 
             const courseProfDecide = await decideRegrade(
                 new NextRequest(`http://localhost/api/professor/regrade-requests/${regrade._id}`, {
@@ -303,7 +303,7 @@ describe('AE-219: Priority Analytics and Regrade Bug Fixes', () => {
                 }),
                 { params: Promise.resolve({ id: regrade._id.toString() }) }
             );
-            expect([200, 404]).toContain(courseProfDecide.status);
+            expect(courseProfDecide.status).toBe(200);
 
             // 2. Unrelated professor is also denied access with 404
             mockSessionUser = { id: otherProf._id.toString(), role: UserRole.PROFESSOR };

@@ -546,7 +546,7 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
             );
             expect(nullEntryStudentsRes.status).toBe(400);
 
-            // 5. Inactive Course -> 404 or 409
+            // 5. Inactive Course -> 404
             await Course.findByIdAndUpdate(fixture.courseA._id, { isActive: false });
             const inactiveCourseRes = await ltiPassbackPOST(
                 new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
@@ -555,8 +555,20 @@ describe('AE-216 LTI 1.3 grade passback design and safe stub', () => {
                 }),
                 { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
             );
-            expect([404, 409]).toContain(inactiveCourseRes.status);
+            expect(inactiveCourseRes.status).toBe(404);
             await Course.findByIdAndUpdate(fixture.courseA._id, { isActive: true });
+
+            // 5b. Inactive Exam -> 404
+            await Exam.findByIdAndUpdate(fixture.exam._id, { isActive: false });
+            const inactiveExamRes = await ltiPassbackPOST(
+                new NextRequest(`http://localhost/api/analytics/exams/${fixture.exam._id}/lti/passback`, {
+                    method: 'POST',
+                    body: JSON.stringify({ students: [{ lmsStudentId: 'ROLL-2026-01' }] })
+                }),
+                { params: Promise.resolve({ id: fixture.exam._id.toString() }) }
+            );
+            expect(inactiveExamRes.status).toBe(404);
+            await Exam.findByIdAndUpdate(fixture.exam._id, { isActive: true });
 
             // 6. Unpublished Exam -> 409 Conflict
             await Exam.findByIdAndUpdate(fixture.exam._id, { status: ExamStatus.DRAFT });

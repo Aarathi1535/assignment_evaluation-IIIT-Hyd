@@ -57,11 +57,18 @@ class ExamRepository {
 
         const query: QueryFilter<IExam> = { _id: id, isActive: true };
 
-        if (actingUserRole === 'ADMIN' || actingUserRole === SYSTEM_ROLE) {
+        const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+
+        if (actingUserRole === 'ADMIN') {
+            const activeCourses = await Course.find({ isActive: true }).select('_id').lean();
+            const activeCourseIds = activeCourses.map((c: { _id: mongoose.Types.ObjectId }) => c._id);
+            query.course = { $in: activeCourseIds };
             return query;
         }
 
-        const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+        if (actingUserRole === SYSTEM_ROLE) {
+            return query;
+        }
 
         if (actingUserRole === 'PROFESSOR') {
             if (!mongoose.Types.ObjectId.isValid(actingUserId)) {

@@ -90,28 +90,17 @@ export async function GET(
       userRole === UserRole.PROFESSOR || userRole === UserRole.ADMIN;
 
     const manage = await canManageExam(user, script.exam);
-    if (!manage.exam || !manage.course) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: manage.errorMessage || 'Forbidden: Course is inactive or not found',
-          data: null,
-        },
-        { status: 404 }
-      );
-    }
+    const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
 
     if (isProfessorOrAdmin) {
-      const isExamManager = manage.canManage;
-      const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
-      if (!isExamManager && !assignedRegrade) {
+      if (!manage.canManage && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,
-            message: 'Forbidden: Access denied to the exam for this answer script',
+            message: 'AnswerScript not found',
             data: null,
           },
-          { status: 403 }
+          { status: 404 }
         );
       }
     } else {
@@ -119,15 +108,24 @@ export async function GET(
         script._id,
         user.id
       );
-      const assignedRegrade = await hasActiveRegradeAccess(script._id, script.exam, user.id);
       if (!allocation && !assignedRegrade) {
         return NextResponse.json(
           {
             success: false,
-            message: 'Forbidden: You are not allocated to grade this answer script',
+            message: 'AnswerScript not found',
             data: null,
           },
-          { status: 403 }
+          { status: 404 }
+        );
+      }
+      if (!manage.exam || !manage.course) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'AnswerScript not found',
+            data: null,
+          },
+          { status: 404 }
         );
       }
     }

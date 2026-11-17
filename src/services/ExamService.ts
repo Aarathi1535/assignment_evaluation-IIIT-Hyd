@@ -87,8 +87,19 @@ class ExamService {
 
     async getAllExams(actingUserId?: string, actingUserRole?: string): Promise<IExam[]> {
         const filter: mongoose.QueryFilter<IExam> = {};
-        if (actingUserRole === 'PROFESSOR' && actingUserId) {
-            filter.createdBy = new mongoose.Types.ObjectId(actingUserId);
+        if (actingUserRole === 'ADMIN') {
+            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+            const activeCourses = await Course.find({ isActive: true }).select('_id').lean();
+            const activeCourseIds = activeCourses.map(c => c._id);
+            filter.course = { $in: activeCourseIds };
+        } else if (actingUserRole === 'PROFESSOR' && actingUserId) {
+            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map(c => c._id);
+            filter.course = { $in: profCourseIds };
         } else if (actingUserRole === 'STUDENT' && actingUserId) {
             filter.isActive = true;
             filter.status = ExamStatus.PUBLISHED;

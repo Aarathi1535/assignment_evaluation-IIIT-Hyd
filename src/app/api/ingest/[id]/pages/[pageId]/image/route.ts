@@ -118,29 +118,7 @@ export const GET = withServerTiming(async (
     const isAdmin = userRole === UserRole.ADMIN;
     const isProfessorOrAdmin = isProfessor || isAdmin;
 
-    let batch = null;
-    if (isProfessor) {
-      batch = await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role);
-      if (!batch) {
-        const internalBatch = await BatchRepository.getBatchByBatchIdInternal(batchId);
-        if (internalBatch?.exam) {
-          const ExamRepository = (await import('../../../../../../../repositories/ExamRepository')).default;
-          const exam = await ExamRepository.getExamById(internalBatch.exam.toString(), auth.user.id, auth.user.role);
-          if (exam) {
-            batch = internalBatch;
-          }
-        }
-      }
-    } else {
-      batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
-      if (isAdmin && batch?.exam) {
-        const manage = await canManageExam(auth.user, batch.exam);
-        if (!manage.canManage) {
-          batch = null;
-        }
-      }
-    }
-
+    const batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
     if (!batch) {
       return NextResponse.json(
         {
@@ -154,15 +132,28 @@ export const GET = withServerTiming(async (
 
     if (batch.exam) {
       const manage = await canManageExam(auth.user, batch.exam);
-      if (!manage.exam || !manage.course) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: manage.errorMessage || 'Batch not found or access denied',
-            data: null,
-          },
-          { status: 404 }
-        );
+      if (isProfessorOrAdmin) {
+        if (!manage.canManage) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: 'Batch not found or access denied',
+              data: null,
+            },
+            { status: 404 }
+          );
+        }
+      } else {
+        if (!manage.exam || !manage.course) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: 'Batch not found or access denied',
+              data: null,
+            },
+            { status: 404 }
+          );
+        }
       }
     }
 
