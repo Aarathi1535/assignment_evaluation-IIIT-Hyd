@@ -715,4 +715,110 @@ describe('AE-208 audit-trail integrity verification', () => {
             d => d.code === 'CHAIN_BROKEN' && d.sequence === 2
         )).toBe(true);
     });
+
+    it('produces MISMATCH (never UNSEALED) and INTEGRITY_STATE_INVALID when state seal is cleared and counters reset on a sealed trail', async () => {
+        const actor = await createActor();
+
+        // Write a sealed record so the trail has been sealed
+        await writeAuditLog({
+            user: actor._id.toString(),
+            action: 'SEALED_EVENT',
+            outcome: 'SUCCESS'
+        });
+
+        const initialResult = await auditIntegrityService.verifyAuditTrail();
+        expect(initialResult.status).toBe('INTACT');
+        expect(initialResult.valid).toBe(true);
+
+        // Attacker clears state seal fields and resets lastSequence to 0
+        await AuditLogIntegrityState.updateOne(
+            { _id: 'global' },
+            {
+                $unset: { integritySeal: 1, lastRecordHmac: 1, integrityKeyId: 1 },
+                $set: { lastSequence: 0 }
+            }
+        );
+
+        const tamperedResult = await auditIntegrityService.verifyAuditTrail();
+        expect(tamperedResult.status).toBe('MISMATCH');
+        expect(tamperedResult.valid).toBe(false);
+        expect(tamperedResult.invalidSeals).toBeGreaterThan(0);
+        expect(tamperedResult.diagnostics.some(d => d.code === 'INTEGRITY_STATE_INVALID')).toBe(true);
+    });
+
+    it('produces MISMATCH when state seal is cleared even if sealed records were deleted leaving only legacy unsealed records', async () => {
+        const actor = await createActor();
+
+        // Insert legacy unsealed record
+        await AuditLog.collection.insertOne({
+            user: actor._id,
+            action: 'LEGACY_EVENT',
+            outcome: 'SUCCESS',
+            createdAt: new Date('2020-01-01T00:00:00.000Z')
+        });
+
+        // Write a sealed record
+        await writeAuditLog({
+            user: actor._id.toString(),
+            action: 'SEALED_EVENT',
+            outcome: 'SUCCESS'
+        });
+
+        // Attacker deletes the sealed record, clears state seal, and resets counter to 0
+        await AuditLog.collection.deleteOne({ action: 'SEALED_EVENT' });
+        await AuditLogIntegrityState.updateOne(
+            { _id: 'global' },
+            {
+                $unset: { integritySeal: 1, lastRecordHmac: 1, integrityKeyId: 1 },
+                $set: { lastSequence: 0 }
+            }
+        );
+
+        // Trail was sealed (state has lastAllocatedAt), so missing/reset state must produce MISMATCH, never UNSEALED
+        const tamperedResult = await auditIntegrityService.verifyAuditTrail();
+        expect(tamperedResult.status).toBe('MISMATCH');
+        expect(tamperedResult.valid).toBe(false);
+        expect(tamperedResult.diagnostics.some(d => d.code === 'INTEGRITY_STATE_INVALID')).toBe(true);
+    });
+
+    it('detects unsequenced record created after cutover date with UNSEALED_RECORD_AFTER_CUTOVER and produces MISMATCH', async () => {
+        const actor = await createActor();
+
+        // Write sealed record to initialize cutover state
+        await writeAuditLog({
+            user: actor._id.toString(),
+            action: 'INITIAL_EVENT',
+            outcome: 'SUCCESS'
+        });
+
+        // Attacker inserts an unsequenced record created after cutover date
+        await AuditLog.collection.insertOne({
+            user: actor._id,
+            action: 'UNSEQUENCED_POST_CUTOVER_INJECTION',
+            outcome: 'SUCCESS',
+            createdAt: new Date(Date.now() + 10_000)
+        });
+
+        const result = await auditIntegrityService.verifyAuditTrail();
+        expect(result.status).toBe('MISMATCH');
+        expect(result.valid).toBe(false);
+        expect(result.invalidSeals).toBeGreaterThan(0);
+        expect(result.diagnostics.some(d => d.code === 'UNSEALED_RECORD_AFTER_CUTOVER')).toBe(true);
+    });
+
+    it('verifies tail deletion produces SEQUENCE_GAP rather than INTEGRITY_STATE_INVALID', async () => {
+        const actor = await createActor();
+
+        // Write sequence 1 and 2
+        await writeAuditLog({ user: actor._id.toString(), action: 'EVENT_1', outcome: 'SUCCESS' });
+        await writeAuditLog({ user: actor._id.toString(), action: 'EVENT_2', outcome: 'SUCCESS' });
+
+        // Delete the tail record (sequence 2) directly, leaving valid state seal at sequence 2
+        await AuditLog.collection.deleteOne({ sequence: 2 });
+
+        const result = await auditIntegrityService.verifyAuditTrail();
+        expect(result.status).toBe('MISMATCH');
+        expect(result.missingSequences).toBe(1);
+        expect(result.diagnostics.some(d => d.code === 'SEQUENCE_GAP' && d.sequence === 2)).toBe(true);
+    });
 });

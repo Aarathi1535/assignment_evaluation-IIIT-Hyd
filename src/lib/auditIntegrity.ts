@@ -22,6 +22,8 @@ export interface AuditIntegrityState {
     lastRecordHmac?: string;
     integritySeal?: string;
     integrityKeyId?: string;
+    cutoverDate?: Date;
+    lastAllocatedAt?: Date;
 }
 
 function canonicalize(value: unknown): unknown {

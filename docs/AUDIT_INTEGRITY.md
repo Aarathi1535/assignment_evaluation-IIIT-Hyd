@@ -30,6 +30,10 @@ Every audit document is signed with HMAC-SHA256 over its canonical JSON represen
    - Encodes `version: 2`, `sequence`, `keyId`, `previousSeal`, `user`, `action`, `outcome`, `entityId`, `entityType`, `details`, `ipAddress`, and `createdAt`.
    - **Chain Requirement**: On every record after the cutover (`sequence > cutoverSequence`), `previousSeal` is **strictly required** and must match the preceding record's HMAC seal (`lastRecordHmac`). For the genesis record at `cutoverSequence`, `previousSeal` is `'GENESIS'`.
 
+> [!NOTE]
+> **Pre-Cutover Records Verification Scope**:
+> Records below `cutoverSequence` are treated as legacy pre-cutover entries (`UNSEALED_RECORD`) and are not currently seal-checked by the verifier; cryptographic verification begins at `cutoverSequence`.
+
 ---
 
 ## 3. Verification Protocol (`AuditIntegrityService`)
@@ -37,8 +41,8 @@ Every audit document is signed with HMAC-SHA256 over its canonical JSON represen
 The verification service traverses all audit records in ascending sequence order and enforces:
 
 1. **Unsealed Records After Cutover**:
-   - Any record with `sequence < cutoverSequence` created prior to cutover is marked `UNSEALED_RECORD` (valid for legacy history).
-   - Any unsealed record created after `cutoverDate` is rejected with `UNSEALED_RECORD_AFTER_CUTOVER`.
+   - Any record with `sequence < cutoverSequence` created prior to cutover is marked `UNSEALED_RECORD` (valid for legacy history, not seal-checked).
+   - Any unsealed record created or inserted after `cutoverDate` (detected via `createdAt` or `_id` timestamp) is rejected with `UNSEALED_RECORD_AFTER_CUTOVER`.
 2. **Strict Sequence Monotonicity**:
    - Detected gaps are flagged as `SEQUENCE_GAP`.
    - Decreasing or out-of-order sequences are flagged as `SEQUENCE_ORDER_INVALID`.
@@ -47,6 +51,7 @@ The verification service traverses all audit records in ascending sequence order
    - Any broken link or missing `previousSeal` is flagged as `CHAIN_BROKEN`.
 4. **State Seal Validation**:
    - The global integrity state document is verified. Mismatches with the highest recorded sequence or an invalid state HMAC trigger `INTEGRITY_STATE_INVALID`.
+   - Once a trail has been sealed, clearing state seal fields or resetting counters causes `INTEGRITY_STATE_INVALID` (or `INTEGRITY_STATE_BEHIND`) and results in `MISMATCH`, never `UNSEALED`.
 
 ---
 
@@ -55,8 +60,8 @@ The verification service traverses all audit records in ascending sequence order
 ### 4.1 Internal Tamper-Evidence
 - **Direct Record Tampering**: Modifying any field (user, action, outcome, details, timestamp) invalidates the HMAC seal (`SEAL_INVALID`).
 - **Record Deletion**: Deleting any intermediate record breaks the sequence continuity (`SEQUENCE_GAP`) and breaks the hash chain (`CHAIN_BROKEN`).
-- **Tail Deletion / Rollback**: Deleting records from the end causes `highestSequence` to lag behind `AuditLogIntegrityState.lastSequence` (`INTEGRITY_STATE_INVALID`).
-- **State Manipulation**: Modifying `lastSequence` without the secret HMAC key fails state verification.
+- **Tail Deletion / Rollback**: Deleting records from the end causes `highestSequence` to lag behind `AuditLogIntegrityState.lastSequence`, producing a sequence gap (`SEQUENCE_GAP`).
+- **State Manipulation**: Modifying `lastSequence` without the secret HMAC key fails state verification (`INTEGRITY_STATE_INVALID`). Clearing state seal fields or resetting counters on a sealed trail produces `MISMATCH`, never `UNSEALED`.
 
 ### 4.2 Backup Restoration Limitation (External Anchor Requirement)
 
@@ -67,3 +72,11 @@ The verification service traverses all audit records in ascending sequence order
 > Therefore, **restoring both records and the state seal from a backup cannot be detected without an external anchor** (such as an external append-only ledger, a public timestamp authority, a transparency log, or cross-system block commitments).
 >
 > This design boundary is explicitly documented and accepted for the current system architecture. Future releases will integrate external notary anchors for cross-system tamper verification.
+
+### 4.3 Unsequenced Records with Forged Past Timestamps Limitation
+
+> [!NOTE]
+> **Heuristic for Unsequenced Records**:
+> The verification service inspects both `createdAt` and the MongoDB `_id` timestamp (derived from ObjectId) to detect unsealed records inserted after `cutoverDate` (`UNSEALED_RECORD_AFTER_CUTOVER`).
+>
+> However, if an attacker with direct database access crafts an unsequenced document with both a forged backdated `createdAt` and a forged backdated `_id` timestamp prior to `cutoverDate`, the document cannot be cryptographically distinguished from a genuine pre-cutover legacy record using database fields alone. A follow-up issue tracks external notary commitments and strict sequence gating to eliminate this boundary limitation.

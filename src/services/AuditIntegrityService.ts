@@ -61,8 +61,11 @@ export class AuditIntegrityService {
             // Legacy pre-cutover records or records with no sequence
             if (!Number.isSafeInteger(sequence) || !sequence || sequence < cutoverSequence) {
                 // If cutover is active and an unsealed record was created after cutover date, it is an invalid injection
-                if (integrityState?.cutoverDate && integrityRecord.createdAt &&
-                    new Date(integrityRecord.createdAt) > new Date(integrityState.cutoverDate)) {
+                const isAfterCutover = Boolean(
+                    integrityState?.cutoverDate && integrityRecord.createdAt &&
+                    new Date(integrityRecord.createdAt) > new Date(integrityState.cutoverDate)
+                );
+                if (isAfterCutover) {
                     invalidSeals += 1;
                     addDiagnostic({ code: 'UNSEALED_RECORD_AFTER_CUTOVER' });
                 } else {
@@ -96,11 +99,6 @@ export class AuditIntegrityService {
                     invalidSeals += 1;
                     addDiagnostic({ code: 'CHAIN_BROKEN', sequence });
                 }
-            } else if (sequence === cutoverSequence) {
-                if (integrityRecord.previousSeal && integrityRecord.previousSeal !== 'GENESIS' && lastSealedRecordHmac && integrityRecord.previousSeal !== lastSealedRecordHmac) {
-                    invalidSeals += 1;
-                    addDiagnostic({ code: 'CHAIN_BROKEN', sequence });
-                }
             }
 
             expectedSequence = Math.max(expectedSequence, sequence + 1);
@@ -117,28 +115,38 @@ export class AuditIntegrityService {
 
         const recordedHighWater = integrityState?.lastSequence ?? 0;
         const integrityStateRecord: AuditIntegrityState | null = integrityState;
-        if (integrityStateRecord && recordedHighWater > 0 &&
-            !verifyAuditIntegrityStateSeal(integrityStateRecord)) {
-            invalidSeals += 1;
-            addDiagnostic({ code: 'INTEGRITY_STATE_INVALID' });
-        } else if (!integrityState && highestSequence > 0) {
-            invalidSeals += 1;
-            addDiagnostic({ code: 'INTEGRITY_STATE_MISSING' });
-        } else if (recordedHighWater > highestSequence) {
-            const missingTail = recordedHighWater - highestSequence;
-            missingSequences += missingTail;
-            addDiagnostic({
-                code: 'SEQUENCE_GAP',
-                sequence: highestSequence + 1,
-                count: missingTail
-            });
-        } else if (highestSequence > recordedHighWater) {
-            invalidSeals += 1;
-            addDiagnostic({ code: 'INTEGRITY_STATE_BEHIND', sequence: recordedHighWater });
-        } else if (integrityState?.lastRecordHmac && lastSealedRecordHmac &&
-            integrityState.lastRecordHmac !== lastSealedRecordHmac) {
-            invalidSeals += 1;
-            addDiagnostic({ code: 'STATE_SEAL_RECORD_MISMATCH', sequence: highestSequence });
+        const trailHasBeenSealed = highestSequence > 0 || sealedRecords > 0 || Boolean(
+            integrityStateRecord && (
+                integrityStateRecord.integritySeal ||
+                integrityStateRecord.lastRecordHmac ||
+                recordedHighWater > 0 ||
+                integrityStateRecord.lastAllocatedAt
+            )
+        );
+
+        if (trailHasBeenSealed) {
+            if (!integrityStateRecord) {
+                invalidSeals += 1;
+                addDiagnostic({ code: 'INTEGRITY_STATE_MISSING' });
+            } else if (!verifyAuditIntegrityStateSeal(integrityStateRecord)) {
+                invalidSeals += 1;
+                addDiagnostic({ code: 'INTEGRITY_STATE_INVALID' });
+            } else if (recordedHighWater > highestSequence) {
+                const missingTail = recordedHighWater - highestSequence;
+                missingSequences += missingTail;
+                addDiagnostic({
+                    code: 'SEQUENCE_GAP',
+                    sequence: highestSequence + 1,
+                    count: missingTail
+                });
+            } else if (highestSequence > recordedHighWater) {
+                invalidSeals += 1;
+                addDiagnostic({ code: 'INTEGRITY_STATE_BEHIND', sequence: recordedHighWater });
+            } else if (integrityStateRecord.lastRecordHmac && lastSealedRecordHmac &&
+                integrityStateRecord.lastRecordHmac !== lastSealedRecordHmac) {
+                invalidSeals += 1;
+                addDiagnostic({ code: 'STATE_SEAL_RECORD_MISMATCH', sequence: highestSequence });
+            }
         }
 
         let status: AuditTrailIntegrityStatus = 'INTACT';
