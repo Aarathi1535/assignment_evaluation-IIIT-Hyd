@@ -88,7 +88,8 @@ export function profileDeviceCapabilities(
 export class RasterMemoryCacheManager {
   private readonly maxBytes: number;
   private currentBytes = 0;
-  private cache = new Map<string, { sizeBytes: number; lastAccessed: number }>();
+  private accessSequence = 0;
+  private cache = new Map<string, { sizeBytes: number; sequence: number }>();
 
   constructor(maxMemoryMb = 150) {
     this.maxBytes = maxMemoryMb * 1024 * 1024;
@@ -113,7 +114,7 @@ export class RasterMemoryCacheManager {
 
     this.cache.set(pageId, {
       sizeBytes,
-      lastAccessed: Date.now(),
+      sequence: ++this.accessSequence,
     });
     this.currentBytes += sizeBytes;
   }
@@ -122,7 +123,7 @@ export class RasterMemoryCacheManager {
     const entry = this.cache.get(pageId);
     if (!entry) return false;
 
-    entry.lastAccessed = Date.now();
+    entry.sequence = ++this.accessSequence;
     return true;
   }
 
@@ -140,11 +141,11 @@ export class RasterMemoryCacheManager {
 
   private evictOldest(): void {
     let oldestKey: string | null = null;
-    let oldestTimestamp = Infinity;
+    let oldestSequence = Infinity;
 
     for (const [key, value] of this.cache.entries()) {
-      if (value.lastAccessed < oldestTimestamp) {
-        oldestTimestamp = value.lastAccessed;
+      if (value.sequence < oldestSequence) {
+        oldestSequence = value.sequence;
         oldestKey = key;
       }
     }
