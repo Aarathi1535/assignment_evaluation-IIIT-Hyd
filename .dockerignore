@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.env*
+!.env.example
+data
+coverage
+scratch
+*.pem
+*.key
+.gemini
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+next_extracted/

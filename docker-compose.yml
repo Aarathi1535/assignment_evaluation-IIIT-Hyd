@@ -1,0 +1,61 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: assignment-evaluator-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - MONGODB_URI=mongodb://mongodb:27017/assignment_evaluator
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=production-secret-change-in-prod-min-32-chars-long!
+      - ORIGINAL_STORAGE_HMAC_SECRET=production-hmac-secret-change-in-prod-min-32-chars!
+      - ORIGINAL_STORAGE_KEY_ID=v1
+      - ORIGINAL_STORAGE_PATH=/app/data/originals
+      - STUDENT_RESULTS_ENABLED=true
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - evaluator_network
+
+  mongodb:
+    image: mongo:7.0
+    container_name: assignment-evaluator-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - evaluator_network
+
+volumes:
+  mongo_data:
+    name: assignment_evaluator_mongo_data
+  app_data:
+    name: assignment_evaluator_app_data
+
+networks:
+  evaluator_network:
+    name: assignment_evaluator_network
+    driver: bridge
