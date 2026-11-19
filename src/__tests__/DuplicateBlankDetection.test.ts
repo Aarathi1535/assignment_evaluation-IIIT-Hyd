@@ -45,6 +45,10 @@ function createNormalPageBuffer(width = 200, height = 200): Buffer {
     ctx.fillText('Student Answer details', 20, 40);
     ctx.fillText('Question 1: Solution code text', 20, 80);
     ctx.fillText('Line 2 of written content', 20, 120);
+    // Draw content strokes to guarantee non-white pixels even if fonts are missing in headless CI
+    ctx.fillRect(20, 45, 120, 4);
+    ctx.fillRect(20, 85, 120, 4);
+    ctx.fillRect(20, 125, 120, 4);
     return canvas.toBuffer('image/png');
 }
 
