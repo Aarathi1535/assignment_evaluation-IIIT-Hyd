@@ -21,8 +21,8 @@ function createSyntheticTestImage(skewDeg: number, orientationDeg: number = 0, t
         for (let i = 100; i < 750; i += 30) {
             ctx.fillText('This is a synthetic line of text for testing deskew and orientation algorithms.', 60, i);
             ctx.fillText('It simulates a scanned document page with a standard layout.', 60, i + 24);
-            // Draw horizontal strokes covering >= 5% of canvas area to ensure contrast percentile statistics work deterministically
-            ctx.fillRect(60, i, 650, 3);
+            // Draw horizontal strokes covering ~12% of canvas area to ensure contrast percentile statistics work deterministically even in headless CI without fonts
+            ctx.fillRect(60, i, 650, 8);
         }
     };
 
