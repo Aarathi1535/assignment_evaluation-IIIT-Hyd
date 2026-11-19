@@ -1,0 +1,85 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: assignment-evaluator-staging
+  namespace: assignment-evaluator-staging
+  labels:
+    cloud.googleapis.com/location: asia-south1
+    environment: staging
+    app: assignment-evaluator
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/ingress-status: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      serviceAccountName: assignment-evaluator-sa@iiit-hyd-assignment-eval.iam.gserviceaccount.com
+      containers:
+        - name: app
+          image: gcr.io/iiit-hyd-assignment-eval/assignment-evaluator:staging-latest
+          ports:
+            - name: http1
+              containerPort: 3000
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: "1"
+              memory: 1Gi
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3000"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: STUDENT_RESULTS_ENABLED
+              value: "true"
+            - name: ORIGINAL_STORAGE_KEY_ID
+              value: "v1"
+            - name: DERIVED_PAGE_STORAGE_BUCKET
+              value: "iiit-assignment-evaluator-staging-assets"
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: evaluator-mongodb-uri
+                  key: latest
+            - name: NEXTAUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: evaluator-nextauth-secret
+                  key: latest
+            - name: NEXTAUTH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: evaluator-nextauth-url
+                  key: latest
+            - name: ORIGINAL_STORAGE_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: evaluator-original-hmac-secret
+                  key: latest
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 20
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 3
