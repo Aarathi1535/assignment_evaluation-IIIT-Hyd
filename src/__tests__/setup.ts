@@ -2,9 +2,16 @@ import { loadEnvConfig } from '@next/env';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { beforeAll, beforeEach, afterAll } from 'vitest';
+import { GlobalFonts } from '@napi-rs/canvas';
 
 // Load environment configuration (.env.local) if present
 loadEnvConfig(process.cwd());
+
+try {
+  (GlobalFonts as unknown as { loadSystemFonts?: () => void }).loadSystemFonts?.();
+} catch {
+  // Ignore in headless/container environments where system fonts cannot be enumerated
+}
 
 // Override MONGODB_URI immediately with a local placeholder to isolate tests from development database
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/test-placeholder-safety';
