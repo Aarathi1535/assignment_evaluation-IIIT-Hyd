@@ -47,7 +47,10 @@ describe('AE-068 Page Enhancement Update Workflow', () => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, 100, 100);
         ctx.fillStyle = '#000000';
+        ctx.font = '16px Arial, sans-serif';
         ctx.fillText('Test Page', 10, 50);
+        // Draw a thin horizontal stroke (160 pixels, < 5% of canvas) to guarantee text structure and faint contrast profile even in headless CI without fonts
+        ctx.fillRect(10, 50, 80, 2);
         return canvas.toBuffer('image/png');
     }
 
