@@ -16,11 +16,13 @@ function createSyntheticTestImage(skewDeg: number, orientationDeg: number = 0, t
     // Draw text lines
     const drawTextLines = () => {
         ctx.fillStyle = textColor;
-        ctx.font = '24px Arial';
+        ctx.font = '24px Arial, sans-serif';
         // Add left margin, draw multiple lines
-        for (let i = 120; i < 700; i += 50) {
+        for (let i = 100; i < 750; i += 30) {
             ctx.fillText('This is a synthetic line of text for testing deskew and orientation algorithms.', 60, i);
             ctx.fillText('It simulates a scanned document page with a standard layout.', 60, i + 24);
+            // Draw horizontal strokes covering ~12% of canvas area to ensure contrast percentile statistics work deterministically even in headless CI without fonts
+            ctx.fillRect(60, i, 650, 8);
         }
     };
 
