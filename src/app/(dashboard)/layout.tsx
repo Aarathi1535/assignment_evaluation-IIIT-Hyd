@@ -17,9 +17,12 @@ import {
   Plus,
   Flag,
   ClipboardList,
+  Sparkles,
+  Calendar,
 } from 'lucide-react';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { clearUserDrafts } from '@/lib/offlineDrafts';
+import { isFeatureEnabled } from '@/config/features';
 
 interface NavLinksProps {
   menuItems: Array<{ label: string; href: string; icon: LucideIcon }>;
@@ -115,28 +118,54 @@ export default function DashboardLayout({
   const rawRole = user.role || 'STUDENT';
   const role = rawRole.toUpperCase();
 
+  const isClassroomEnabled = isFeatureEnabled('CLASSROOM_ASSESSMENT');
+  const isPersonalizedEnabled = isFeatureEnabled('PERSONALIZED_ASSESSMENT');
+
+  const adminNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+    { label: 'Users', href: '/admin/users', icon: Users },
+    { label: 'Audit History', href: '/admin/audit-logs', icon: ClipboardList },
+  ];
+  if (isClassroomEnabled) {
+    adminNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
+  }
+
+  const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
+    { label: 'Courses', href: '/professor/courses', icon: BookOpen },
+    { label: 'Exams', href: '/professor/exams', icon: FileText },
+    { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
+    { label: 'Audit History', href: '/professor/audit-logs', icon: ClipboardList },
+    { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
+    { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
+  ];
+  if (isClassroomEnabled) {
+    professorNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
+  }
+  if (isPersonalizedEnabled) {
+    professorNavItems.push({ label: 'Personalized Learning', href: '/professor/personalized', icon: Calendar });
+  }
+
+  const taNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
+  ];
+
+  const studentNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+    { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
+  ];
+  if (isClassroomEnabled) {
+    studentNavItems.push({ label: 'Classroom Activity', href: '/student/classroom', icon: Sparkles });
+  }
+  if (isPersonalizedEnabled) {
+    studentNavItems.push({ label: 'Personalized Learning', href: '/student/personalized', icon: Calendar });
+  }
+
   // Define navigation items per role
   const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
-    ADMIN: [
-      { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-      { label: 'Users', href: '/admin/users', icon: Users },
-      { label: 'Audit History', href: '/admin/audit-logs', icon: ClipboardList },
-    ],
-    PROFESSOR: [
-      { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
-      { label: 'Courses', href: '/professor/courses', icon: BookOpen },
-      { label: 'Exams', href: '/professor/exams', icon: FileText },
-      { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
-      { label: 'Audit History', href: '/professor/audit-logs', icon: ClipboardList },
-      { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
-      { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
-    ],
-    TA: [
-      { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
-    ],
-    STUDENT: [
-      { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
-    ],
+    ADMIN: adminNavItems,
+    PROFESSOR: professorNavItems,
+    TA: taNavItems,
+    STUDENT: studentNavItems,
   };
 
   const menuItems = navItemsByRole[role] || navItemsByRole.STUDENT;

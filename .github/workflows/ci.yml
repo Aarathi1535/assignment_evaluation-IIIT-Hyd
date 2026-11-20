@@ -30,6 +30,9 @@ jobs:
       - name: Run lint
         run: npm run lint
 
+      - name: Lint OpenAPI specifications
+        run: npx --yes @redocly/cli@1.25.7 lint docs/openapi/classroom-service.v1.yaml
+
       - name: Type check
         run: npx tsc --noEmit
 

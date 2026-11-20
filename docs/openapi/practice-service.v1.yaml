@@ -1,0 +1,573 @@
+openapi: 3.1.0
+info:
+  title: IIIT Hyderabad Practice & Personalised Learning Service API
+  version: 1.0.0
+  license:
+    name: Proprietary - IIIT Hyderabad Internal Educational License
+    identifier: Proprietary
+  description: >
+    Headless REST API for Practice & Personalised Learning (Product 3).
+    Provides syllabus ingestion, course taxonomy trees, question bank management with diverse
+    question types (conceptual, analytical, numerical, coding, debugging), student-selected and
+    adaptive daily practice, concept mastery tracking, and model-agnostic AI question generation
+    with human-in-the-loop review governance.
+  contact:
+    name: IIIT Hyderabad Learning Platform Engineering Team
+servers:
+  - url: https://practice.iiit.ac.in/api/v1
+    description: Production Practice Service
+  - url: https://staging-practice.iiit.ac.in/api/v1
+    description: Staging Practice Service
+
+paths:
+  /health:
+    get:
+      summary: Service health check
+      description: Returns service status and uptime metrics.
+      operationId: getPracticeHealth
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - uptime
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  uptime:
+                    type: number
+                    example: 3600
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+
+  /taxonomy/{courseCode}:
+    get:
+      summary: Get course taxonomy and topic tree
+      description: Returns hierarchical course syllabus breakdown into units, topics, subtopics, prerequisites, and learning objectives.
+      operationId: getCourseTaxonomy
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      parameters:
+        - name: courseCode
+          in: path
+          required: true
+          schema:
+            type: string
+            example: CS201
+      responses:
+        '200':
+          description: Taxonomy tree retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /questions:
+    get:
+      summary: List question bank items
+      description: Instructors and authorized staff retrieve course questions with filtering by topic, difficulty, or question type. Student payloads have reference answers and rubrics stripped.
+      operationId: listQuestions
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      parameters:
+        - name: courseCode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: topicCode
+          in: query
+          schema:
+            type: string
+        - name: difficulty
+          in: query
+          schema:
+            type: string
+            enum: [EASY, MEDIUM, HARD]
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [conceptual, analytical, numerical, coding, debugging, code_completion, output_prediction]
+      responses:
+        '200':
+          description: Questions retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedQuestionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+    post:
+      summary: Create a new practice question
+      description: Professors create calibrated practice questions with difficulty, skills, learning objectives, and rubrics.
+      operationId: createQuestion
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQuestionRequest'
+      responses:
+        '201':
+          description: Question created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /questions/generate:
+    post:
+      summary: Trigger AI-assisted question generation
+      description: Generates syllabus-grounded question drafts using the configured model provider. Generated questions remain in DRAFT status until human staff approval.
+      operationId: generateQuestionsAI
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateQuestionsRequest'
+      responses:
+        '201':
+          description: Draft questions generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftQuestionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '502':
+          $ref: '#/components/responses/BadGatewayError'
+
+  /questions/{id}/approve:
+    patch:
+      summary: Approve draft question into question bank
+      description: Course instructor reviews and approves an AI-generated draft question, promoting it to APPROVED for student practice.
+      operationId: approveQuestion
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Question approved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /daily:
+    get:
+      summary: Get student daily adaptive practice session
+      description: Returns personalized 3-question mastery practice cycle tailored to student's current concept knowledge state.
+      operationId: getDailyPractice
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      parameters:
+        - name: courseCode
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Daily practice session returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyPracticeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /submissions:
+    post:
+      summary: Submit practice question answer
+      description: Evaluates student practice response, updates adaptive mastery state, and provides immediate pedagogical feedback.
+      operationId: submitPracticeAnswer
+      security:
+        - PlatformBearerAuth: []
+        - PracticeAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PracticeSubmissionRequest'
+      responses:
+        '200':
+          description: Submission evaluated and mastery updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PracticeSubmissionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+components:
+  securitySchemes:
+    PlatformBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Asymmetrically signed RS256 token issued by Platform Identity Service.
+    PracticeAuth:
+      type: apiKey
+      in: header
+      name: x-personalized-token
+      description: Product-local authentication token for Personalised Learning.
+
+  schemas:
+    TaxonomyResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - courseCode
+            - units
+          properties:
+            courseCode:
+              type: string
+              example: CS201
+            units:
+              type: array
+              items:
+                type: object
+                properties:
+                  unitNumber:
+                    type: integer
+                  title:
+                    type: string
+                  topics:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        topicCode:
+                          type: string
+                        name:
+                          type: string
+                        prerequisites:
+                          type: array
+                          items:
+                            type: string
+
+    CreateQuestionRequest:
+      type: object
+      required:
+        - courseCode
+        - topicCode
+        - difficulty
+        - questionType
+        - questionText
+        - maxScore
+      properties:
+        courseCode:
+          type: string
+        topicCode:
+          type: string
+        difficulty:
+          type: string
+          enum: [EASY, MEDIUM, HARD]
+        questionType:
+          type: string
+          enum: [conceptual, analytical, numerical, coding, debugging, code_completion, output_prediction]
+        questionText:
+          type: string
+        options:
+          type: array
+          items:
+            type: string
+        referenceAnswer:
+          type: string
+        hints:
+          type: array
+          items:
+            type: string
+        maxScore:
+          type: number
+          example: 10
+
+    QuestionResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - id
+            - courseCode
+            - topicCode
+            - difficulty
+            - questionType
+            - questionText
+            - status
+          properties:
+            id:
+              type: string
+            courseCode:
+              type: string
+            topicCode:
+              type: string
+            difficulty:
+              type: string
+            questionType:
+              type: string
+            questionText:
+              type: string
+            options:
+              type: array
+              items:
+                type: string
+            hints:
+              type: array
+              items:
+                type: string
+            status:
+              type: string
+              enum: [DRAFT_GENERATED, APPROVED, ARCHIVED]
+
+    PaginatedQuestionsResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionResponse'
+
+    GenerateQuestionsRequest:
+      type: object
+      required:
+        - courseCode
+        - topicCode
+        - count
+      properties:
+        courseCode:
+          type: string
+        topicCode:
+          type: string
+        count:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 3
+        difficultyDistribution:
+          type: object
+          properties:
+            EASY:
+              type: integer
+            MEDIUM:
+              type: integer
+            HARD:
+              type: integer
+
+    DraftQuestionsResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionResponse'
+
+    DailyPracticeResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - date
+            - questions
+          properties:
+            date:
+              type: string
+              format: date
+            questions:
+              type: array
+              items:
+                $ref: '#/components/schemas/QuestionResponse'
+
+    PracticeSubmissionRequest:
+      type: object
+      required:
+        - questionId
+        - answerText
+        - timeSpentSeconds
+      properties:
+        questionId:
+          type: string
+        answerText:
+          type: string
+        selectedOptionIndex:
+          type: integer
+        timeSpentSeconds:
+          type: integer
+
+    PracticeSubmissionResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - questionId
+            - isCorrect
+            - score
+            - feedback
+            - conceptMasteryScore
+          properties:
+            questionId:
+              type: string
+            isCorrect:
+              type: boolean
+            score:
+              type: number
+            feedback:
+              type: string
+            conceptMasteryScore:
+              type: number
+              example: 0.85
+            nextRecommendedDifficulty:
+              type: string
+              enum: [EASY, MEDIUM, HARD]
+
+    ProblemDetails:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - detail
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+
+  responses:
+    BadRequestError:
+      description: Invalid query, missing parameter or validation error
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    UnauthorizedError:
+      description: Missing or expired authentication token
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    ForbiddenError:
+      description: Insufficient course staff permission
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    NotFoundError:
+      description: Question or taxonomy resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    BadGatewayError:
+      description: Upstream AI model provider returned malformed or unparseable response
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'

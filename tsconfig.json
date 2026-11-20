@@ -19,7 +19,15 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@cvit/ai": ["./packages/ai/src/index.ts"],
+      "@cvit/ai/*": ["./packages/ai/src/*"],
+      "@cvit/auth": ["./packages/auth/src/index.ts"],
+      "@cvit/auth/*": ["./packages/auth/src/*"],
+      "@cvit/api-client": ["./packages/api-client/src/index.ts"],
+      "@cvit/api-client/*": ["./packages/api-client/src/*"],
+      "@cvit/lti": ["./packages/lti/src/index.ts"],
+      "@cvit/lti/*": ["./packages/lti/src/*"]
     }
   },
   "include": [

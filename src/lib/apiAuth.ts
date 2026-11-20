@@ -2,6 +2,7 @@ import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 import { authOptions } from './auth';
 import { hasPermission, Permission, UserRole } from '../constants/permissions';
+import { isFeatureEnabled, FeatureFlag } from '../config/features';
 
 export type AuthResult =
   | {
@@ -166,3 +167,31 @@ export async function requireAnyPermission(permissions: Permission[]): Promise<A
 export async function requireGradingOrAnnotationAccess(): Promise<AuthResult> {
   return requireAnyPermission(GRADING_OR_CANVAS_PERMISSIONS);
 }
+
+/**
+ * Helper to enforce that a research feature flag is enabled before processing an API route.
+ * Returns { authorized: false, response } with status 404 if disabled,
+ * or { authorized: true, response: null } if enabled.
+ */
+export function requireFeature(flag: FeatureFlag): { authorized: boolean; response: NextResponse | null } {
+  if (!isFeatureEnabled(flag)) {
+    const featureName = flag === 'CLASSROOM_ASSESSMENT' ? 'Classroom' : 'Personalized';
+    return {
+      authorized: false,
+      response: NextResponse.json(
+        {
+          success: false,
+          message: `${featureName} assessment feature is disabled`,
+          data: null,
+        },
+        { status: 404 }
+      ),
+    };
+  }
+
+  return {
+    authorized: true,
+    response: null,
+  };
+}
+

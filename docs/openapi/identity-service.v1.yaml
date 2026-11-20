@@ -1,0 +1,548 @@
+openapi: 3.1.0
+info:
+  title: IIIT Hyderabad Identity & Access Management Service API
+  version: 1.0.0
+  license:
+    name: Proprietary - IIIT Hyderabad Internal Educational License
+    identifier: Proprietary
+  description: >
+    Headless REST API for Central Platform Identity, Authentication, and Access Management.
+    Provides unified platform user registration, asymmetric RS256 token issuance, role-based
+    access control (RBAC), course enrollments, public JWKS key set publishing, and OAuth 2.0
+    machine client credential exchanges.
+  contact:
+    name: IIIT Hyderabad Learning Platform Engineering Team
+servers:
+  - url: https://auth.iiit.ac.in/api/v1
+    description: Production Identity Service
+  - url: https://staging-auth.iiit.ac.in/api/v1
+    description: Staging Identity Service
+
+paths:
+  /.well-known/jwks.json:
+    get:
+      summary: Retrieve platform JSON Web Key Set (JWKS)
+      description: Returns the rotating asymmetric RSA public keys used by consumer services to verify platform JWTs.
+      operationId: getJwks
+      security: []
+      responses:
+        '200':
+          description: Public JWKS document returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwksDocument'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /auth/register:
+    post:
+      summary: Register a new platform user
+      description: Public registration strictly defaults to STUDENT role. Elevated roles (PROFESSOR, TA) require an administrative invite code.
+      operationId: registerPlatformUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUserRequest'
+      responses:
+        '201':
+          description: Platform user registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+
+  /auth/login:
+    post:
+      summary: Authenticate platform credentials and issue signed token
+      description: Verifies user credentials, checks lockout and active status, and returns an asymmetrically signed RS256 JWT for the target service audience.
+      operationId: loginPlatformUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: User authenticated and token issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/TooManyRequestsError'
+
+  /auth/me:
+    get:
+      summary: Get current authenticated platform user profile
+      description: Returns user profile, roles, and active course enrollments based on platform JWT.
+      operationId: getCurrentUserProfile
+      security:
+        - PlatformBearerAuth: []
+      responses:
+        '200':
+          description: Profile returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /oauth/token:
+    post:
+      summary: OAuth 2.0 client credentials token exchange
+      description: Allows machine clients and external services to exchange client_id and client_secret for scoped RS256 access tokens.
+      operationId: exchangeClientCredentials
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientCredentialsRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientCredentialsRequest'
+      responses:
+        '200':
+          description: OAuth access token issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /federation/link:
+    post:
+      summary: Manage explicit two-party account federation linking
+      description: Initiates or completes cryptographic round-trip account linking with state and nonce verification.
+      operationId: manageFederationLink
+      security:
+        - PlatformBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FederationLinkRequest'
+      responses:
+        '200':
+          description: Linking initiated or completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FederationLinkResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /federation/unlink:
+    post:
+      summary: Self-service account unlinking
+      description: Disconnects the user's platform identity from a specific product without deleting historical activity.
+      operationId: unlinkPlatformAccount
+      security:
+        - PlatformBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FederationUnlinkRequest'
+      responses:
+        '200':
+          description: Account unlinked successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+components:
+  securitySchemes:
+    PlatformBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Asymmetrically signed RS256 platform token issued by Identity Service.
+
+  schemas:
+    JwksDocument:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required:
+              - kty
+              - kid
+              - alg
+              - n
+              - e
+            properties:
+              kty:
+                type: string
+                example: RSA
+              kid:
+                type: string
+                example: cvit-auth-key-2026-1
+              use:
+                type: string
+                example: sig
+              alg:
+                type: string
+                example: RS256
+              n:
+                type: string
+              e:
+                type: string
+
+    RegisterUserRequest:
+      type: object
+      required:
+        - name
+        - email
+        - password
+      properties:
+        name:
+          type: string
+          example: Rohan Sharma
+        email:
+          type: string
+          format: email
+          example: rohan@iiit.ac.in
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: secureStudentPass123
+        role:
+          type: string
+          enum: [STUDENT, TA, PROFESSOR, ADMIN]
+          default: STUDENT
+        department:
+          type: string
+          example: CSE
+        rollNumber:
+          type: string
+          example: 2026101
+        adminInviteCode:
+          type: string
+          description: Required when requesting PROFESSOR, TA, or ADMIN role.
+
+    UserResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - id
+            - name
+            - email
+            - role
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            email:
+              type: string
+            role:
+              type: string
+            department:
+              type: string
+            rollNumber:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: rohan@iiit.ac.in
+        password:
+          type: string
+          format: password
+          example: secureStudentPass123
+        audience:
+          type: string
+          enum: [evaluation-service, classroom-service, practice-service, identity-service]
+          default: evaluation-service
+
+    LoginResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - token
+            - tokenType
+            - expiresIn
+            - user
+          properties:
+            token:
+              type: string
+            tokenType:
+              type: string
+              example: Bearer
+            expiresIn:
+              type: integer
+              example: 900
+            user:
+              type: object
+              properties:
+                id:
+                  type: string
+                name:
+                  type: string
+                email:
+                  type: string
+                role:
+                  type: string
+                courses:
+                  type: array
+                  items:
+                    type: string
+
+    UserProfileResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required:
+            - id
+            - name
+            - email
+            - role
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            email:
+              type: string
+            role:
+              type: string
+            enrollments:
+              type: array
+              items:
+                type: object
+                properties:
+                  courseCode:
+                    type: string
+                  courseName:
+                    type: string
+                  semester:
+                    type: string
+                  role:
+                    type: string
+
+    ClientCredentialsRequest:
+      type: object
+      required:
+        - grant_type
+        - client_id
+        - client_secret
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        audience:
+          type: string
+
+    OAuthTokenResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          example: 3600
+        scope:
+          type: string
+
+    FederationLinkRequest:
+      type: object
+      required:
+        - action
+        - targetProduct
+      properties:
+        action:
+          type: string
+          enum: [initiate, complete]
+        targetProduct:
+          type: string
+          enum: [EVALUATION, CLASSROOM, PRACTICE]
+        localUserId:
+          type: string
+        state:
+          type: string
+        nonce:
+          type: string
+
+    FederationLinkResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+
+    FederationUnlinkRequest:
+      type: object
+      required:
+        - targetProduct
+      properties:
+        targetProduct:
+          type: string
+          enum: [EVALUATION, CLASSROOM, PRACTICE]
+
+    SuccessResponse:
+      type: object
+      required:
+        - success
+        - data
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+
+    ProblemDetails:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - detail
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+
+  responses:
+    BadRequestError:
+      description: Malformed syntax or invalid parameter validation failure
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    UnauthorizedError:
+      description: Authentication credential missing, expired, or invalid
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    ForbiddenError:
+      description: Authenticated user lacks required role or permission
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    NotFoundError:
+      description: The requested resource was not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    ConflictError:
+      description: Conflict with existing resource state
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    TooManyRequestsError:
+      description: Rate limit or brute-force threshold exceeded
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    InternalServerError:
+      description: Unexpected internal server error occurred
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
