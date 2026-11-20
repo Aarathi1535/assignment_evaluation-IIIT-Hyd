@@ -1,0 +1,8 @@
+{
+  "name": "@cvit/web-app",
+  "version": "1.0.0",
+  "description": "Unified Web Application for CVIT Integrated Platform",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "private": true
+}

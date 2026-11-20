@@ -13,6 +13,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@cvit/ai': path.resolve(__dirname, './packages/ai/src'),
+      '@cvit/auth': path.resolve(__dirname, './packages/auth/src'),
+      '@cvit/api-client': path.resolve(__dirname, './packages/api-client/src'),
+      '@cvit/lti': path.resolve(__dirname, './packages/lti/src'),
     },
   },
 });

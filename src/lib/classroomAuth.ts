@@ -42,6 +42,45 @@ export function verifyClassroomToken(token: string): ClassroomAuthTokenPayload |
   }
 }
 
+export interface ParticipantTokenPayload {
+  sessionId: string;
+  sessionCode: string;
+  participantId: string;
+  studentName: string;
+  rollNumber?: string;
+  exp: number;
+}
+
+export function signParticipantToken(
+  payload: Omit<ParticipantTokenPayload, 'exp'>,
+  expiresInSeconds = 24 * 3600
+): string {
+  const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
+  const fullPayload: ParticipantTokenPayload = { ...payload, exp };
+  const data = Buffer.from(JSON.stringify(fullPayload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', SECRET).update(data).digest('base64url');
+  return `${data}.${signature}`;
+}
+
+export function verifyParticipantToken(token: string): ParticipantTokenPayload | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [data, signature] = parts;
+    const expectedSignature = crypto.createHmac('sha256', SECRET).update(data).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+      return null;
+    }
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf8')) as ParticipantTokenPayload;
+    if (payload.exp < Math.floor(Date.now() / 1000)) {
+      return null; // Expired
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 export async function getClassroomUser(req?: NextRequest) {
   // 1. Check x-classroom-token header
   let token = req?.headers.get('x-classroom-token') || null;

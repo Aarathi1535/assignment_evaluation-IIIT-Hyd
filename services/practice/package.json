@@ -1,0 +1,8 @@
+{
+  "name": "@cvit/practice-service",
+  "version": "1.0.0",
+  "description": "Headless Practice & Personalised Learning Service for CVIT Integrated Platform",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "private": true
+}

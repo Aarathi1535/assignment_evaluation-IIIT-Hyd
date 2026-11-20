@@ -105,10 +105,46 @@ services:
     networks:
       - personalized-network
 
+  # ==============================================================
+  # SERVICE 4: IDENTITY & ACCESS MANAGEMENT
+  # Shared Platform Identity + Independent MongoDB
+  # ==============================================================
+  mongo-identity:
+    image: mongo:7.0
+    container_name: identity-service-db
+    restart: unless-stopped
+    ports:
+      - "27020:27017"
+    volumes:
+      - mongo-identity-data:/data/db
+    networks:
+      - identity-network
+
+  app-identity:
+    build:
+      context: .
+      dockerfile: deploy/identity/Dockerfile
+    container_name: identity-service-app
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - MONGODB_IDENTITY_URI=mongodb://mongo-identity:27017/cvit_identity
+      - MONGODB_URI=mongodb://mongo-identity:27017/cvit_identity
+      - PLATFORM_ISSUER=https://auth.iiit.ac.in
+      - ADMIN_INVITE_CODE=iiit-faculty-invite-2026
+    depends_on:
+      - mongo-identity
+    networks:
+      - identity-network
+
 volumes:
   mongo-assignment-data:
   mongo-classroom-data:
   mongo-personalized-data:
+  mongo-identity-data:
 
 networks:
   assignment-network:
@@ -116,5 +152,7 @@ networks:
   classroom-network:
     driver: bridge
   personalized-network:
+    driver: bridge
+  identity-network:
     driver: bridge
 

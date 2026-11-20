@@ -1,125 +1,164 @@
 import React from 'react';
 import Link from 'next/link';
-import { ClipboardCheck, Monitor, Brain } from 'lucide-react';
+import { ClipboardCheck, Monitor, Brain, ArrowRight, ShieldCheck, Sparkles, Cpu } from 'lucide-react';
+import { UnifiedPlatformNav } from '@/components/navigation/UnifiedPlatformNav';
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col justify-between px-4 py-12 sm:px-6 lg:px-8 font-sans antialiased selection:bg-zinc-800 selection:text-white">
-      {/* Top Header */}
-      <header className="text-center pt-4 sm:pt-8">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-          IIIT Hyderabad Learning Platform
-        </h1>
-        <p className="mt-2 text-sm text-zinc-400">
-          Unified product discovery and entry point
-        </p>
-      </header>
+    <div className="min-h-screen bg-black text-white flex flex-col justify-between font-sans antialiased selection:bg-zinc-800 selection:text-white">
+      {/* Platform Navigation */}
+      <UnifiedPlatformNav />
 
-      {/* Main Product Discovery Section */}
-      <main className="max-w-4xl mx-auto w-full my-8 sm:my-12">
-        <div className="mb-6">
-          <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
-            Choose the product you want to use
-          </h2>
-          <p className="mt-1 text-sm text-zinc-400">
-            Each product has its own registration, login, users and workflows.
+      {/* Main Content Area */}
+      <main className="max-w-5xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
+        {/* Hero Header */}
+        <div className="text-center max-w-3xl mx-auto mb-12">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-blue-950/60 text-blue-400 border border-blue-800/60 mb-4">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Architecture Plan v2 &middot; CVIT Integrated Platform</span>
+          </div>
+
+          <h1 className="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
+            CVIT Integrated <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-purple-400">E-Learning Platform</span>
+          </h1>
+
+          <p className="mt-4 text-base sm:text-lg text-zinc-400 leading-relaxed">
+            IIIT Hyderabad Center for Visual Information Technology (CVIT) &middot; Prof. C.V. Jawahar.
+            One unified experience connecting three independent headless services: Assignment Evaluation, Classroom Activity, and Personalised Practice.
           </p>
         </div>
 
-        <div className="space-y-4">
+        {/* 3 Core Product Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Product 1: Assignment Evaluation */}
-          <Link
-            href="/login"
-            className="block group rounded-2xl border border-zinc-800 bg-zinc-950/80 p-5 sm:p-6 transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900/60 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <ClipboardCheck className="w-6 h-6 text-blue-400 shrink-0" />
-                <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-blue-300 transition-colors">
-                  Assignment Evaluation
-                </h3>
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/90 p-6 flex flex-col justify-between hover:border-blue-500/50 hover:bg-zinc-900/40 transition-all duration-200">
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div className="h-11 w-11 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400">
+                  <ClipboardCheck className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-blue-950 text-blue-300 border border-blue-800/60">
+                  Product 1
+                </span>
               </div>
-              <span className="shrink-0 px-3 py-1 rounded-full text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700/60">
-                Product 1
-              </span>
+
+              <h2 className="text-xl font-bold text-white mb-2">Assignment Evaluation</h2>
+              <p className="text-sm text-zinc-400 leading-relaxed mb-4">
+                Exam ingestion, multi-page splitting, rubric-driven canvas grading, TA allocations, regrading, and comprehensive analytics.
+              </p>
+
+              <div className="space-y-1.5 text-xs text-zinc-300">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Headless REST API: /api/v1/evaluation</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Dedicated DB: MONGODB_URI</span>
+                </div>
+              </div>
             </div>
 
-            <p className="mt-3 text-sm text-zinc-400 leading-relaxed">
-              Separate registration &middot; Separate login &middot; Separate user database &middot; Existing grading system
-            </p>
-
-            <div className="mt-3">
-              <span className="text-xs sm:text-sm font-medium text-emerald-400">
-                Preserve existing implementation
-              </span>
+            <div className="mt-6 pt-4 border-t border-zinc-800/80">
+              <Link
+                href="/login"
+                className="inline-flex items-center justify-center w-full gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+              >
+                <span>Access Evaluation</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
             </div>
-          </Link>
+          </div>
 
           {/* Product 2: Classroom Activity */}
-          <Link
-            href="/classroom"
-            className="block group rounded-2xl border border-zinc-800 bg-zinc-950/80 p-5 sm:p-6 transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900/60 focus:outline-none focus:ring-2 focus:ring-teal-500/50"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Monitor className="w-6 h-6 text-teal-400 shrink-0" />
-                <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-teal-300 transition-colors">
-                  Classroom Activity
-                </h3>
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/90 p-6 flex flex-col justify-between hover:border-teal-500/50 hover:bg-zinc-900/40 transition-all duration-200">
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div className="h-11 w-11 rounded-xl bg-teal-600/20 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                  <Monitor className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-teal-950 text-teal-300 border border-teal-800/60">
+                  Product 2
+                </span>
               </div>
-              <span className="shrink-0 px-3 py-1 rounded-full text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700/60">
-                Product 2
-              </span>
+
+              <h2 className="text-xl font-bold text-white mb-2">Classroom Activity</h2>
+              <p className="text-sm text-zinc-400 leading-relaxed mb-4">
+                6-digit PIN and QR mobile join, real-time Mentimeter-style polls, handwritten script photo uploads, OCR extraction, and staff review.
+              </p>
+
+              <div className="space-y-1.5 text-xs text-zinc-300">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Headless REST API: /api/v1/classroom</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-3.5 h-3.5 text-teal-400" />
+                  <span>Dedicated DB: MONGODB_CLASSROOM_URI</span>
+                </div>
+              </div>
             </div>
 
-            <p className="mt-3 text-sm text-zinc-400 leading-relaxed">
-              Separate registration &middot; Separate login &middot; Separate users &middot; Live classroom sessions
-            </p>
-
-            <div className="mt-3">
-              <span className="text-xs sm:text-sm font-medium text-emerald-400">
-                Develop independently
-              </span>
+            <div className="mt-6 pt-4 border-t border-zinc-800/80">
+              <Link
+                href="/classroom"
+                className="inline-flex items-center justify-center w-full gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-teal-600 text-white hover:bg-teal-500 transition-colors"
+              >
+                <span>Launch Classroom</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
             </div>
-          </Link>
+          </div>
 
           {/* Product 3: Personalised Learning */}
-          <Link
-            href="/personalized"
-            className="block group rounded-2xl border border-zinc-800 bg-zinc-950/80 p-5 sm:p-6 transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900/60 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Brain className="w-6 h-6 text-purple-400 shrink-0" />
-                <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-purple-300 transition-colors">
-                  Personalised Learning
-                </h3>
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/90 p-6 flex flex-col justify-between hover:border-purple-500/50 hover:bg-zinc-900/40 transition-all duration-200">
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <div className="h-11 w-11 rounded-xl bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                  <Brain className="w-6 h-6" />
+                </div>
+                <span className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-purple-950 text-purple-300 border border-purple-800/60">
+                  Product 3
+                </span>
               </div>
-              <span className="shrink-0 px-3 py-1 rounded-full text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700/60">
-                Product 3
-              </span>
+
+              <h2 className="text-xl font-bold text-white mb-2">Personalised Learning</h2>
+              <p className="text-sm text-zinc-400 leading-relaxed mb-4">
+                Syllabus taxonomy trees, curated question banks, daily 3-question adaptive practice, concept mastery, and model-agnostic AI generation.
+              </p>
+
+              <div className="space-y-1.5 text-xs text-zinc-300">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Headless REST API: /api/v1/practice</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Dedicated DB: MONGODB_PERSONALIZED_URI</span>
+                </div>
+              </div>
             </div>
 
-            <p className="mt-3 text-sm text-zinc-400 leading-relaxed">
-              Separate registration &middot; Separate login &middot; Separate users &middot; Individual learning workflows
-            </p>
-
-            <div className="mt-3">
-              <span className="text-xs sm:text-sm font-medium text-emerald-400">
-                Develop independently
-              </span>
+            <div className="mt-6 pt-4 border-t border-zinc-800/80">
+              <Link
+                href="/personalized"
+                className="inline-flex items-center justify-center w-full gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-purple-600 text-white hover:bg-purple-500 transition-colors"
+              >
+                <span>Start Practice</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
             </div>
-          </Link>
+          </div>
         </div>
       </main>
 
       {/* Footer */}
-      <footer className="text-center pb-4 sm:pb-8">
-        <h4 className="text-sm sm:text-base font-bold text-zinc-200">
-          Independent product infrastructure
-        </h4>
-        <p className="mt-1 text-xs sm:text-sm text-zinc-400">
-          Separate databases &middot; Authentication &middot; APIs &middot; Storage &middot; Deployment
+      <footer className="border-t border-zinc-900 py-6 text-center text-xs text-zinc-500">
+        <p>
+          IIIT Hyderabad &middot; Center for Visual Information Technology &middot; Architecture Plan v2 (2026)
+        </p>
+        <p className="mt-1">
+          Independent Headless Services &middot; Asymmetric RS256 Auth &middot; Isolated Databases &middot; LTI 1.3 Advantage
         </p>
       </footer>
     </div>
