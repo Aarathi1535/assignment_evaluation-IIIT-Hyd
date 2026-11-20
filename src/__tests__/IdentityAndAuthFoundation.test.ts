@@ -4,10 +4,7 @@ import {
   signPlatformToken,
   verifyPlatformToken,
   revokeTokenJti,
-  TokenVerificationError,
-  KeyManager,
   ServiceAuthManager,
-  FederationManager,
 } from '@cvit/auth';
 import { connectIdentityDB } from '../lib/identityDb';
 import IdentityUser from '../models/identity/IdentityUser';

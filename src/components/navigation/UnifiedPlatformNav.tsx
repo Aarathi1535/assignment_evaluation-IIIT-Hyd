@@ -9,7 +9,6 @@ import {
   Brain,
   GraduationCap,
   LogOut,
-  User,
   Layers,
 } from 'lucide-react';
 

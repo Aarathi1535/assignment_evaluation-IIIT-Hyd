@@ -1,4 +1,4 @@
-import { AIModelConfig, AIProviderType, AIResponse } from './interfaces';
+import { AIProviderType } from './interfaces';
 
 export class AIPrivacyViolationError extends Error {
   public readonly statusCode = 403;

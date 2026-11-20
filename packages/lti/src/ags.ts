@@ -1,4 +1,4 @@
-import { LtiScorePayload, LtiLineItem } from './types';
+import { LtiScorePayload } from './types';
 
 export interface AgsClientConfig {
   lineItemUrl?: string;

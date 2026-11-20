@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectIdentityDB } from '@/lib/identityDb';
 import ApiClientCredential from '@/models/identity/ApiClientCredential';
-import { ServiceAuthManager, signPlatformToken, ServiceAudience } from '@cvit/auth';
+import { ServiceAuthManager, signPlatformToken, ServiceAudience, ApiClientScope } from '@cvit/auth';
 
 export async function POST(req: NextRequest) {
   try {
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       clientSecretHash: client.clientSecretHash,
       name: client.name,
       ownerId: client.ownerId,
-      scopes: client.scopes as any,
+      scopes: client.scopes as unknown as ApiClientScope[],
       isActive: client.isActive,
       createdAt: client.createdAt,
       expiresAt: client.expiresAt,

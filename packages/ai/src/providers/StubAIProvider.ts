@@ -61,7 +61,7 @@ export class StubAIProvider implements AIProvider {
     };
   }
 
-  public async generateMultimodal(params: GenerateMultimodalParams): Promise<AIResponse> {
+  public async generateMultimodal(_params: GenerateMultimodalParams): Promise<AIResponse> {
     const text = this.cannedResponse || JSON.stringify({
       extractedText: 'Binary search algorithm divides the search interval in half...',
       confidence: 0.94,

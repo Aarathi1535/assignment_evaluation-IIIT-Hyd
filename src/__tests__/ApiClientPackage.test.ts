@@ -1,10 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  BaseApiClient,
   ApiClientError,
   ClassroomApiClient,
   PracticeApiClient,
-  IdentityApiClient,
 } from '@cvit/api-client';
 
 describe('Typed API Client Package (@cvit/api-client)', () => {
