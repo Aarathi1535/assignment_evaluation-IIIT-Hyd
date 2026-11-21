@@ -4,6 +4,8 @@ import Batch, { BatchStatus } from '../models/Batch';
 import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
 import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
 import AnswerScript from '../models/AnswerScript';
+import Course from '../models/Course';
+import Exam, { ExamStatus } from '../models/Exam';
 import BatchRepository from '../repositories/BatchRepository';
 import DerivedStorageService from '../services/DerivedStorageService';
 import mongoose from 'mongoose';
@@ -39,8 +41,30 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
 
     async function createTestIngestionSetup(ownerId: string) {
         const batchId = crypto.randomUUID();
+        const course = await Course.create({
+            courseCode: `CS-ING-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            courseName: 'Test Ingestion Course',
+            academicYear: '2026',
+            semester: 1,
+            professor: new mongoose.Types.ObjectId(ownerId),
+            teachingAssistants: [new mongoose.Types.ObjectId(graderId)],
+            isActive: true,
+        });
+
+        const exam = await Exam.create({
+            title: 'Test Ingestion Exam',
+            course: course._id,
+            createdBy: new mongoose.Types.ObjectId(ownerId),
+            examDate: new Date(),
+            totalMarks: 100,
+            numberOfQuestions: 1,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+        });
+
         const batch = await BatchRepository.createBatch({
             batchId,
+            exam: exam._id as mongoose.Types.ObjectId,
             uploadedBy: new mongoose.Types.ObjectId(ownerId),
             files: [
                 {
@@ -72,7 +96,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
         });
 
         const script1 = await AnswerScript.create({
-            exam: new mongoose.Types.ObjectId(),
+            exam: exam._id as mongoose.Types.ObjectId,
             batchId,
             fileIndex: 0,
             startPageNumber: 1,
@@ -86,7 +110,7 @@ describe('Ingestion Script Listing & Thumbnail APIs (AE-060 backend)', () => {
         });
 
         const script2 = await AnswerScript.create({
-            exam: new mongoose.Types.ObjectId(),
+            exam: exam._id as mongoose.Types.ObjectId,
             batchId,
             fileIndex: 0,
             startPageNumber: 4,
