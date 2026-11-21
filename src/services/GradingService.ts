@@ -12,7 +12,7 @@ import ProgressEventService from './ProgressEventService';
 import Allocation, { AllocationStatus, IAllocation } from '../models/Allocation';
 import ScriptFlag, { FlagStatus } from '../models/ScriptFlag';
 import { UserRole } from '../constants/permissions';
-import { HttpError } from '../lib/errors';
+import { HttpError, isConflictError } from '../lib/errors';
 import { writeAuditLog } from '../lib/audit';
 
 interface GradingValues {
@@ -641,6 +641,12 @@ export class GradingService {
                                 // Ignore cleanup errors
                             }
                         }
+                    }
+                    if (isConflictError(err)) {
+                        throw new HttpError(
+                            'Conflict: Concurrent grade finalization detected. This grade was already modified or finalized by another user.',
+                            409
+                        );
                     }
                     throw err;
                 }

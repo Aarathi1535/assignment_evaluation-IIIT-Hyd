@@ -61,12 +61,12 @@ export async function migrateIndexes(): Promise<void> {
     // 3. Drop the obsolete RegradeRequest unique index that prevented multiple questions per script
     await dropObsoleteIndex(regradeRequestsCol, { answerScript: 1 }, 'answerScript_1');
 
-    // 4. Ensure the new composite indexes exist by calling createIndexes on models
+    // 4. Ensure the new composite indexes exist by calling syncIndexes on models
     const Allocation = (await import('../models/Allocation')).default;
     const Grade = (await import('../models/Grade')).default;
     const RegradeRequest = (await import('../models/RegradeRequest')).default;
 
-    await Allocation.createIndexes();
-    await Grade.createIndexes();
-    await RegradeRequest.createIndexes();
+    await Allocation.syncIndexes();
+    await Grade.syncIndexes();
+    await RegradeRequest.syncIndexes();
 }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withServerTiming } from '../../../../../lib/serverTiming';
 import { connectDB } from '../../../../../lib/db';
 import { requireGradingOrAnnotationAccess } from '../../../../../lib/apiAuth';
-import { HttpError } from '../../../../../lib/errors';
+import { HttpError, isConflictError } from '../../../../../lib/errors';
 import gradingService, { SavedGradeWithNext } from '../../../../../services/GradingService';
 
 /**
@@ -69,6 +69,16 @@ export const POST = withServerTiming(async (
       { status: 200 }
     );
   } catch (error: unknown) {
+    if (isConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Conflict: This question was concurrently graded or finalized.',
+          data: null,
+        },
+        { status: 409 }
+      );
+    }
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json(
@@ -117,6 +127,16 @@ export const GET = withServerTiming(async (
       { status: 200 }
     );
   } catch (error: unknown) {
+    if (isConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Conflict: This question was concurrently graded or finalized.',
+          data: null,
+        },
+        { status: 409 }
+      );
+    }
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json(
