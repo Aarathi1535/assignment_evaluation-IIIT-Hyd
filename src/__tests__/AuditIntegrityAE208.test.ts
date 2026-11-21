@@ -274,7 +274,8 @@ describe('AE-208 audit-trail integrity verification', () => {
         // Sequence 2 is allocated and state is updated via CAS, but the process "crashes"
         // before inserting the AuditLog document for sequence 2.
         const ghostSeal = 'ghost-hmac-simulating-crashed-insert';
-        const ghostStateSeal = createAuditIntegrityStateSeal(2, ghostSeal, 1);
+        const globalState = await AuditLogIntegrityState.findById('global').lean();
+        const ghostStateSeal = createAuditIntegrityStateSeal(2, ghostSeal, 1, globalState?.cutoverDate);
         await AuditLogIntegrityState.updateOne(
             { _id: 'global' },
             {
@@ -342,12 +343,14 @@ describe('AE-208 audit-trail integrity verification', () => {
 
         // Simulate crash on sequence 1: state is at 1, but AuditLog is completely empty
         const ghostSeal = 'ghost-genesis-hmac';
-        const ghostStateSeal = createAuditIntegrityStateSeal(1, ghostSeal, 1);
+        const cutoverDate = new Date();
+        const ghostStateSeal = createAuditIntegrityStateSeal(1, ghostSeal, 1, cutoverDate);
         await AuditLogIntegrityState.create({
             _id: 'global',
             lastSequence: 1,
             lastRecordHmac: ghostSeal,
             cutoverSequence: 1,
+            cutoverDate,
             integritySeal: ghostStateSeal.hmac,
             integrityKeyId: ghostStateSeal.keyId,
             lastAllocatedAt: new Date(Date.now() - 500)
@@ -415,7 +418,8 @@ describe('AE-208 audit-trail integrity verification', () => {
             previousSeal: initialRecord!.integritySeal
         }, 2);
 
-        const stateSeal2 = createAuditIntegrityStateSeal(2, seal2.hmac, 1);
+        const globalState = await AuditLogIntegrityState.findById('global').lean();
+        const stateSeal2 = createAuditIntegrityStateSeal(2, seal2.hmac, 1, globalState?.cutoverDate);
 
         await AuditLogIntegrityState.updateOne(
             { _id: 'global' },
@@ -820,5 +824,220 @@ describe('AE-208 audit-trail integrity verification', () => {
         expect(result.status).toBe('MISMATCH');
         expect(result.missingSequences).toBe(1);
         expect(result.diagnostics.some(d => d.code === 'SEQUENCE_GAP' && d.sequence === 2)).toBe(true);
+    });
+
+    describe('Issue #338 Part 2: State Seal cutoverDate Binding & Backward Compatibility', () => {
+        it('verifies that a valid state seal binds cutoverDate and verifies successfully', async () => {
+            const cutoverDate = new Date('2026-10-15T10:00:00.000Z');
+            const stateSeal = createAuditIntegrityStateSeal(5, 'record-hmac-5', 1, cutoverDate);
+
+            const state = {
+                lastSequence: 5,
+                cutoverSequence: 1,
+                lastRecordHmac: 'record-hmac-5',
+                cutoverDate,
+                stateSealVersion: 3,
+                integritySeal: stateSeal.hmac,
+                integrityKeyId: stateSeal.keyId
+            };
+
+            expect(verifyAuditIntegrityStateSeal(state)).toBe(true);
+        });
+
+        it('invalidates state seal if cutoverDate is modified (Issue #338 Part 2)', async () => {
+            const originalCutover = new Date('2026-10-15T10:00:00.000Z');
+            const stateSeal = createAuditIntegrityStateSeal(5, 'record-hmac-5', 1, originalCutover);
+
+            // Attacker modifies cutoverDate to an earlier date to allow injection
+            const forgedCutover = new Date('2026-10-01T00:00:00.000Z');
+            const tamperedState = {
+                lastSequence: 5,
+                cutoverSequence: 1,
+                lastRecordHmac: 'record-hmac-5',
+                cutoverDate: forgedCutover,
+                stateSealVersion: 3,
+                integritySeal: stateSeal.hmac,
+                integrityKeyId: stateSeal.keyId
+            };
+
+            expect(verifyAuditIntegrityStateSeal(tamperedState)).toBe(false);
+        });
+
+        it('invalidates state seal if already-bound fields (lastSequence, lastRecordHmac, cutoverSequence) are modified', async () => {
+            const cutoverDate = new Date('2026-10-15T10:00:00.000Z');
+            const stateSeal = createAuditIntegrityStateSeal(5, 'record-hmac-5', 1, cutoverDate);
+
+            // Modifying lastSequence
+            expect(verifyAuditIntegrityStateSeal({
+                lastSequence: 6,
+                cutoverSequence: 1,
+                lastRecordHmac: 'record-hmac-5',
+                cutoverDate,
+                stateSealVersion: 3,
+                integritySeal: stateSeal.hmac,
+                integrityKeyId: stateSeal.keyId
+            })).toBe(false);
+
+            // Modifying lastRecordHmac
+            expect(verifyAuditIntegrityStateSeal({
+                lastSequence: 5,
+                cutoverSequence: 1,
+                lastRecordHmac: 'forged-record-hmac',
+                cutoverDate,
+                stateSealVersion: 3,
+                integritySeal: stateSeal.hmac,
+                integrityKeyId: stateSeal.keyId
+            })).toBe(false);
+
+            // Modifying cutoverSequence
+            expect(verifyAuditIntegrityStateSeal({
+                lastSequence: 5,
+                cutoverSequence: 2,
+                lastRecordHmac: 'record-hmac-5',
+                cutoverDate,
+                stateSealVersion: 3,
+                integritySeal: stateSeal.hmac,
+                integrityKeyId: stateSeal.keyId
+            })).toBe(false);
+        });
+
+        it('maintains backward compatibility with Version 2 state seals created without cutoverDate', async () => {
+            const keyId = process.env.ORIGINAL_STORAGE_KEY_ID || 'v1';
+            const metadata = {
+                batchId: 'audit-log-integrity-state',
+                sequenceNumber: 3,
+                uploader: 'audit-integrity-service',
+                timestamp: 0
+            };
+            // Generate legacy Version 2 seal payload (without cutoverDate)
+            const v2Payload = Buffer.from(JSON.stringify({
+                version: 2,
+                lastSequence: 3,
+                cutoverSequence: 1,
+                lastRecordHmac: 'record-hmac-3',
+                keyId
+            }), 'utf8');
+            const v2Seal = generateHmacSeal(v2Payload, metadata, keyId);
+
+            // Legacy state document without stateSealVersion (or stateSealVersion: 2)
+            const legacyState = {
+                lastSequence: 3,
+                cutoverSequence: 1,
+                lastRecordHmac: 'record-hmac-3',
+                cutoverDate: new Date('2026-09-01T00:00:00.000Z'),
+                integritySeal: v2Seal.hmac,
+                integrityKeyId: v2Seal.keyId
+            };
+
+            expect(verifyAuditIntegrityStateSeal(legacyState)).toBe(true);
+        });
+
+        it('ensures changing cutoverDate in DB invalidates state seal during full audit trail verification', async () => {
+            const actor = await createActor();
+            await writeAuditLog({ user: actor._id.toString(), action: 'INITIAL_EVENT', outcome: 'SUCCESS' });
+
+            const initial = await auditIntegrityService.verifyAuditTrail();
+            expect(initial.status).toBe('INTACT');
+
+            // Attacker modifies cutoverDate in the DB document
+            await AuditLogIntegrityState.updateOne(
+                { _id: 'global' },
+                { $set: { cutoverDate: new Date(Date.now() - 100_000_000) } }
+            );
+
+            const result = await auditIntegrityService.verifyAuditTrail();
+            expect(result.status).toBe('MISMATCH');
+            expect(result.valid).toBe(false);
+            expect(result.diagnostics.some(d => d.code === 'INTEGRITY_STATE_INVALID')).toBe(true);
+        });
+    });
+
+    describe('Issue #338 Part 3: Missing State Document Handling & Classification', () => {
+        it('Case A: reports MISMATCH with INTEGRITY_STATE_MISSING (never UNSEALED) when state document is deleted on a sealed trail', async () => {
+            const actor = await createActor();
+            await writeAuditLog({ user: actor._id.toString(), action: 'EVENT_A1', outcome: 'SUCCESS' });
+            await writeAuditLog({ user: actor._id.toString(), action: 'EVENT_A2', outcome: 'SUCCESS' });
+
+            const initial = await auditIntegrityService.verifyAuditTrail();
+            expect(initial.status).toBe('INTACT');
+            expect(initial.sealedRecords).toBe(2);
+
+            // Attacker deletes the global integrity-state document
+            await AuditLogIntegrityState.deleteOne({ _id: 'global' });
+            expect(await AuditLogIntegrityState.findById('global')).toBeNull();
+
+            const result = await auditIntegrityService.verifyAuditTrail();
+            expect(result.status).toBe('MISMATCH');
+            expect(result.valid).toBe(false);
+            expect(result.sealedRecords).toBe(2);
+            expect(result.status).not.toBe('UNSEALED');
+            expect(result.status).not.toBe('INTACT');
+            expect(result.diagnostics.some(d => d.code === 'INTEGRITY_STATE_MISSING')).toBe(true);
+
+            // Verify that the verifier does NOT silently recreate or repair the state document
+            expect(await AuditLogIntegrityState.findById('global')).toBeNull();
+        });
+
+        it('Case B: retains expected UNSEALED behavior for genuinely legacy unsealed records when state document is absent', async () => {
+            const actor = await createActor();
+
+            // Ensure global state document is absent
+            await AuditLogIntegrityState.deleteMany({});
+            await AuditLog.collection.deleteMany({});
+
+            // Insert only legacy unsealed record (no sequence, no seal, no keyId)
+            await AuditLog.collection.insertOne({
+                user: actor._id,
+                action: 'LEGACY_UNSEALED_RECORD',
+                outcome: 'SUCCESS',
+                createdAt: new Date('2026-01-01T00:00:00.000Z')
+            });
+
+            const result = await auditIntegrityService.verifyAuditTrail();
+            expect(result.status).toBe('UNSEALED');
+            expect(result.valid).toBe(false);
+            expect(result.unsealedRecords).toBe(1);
+            expect(result.sealedRecords).toBe(0);
+            expect(result.invalidSeals).toBe(0);
+            expect(result.diagnostics.some(d => d.code === 'UNSEALED_RECORD')).toBe(true);
+        });
+
+        it('Case C: reports MISMATCH with both INTEGRITY_STATE_MISSING and SEAL_INVALID when record seal is tampered and state is missing', async () => {
+            const actor = await createActor();
+            await writeAuditLog({ user: actor._id.toString(), action: 'EVENT_C1', outcome: 'SUCCESS' });
+
+            // Tamper with record 1's seal
+            await AuditLog.collection.updateOne(
+                { sequence: 1 },
+                { $set: { integritySeal: 'tampered-corrupted-seal' } }
+            );
+
+            // Delete global state document
+            await AuditLogIntegrityState.deleteOne({ _id: 'global' });
+
+            const result = await auditIntegrityService.verifyAuditTrail();
+            expect(result.status).toBe('MISMATCH');
+            expect(result.valid).toBe(false);
+            expect(result.diagnostics.some(d => d.code === 'INTEGRITY_STATE_MISSING')).toBe(true);
+            expect(result.diagnostics.some(d => d.code === 'SEAL_INVALID')).toBe(true);
+            expect(result.status).not.toBe('UNSEALED');
+        });
+
+        it('Case D: continues to report MISMATCH and INTEGRITY_STATE_INVALID when state seal fields are cleared or corrupted', async () => {
+            const actor = await createActor();
+            await writeAuditLog({ user: actor._id.toString(), action: 'EVENT_D1', outcome: 'SUCCESS' });
+
+            // Corrupt the integrity seal on existing state document
+            await AuditLogIntegrityState.updateOne(
+                { _id: 'global' },
+                { $set: { integritySeal: 'corrupted-hmac-state-seal' } }
+            );
+
+            const result = await auditIntegrityService.verifyAuditTrail();
+            expect(result.status).toBe('MISMATCH');
+            expect(result.valid).toBe(false);
+            expect(result.diagnostics.some(d => d.code === 'INTEGRITY_STATE_INVALID')).toBe(true);
+            expect(result.status).not.toBe('UNSEALED');
+        });
     });
 });
