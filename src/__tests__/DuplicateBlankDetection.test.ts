@@ -45,6 +45,9 @@ function createNormalPageBuffer(width = 200, height = 200): Buffer {
     ctx.fillText('Student Answer details', 20, 40);
     ctx.fillText('Question 1: Solution code text', 20, 80);
     ctx.fillText('Line 2 of written content', 20, 120);
+    ctx.fillRect(20, 42, 100, 4);
+    ctx.fillRect(20, 82, 120, 4);
+    ctx.fillRect(20, 122, 90, 4);
     return canvas.toBuffer('image/png');
 }
 
