@@ -1288,7 +1288,9 @@ export class AllocationService {
         }
 
         if (role === UserRole.PROFESSOR) {
-            if (!exam.createdBy || !exam.createdBy.equals(userObjectId)) {
+            const { canManageExam } = await import('../lib/apiAuth');
+            const manage = await canManageExam({ id: userId.toString(), role }, exam);
+            if (!manage.canManage) {
                 await writeAuditLog({
                     user: userObjectId,
                     action: 'ALLOCATION_REOPEN_DENIED',
@@ -1978,8 +1980,14 @@ export class AllocationService {
         const isAdmin = viewer?.role?.toUpperCase() === UserRole.ADMIN;
         let allowedExamIds: mongoose.Types.ObjectId[] = [];
 
+        const Course = mongoose.models.Course || (await import('../models/Course')).default;
         if (!isAdmin && viewer?.id && mongoose.Types.ObjectId.isValid(viewer.id)) {
-            allowedExamIds = await Exam.find({ createdBy: new mongoose.Types.ObjectId(viewer.id) }).distinct('_id');
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(viewer.id),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map((c: { _id: mongoose.Types.ObjectId }) => c._id);
+            allowedExamIds = await Exam.find({ course: { $in: profCourseIds }, isActive: true }).distinct('_id');
             if (allowedExamIds.length === 0) {
                 return {
                     activities: [],

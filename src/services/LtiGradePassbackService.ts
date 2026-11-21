@@ -116,9 +116,19 @@ export class LtiGradePassbackService {
         }
 
         // 1. Authorize exam access and enforce ownership/course scoping
-        const exam: IExam | null = await ExamRepository.getExamById(examId, actingUserId, actingUserRole);
-        if (!exam) {
-            throw new HttpError('Exam not found', 404);
+        let exam: IExam | null = null;
+        if (actingUserId && actingUserRole) {
+            const { canManageExam } = await import('../lib/apiAuth');
+            const manage = await canManageExam({ id: actingUserId, role: actingUserRole }, examId);
+            if (!manage.canManage || !manage.exam) {
+                throw new HttpError(manage.errorMessage || 'Exam not found', manage.errorStatus === 200 ? 404 : manage.errorStatus);
+            }
+            exam = manage.exam;
+        } else {
+            exam = await ExamRepository.getExamById(examId, actingUserId, actingUserRole);
+            if (!exam) {
+                throw new HttpError('Exam not found', 404);
+            }
         }
 
         if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {

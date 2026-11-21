@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { withServerTiming } from '../../../../../../../lib/serverTiming';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../../../lib/db';
-import { requireGradingOrAnnotationAccess } from '../../../../../../../lib/apiAuth';
+import { requireGradingOrAnnotationAccess, canManageExam } from '../../../../../../../lib/apiAuth';
 import { UserRole } from '../../../../../../../constants/permissions';
 import BatchRepository from '../../../../../../../repositories/BatchRepository';
 import IngestionPage from '../../../../../../../models/IngestionPage';
@@ -118,23 +118,7 @@ export const GET = withServerTiming(async (
     const isAdmin = userRole === UserRole.ADMIN;
     const isProfessorOrAdmin = isProfessor || isAdmin;
 
-    let batch = null;
-    if (isProfessor) {
-      batch = await BatchRepository.getBatchById(batchId, auth.user.id, auth.user.role);
-      if (!batch) {
-        const internalBatch = await BatchRepository.getBatchByBatchIdInternal(batchId);
-        if (internalBatch?.exam) {
-          const ExamRepository = (await import('../../../../../../../repositories/ExamRepository')).default;
-          const exam = await ExamRepository.getExamById(internalBatch.exam.toString(), auth.user.id, auth.user.role);
-          if (exam) {
-            batch = internalBatch;
-          }
-        }
-      }
-    } else {
-      batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
-    }
-
+    const batch = await BatchRepository.getBatchByBatchIdInternal(batchId);
     if (!batch) {
       return NextResponse.json(
         {
@@ -146,22 +130,52 @@ export const GET = withServerTiming(async (
       );
     }
 
-    if (batch.exam) {
-      const Exam = mongoose.models.Exam || (await import('../../../../../../../models/Exam')).default;
-      const examDoc = await Exam.findById(batch.exam).select('course');
-      if (examDoc?.course) {
-        const Course = mongoose.models.Course || (await import('../../../../../../../models/Course')).default;
-        const courseDoc = await Course.findById(examDoc.course).select('isActive');
-        if (!courseDoc || !courseDoc.isActive) {
-          return NextResponse.json(
-            {
-              success: false,
-              message: 'Batch not found or access denied',
-              data: null,
-            },
-            { status: 404 }
-          );
+    let examId = batch.exam;
+    if (!examId && page.answerScript) {
+      const AnswerScript = mongoose.models.AnswerScript || (await import('../../../../../../../models/AnswerScript')).default;
+      const script = await AnswerScript.findById(page.answerScript).select('exam');
+      if (script?.exam) {
+        const Exam = mongoose.models.Exam || (await import('../../../../../../../models/Exam')).default;
+        const examDoc = await Exam.findById(script.exam).select('_id');
+        if (examDoc) {
+          examId = script.exam;
         }
+      }
+    }
+
+    if (!examId) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: !page.answerScript ? 'Page not found' : 'Batch not found or access denied',
+          data: null,
+        },
+        { status: 404 }
+      );
+    }
+
+    const manage = await canManageExam(auth.user, examId);
+    if (isProfessorOrAdmin) {
+      if (!manage.canManage) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Batch not found or access denied',
+            data: null,
+          },
+          { status: 404 }
+        );
+      }
+    } else {
+      if (!manage.exam || !manage.course) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Batch not found or access denied',
+            data: null,
+          },
+          { status: 404 }
+        );
       }
     }
 
