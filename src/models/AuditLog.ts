@@ -181,9 +181,10 @@ export async function reconcileOrphanedIntegrityState(
     const actualSequence = actualLatestRecord?.sequence ?? 0;
     const actualHmac = actualLatestRecord?.integritySeal || undefined;
     const cutoverSequence = state.cutoverSequence ?? 1;
+    const cutoverDate = state.cutoverDate || new Date();
 
     const healedStateSeal = actualSequence > 0
-        ? createAuditIntegrityStateSeal(actualSequence, actualHmac, cutoverSequence)
+        ? createAuditIntegrityStateSeal(actualSequence, actualHmac, cutoverSequence, cutoverDate)
         : { hmac: undefined, keyId: undefined };
 
     // Atomic CAS: only heal if state.lastSequence has not changed in the meantime
@@ -197,6 +198,8 @@ export async function reconcileOrphanedIntegrityState(
                 lastSequence: actualSequence,
                 lastRecordHmac: actualHmac || null,
                 cutoverSequence,
+                cutoverDate,
+                stateSealVersion: actualSequence > 0 ? 3 : undefined,
                 integritySeal: healedStateSeal.hmac || null,
                 integrityKeyId: healedStateSeal.keyId || null,
                 lastAllocatedAt: new Date()
@@ -279,6 +282,7 @@ export async function allocateAuditSequence(
                             lastSequence: 0,
                             cutoverSequence: 1,
                             cutoverDate: new Date(),
+                            stateSealVersion: 3,
                             lastAllocatedAt: new Date()
                         });
                         state = created.toObject();
@@ -330,7 +334,8 @@ export async function allocateAuditSequence(
                     previousSeal
                 }, nextSequence);
 
-                const stateSeal = createAuditIntegrityStateSeal(nextSequence, integritySeal.hmac, cutoverSequence);
+                const cutoverDate = state.cutoverDate || new Date();
+                const stateSeal = createAuditIntegrityStateSeal(nextSequence, integritySeal.hmac, cutoverSequence, cutoverDate);
 
                 // Atomic CAS condition: lastSequence must match state.lastSequence
                 // across any and all application instances.
@@ -344,6 +349,8 @@ export async function allocateAuditSequence(
                             lastSequence: nextSequence,
                             lastRecordHmac: integritySeal.hmac,
                             cutoverSequence,
+                            cutoverDate,
+                            stateSealVersion: 3,
                             integritySeal: stateSeal.hmac,
                             integrityKeyId: stateSeal.keyId,
                             lastAllocatedAt: new Date(),

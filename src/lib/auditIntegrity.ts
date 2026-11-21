@@ -22,6 +22,9 @@ export interface AuditIntegrityState {
     lastRecordHmac?: string;
     integritySeal?: string;
     integrityKeyId?: string;
+    cutoverDate?: Date;
+    stateSealVersion?: number;
+    lastAllocatedAt?: Date;
 }
 
 function canonicalize(value: unknown): unknown {
@@ -107,7 +110,8 @@ export function createAuditIntegritySeal(
 }
 
 export function verifyAuditIntegritySeal(
-    record: AuditIntegrityRecord
+    record: AuditIntegrityRecord,
+    cutoverSequence: number = 1
 ): { valid: boolean } {
     if (!record.integritySeal || !record.integrityKeyId ||
         !Number.isSafeInteger(record.sequence) || !record.sequence || record.sequence < 1) {
@@ -135,27 +139,51 @@ export function verifyAuditIntegritySeal(
         return { valid: true };
     }
 
-    // Fallback to version 1 for legacy seals
-    const v1Result = verifyHmacSeal(
-        auditRecordBytes(record, record.sequence, record.integrityKeyId, 1),
-        metadata,
-        record.integritySeal,
-        record.integrityKeyId
-    );
-    return { valid: v1Result.valid };
+    // Fallback to version 1 for legacy seals ONLY strictly below cutoverSequence
+    if (record.sequence < cutoverSequence) {
+        const v1Result = verifyHmacSeal(
+            auditRecordBytes(record, record.sequence, record.integrityKeyId, 1),
+            metadata,
+            record.integritySeal,
+            record.integrityKeyId
+        );
+        return { valid: v1Result.valid };
+    }
+
+    return { valid: false };
 }
 
 function integrityStateBytes(
     lastSequence: number,
     keyId: string,
     lastRecordHmac?: string,
-    cutoverSequence: number = 1
+    cutoverSequence: number = 1,
+    cutoverDate?: Date | string | number | null,
+    version: number = 3
 ): Buffer {
+    if (version === 3) {
+        const isoDate = cutoverDate ? new Date(cutoverDate).toISOString() : null;
+        return Buffer.from(JSON.stringify({
+            version: 3,
+            lastSequence,
+            cutoverSequence,
+            cutoverDate: isoDate,
+            lastRecordHmac: lastRecordHmac || null,
+            keyId
+        }), 'utf8');
+    }
+    if (version === 2) {
+        return Buffer.from(JSON.stringify({
+            version: 2,
+            lastSequence,
+            cutoverSequence,
+            lastRecordHmac: lastRecordHmac || null,
+            keyId
+        }), 'utf8');
+    }
     return Buffer.from(JSON.stringify({
-        version: 2,
+        version: 1,
         lastSequence,
-        cutoverSequence,
-        lastRecordHmac: lastRecordHmac || null,
         keyId
     }), 'utf8');
 }
@@ -163,7 +191,8 @@ function integrityStateBytes(
 export function createAuditIntegrityStateSeal(
     lastSequence: number,
     lastRecordHmac?: string,
-    cutoverSequence: number = 1
+    cutoverSequence: number = 1,
+    cutoverDate?: Date | string | number | null
 ): Pick<HmacSealResult, 'hmac' | 'keyId'> {
     const keyId = process.env.ORIGINAL_STORAGE_KEY_ID || 'v1';
     const metadata = {
@@ -173,7 +202,7 @@ export function createAuditIntegrityStateSeal(
         timestamp: 0
     };
     const seal = generateHmacSeal(
-        integrityStateBytes(lastSequence, keyId, lastRecordHmac, cutoverSequence),
+        integrityStateBytes(lastSequence, keyId, lastRecordHmac, cutoverSequence, cutoverDate, 3),
         metadata,
         keyId
     );
@@ -192,22 +221,42 @@ export function verifyAuditIntegrityStateSeal(state: AuditIntegrityState): boole
         timestamp: 0
     };
 
-    // Try version 2 (binding lastRecordHmac and cutoverSequence)
-    const v2Result = verifyHmacSeal(
-        integrityStateBytes(state.lastSequence, state.integrityKeyId, state.lastRecordHmac, state.cutoverSequence ?? 1),
+    const cutover = state.cutoverSequence ?? 1;
+
+    // 1. Try version 3 (canonical payload binding cutoverDate)
+    const v3Result = verifyHmacSeal(
+        integrityStateBytes(state.lastSequence, state.integrityKeyId, state.lastRecordHmac, cutover, state.cutoverDate, 3),
         metadata,
         state.integritySeal,
         state.integrityKeyId
     );
-    if (v2Result.valid) {
+    if (v3Result.valid) {
         return true;
     }
 
-    // Fallback to version 1
-    return verifyHmacSeal(
-        Buffer.from(JSON.stringify({ version: 1, lastSequence: state.lastSequence, keyId: state.integrityKeyId }), 'utf8'),
-        metadata,
-        state.integritySeal,
-        state.integrityKeyId
-    ).valid;
+    // 2. Backward compatibility: if state is legacy version 2 (or unversioned legacy state document),
+    // verify against version 2 (which did not bind cutoverDate).
+    if (state.stateSealVersion === undefined || state.stateSealVersion === 2) {
+        const v2Result = verifyHmacSeal(
+            integrityStateBytes(state.lastSequence, state.integrityKeyId, state.lastRecordHmac, cutover, undefined, 2),
+            metadata,
+            state.integritySeal,
+            state.integrityKeyId
+        );
+        if (v2Result.valid) {
+            return true;
+        }
+    }
+
+    // 3. Fallback to version 1 ONLY strictly below cutoverSequence for legacy unversioned/pre-cutover states
+    if (state.lastSequence < cutover && (state.stateSealVersion === undefined || state.stateSealVersion === 1)) {
+        return verifyHmacSeal(
+            integrityStateBytes(state.lastSequence, state.integrityKeyId, undefined, cutover, undefined, 1),
+            metadata,
+            state.integritySeal,
+            state.integrityKeyId
+        ).valid;
+    }
+
+    return false;
 }

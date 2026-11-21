@@ -1,10 +1,24 @@
+import path from 'path';
+import fs from 'fs';
 import { loadEnvConfig } from '@next/env';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { beforeAll, beforeEach, afterAll } from 'vitest';
+import { GlobalFonts } from '@napi-rs/canvas';
 
 // Load environment configuration (.env.local) if present
 loadEnvConfig(process.cwd());
+
+// Ensure bundled fallback fonts are available for canvas tests in CI (e.g. Linux runners)
+try {
+  const fontPath = path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'standard_fonts', 'LiberationSans-Regular.ttf');
+  if (fs.existsSync(fontPath)) {
+    GlobalFonts.registerFromPath(fontPath, 'Arial');
+    GlobalFonts.registerFromPath(fontPath, 'sans-serif');
+  }
+} catch {
+  // Ignore font loading errors if environment restricts file access
+}
 
 // Override MONGODB_URI immediately with a local placeholder to isolate tests from development database
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/test-placeholder-safety';

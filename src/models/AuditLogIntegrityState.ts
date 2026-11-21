@@ -6,6 +6,7 @@ export interface IAuditLogIntegrityState {
     cutoverSequence?: number;
     lastRecordHmac?: string;
     cutoverDate?: Date;
+    stateSealVersion?: number;
     lastAllocatedAt?: Date;
     leaseExpiresAt?: Date | null;
     allocationToken?: string | null;
@@ -20,6 +21,7 @@ const AuditLogIntegrityStateSchema = new Schema<IAuditLogIntegrityState>(
         cutoverSequence: { type: Number, default: 1 },
         lastRecordHmac: { type: String },
         cutoverDate: { type: Date, default: () => new Date() },
+        stateSealVersion: { type: Number, default: 3 },
         lastAllocatedAt: { type: Date },
         leaseExpiresAt: { type: Date },
         allocationToken: { type: String },
