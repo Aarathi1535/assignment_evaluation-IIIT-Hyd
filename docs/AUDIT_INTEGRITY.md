@@ -42,7 +42,7 @@ The verification service traverses all audit records in ascending sequence order
 
 1. **Unsealed Records After Cutover**:
    - Any record with `sequence < cutoverSequence` created prior to cutover is marked `UNSEALED_RECORD` (valid for legacy history, not seal-checked).
-   - Any unsealed record created or inserted after `cutoverDate` (detected via `createdAt` or `_id` timestamp) is rejected with `UNSEALED_RECORD_AFTER_CUTOVER`.
+   - Any unsealed record created or inserted after `cutoverDate` (detected via `createdAt`) is rejected with `UNSEALED_RECORD_AFTER_CUTOVER`. Note that MongoDB `_id` timestamp verification (derived from ObjectId) is not currently implemented.
 2. **Strict Sequence Monotonicity**:
    - Detected gaps are flagged as `SEQUENCE_GAP`.
    - Decreasing or out-of-order sequences are flagged as `SEQUENCE_ORDER_INVALID`.
@@ -77,6 +77,6 @@ The verification service traverses all audit records in ascending sequence order
 
 > [!NOTE]
 > **Heuristic for Unsequenced Records**:
-> The verification service inspects both `createdAt` and the MongoDB `_id` timestamp (derived from ObjectId) to detect unsealed records inserted after `cutoverDate` (`UNSEALED_RECORD_AFTER_CUTOVER`).
+> The verification service currently inspects `createdAt` against `cutoverDate` to detect unsealed records inserted after cutover (`UNSEALED_RECORD_AFTER_CUTOVER`). MongoDB `_id` timestamp verification (derived from ObjectId) is not currently implemented in the verifier.
 >
-> However, if an attacker with direct database access crafts an unsequenced document with both a forged backdated `createdAt` and a forged backdated `_id` timestamp prior to `cutoverDate`, the document cannot be cryptographically distinguished from a genuine pre-cutover legacy record using database fields alone. A follow-up issue tracks external notary commitments and strict sequence gating to eliminate this boundary limitation.
+> Consequently, if an attacker with direct database access crafts an unsequenced document with a forged backdated `createdAt` prior to `cutoverDate`, the document cannot be cryptographically distinguished from a genuine pre-cutover legacy record using database fields alone. A follow-up issue (Issue #338) tracks binding cutoverDate into the state seal, strict sequence gating, and external notary commitments to eliminate this boundary limitation.
