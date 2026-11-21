@@ -75,9 +75,10 @@ export class IngestionWorker {
      */
     async processNextJob(options?: {
         pageTimeoutMs?: number;
+        batchId?: string;
     }): Promise<ProcessJobResult> {
         // Step 1: Atomically claim one job from queue
-        const job = await BatchRepository.claimNextQueuedJob(this.workerId, this.staleTimeoutMs);
+        const job = await BatchRepository.claimNextQueuedJob(this.workerId, this.staleTimeoutMs, options?.batchId);
         if (!job) {
             return { processed: false };
         }

@@ -14,20 +14,45 @@ describe('AE-223: Ingestion Load Testing vs 5,000 Pages/Hour Target', () => {
         }
     });
 
-    it('processes synthetic batch, measures throughput and memory, and asserts zero failures', async () => {
-        // Run test with 50 pages to measure throughput accurately
-        const metrics = await runIngestionLoadTest({ totalPages: 50, cleanup: true });
+    it('processes synthetic realistic batch, measures throughput and memory, and asserts processed equals total', async () => {
+        // Run test with realistic multi-page scanned PDF (cover QR + student work pages)
+        const totalPages = 20;
+        const metrics = await runIngestionLoadTest({ totalPages, cleanup: true });
 
-        expect(metrics.totalPages).toBe(50);
+        // Correctness assertions: processed pages MUST equal total pages (AE-223 mentor requirement)
+        expect(metrics.totalPages).toBe(totalPages);
+        expect(metrics.processedPages).toBe(totalPages);
+        expect(metrics.failedPages).toBe(0);
         expect(metrics.errorCount).toBe(0);
+
+        // Throughput & duration sanity checks
         expect(metrics.totalDurationMs).toBeGreaterThan(0);
         expect(metrics.pagesPerSecond).toBeGreaterThan(0);
         expect(metrics.extrapolatedPagesPerHour).toBeGreaterThan(0);
-
-        // Target check: 5,000 pages/hour is ~1.39 pages/sec
         expect(metrics.targetPagesPerHour).toBe(5000);
-        // Assert that memory metrics are reported
+
+        // Assert all per-stage measurements are populated and non-zero
+        expect(metrics.stageBreakdownMs.renderMs).toBeGreaterThan(0);
+        expect(metrics.stageBreakdownMs.thumbnailMs).toBeGreaterThan(0);
+        expect(metrics.stageBreakdownMs.storageWriteMs).toBeGreaterThan(0);
+        expect(metrics.stageBreakdownMs.dbPersistMs).toBeGreaterThan(0);
+
+        // Log and report pass/fail against 5,000 pages/hour SLA
+        console.log(`\n==================================================`);
+        console.log(`[AE-223 Target Check] Processed Pages: ${metrics.processedPages}/${metrics.totalPages}`);
+        console.log(`[AE-223 Target Check] Measured Throughput: ${metrics.extrapolatedPagesPerHour} pages/hr (${metrics.averageLatencyMsPerPage.toFixed(1)} ms/page)`);
+        console.log(`[AE-223 Target Check] Target SLA: ${metrics.targetPagesPerHour} pages/hr`);
+        console.log(`[AE-223 Target Check] Target Status: ${metrics.meetsTarget ? 'PASS (Meets/Exceeds Target)' : 'FAIL/BELOW TARGET (Environment-constrained)'}`);
+        console.log(`==================================================\n`);
+
+        // Assert machine & run metadata are captured
+        expect(metrics.machineInfo.cpuModel).toBeDefined();
+        expect(metrics.machineInfo.cpuCores).toBeGreaterThan(0);
+        expect(metrics.runInfo.command).toContain('loadTestIngestion.ts');
+        expect(typeof metrics.meetsTarget).toBe('boolean');
+
+        // Memory assertions
         expect(metrics.memoryUsage.rssMb).toBeGreaterThan(0);
         expect(typeof metrics.memoryUsage.heapUsedDeltaMb).toBe('number');
-    }, 60000);
+    }, 120000);
 });

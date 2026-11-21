@@ -159,12 +159,13 @@ class BatchRepository {
      */
     async claimNextQueuedJob(
         workerId: string,
-        staleTimeoutMs = 60000
+        staleTimeoutMs = 60000,
+        batchId?: string
     ): Promise<IIngestionJob | null> {
         const now = new Date();
         const staleThreshold = new Date(now.getTime() - staleTimeoutMs);
 
-        const filter = {
+        const filter: Record<string, unknown> = {
             $expr: { $lt: ['$attempts', '$maxRetries'] },
             $or: [
                 { status: IngestionStatus.QUEUED },
@@ -177,6 +178,10 @@ class BatchRepository {
                 }
             ]
         };
+
+        if (batchId) {
+            filter.batchId = batchId;
+        }
 
         const update: Record<string, unknown> = {
             $set: {
