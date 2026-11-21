@@ -1,8 +1,9 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach } from 'vitest';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { seedDemoData, isDatabaseHostAllowed } from '../scripts/seedDemoData';
+import defaultDerivedStorageService from '../services/DerivedStorageService';
 import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
@@ -11,6 +12,7 @@ import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Page from '../models/Page';
 import Allocation, { AllocationStatus, AllocationRule } from '../models/Allocation';
 import Grade from '../models/Grade';
+import StudentMapping from '../models/StudentMapping';
 
 describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
     beforeEach(async () => {
@@ -52,8 +54,23 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
 
         expect(isDatabaseHostAllowed('mongodb://127.0.0.1:27017/test')).toBe(true);
         expect(isDatabaseHostAllowed('mongodb://localhost:27017/test')).toBe(true);
-        expect(isDatabaseHostAllowed('mongodb://demo-cluster.internal:27017/test')).toBe(true);
+        expect(isDatabaseHostAllowed('mongodb://[::1]:27017/test')).toBe(true);
+        // Host containing "demo" must NOT be allowed without explicit DEMO_CLUSTER_HOST configuration
+        expect(isDatabaseHostAllowed('mongodb://demo-cluster.internal:27017/test')).toBe(false);
+
+        const originalDemoCluster = process.env.DEMO_CLUSTER_HOST;
+        try {
+            process.env.DEMO_CLUSTER_HOST = 'demo-cluster.internal';
+            expect(isDatabaseHostAllowed('mongodb://demo-cluster.internal:27017/test')).toBe(true);
+            expect(isDatabaseHostAllowed('mongodb://other-demo-cluster.internal:27017/test')).toBe(false);
+        } finally {
+            process.env.DEMO_CLUSTER_HOST = originalDemoCluster;
+        }
+
         expect(isDatabaseHostAllowed('mongodb://prod.customer-data.internal:27017/live')).toBe(false);
+        expect(isDatabaseHostAllowed('not-a-mongo-uri')).toBe(false);
+        expect(isDatabaseHostAllowed('')).toBe(false);
+        expect(isDatabaseHostAllowed(undefined)).toBe(false);
     });
 
     it('generates complete demonstration environment with valid referential integrity, pages, and dynamic credentials', async () => {
@@ -107,6 +124,16 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
             expect(page.imagePath.length).toBeGreaterThan(0);
             expect(page.width).toBe(800);
             expect(page.height).toBe(1000);
+
+            // Verify that generated page images are actually persisted and readable from DerivedStorageService
+            const exists = await defaultDerivedStorageService.derivedPageExists(page.imagePath);
+            expect(exists).toBe(true);
+            const imageBuffer = await defaultDerivedStorageService.readDerivedPage(page.imagePath);
+            expect(imageBuffer.length).toBeGreaterThan(0);
+            // PNG signature bytes: 89 50 4E 47 0D 0A 1A 0A
+            expect(imageBuffer.subarray(0, 8)).toEqual(
+                Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+            );
         }
 
         // Verify grades
@@ -124,7 +151,7 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
     });
 
     it('--clean deletes ONLY demo records without touching real production or non-demo exams', async () => {
-        // 1. Create a real non-demo Course, Exam, Script, and Grade
+        // 1. Create a real non-demo Course, and an Exam whose title contains "Demo"
         const realProf = await User.create({
             name: 'Prof. Real Faculty',
             email: 'real.professor@university.edu',
@@ -143,7 +170,7 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
         });
 
         const realExam = await Exam.create({
-            title: 'Midterm Examination 2026',
+            title: 'Midterm Demo Examination 2026',
             course: realCourse._id,
             createdBy: realProf._id,
             examDate: new Date(),
@@ -180,6 +207,31 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
             isActive: true,
         });
 
+        const realPage = await Page.create({
+            answerScript: realScript._id,
+            pageNumber: 1,
+            imagePath: 'real/storage/path/page1.png',
+            width: 800,
+            height: 1000,
+        });
+
+        const realAllocation: any = await Allocation.create({
+            exam: realExam._id,
+            answerScript: realScript._id,
+            ta: realProf._id,
+            allocatedBy: realProf._id,
+            status: AllocationStatus.PENDING,
+            rule: AllocationRule.EQUAL,
+        });
+
+        const realStudentMapping = await StudentMapping.create({
+            exam: realExam._id,
+            student: realProf._id,
+            anonymousId: 'REAL-ANON-1',
+            rollNumber: 'REAL-ROLL-001',
+            isVerified: true,
+        });
+
         const realGrade = await Grade.create({
             answerScript: realScript._id,
             rubric: realRubric._id,
@@ -197,10 +249,14 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
             cleanFirst: true,
         });
 
-        // 3. Assert real non-demo records were NOT deleted!
+        // 3. Assert real non-demo records were NOT deleted despite exam title containing "Demo"
         expect(await Course.findById(realCourse._id)).not.toBeNull();
         expect(await Exam.findById(realExam._id)).not.toBeNull();
+        expect(await Rubric.findById(realRubric._id)).not.toBeNull();
         expect(await AnswerScript.findById(realScript._id)).not.toBeNull();
+        expect(await Page.findById(realPage._id)).not.toBeNull();
+        expect(await Allocation.findById(realAllocation._id)).not.toBeNull();
+        expect(await StudentMapping.findById(realStudentMapping._id)).not.toBeNull();
         expect(await Grade.findById(realGrade._id)).not.toBeNull();
         expect(await User.findById(realProf._id)).not.toBeNull();
 

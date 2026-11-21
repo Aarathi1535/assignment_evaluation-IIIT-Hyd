@@ -44,31 +44,44 @@ export interface SeedDemoResult {
 /**
  * Validates whether the target MongoDB host is permitted for demo data generation.
  * Only local development/test hosts or explicitly configured demo clusters are allowed.
+ * Reject malformed URIs, unknown hosts, and substring matches.
  */
 export function isDatabaseHostAllowed(uri?: string): boolean {
-    if (!uri) return false;
+    if (!uri || typeof uri !== 'string') return false;
     try {
-        const parsed = new URL(uri.replace(/^mongodb(\+srv)?:\/\//, 'http://'));
+        const trimmed = uri.trim();
+        if (!trimmed.startsWith('mongodb://') && !trimmed.startsWith('mongodb+srv://')) {
+            return false;
+        }
+
+        const parsed = new URL(trimmed.replace(/^mongodb(\+srv)?:\/\//, 'http://'));
+        if (!parsed.host) return false;
+
         const hosts = parsed.host.split(',');
+        const demoClusterHost = process.env.DEMO_CLUSTER_HOST?.toLowerCase().trim();
+
         return hosts.every(h => {
-            const hostname = h.split(':')[0].toLowerCase();
+            if (!h) return false;
+            let hostname = h.trim();
+            if (hostname.startsWith('[')) {
+                const closeBracketIdx = hostname.indexOf(']');
+                if (closeBracketIdx !== -1) {
+                    hostname = hostname.substring(1, closeBracketIdx);
+                }
+            } else {
+                hostname = hostname.split(':')[0];
+            }
+            hostname = hostname.toLowerCase();
+
             return (
                 hostname === 'localhost' ||
                 hostname === '127.0.0.1' ||
                 hostname === '::1' ||
-                hostname.includes('mongodb-memory-server') ||
-                hostname.includes('demo') ||
-                (process.env.DEMO_CLUSTER_HOST && hostname === process.env.DEMO_CLUSTER_HOST.toLowerCase())
+                (Boolean(demoClusterHost) && hostname === demoClusterHost)
             );
         });
     } catch {
-        const lower = uri.toLowerCase();
-        return (
-            lower.includes('localhost') ||
-            lower.includes('127.0.0.1') ||
-            lower.includes('mongodb-memory-server') ||
-            lower.includes('demo')
-        );
+        return false;
     }
 }
 
@@ -154,7 +167,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
         const demoCourseIds = demoCourses.map(c => c._id);
 
         const demoExams = await Exam.find({
-            $or: [{ course: { $in: demoCourseIds } }, { title: /Demo/i }]
+            course: { $in: demoCourseIds }
         }).select('_id');
         const demoExamIds = demoExams.map(e => e._id);
 
@@ -162,7 +175,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
         const demoRubricIds = demoRubrics.map(r => r._id);
 
         const demoScripts = await AnswerScript.find({
-            $or: [{ exam: { $in: demoExamIds } }, { batchId: /^DEMO-BATCH/ }]
+            exam: { $in: demoExamIds }
         }).select('_id');
         const demoScriptIds = demoScripts.map(s => s._id);
 
