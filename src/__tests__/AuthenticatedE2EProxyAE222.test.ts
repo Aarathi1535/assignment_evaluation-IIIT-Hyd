@@ -1,59 +1,64 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { encode } from 'next-auth/jwt';
 import { NextRequest } from 'next/server';
+import { spawn, ChildProcess, execSync } from 'child_process';
+import net from 'net';
+import fs from 'fs';
+import path from 'path';
+import { createCanvas } from '@napi-rs/canvas';
+import * as zxing from '@zxing/library';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 
 // Models
 import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
 import Rubric from '../models/Rubric';
-import AnswerScript, { IdentificationSource, IdentificationStatus } from '../models/AnswerScript';
+import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import AuditLog from '../models/AuditLog';
 import Notification, { NotificationType } from '../models/Notification';
 import RegradeRequest, { RegradeStatus, RegradeDecisionOutcome } from '../models/RegradeRequest';
-import IngestionJob, { IngestionStatus } from '../models/IngestionJob';
-import IngestionPage, { PageProcessingStatus } from '../models/IngestionPage';
-import Batch, { BatchStatus } from '../models/Batch';
+import StudentMapping from '../models/StudentMapping';
+import Allocation, { AllocationStatus } from '../models/Allocation';
+import Batch from '../models/Batch';
+import IngestionPage from '../models/IngestionPage';
 
-// Services & Handlers
+// Services & Middleware
 import { authOptions } from '../lib/auth';
 import proxyMiddleware from '../proxy';
-import derivedStorageService from '../services/DerivedStorageService';
+import IngestionWorker from '../services/IngestionWorker';
 
-let mockSessionUser: any = null;
+async function getAvailablePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const s = net.createServer();
+        s.listen(0, '127.0.0.1', () => {
+            const port = (s.address() as net.AddressInfo).port;
+            s.close(() => resolve(port));
+        });
+        s.on('error', reject);
+    });
+}
 
-// Mock next-auth for Route Handler execution (Next.js route handlers call headers() in getServerSession)
-vi.mock('next-auth', async (importOriginal) => {
-    const original = await importOriginal<typeof import('next-auth')>();
-    return {
-        ...original,
-        getServerSession: vi.fn().mockImplementation(() => {
-            if (!mockSessionUser) return Promise.resolve(null);
-            return Promise.resolve({ user: mockSessionUser });
-        }),
-    };
-});
-
-// Route handlers
-import { PUT as examPUT } from '../app/api/exams/[id]/route';
-import { POST as approveIngestionPOST } from '../app/api/exams/[id]/approve-ingestion/route';
-import { POST as allocatePOST } from '../app/api/exams/[id]/allocate/route';
-import { POST as gradeQuestionPOST } from '../app/api/scripts/[id]/questions/[questionNumber]/grade/route';
-import { POST as publishPOST } from '../app/api/exams/[id]/publish/route';
-import { GET as studentResultGET } from '../app/api/student/results/[scriptId]/route';
-import { POST as studentRegradePOST } from '../app/api/student/regrade-requests/route';
-import { GET as professorRegradeQueueGET } from '../app/api/professor/regrade-requests/route';
-import { PATCH as assignReviewerPATCH } from '../app/api/professor/regrade-requests/[id]/assignment/route';
-import { PATCH as decideRegradePATCH } from '../app/api/professor/regrade-requests/[id]/route';
+function stopChildProcess(child: ChildProcess): void {
+    if (!child || child.killed) return;
+    try {
+        if (process.platform === 'win32' && child.pid) {
+            execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+        } else {
+            child.kill('SIGKILL');
+        }
+    } catch {
+        // Child process may already have terminated
+    }
+}
 
 describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src/proxy.ts', () => {
     let adminUser: any;
     let profUser: any;
     let taUser: any;
-    let reviewerTaUser: any;
     let studentUser: any;
 
     let adminSessionToken: string;
@@ -64,7 +69,6 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
     const SECRET = process.env.NEXTAUTH_SECRET || 'test-secret-value-at-least-32-chars-long';
 
     beforeEach(async () => {
-        mockSessionUser = null;
         process.env.STUDENT_RESULTS_ENABLED = 'true';
 
         // Create actual users with bcrypt-hashed passwords in the database
@@ -94,14 +98,6 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             isActive: true,
         });
 
-        reviewerTaUser = await User.create({
-            name: 'Reviewer TA Bob',
-            email: 'ta.bob.ae222@university.edu',
-            password: passwordHash,
-            role: UserRole.TA,
-            isActive: true,
-        });
-
         studentUser = await User.create({
             name: 'Student Charlie',
             email: 'student.charlie.ae222@university.edu',
@@ -110,7 +106,7 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             isActive: true,
         });
 
-        // Mint genuine encrypted NextAuth JWT tokens using next-auth/jwt encode()
+        // Mint genuine encrypted NextAuth JWT tokens using next-auth/jwt encode() for proxy.ts unit tests
         adminSessionToken = await encode({
             token: { id: adminUser._id.toString(), email: adminUser.email, name: adminUser.name, role: adminUser.role },
             secret: SECRET,
@@ -133,14 +129,16 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
     });
 
     afterAll(async () => {
-        await User.deleteMany({ email: { $regex: /ae222/ } });
-        await Course.deleteMany({ courseCode: { $regex: /AE222/ } });
-        await Exam.deleteMany({ title: { $regex: /AE222/ } });
-        await Batch.deleteMany({ batchId: { $regex: /batch-ae222/ } });
-        await IngestionPage.deleteMany({ batchId: { $regex: /batch-ae222/ } });
-        await AnswerScript.deleteMany({ candidateStudentId: 'STUD-AE222-01' });
-        await RegradeRequest.deleteMany({ reason: { $regex: /AE-222/ } });
-        await Notification.deleteMany({ 'data.studentId': 'STUD-AE222-01' });
+        if (mongoose.connection.readyState === 1) {
+            await User.deleteMany({ email: { $regex: /ae222/ } });
+            await Course.deleteMany({ courseCode: { $regex: /AE222/ } });
+            await Exam.deleteMany({ title: { $regex: /AE222/ } });
+            await Batch.deleteMany({ batchId: { $regex: /batch-ae222/ } });
+            await IngestionPage.deleteMany({ batchId: { $regex: /batch-ae222/ } });
+            await AnswerScript.deleteMany({ candidateStudentId: { $regex: /AE222/ } });
+            await RegradeRequest.deleteMany({ reason: { $regex: /AE-222/ } });
+            await Notification.deleteMany({ 'data.studentId': { $regex: /AE222/ } });
+        }
     });
 
     describe('1. Genuine Login & Authentication Verification', () => {
@@ -152,20 +150,20 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 password: 'CorrectPassword123!',
             });
 
-            expect(authResult).toBeDefined();
+            expect(authResult).not.toBeNull();
             expect(authResult.id).toBe(profUser._id.toString());
             expect(authResult.email).toBe(profUser.email);
             expect(authResult.role).toBe(UserRole.PROFESSOR);
 
-            // Verify LOGIN_SUCCESS audit log
+            // Verify LOGIN_SUCCESS audit log with exact assertion
             const auditEntry = await AuditLog.findOne({
                 user: profUser._id,
                 action: 'LOGIN_SUCCESS',
                 outcome: 'SUCCESS',
             }).sort({ createdAt: -1 });
 
-            expect(auditEntry).toBeDefined();
-            expect(auditEntry?.details?.email).toBe(profUser.email);
+            expect(auditEntry).not.toBeNull();
+            expect(auditEntry!.details?.email).toBe(profUser.email);
         });
 
         it('rejects invalid password, logs LOGIN_FAILURE audit event, and throws error', async () => {
@@ -181,7 +179,7 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 caughtError = err;
             }
 
-            expect(caughtError).toBeDefined();
+            expect(caughtError).not.toBeNull();
             expect(caughtError.message).toBe('Incorrect password');
 
             const failureAudit = await AuditLog.findOne({
@@ -190,8 +188,8 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 outcome: 'FAILURE',
             }).sort({ createdAt: -1 });
 
-            expect(failureAudit).toBeDefined();
-            expect(failureAudit?.details?.reason).toBe('Incorrect password');
+            expect(failureAudit).not.toBeNull();
+            expect(failureAudit!.details?.reason).toBe('Incorrect password');
         });
 
         it('rejects inactive user with LOGIN_FAILURE audit log', async () => {
@@ -215,7 +213,7 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 caughtError = err;
             }
 
-            expect(caughtError).toBeDefined();
+            expect(caughtError).not.toBeNull();
             expect(caughtError.message).toBe('No user found with this email');
 
             const inactiveAudit = await AuditLog.findOne({
@@ -223,8 +221,8 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 action: 'LOGIN_FAILURE',
             }).sort({ createdAt: -1 });
 
-            expect(inactiveAudit).toBeDefined();
-            expect(inactiveAudit?.details?.reason).toBe('User is inactive');
+            expect(inactiveAudit).not.toBeNull();
+            expect(inactiveAudit!.details?.reason).toBe('User is inactive');
         });
     });
 
@@ -233,7 +231,7 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             const req = new NextRequest('http://localhost:3000/api/courses');
             const res = await (proxyMiddleware as any)(req);
 
-            expect(res).toBeDefined();
+            expect(res).not.toBeNull();
             expect(res?.status).toBe(401);
             const data = await res?.json();
             expect(data.success).toBe(false);
@@ -307,33 +305,187 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
         });
     });
 
-    describe('3. Full Happy-Path Pipeline Across All Roles (Ingest → Publish → Regrade)', () => {
-        let course: any;
-        let exam: any;
-        let rubric: any;
-        let batch: any;
-        let job: any;
-        let script: any;
-        let page: any;
-        let regradeRequest: any;
+    describe('3. Genuine End-to-End HTTP Pipeline with Next Server, Session Cookies & Ingestion', () => {
+        let nextServerProcess: ChildProcess;
+        let serverPort: number;
+        let baseUrl: string;
+        let replSet: MongoMemoryReplSet;
 
-        beforeEach(async () => {
-            // Setup full course, exam, rubric, batch, and script
-            course = await Course.create({
-                courseCode: 'CS-AE222',
-                courseName: 'Authenticated Pipeline Testing',
-                academicYear: '2026-2027',
-                semester: 1,
-                professor: profUser._id,
-                teachingAssistants: [taUser._id, reviewerTaUser._id],
-                enrolledStudents: [studentUser._id],
+        let e2eProfCookie: string;
+        let e2eTaCookie: string;
+        let e2eStudentCookie: string;
+
+        let e2eCourse: any;
+        let e2eExam: any;
+        let e2eRubric: any;
+
+        beforeAll(async () => {
+            // Ensure .next production build exists before starting next start
+            if (!fs.existsSync(path.join(process.cwd(), '.next', 'BUILD_ID'))) {
+                execSync('npx next build', {
+                    stdio: 'inherit',
+                    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+                });
+            }
+
+            // Start MongoMemoryReplSet to support transactions in production server mode
+            if (mongoose.connection.readyState !== 0) {
+                await mongoose.disconnect();
+            }
+            replSet = await MongoMemoryReplSet.create({
+                replSet: { count: 1, storageEngine: 'wiredTiger' },
+            });
+            const replUri = replSet.getUri();
+            process.env.MONGODB_URI = replUri;
+            await mongoose.connect(replUri);
+
+            serverPort = await getAvailablePort();
+            baseUrl = `http://127.0.0.1:${serverPort}`;
+
+            // Spawn next start as an isolated child process
+            const nextBin = require.resolve('next/dist/bin/next');
+            nextServerProcess = spawn(
+                process.execPath,
+                [nextBin, 'start', '-p', String(serverPort)],
+                {
+                    env: {
+                        ...process.env,
+                        PORT: String(serverPort),
+                        NODE_ENV: 'production',
+                        MONGODB_URI: replUri,
+                        NEXTAUTH_SECRET: SECRET,
+                        NEXTAUTH_URL: `http://localhost:${serverPort}`,
+                        ORIGINAL_STORAGE_HMAC_SECRET: 'test-storage-hmac-secret-at-least-32-chars',
+                        ORIGINAL_STORAGE_KEY_ID: 'v1',
+                        WATERMARK_HMAC_SECRET: 'test-watermark-secret-at-least-32-chars',
+                        STUDENT_RESULTS_ENABLED: 'true',
+                    },
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                }
+            );
+
+            // Wait until next start server is responding
+            let serverHealthy = false;
+            for (let i = 0; i < 40; i++) {
+                try {
+                    const healthRes = await fetch(`${baseUrl}/api/health`);
+                    if (healthRes.status === 200) {
+                        serverHealthy = true;
+                        break;
+                    }
+                } catch {
+                    // Waiting for server to initialize
+                }
+                await new Promise((r) => setTimeout(r, 400));
+            }
+
+            if (!serverHealthy) {
+                throw new Error(`next start failed to respond on port ${serverPort} within timeout`);
+            }
+        }, 180000);
+
+        afterAll(async () => {
+            if (nextServerProcess) {
+                stopChildProcess(nextServerProcess);
+            }
+            if (mongoose.connection.readyState !== 0) {
+                await mongoose.disconnect();
+            }
+            if (replSet) {
+                await replSet.stop();
+            }
+            const fallbackUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/test-placeholder-safety';
+            try {
+                await mongoose.connect(fallbackUri);
+            } catch {
+                // ignore
+            }
+        });
+
+        // Helper to login via genuine HTTP NextAuth flow (/api/auth/csrf + /api/auth/callback/credentials)
+        async function loginViaHttp(email: string, password: string): Promise<string> {
+            const csrfRes = await fetch(`${baseUrl}/api/auth/csrf`);
+            const csrfData = (await csrfRes.json()) as { csrfToken: string };
+            const csrfSetCookie = csrfRes.headers.get('set-cookie') || '';
+            const csrfMatch = csrfSetCookie.match(/next-auth\.csrf-token=([^;]+)/);
+            const csrfCookie = csrfMatch ? csrfMatch[0] : '';
+
+            const params = new URLSearchParams();
+            params.set('csrfToken', csrfData.csrfToken);
+            params.set('email', email);
+            params.set('password', password);
+            params.set('json', 'true');
+
+            const loginRes = await fetch(`${baseUrl}/api/auth/callback/credentials`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    Cookie: csrfCookie,
+                },
+                body: params.toString(),
+            });
+
+            const loginSetCookies = loginRes.headers.get('set-cookie') || '';
+            const sessionMatch = loginSetCookies.match(/next-auth\.session-token=([^;]+)/);
+            if (!sessionMatch) {
+                throw new Error(`Login failed for ${email}: ${loginSetCookies}`);
+            }
+            return `next-auth.session-token=${sessionMatch[1]}`;
+        }
+
+        it('executes genuine end-to-end workflow over real HTTP with session cookies: Ingest → Allocate → Grade → Publish → Regrade', async () => {
+            // Seed users for E2E HTTP pipeline
+            const passwordHash = await bcrypt.hash('CorrectPassword123!', 10);
+            const prof = await User.create({
+                name: 'Prof Krishna E2E',
+                email: 'prof.http.ae222@university.edu',
+                password: passwordHash,
+                role: UserRole.PROFESSOR,
+                isActive: true,
+            });
+            const ta = await User.create({
+                name: 'Grader TA Alice E2E',
+                email: 'ta.alice.http.ae222@university.edu',
+                password: passwordHash,
+                role: UserRole.TA,
+                isActive: true,
+            });
+            const reviewer = await User.create({
+                name: 'Reviewer TA Bob E2E',
+                email: 'ta.bob.http.ae222@university.edu',
+                password: passwordHash,
+                role: UserRole.TA,
+                isActive: true,
+            });
+            const student = await User.create({
+                name: 'Student Charlie E2E',
+                email: 'student.charlie.http.ae222@university.edu',
+                password: passwordHash,
+                role: UserRole.STUDENT,
                 isActive: true,
             });
 
-            exam = await Exam.create({
-                title: 'AE222 Midterm Examination',
-                course: course._id,
-                createdBy: profUser._id,
+            // Login via HTTP
+            e2eProfCookie = await loginViaHttp('prof.http.ae222@university.edu', 'CorrectPassword123!');
+            e2eTaCookie = await loginViaHttp('ta.alice.http.ae222@university.edu', 'CorrectPassword123!');
+            e2eStudentCookie = await loginViaHttp('student.charlie.http.ae222@university.edu', 'CorrectPassword123!');
+
+            // Setup Course, Exam, Rubric, and StudentMapping
+            e2eCourse = await Course.create({
+                courseCode: 'CS-E2E-HTTP-AE222',
+                courseName: 'HTTP Authenticated Pipeline AE222',
+                academicYear: '2026-2027',
+                semester: 1,
+                professor: prof._id,
+                teachingAssistants: [ta._id, reviewer._id],
+                enrolledStudents: [student._id],
+                isActive: true,
+            });
+
+            e2eExam = await Exam.create({
+                title: 'AE222 Genuine HTTP E2E Exam',
+                course: e2eCourse._id,
+                createdBy: prof._id,
                 totalMarks: 20,
                 numberOfQuestions: 1,
                 examDate: new Date(),
@@ -343,9 +495,9 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 isActive: true,
             });
 
-            rubric = await Rubric.create({
-                exam: exam._id,
-                createdBy: profUser._id,
+            e2eRubric = await Rubric.create({
+                exam: e2eExam._id,
+                createdBy: prof._id,
                 scoreStep: 0.5,
                 questions: [
                     {
@@ -357,152 +509,133 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 isActive: true,
             });
 
-            await Exam.findByIdAndUpdate(exam._id, { rubric: rubric._id });
+            await Exam.updateOne({ _id: e2eExam._id }, { rubric: e2eRubric._id });
 
-            const batchId = `batch-ae222-${Date.now()}`;
-            batch = await Batch.create({
-                batchId,
-                exam: exam._id,
-                uploadedBy: adminUser._id,
-                files: [
-                    {
-                        fileId: 'f1',
-                        fileIndex: 0,
-                        originalFilename: 'scanned_exam.pdf',
-                        fileType: 'pdf',
-                        mimeType: 'application/pdf',
-                        size: 4096,
-                        pageCount: 1,
-                        storageKey: `batches/${batchId}/scanned_exam.pdf`,
-                    },
-                ],
-                totalFiles: 1,
-                totalSize: 4096,
-                totalPageCount: 1,
-                status: BatchStatus.QUEUED,
-                isActive: true,
+            await StudentMapping.create({
+                exam: e2eExam._id,
+                student: student._id,
+                anonymousId: 'ANON-E2E-AE222',
             });
+            // Helper function to generate scannable QR code PNG buffer
+            function createQrBuffer(text: string): Buffer {
+                const writer = new zxing.QRCodeWriter();
+                const qrMatrix = writer.encode(text, zxing.BarcodeFormat.QR_CODE, 120, 120, new Map());
+                const canvas = createCanvas(300, 300);
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, 300, 300);
+                ctx.fillStyle = '#000000';
+                for (let x = 0; x < qrMatrix.getWidth(); x++) {
+                    for (let y = 0; y < qrMatrix.getHeight(); y++) {
+                        if (qrMatrix.get(x, y)) {
+                            ctx.fillRect(30 + x, 30 + y, 1, 1);
+                        }
+                    }
+                }
+                return canvas.toBuffer('image/png');
+            }
 
-            job = await IngestionJob.create({
-                batchId,
-                batch: batch._id,
-                uploadedBy: adminUser._id,
-                status: IngestionStatus.DONE,
-                totalPages: 1,
-                processedPages: 1,
-                failedPages: 0,
+            // 1. STEP A: Ingestion via real HTTP multipart POST /api/ingest
+            const studentUser = await User.findOne({ email: 'student.charlie.http.ae222@university.edu' });
+            expect(studentUser).not.toBeNull();
+            const qrText = `${e2eExam._id.toString()}:${studentUser!._id.toString()}`;
+            const qrPngBuffer = createQrBuffer(qrText);
+
+            const form = new FormData();
+            form.append('examId', e2eExam._id.toString());
+            form.append('file', new Blob([new Uint8Array(qrPngBuffer)], { type: 'image/png' }), 'answerscript_p1.png');
+
+            const ingestRes = await fetch(`${baseUrl}/api/ingest`, {
+                method: 'POST',
+                headers: { Cookie: e2eProfCookie },
+                body: form,
             });
+            expect(ingestRes.status).toBe(201);
+            const ingestData = await ingestRes.json();
+            expect(ingestData.success).toBe(true);
+            expect(ingestData.data.batchId).toBeDefined();
 
-            script = await AnswerScript.create({
-                exam: exam._id,
-                student: studentUser._id,
-                candidateStudentId: 'STUD-AE222-01',
-                batchId,
-                fileIndex: 0,
-                startPageNumber: 1,
-                endPageNumber: 1,
-                pageCount: 1,
-                identificationStatus: IdentificationStatus.IDENTIFIED,
-                identificationSource: IdentificationSource.QR,
-                needsManualId: false,
-                isActive: true,
-            });
+            // Process job through IngestionWorker
+            await IngestionWorker.processNextJob();
 
-            page = await IngestionPage.create({
-                batchId,
-                job: job._id,
-                fileId: 'f1',
-                fileIndex: 0,
-                pageNumber: 1,
-                storageKey: `batches/${batchId}/derived/f1/1/page.png`,
-                thumbnailKey: `batches/${batchId}/derived/f1/1/thumb.jpg`,
-                status: PageProcessingStatus.PROCESSED,
-                answerScript: script._id,
-                qrDecodeOutcome: 'found',
-            });
+            const script = await AnswerScript.findOne({ exam: e2eExam._id, isActive: true });
+            expect(script).not.toBeNull();
+            expect(script!.identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
 
-            vi.spyOn(derivedStorageService, 'readDerivedPage').mockResolvedValue(Buffer.from('fake-png-bytes'));
-        });
-
-        it('completes the entire end-to-end pipeline across all roles', async () => {
-            // STEP A (PROFESSOR): Transitions Exam to EVALUATING, approves ingestion, transitions to REVIEW_PENDING
-            mockSessionUser = {
-                id: profUser._id.toString(),
-                email: profUser.email,
-                name: profUser.name,
-                role: UserRole.PROFESSOR,
-            };
-
-            // Exam status transitions: SCHEDULED -> SCANNING -> EVALUATING
-            const reqScanning = new NextRequest(`http://localhost:3000/api/exams/${exam._id}`, {
+            // 2. STEP B: Ingestion Approval & Allocation via real HTTP
+            // Transition status: SCHEDULED -> SCANNING -> EVALUATING
+            const resScanning = await fetch(`${baseUrl}/api/exams/${e2eExam._id}`, {
                 method: 'PUT',
-                headers: { 'content-type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', Cookie: e2eProfCookie },
                 body: JSON.stringify({ status: ExamStatus.SCANNING }),
             });
-            const resScanning = await examPUT(reqScanning as any, { params: Promise.resolve({ id: exam._id.toString() }) });
             expect(resScanning.status).toBe(200);
 
-            const reqEvaluating = new NextRequest(`http://localhost:3000/api/exams/${exam._id}`, {
+            const resEvaluating = await fetch(`${baseUrl}/api/exams/${e2eExam._id}`, {
                 method: 'PUT',
-                headers: { 'content-type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', Cookie: e2eProfCookie },
                 body: JSON.stringify({ status: ExamStatus.EVALUATING }),
             });
-            const resEvaluating = await examPUT(reqEvaluating as any, { params: Promise.resolve({ id: exam._id.toString() }) });
             expect(resEvaluating.status).toBe(200);
 
-            // Approve ingestion
-            const reqApprove = new NextRequest(`http://localhost:3000/api/exams/${exam._id}/approve-ingestion`, {
+            // Approve ingestion via HTTP
+            const resApprove = await fetch(`${baseUrl}/api/exams/${e2eExam._id}/approve-ingestion`, {
                 method: 'POST',
+                headers: { Cookie: e2eProfCookie },
             });
-            const resApprove = await approveIngestionPOST(reqApprove as any, { params: Promise.resolve({ id: exam._id.toString() }) });
             expect(resApprove.status).toBe(200);
 
             const approveAudit = await AuditLog.findOne({
                 action: 'INGESTION_APPROVED',
-                targetExam: exam._id,
+                entityId: e2eExam._id,
             });
-            expect(approveAudit).toBeDefined();
+            expect(approveAudit).not.toBeNull();
+            expect(approveAudit!.outcome).toBe('SUCCESS');
 
             // Transition to REVIEW_PENDING
-            const reqReview = new NextRequest(`http://localhost:3000/api/exams/${exam._id}`, {
+            const resReview = await fetch(`${baseUrl}/api/exams/${e2eExam._id}`, {
                 method: 'PUT',
-                headers: { 'content-type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', Cookie: e2eProfCookie },
                 body: JSON.stringify({ status: ExamStatus.REVIEW_PENDING }),
             });
-            const resReview = await examPUT(reqReview as any, { params: Promise.resolve({ id: exam._id.toString() }) });
             expect(resReview.status).toBe(200);
 
-            // STEP B (PROFESSOR): Allocates AnswerScript to TA Alice
-            const reqAllocate = new NextRequest(`http://localhost:3000/api/exams/${exam._id}/allocate`, {
+            // Allocate AnswerScript to TA Alice via HTTP
+            const taUser = await User.findOne({ email: 'ta.alice.http.ae222@university.edu' });
+            expect(taUser).not.toBeNull();
+
+            const resAllocate = await fetch(`${baseUrl}/api/exams/${e2eExam._id}/allocate`, {
                 method: 'POST',
-                headers: { 'content-type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', Cookie: e2eProfCookie },
                 body: JSON.stringify({
                     rule: 'EQUAL',
-                    taIds: [taUser._id.toString()],
+                    taIds: [taUser!._id.toString()],
                 }),
             });
-            const resAllocate = await allocatePOST(reqAllocate as any, { params: Promise.resolve({ id: exam._id.toString() }) });
             expect(resAllocate.status).toBe(200);
 
-            // STEP C (TA): Grades Question 1 with isFinal: true
-            mockSessionUser = {
-                id: taUser._id.toString(),
-                email: taUser.email,
-                name: taUser.name,
-                role: UserRole.TA,
-            };
+            // TA Alice claims the allocation via HTTP
+            const allocation = await Allocation.findOne({ exam: e2eExam._id, ta: taUser!._id });
+            expect(allocation).not.toBeNull();
+            expect(allocation!.status).toBe(AllocationStatus.PENDING);
 
-            const reqGrade = new NextRequest(`http://localhost:3000/api/scripts/${script._id}/questions/1/grade`, {
+            const resClaim = await fetch(`${baseUrl}/api/allocations/${allocation!._id}/claim`, {
                 method: 'POST',
-                headers: { 'content-type': 'application/json' },
+                headers: { Cookie: e2eTaCookie },
+            });
+            expect(resClaim.status).toBe(200);
+            const claimData = await resClaim.json();
+            expect(claimData.success).toBe(true);
+
+            // 3. STEP C: TA grades Question 1 via HTTP with real taCookie
+            const resGrade = await fetch(`${baseUrl}/api/scripts/${script!._id}/questions/1/grade`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Cookie: e2eTaCookie },
                 body: JSON.stringify({
                     marksAwarded: [{ criterionName: 'Correctness', score: 14, feedback: 'Good work, partial credit.' }],
                     feedback: 'Review section 2.',
                     isFinal: true,
                 }),
-            });
-            const resGrade = await gradeQuestionPOST(reqGrade as any, {
-                params: Promise.resolve({ id: script._id.toString(), questionNumber: '1' }),
             });
             expect(resGrade.status).toBe(200);
             const gradeData = await resGrade.json();
@@ -510,92 +643,75 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             expect(gradeData.data.totalScore).toBe(14);
             expect(gradeData.data.allocationCompleted).toBe(true);
 
-            // STEP D (PROFESSOR): Publishes Exam results
-            mockSessionUser = {
-                id: profUser._id.toString(),
-                email: profUser.email,
-                name: profUser.name,
-                role: UserRole.PROFESSOR,
-            };
-
-            const reqPublish = new NextRequest(`http://localhost:3000/api/exams/${exam._id}/publish`, {
+            // 4. STEP D: Professor publishes exam results via HTTP
+            const resPublish = await fetch(`${baseUrl}/api/exams/${e2eExam._id}/publish`, {
                 method: 'POST',
+                headers: { Cookie: e2eProfCookie },
             });
-            const resPublish = await publishPOST(reqPublish as any, { params: Promise.resolve({ id: exam._id.toString() }) });
             expect(resPublish.status).toBe(200);
 
             const pubAudit = await AuditLog.findOne({
                 action: 'EXAM_PUBLISHED',
-                targetExam: exam._id,
+                entityId: e2eExam._id,
             });
-            expect(pubAudit).toBeDefined();
+            expect(pubAudit).not.toBeNull();
+            expect(pubAudit!.outcome).toBe('SUCCESS');
 
             const pubNotification = await Notification.findOne({
-                user: studentUser._id,
+                recipient: studentUser!._id,
                 type: NotificationType.PUBLISH,
             });
-            expect(pubNotification).toBeDefined();
+            expect(pubNotification).not.toBeNull();
+            expect(pubNotification!.message).toContain(e2eExam.title);
 
-            // STEP E (STUDENT): Views published results and submits regrade request
-            mockSessionUser = {
-                id: studentUser._id.toString(),
-                email: studentUser.email,
-                name: studentUser.name,
-                role: UserRole.STUDENT,
-            };
-
-            const reqView = new NextRequest(`http://localhost:3000/api/student/results/${script._id}`);
-            const resView = await studentResultGET(reqView as any, { params: Promise.resolve({ scriptId: script._id.toString() }) });
+            // 5. STEP E: Student Charlie views results and submits regrade request via HTTP
+            const resView = await fetch(`${baseUrl}/api/student/results/${script!._id}`, {
+                headers: { Cookie: e2eStudentCookie },
+            });
             expect(resView.status).toBe(200);
             const viewData = await resView.json();
             expect(viewData.total).toBe(14);
 
-            const reqRegrade = new NextRequest('http://localhost:3000/api/student/regrade-requests', {
+            const resRegrade = await fetch(`${baseUrl}/api/student/regrade-requests`, {
                 method: 'POST',
-                headers: { 'content-type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', Cookie: e2eStudentCookie },
                 body: JSON.stringify({
-                    scriptId: script._id.toString(),
+                    scriptId: script!._id.toString(),
                     questionNumber: 1,
                     reason: 'AE-222: Step 3 was completed correctly. Please review.',
                 }),
             });
-            const resRegrade = await studentRegradePOST(reqRegrade as any);
             expect(resRegrade.status).toBe(201);
             const regradeData = await resRegrade.json();
             expect(regradeData.success).toBe(true);
-            expect(regradeData.data.status).toBe('open');
-            const regradeRequestId = regradeData.data.id;
+            const regradeRequestId = regradeData.data.id || regradeData.data._id;
+            expect(regradeRequestId).toBeDefined();
 
-            // STEP F (PROFESSOR): Reviews queue, assigns Reviewer TA Bob, and decides regrade
-            mockSessionUser = {
-                id: profUser._id.toString(),
-                email: profUser.email,
-                name: profUser.name,
-                role: UserRole.PROFESSOR,
-            };
-
-            const reqQueue = new NextRequest('http://localhost:3000/api/professor/regrade-requests');
-            const resQueue = await professorRegradeQueueGET(reqQueue as any);
+            // 6. STEP F: Professor reviews queue, assigns Reviewer TA Bob, and decides regrade via HTTP
+            const resQueue = await fetch(`${baseUrl}/api/professor/regrade-requests`, {
+                headers: { Cookie: e2eProfCookie },
+            });
             expect(resQueue.status).toBe(200);
 
-            const reqAssign = new NextRequest(`http://localhost:3000/api/professor/regrade-requests/${regradeRequestId}/assignment`, {
+            const reviewerTa = await User.findOne({ email: 'ta.bob.http.ae222@university.edu' });
+            expect(reviewerTa).not.toBeNull();
+
+            const resAssign = await fetch(`${baseUrl}/api/professor/regrade-requests/${regradeRequestId}/assignment`, {
                 method: 'PATCH',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ reviewerId: reviewerTaUser._id.toString() }),
+                headers: { 'Content-Type': 'application/json', Cookie: e2eProfCookie },
+                body: JSON.stringify({ reviewerId: reviewerTa!._id.toString() }),
             });
-            const resAssign = await assignReviewerPATCH(reqAssign as any, { params: Promise.resolve({ id: regradeRequestId }) });
             expect(resAssign.status).toBe(200);
 
-            const reqDecide = new NextRequest(`http://localhost:3000/api/professor/regrade-requests/${regradeRequestId}`, {
+            const resDecide = await fetch(`${baseUrl}/api/professor/regrade-requests/${regradeRequestId}`, {
                 method: 'PATCH',
-                headers: { 'content-type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', Cookie: e2eProfCookie },
                 body: JSON.stringify({
                     outcome: RegradeDecisionOutcome.APPROVED,
                     reason: 'Step 3 verified. +4 marks awarded.',
                     revisedScore: 18,
                 }),
             });
-            const resDecide = await decideRegradePATCH(reqDecide as any, { params: Promise.resolve({ id: regradeRequestId }) });
             expect(resDecide.status).toBe(200);
             const decideData = await resDecide.json();
             expect(decideData.success).toBe(true);
@@ -603,23 +719,18 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
 
             const decideAudit = await AuditLog.findOne({
                 action: 'REGRADE_DECIDED',
-                targetScript: script._id,
+                entityId: regradeRequestId,
             });
-            expect(decideAudit).toBeDefined();
+            expect(decideAudit).not.toBeNull();
+            expect(decideAudit!.outcome).toBe('SUCCESS');
 
-            // STEP G (STUDENT): Verifies updated score in portal
-            mockSessionUser = {
-                id: studentUser._id.toString(),
-                email: studentUser.email,
-                name: studentUser.name,
-                role: UserRole.STUDENT,
-            };
-
-            const reqFinalView = new NextRequest(`http://localhost:3000/api/student/results/${script._id}`);
-            const resFinalView = await studentResultGET(reqFinalView as any, { params: Promise.resolve({ scriptId: script._id.toString() }) });
+            // 7. STEP G: Student Charlie views updated score in portal via HTTP
+            const resFinalView = await fetch(`${baseUrl}/api/student/results/${script!._id}`, {
+                headers: { Cookie: e2eStudentCookie },
+            });
             expect(resFinalView.status).toBe(200);
             const finalData = await resFinalView.json();
             expect(finalData.total).toBe(18);
-        });
+        }, 120000);
     });
 });
