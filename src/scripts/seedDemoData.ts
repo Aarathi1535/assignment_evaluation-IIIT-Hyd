@@ -1,7 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { loadEnvConfig } from '@next/env';
 import bcrypt from 'bcryptjs';
-import mongoose from 'mongoose';
+import crypto from 'crypto';
+import { createCanvas } from '@napi-rs/canvas';
+import defaultDerivedStorageService from '../services/DerivedStorageService';
 
 loadEnvConfig(process.cwd());
 
@@ -14,6 +16,7 @@ export interface SeedDemoOptions {
     questionsCount?: number;
     withGrades?: boolean;
     cleanFirst?: boolean;
+    password?: string;
 }
 
 export interface SeedDemoResult {
@@ -24,20 +27,104 @@ export interface SeedDemoResult {
     scriptIds: string[];
     allocationIds: string[];
     gradeIds: string[];
+    pageIds: string[];
+    generatedPassword?: string;
     stats: {
         courses: number;
         exams: number;
         tas: number;
         students: number;
         scripts: number;
+        pages: number;
         allocations: number;
         grades: number;
     };
 }
 
+/**
+ * Validates whether the target MongoDB host is permitted for demo data generation.
+ * Only local development/test hosts or explicitly configured demo clusters are allowed.
+ */
+export function isDatabaseHostAllowed(uri?: string): boolean {
+    if (!uri) return false;
+    try {
+        const parsed = new URL(uri.replace(/^mongodb(\+srv)?:\/\//, 'http://'));
+        const hosts = parsed.host.split(',');
+        return hosts.every(h => {
+            const hostname = h.split(':')[0].toLowerCase();
+            return (
+                hostname === 'localhost' ||
+                hostname === '127.0.0.1' ||
+                hostname === '::1' ||
+                hostname.includes('mongodb-memory-server') ||
+                hostname.includes('demo') ||
+                (process.env.DEMO_CLUSTER_HOST && hostname === process.env.DEMO_CLUSTER_HOST.toLowerCase())
+            );
+        });
+    } catch {
+        const lower = uri.toLowerCase();
+        return (
+            lower.includes('localhost') ||
+            lower.includes('127.0.0.1') ||
+            lower.includes('mongodb-memory-server') ||
+            lower.includes('demo')
+        );
+    }
+}
+
+/**
+ * Generates synthetic page image buffer for demo AnswerScript pages.
+ */
+function createDemoPageBuffer(title: string, pageNumber: number, totalPages: number): Buffer {
+    try {
+        const canvas = createCanvas(800, 1000);
+        const ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 800, 1000);
+
+        ctx.fillStyle = '#1e293b';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.fillText(title, 50, 70);
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = '16px sans-serif';
+        ctx.fillText(`Page ${pageNumber} of ${totalPages} - Demo Answer Sheet`, 50, 105);
+
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(50, 130, 700, 820);
+
+        ctx.fillStyle = '#334155';
+        ctx.font = '14px sans-serif';
+        ctx.fillText(`Question ${pageNumber}: Candidate Response`, 70, 170);
+        ctx.fillText('------------------------------------------------------------', 70, 195);
+        ctx.fillText('Demonstration answer text with verified handwriting and figures.', 70, 220);
+        ctx.fillText('Step 1: Parse input parameters and validate preconditions.', 70, 250);
+        ctx.fillText('Step 2: Apply dynamic programming recurrence relation.', 70, 280);
+        ctx.fillText('Step 3: Return authoritative evaluated result.', 70, 310);
+
+        return canvas.toBuffer('image/png');
+    } catch {
+        // Fallback minimal 1x1 valid PNG if canvas rendering is unavailable
+        return Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64'
+        );
+    }
+}
+
 export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedDemoResult> {
-    if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_PROD_SEED) {
+    // 1. Strict production & host allowlist guard
+    if (process.env.NODE_ENV === 'production') {
         throw new Error('Demo data generation is forbidden in production');
+    }
+
+    const mongoUri = process.env.MONGODB_URI;
+    if (!isDatabaseHostAllowed(mongoUri)) {
+        throw new Error(
+            'Demo data generation is forbidden on non-allowlisted database hosts. Refusing connection to host outside allowlist (allowed: localhost, 127.0.0.1, or explicit demo cluster).'
+        );
     }
 
     const { connectDB } = await import('../lib/db');
@@ -49,6 +136,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
     const { default: Rubric } = await import('../models/Rubric');
     const { default: StudentMapping } = await import('../models/StudentMapping');
     const { default: AnswerScript, IdentificationStatus } = await import('../models/AnswerScript');
+    const { default: Page } = await import('../models/Page');
     const { default: Allocation, AllocationStatus, AllocationRule } = await import('../models/Allocation');
     const { default: Grade } = await import('../models/Grade');
 
@@ -57,23 +145,47 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
     const studentsCount = Math.max(1, options.studentsCount ?? 4);
     const tasCount = Math.max(1, options.tasCount ?? 2);
     const questionsCount = Math.max(1, options.questionsCount ?? 2);
+    const pagesPerScript = Math.max(1, options.pagesPerScript ?? 3);
     const withGrades = options.withGrades ?? true;
 
+    // 2. Safe selective clean: ONLY delete records tagged by demo identifiers
     if (options.cleanFirst) {
-        // Only clean demo entities matching 'demo' tag or prefix
-        await Grade.deleteMany({});
-        await Allocation.deleteMany({});
-        await AnswerScript.deleteMany({});
-        await StudentMapping.deleteMany({});
-        await Rubric.deleteMany({});
-        await Exam.deleteMany({ title: /Demo/i });
-        await Course.deleteMany({ courseCode: /^DEMO-/ });
+        const demoCourses = await Course.find({ courseCode: /^DEMO-/ }).select('_id');
+        const demoCourseIds = demoCourses.map(c => c._id);
+
+        const demoExams = await Exam.find({
+            $or: [{ course: { $in: demoCourseIds } }, { title: /Demo/i }]
+        }).select('_id');
+        const demoExamIds = demoExams.map(e => e._id);
+
+        const demoRubrics = await Rubric.find({ exam: { $in: demoExamIds } }).select('_id');
+        const demoRubricIds = demoRubrics.map(r => r._id);
+
+        const demoScripts = await AnswerScript.find({
+            $or: [{ exam: { $in: demoExamIds } }, { batchId: /^DEMO-BATCH/ }]
+        }).select('_id');
+        const demoScriptIds = demoScripts.map(s => s._id);
+
+        await Grade.deleteMany({
+            $or: [{ answerScript: { $in: demoScriptIds } }, { rubric: { $in: demoRubricIds } }]
+        });
+        await Allocation.deleteMany({
+            $or: [{ exam: { $in: demoExamIds } }, { answerScript: { $in: demoScriptIds } }]
+        });
+        await Page.deleteMany({ answerScript: { $in: demoScriptIds } });
+        await AnswerScript.deleteMany({ _id: { $in: demoScriptIds } });
+        await StudentMapping.deleteMany({ exam: { $in: demoExamIds } });
+        await Rubric.deleteMany({ _id: { $in: demoRubricIds } });
+        await Exam.deleteMany({ _id: { $in: demoExamIds } });
+        await Course.deleteMany({ _id: { $in: demoCourseIds } });
         await User.deleteMany({ email: /\.demo@university\.edu$/ });
     }
 
-    const passwordHash = await bcrypt.hash('DemoPassword123!', 10);
+    // 3. Dynamic or configured password
+    const effectivePassword = options.password || process.env.DEMO_PASSWORD || (crypto.randomBytes(9).toString('base64url') + '!Aa1');
+    const passwordHash = await bcrypt.hash(effectivePassword, 10);
 
-    // 1. Ensure Professor
+    // 4. Ensure / Upsert Professor
     let prof: any = await User.findOne({ email: 'prof.demo@university.edu' });
     if (!prof) {
         prof = await User.create({
@@ -83,9 +195,11 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
             role: UserRole.PROFESSOR,
             isActive: true,
         });
+    } else {
+        await User.updateOne({ _id: prof._id }, { $set: { password: passwordHash, isActive: true } });
     }
 
-    // 2. Ensure TAs
+    // 5. Ensure / Upsert TAs
     const taUsers: any[] = [];
     for (let i = 1; i <= tasCount; i++) {
         const email = `ta${i}.demo@university.edu`;
@@ -98,11 +212,13 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 role: UserRole.TA,
                 isActive: true,
             });
+        } else {
+            await User.updateOne({ _id: ta._id }, { $set: { password: passwordHash, isActive: true } });
         }
         taUsers.push(ta);
     }
 
-    // 3. Ensure Students
+    // 6. Ensure / Upsert Students
     const studentUsers: any[] = [];
     for (let i = 1; i <= studentsCount; i++) {
         const email = `student${i}.demo@university.edu`;
@@ -115,6 +231,8 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 role: UserRole.STUDENT,
                 isActive: true,
             });
+        } else {
+            await User.updateOne({ _id: student._id }, { $set: { password: passwordHash, isActive: true } });
         }
         studentUsers.push(student);
     }
@@ -124,40 +242,72 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
     const createdScriptIds: string[] = [];
     const createdAllocationIds: string[] = [];
     const createdGradeIds: string[] = [];
+    const createdPageIds: string[] = [];
 
-    // 4. Create Courses & Exams
+    // 7. Idempotent Course & Exam Generation (Deterministic demo keys)
     for (let c = 1; c <= coursesCount; c++) {
-        const courseCode = `DEMO-CS${100 + c}-${Date.now().toString().slice(-4)}`;
-        const course: any = await Course.create({
-            courseCode,
-            courseName: `Demo Computer Science ${100 + c}`,
-            professor: prof._id,
-            semester: 1,
-            academicYear: '2026-2027',
-            enrolledStudents: studentUsers.map(s => s._id),
-            teachingAssistants: taUsers.map(t => t._id),
-            isActive: true,
-        });
+        const courseCode = `DEMO-CS${100 + c}`;
+        let course: any = await Course.findOne({ courseCode });
+        if (!course) {
+            course = await Course.create({
+                courseCode,
+                courseName: `Demo Computer Science ${100 + c}`,
+                professor: prof._id,
+                semester: 1,
+                academicYear: '2026-2027',
+                enrolledStudents: studentUsers.map(s => s._id),
+                teachingAssistants: taUsers.map(t => t._id),
+                isActive: true,
+            });
+        } else {
+            await Course.updateOne(
+                { _id: course._id },
+                {
+                    $set: {
+                        professor: prof._id,
+                        enrolledStudents: studentUsers.map(s => s._id),
+                        teachingAssistants: taUsers.map(t => t._id),
+                        isActive: true,
+                    },
+                }
+            );
+        }
         createdCourseIds.push(course._id.toString());
 
         for (let e = 1; e <= examsPerCourse; e++) {
-            const exam: any = await Exam.create({
-                title: `Demo Exam ${e} (${courseCode})`,
-                course: course._id,
-                createdBy: prof._id,
-                examDate: new Date(),
-                numberOfQuestions: questionsCount,
-                totalMarks: questionsCount * 10,
-                status: ExamStatus.EVALUATING,
-                splittingStrategy: SplittingStrategyType.COVER_PAGE,
-                enrolledStudents: studentUsers.map(s => s._id),
-                regradeWindowOpensAt: new Date(Date.now() - 3600000),
-                regradeWindowClosesAt: new Date(Date.now() + 86400000),
-                isActive: true,
-            });
+            const examTitle = `Demo Exam ${e} (${courseCode})`;
+            let exam: any = await Exam.findOne({ course: course._id, title: examTitle });
+            if (!exam) {
+                exam = await Exam.create({
+                    title: examTitle,
+                    course: course._id,
+                    createdBy: prof._id,
+                    examDate: new Date(),
+                    numberOfQuestions: questionsCount,
+                    totalMarks: questionsCount * 10,
+                    status: ExamStatus.EVALUATING,
+                    splittingStrategy: SplittingStrategyType.COVER_PAGE,
+                    enrolledStudents: studentUsers.map(s => s._id),
+                    regradeWindowOpensAt: new Date(Date.now() - 3600000),
+                    regradeWindowClosesAt: new Date(Date.now() + 86400000),
+                    isActive: true,
+                });
+            } else {
+                await Exam.updateOne(
+                    { _id: exam._id },
+                    {
+                        $set: {
+                            numberOfQuestions: questionsCount,
+                            totalMarks: questionsCount * 10,
+                            enrolledStudents: studentUsers.map(s => s._id),
+                            isActive: true,
+                        },
+                    }
+                );
+            }
             createdExamIds.push(exam._id.toString());
 
-            // Create Rubric
+            // 8. Idempotent Rubric
             const rubricQuestions = [];
             for (let q = 1; q <= questionsCount; q++) {
                 rubricQuestions.push({
@@ -171,75 +321,148 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 });
             }
 
-            const rubric = await Rubric.create({
-                exam: exam._id,
-                createdBy: prof._id,
-                scoreStep: 0.5,
-                questions: rubricQuestions,
-            });
+            let rubric: any = await Rubric.findOne({ exam: exam._id });
+            if (!rubric) {
+                rubric = await Rubric.create({
+                    exam: exam._id,
+                    createdBy: prof._id,
+                    scoreStep: 0.5,
+                    questions: rubricQuestions,
+                    isActive: true,
+                });
+            } else {
+                await Rubric.updateOne(
+                    { _id: rubric._id },
+                    { $set: { questions: rubricQuestions, isActive: true } }
+                );
+            }
 
-            // Create StudentMappings, AnswerScripts, and Allocations
+            // 9. Idempotent Student Mappings, Answer Scripts, Pages, Allocations, and Grades
+            const batchId = `DEMO-BATCH-${exam._id.toString().slice(-6)}`;
             for (let sIdx = 0; sIdx < studentUsers.length; sIdx++) {
                 const student = studentUsers[sIdx];
                 const rollNumber = `DEMO-ROLL-${(sIdx + 1).toString().padStart(3, '0')}`;
 
-                await StudentMapping.create({
-                    exam: exam._id,
-                    student: student._id,
-                    anonymousId: `ANON-${sIdx + 1}`,
-                    rollNumber,
-                    isVerified: true,
-                });
+                await StudentMapping.findOneAndUpdate(
+                    { exam: exam._id, student: student._id },
+                    {
+                        $set: {
+                            anonymousId: `ANON-${sIdx + 1}`,
+                            rollNumber,
+                            isVerified: true,
+                        },
+                    },
+                    { upsert: true, new: true }
+                );
 
-                const pagesPerScript = options.pagesPerScript ?? 3;
                 const startPageNumber = sIdx * pagesPerScript + 1;
                 const endPageNumber = (sIdx + 1) * pagesPerScript;
 
-                const script = await AnswerScript.create({
-                    exam: exam._id,
-                    student: student._id,
-                    identificationStatus: IdentificationStatus.IDENTIFIED,
-                    batchId: `DEMO-BATCH-${exam._id.toString().slice(-6)}`,
-                    fileIndex: sIdx,
-                    startPageNumber,
-                    endPageNumber,
-                    filename: `${rollNumber}_exam.pdf`,
-                    pageCount: pagesPerScript,
-                    isActive: true,
-                });
+                let script: any = await AnswerScript.findOne({ exam: exam._id, student: student._id });
+                if (!script) {
+                    script = await AnswerScript.create({
+                        exam: exam._id,
+                        student: student._id,
+                        identificationStatus: IdentificationStatus.IDENTIFIED,
+                        batchId,
+                        fileIndex: sIdx,
+                        startPageNumber,
+                        endPageNumber,
+                        filename: `${rollNumber}_exam.pdf`,
+                        pageCount: pagesPerScript,
+                        isActive: true,
+                    });
+                } else {
+                    await AnswerScript.updateOne(
+                        { _id: script._id },
+                        {
+                            $set: {
+                                batchId,
+                                fileIndex: sIdx,
+                                startPageNumber,
+                                endPageNumber,
+                                filename: `${rollNumber}_exam.pdf`,
+                                pageCount: pagesPerScript,
+                                isActive: true,
+                            },
+                        }
+                    );
+                }
                 createdScriptIds.push(script._id.toString());
+
+                // Generate and persist Page documents and image files
+                for (let p = 1; p <= pagesPerScript; p++) {
+                    const pageBuffer = createDemoPageBuffer(examTitle, p, pagesPerScript);
+                    const stored = await defaultDerivedStorageService.storeDerivedPage({
+                        batchId: script.batchId,
+                        fileId: script._id.toString(),
+                        pageNumber: p,
+                        buffer: pageBuffer,
+                        format: 'png',
+                    });
+
+                    const pageDoc = await Page.findOneAndUpdate(
+                        { answerScript: script._id, pageNumber: p },
+                        {
+                            $set: {
+                                imagePath: stored.storageKey,
+                                width: 800,
+                                height: 1000,
+                                isActive: true,
+                            },
+                        },
+                        { upsert: true, new: true }
+                    );
+                    createdPageIds.push(pageDoc._id.toString());
+                }
 
                 // Allocate script to TA round-robin
                 const assignedTa = taUsers[sIdx % taUsers.length];
-                const allocation = await Allocation.create({
+                let allocation: any = await Allocation.findOne({
                     exam: exam._id,
                     ta: assignedTa._id,
-                    allocatedBy: prof._id,
-                    status: AllocationStatus.IN_PROGRESS,
-                    rule: AllocationRule.EQUAL,
                     answerScript: script._id,
-                    claimedAt: new Date(),
                 });
+                if (!allocation) {
+                    allocation = await Allocation.create({
+                        exam: exam._id,
+                        ta: assignedTa._id,
+                        allocatedBy: prof._id,
+                        status: AllocationStatus.IN_PROGRESS,
+                        rule: AllocationRule.EQUAL,
+                        answerScript: script._id,
+                        claimedAt: new Date(),
+                    });
+                } else {
+                    await Allocation.updateOne(
+                        { _id: allocation._id },
+                        { $set: { status: AllocationStatus.IN_PROGRESS, claimedAt: new Date() } }
+                    );
+                }
                 createdAllocationIds.push(allocation._id.toString());
 
                 if (withGrades) {
                     for (let q = 1; q <= questionsCount; q++) {
                         const score1 = Math.min(6, 4 + (sIdx % 3));
                         const score2 = Math.min(4, 2 + (sIdx % 3));
-                        const grade = await Grade.create({
-                            answerScript: script._id,
-                            rubric: rubric._id,
-                            gradedBy: assignedTa._id,
-                            question: q,
-                            marksAwarded: [
-                                { criterionName: 'Approach', score: score1, feedback: 'Solid method' },
-                                { criterionName: 'Implementation', score: score2, feedback: 'Well structured' },
-                            ],
-                            totalScore: score1 + score2,
-                            feedback: `Demo evaluation for Q${q}`,
-                            isFinal: true,
-                        });
-                        createdGradeIds.push(grade._id.toString());
+                        const gradeDoc = await Grade.findOneAndUpdate(
+                            { answerScript: script._id, question: q },
+                            {
+                                $set: {
+                                    rubric: rubric._id,
+                                    gradedBy: assignedTa._id,
+                                    marksAwarded: [
+                                        { criterionName: 'Approach', score: score1, feedback: 'Solid method' },
+                                        { criterionName: 'Implementation', score: score2, feedback: 'Well structured' },
+                                    ],
+                                    totalScore: score1 + score2,
+                                    feedback: `Demo evaluation for Q${q}`,
+                                    isFinal: true,
+                                },
+                            },
+                            { upsert: true, new: true }
+                        );
+                        createdGradeIds.push(gradeDoc._id.toString());
                     }
                 }
             }
@@ -254,12 +477,15 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
         scriptIds: createdScriptIds,
         allocationIds: createdAllocationIds,
         gradeIds: createdGradeIds,
+        pageIds: createdPageIds,
+        generatedPassword: effectivePassword,
         stats: {
             courses: createdCourseIds.length,
             exams: createdExamIds.length,
             tas: taUsers.length,
             students: studentUsers.length,
             scripts: createdScriptIds.length,
+            pages: createdPageIds.length,
             allocations: createdAllocationIds.length,
             grades: createdGradeIds.length,
         },
@@ -281,17 +507,18 @@ if (process.argv[1] && process.argv[1].endsWith('seedDemoData.ts')) {
     })
         .then(result => {
             console.log('\n=== Seed Demo Data Complete ===');
-            console.log(`Courses Created: ${result.stats.courses}`);
-            console.log(`Exams Created: ${result.stats.exams}`);
+            console.log(`Courses Created/Updated: ${result.stats.courses}`);
+            console.log(`Exams Created/Updated: ${result.stats.exams}`);
             console.log(`TAs Configured: ${result.stats.tas}`);
             console.log(`Students Enrolled: ${result.stats.students}`);
             console.log(`Answer Scripts Generated: ${result.stats.scripts}`);
+            console.log(`Pages & Images Generated: ${result.stats.pages}`);
             console.log(`Allocations Assigned: ${result.stats.allocations}`);
             console.log(`Grades Recorded: ${result.stats.grades}`);
-            console.log('\nDefault credentials:');
-            console.log('  Professor: prof.demo@university.edu / DemoPassword123!');
-            console.log('  TA:        ta1.demo@university.edu / DemoPassword123!');
-            console.log('  Student:   student1.demo@university.edu / DemoPassword123!');
+            console.log(`\nGenerated / Configured credentials (password: ${result.generatedPassword}):`);
+            console.log('  Professor: prof.demo@university.edu');
+            console.log('  TA:        ta1.demo@university.edu');
+            console.log('  Student:   student1.demo@university.edu');
             process.exit(0);
         })
         .catch(err => {
