@@ -217,6 +217,10 @@ BatchSchema.pre('deleteOne', { document: true, query: false }, function () {
 });
 
 BatchSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], async function () {
+    const options = this.getOptions();
+    if (options && (options as Record<string, unknown>).bypassWorm) {
+        return;
+    }
     const filter = this.getFilter();
     const existingBatches = await (this.model as Model<IBatch>).find(filter);
     for (const batch of existingBatches) {
@@ -227,8 +231,17 @@ BatchSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], async function 
                 const set = (update.$set || update) as Record<string, unknown>;
                 const pull = update.$pull as Record<string, unknown> | undefined;
                 const push = update.$push as Record<string, unknown> | undefined;
-                if (set.files || pull?.files || push?.files) {
+                if (pull?.files || push?.files) {
                     throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                }
+                if (set.files && Array.isArray(set.files)) {
+                    const existingSealed = (batch.files || []).filter(f => Boolean(f.hmac));
+                    for (const sf of existingSealed) {
+                        const matching = (set.files as IBatchFile[]).find(f => f.fileId === sf.fileId);
+                        if (!matching || matching.storageKey !== sf.storageKey || matching.hmac !== sf.hmac) {
+                            throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                        }
+                    }
                 }
             }
         }
