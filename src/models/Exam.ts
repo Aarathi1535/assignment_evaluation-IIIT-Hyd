@@ -271,6 +271,46 @@ ExamSchema.virtual('published_at')
 // Indexes for common query patterns
 ExamSchema.index({ course: 1, examDate: -1 });
 
+/**
+ * WORM Immutability Hooks:
+ * Prevent deletion or unauthorized core parameter alteration of published exams.
+ */
+ExamSchema.pre(['deleteOne', 'deleteMany', 'findOneAndDelete'], async function () {
+    const filter = this.getFilter();
+    const existingExams = await (this.model as Model<IExam>).find(filter);
+    for (const exam of existingExams) {
+        if (exam.status === ExamStatus.PUBLISHED) {
+            throw new Error(`Cannot delete published exam "${exam.title}" (WORM immutability enforcement)`);
+        }
+    }
+});
+
+ExamSchema.pre('deleteOne', { document: true, query: false }, function () {
+    const doc = this as IExam;
+    if (doc.status === ExamStatus.PUBLISHED) {
+        throw new Error(`Cannot delete published exam "${doc.title}" (WORM immutability enforcement)`);
+    }
+});
+
+ExamSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], async function () {
+    const filter = this.getFilter();
+    const existingExams = await (this.model as Model<IExam>).find(filter);
+    for (const exam of existingExams) {
+        if (exam.status === ExamStatus.PUBLISHED) {
+            const update = this.getUpdate() as Record<string, unknown> | null;
+            if (update) {
+                const set = (update.$set || update) as Record<string, unknown>;
+                if (set.course && set.course.toString() !== exam.course.toString()) {
+                    throw new Error(`Cannot alter course of published exam "${exam.title}" (WORM immutability enforcement)`);
+                }
+                if (set.totalMarks !== undefined && set.totalMarks !== exam.totalMarks) {
+                    throw new Error(`Cannot update totalMarks on published exam "${exam.title}" (WORM immutability enforcement)`);
+                }
+            }
+        }
+    }
+});
+
 const Exam: Model<IExam> = mongoose.models.Exam || mongoose.model<IExam>('Exam', ExamSchema);
 
 export default Exam;

@@ -1,7 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+import { describe, it, expect, beforeEach, afterEach, beforeAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import mongoose from 'mongoose';
+import { connectDB } from '../lib/db';
 import {
   generateHmacSeal,
   verifyHmacSeal,
@@ -10,7 +12,18 @@ import {
 } from '../utils/hmacStorage';
 import immutableStorageService, { ImmutableStorageService } from '../services/ImmutableStorageService';
 import { HttpError } from '../lib/errors';
-import { IBindingMetadata } from '../models/Batch';
+import Batch, { IBindingMetadata, BatchStatus } from '../models/Batch';
+import Exam, { ExamStatus } from '../models/Exam';
+import User, { UserRole } from '../models/User';
+import Course from '../models/Course';
+
+const auditCalls: any[] = [];
+vi.mock('../lib/audit', () => ({
+  writeAuditLog: vi.fn().mockImplementation(async (entry: any) => {
+    auditCalls.push(entry);
+    return Promise.resolve({ success: true, id: 'mock-audit-id' });
+  }),
+}));
 
 describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
   const testStorageDir = path.join(process.cwd(), 'data', 'test_worm_originals');
@@ -19,7 +32,12 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
   let originalKeyId: string | undefined;
   let originalV2Secret: string | undefined;
 
+  beforeAll(async () => {
+    await connectDB();
+  });
+
   beforeEach(async () => {
+    auditCalls.length = 0;
     originalStoragePath = process.env.ORIGINAL_STORAGE_PATH;
     originalSecret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
     originalKeyId = process.env.ORIGINAL_STORAGE_KEY_ID;
@@ -30,6 +48,13 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
     process.env.ORIGINAL_STORAGE_KEY_ID = 'v1';
 
     await fs.promises.mkdir(testStorageDir, { recursive: true });
+
+    await Promise.all([
+      Batch.deleteMany({}),
+      Exam.deleteMany({}),
+      Course.deleteMany({}),
+      User.deleteMany({}),
+    ]);
   });
 
   afterEach(async () => {
@@ -261,7 +286,6 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
     });
 
     it('throws error and strictly avoids silent fallback when historical key secret is missing', () => {
-      // Historical key 'v99' has no environment variable configured
       expect(() => getHmacSecret('v99')).toThrow(
         /HMAC secret for key ID "v99" is unavailable or not configured/i
       );
@@ -279,6 +303,302 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
       expect(verifyHmacSeal(buffer, meta, '').valid).toBe(false);
       expect(verifyHmacSeal(buffer, meta, null as any).valid).toBe(false);
       expect(verifyHmacSeal(buffer, meta, 'malformed-non-hex-length').valid).toBe(false);
+    });
+  });
+
+  describe('5. Model-Level WORM Immutability Hooks (Batch & Exam)', () => {
+    it('blocks deletion of a Batch containing sealed original files', async () => {
+      const prof = await User.create({
+        name: 'Prof. Raman',
+        email: 'raman@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const sealedBatch = await Batch.create({
+        batchId: 'SEALED-BATCH-001',
+        uploadedBy: prof._id,
+        files: [
+          {
+            fileId: 'file-1',
+            fileIndex: 0,
+            originalFilename: 'scan.pdf',
+            fileType: 'pdf',
+            mimeType: 'application/pdf',
+            size: 1024,
+            pageCount: 2,
+            storageKey: 'batches/SEALED-BATCH-001/file-1.pdf',
+            hmac: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+            keyId: 'v1',
+            sequenceNumber: 1,
+            integrityMetadata: {
+              batchId: 'SEALED-BATCH-001',
+              sequenceNumber: 1,
+              uploader: prof._id.toString(),
+              timestamp: Date.now(),
+            },
+          },
+        ],
+        status: BatchStatus.DONE,
+        isActive: true,
+      });
+
+      // 1. deleteOne hook throws
+      await expect(Batch.deleteOne({ _id: sealedBatch._id })).rejects.toThrow(
+        /Cannot delete batch "SEALED-BATCH-001" containing sealed original files \(WORM immutability enforcement\)/i
+      );
+
+      // 2. deleteMany hook throws
+      await expect(Batch.deleteMany({ _id: sealedBatch._id })).rejects.toThrow(
+        /Cannot delete batch "SEALED-BATCH-001" containing sealed original files \(WORM immutability enforcement\)/i
+      );
+
+      // 3. findOneAndDelete hook throws
+      await expect(Batch.findOneAndDelete({ _id: sealedBatch._id })).rejects.toThrow(
+        /Cannot delete batch "SEALED-BATCH-001" containing sealed original files \(WORM immutability enforcement\)/i
+      );
+
+      // Verify batch still exists intact
+      expect(await Batch.findById(sealedBatch._id)).not.toBeNull();
+    });
+
+    it('blocks modification of sealed files in a Batch', async () => {
+      const prof = await User.create({
+        name: 'Prof. Raman',
+        email: 'raman2@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const sealedBatch = await Batch.create({
+        batchId: 'SEALED-BATCH-002',
+        uploadedBy: prof._id,
+        files: [
+          {
+            fileId: 'file-2',
+            fileIndex: 0,
+            originalFilename: 'scan2.pdf',
+            fileType: 'pdf',
+            mimeType: 'application/pdf',
+            size: 2048,
+            pageCount: 3,
+            storageKey: 'batches/SEALED-BATCH-002/file-2.pdf',
+            hmac: 'b1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+            keyId: 'v1',
+            sequenceNumber: 1,
+          },
+        ],
+        status: BatchStatus.DONE,
+        isActive: true,
+      });
+
+      // Attempt to clear or overwrite files array
+      await expect(
+        Batch.updateOne({ _id: sealedBatch._id }, { $set: { files: [] } })
+      ).rejects.toThrow(
+        /Cannot modify sealed files in batch "SEALED-BATCH-002" \(WORM immutability enforcement\)/i
+      );
+
+      // Verify files remained intact
+      const fresh = await Batch.findById(sealedBatch._id);
+      expect(fresh?.files).toHaveLength(1);
+    });
+
+    it('allows deleting an unsealed batch without sealed files', async () => {
+      const prof = await User.create({
+        name: 'Prof. Raman',
+        email: 'raman3@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const unsealedBatch = await Batch.create({
+        batchId: 'UNSEALED-BATCH-001',
+        uploadedBy: prof._id,
+        files: [],
+        status: BatchStatus.QUEUED,
+        isActive: true,
+      });
+
+      await expect(Batch.deleteOne({ _id: unsealedBatch._id })).resolves.toBeDefined();
+      expect(await Batch.findById(unsealedBatch._id)).toBeNull();
+    });
+
+    it('blocks deletion of a PUBLISHED exam', async () => {
+      const prof = await User.create({
+        name: 'Prof. Raman',
+        email: 'raman4@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const course = await Course.create({
+        courseCode: 'CS303-WORM',
+        courseName: 'WORM Testing',
+        professor: prof._id,
+        semester: 1,
+        academicYear: '2026-2027',
+      });
+
+      const publishedExam = await Exam.create({
+        title: 'Final Examination 2026',
+        course: course._id,
+        createdBy: prof._id,
+        examDate: new Date(),
+        numberOfQuestions: 3,
+        totalMarks: 30,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+      });
+
+      // deleteOne hook throws
+      await expect(Exam.deleteOne({ _id: publishedExam._id })).rejects.toThrow(
+        /Cannot delete published exam "Final Examination 2026" \(WORM immutability enforcement\)/i
+      );
+
+      // findOneAndDelete hook throws
+      await expect(Exam.findOneAndDelete({ _id: publishedExam._id })).rejects.toThrow(
+        /Cannot delete published exam "Final Examination 2026" \(WORM immutability enforcement\)/i
+      );
+
+      // Verify exam still exists
+      expect(await Exam.findById(publishedExam._id)).not.toBeNull();
+    });
+
+    it('blocks altering course or totalMarks on a PUBLISHED exam', async () => {
+      const prof = await User.create({
+        name: 'Prof. Raman',
+        email: 'raman5@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const courseA = await Course.create({
+        courseCode: 'CS404-A',
+        courseName: 'Course A',
+        professor: prof._id,
+        semester: 1,
+        academicYear: '2026-2027',
+      });
+
+      const courseB = await Course.create({
+        courseCode: 'CS404-B',
+        courseName: 'Course B',
+        professor: prof._id,
+        semester: 1,
+        academicYear: '2026-2027',
+      });
+
+      const publishedExam = await Exam.create({
+        title: 'Sealed Grade Exam',
+        course: courseA._id,
+        createdBy: prof._id,
+        examDate: new Date(),
+        numberOfQuestions: 2,
+        totalMarks: 20,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+      });
+
+      // Altering course is rejected
+      await expect(
+        Exam.updateOne({ _id: publishedExam._id }, { $set: { course: courseB._id } })
+      ).rejects.toThrow(
+        /Cannot alter course of published exam "Sealed Grade Exam" \(WORM immutability enforcement\)/i
+      );
+
+      // Altering totalMarks is rejected
+      await expect(
+        Exam.updateOne({ _id: publishedExam._id }, { $set: { totalMarks: 100 } })
+      ).rejects.toThrow(
+        /Cannot update totalMarks on published exam "Sealed Grade Exam" \(WORM immutability enforcement\)/i
+      );
+    });
+  });
+
+  describe('6. Ingestion Read-Path Integrity Verification & INTEGRITY_MISMATCH Auditing', () => {
+    it('readOriginalContent verifies HMAC seal and throws with INTEGRITY_MISMATCH on file tamper', async () => {
+      const storageService = new ImmutableStorageService();
+      const content = Buffer.from('Original Sealed Batch Scan Bytes', 'utf-8');
+
+      const prof = await User.create({
+        name: 'Prof. Raman',
+        email: 'raman6@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const stored = await storageService.storeOriginal({
+        batchId: 'BATCH-READ-VERIFY',
+        fileId: 'file-read-1',
+        sequenceNumber: 1,
+        uploader: prof._id.toString(),
+        timestamp: 1700000000000,
+        buffer: content,
+        originalFilename: 'page.pdf',
+        fileExtension: 'pdf',
+      });
+
+      // Record in Batch document in MongoDB (as Ingestion worker expects)
+      await Batch.create({
+        batchId: 'BATCH-READ-VERIFY',
+        uploadedBy: prof._id,
+        files: [
+          {
+            fileId: stored.fileId,
+            fileIndex: 0,
+            originalFilename: 'page.pdf',
+            fileType: 'pdf',
+            mimeType: 'application/pdf',
+            size: stored.size,
+            pageCount: 1,
+            storageKey: stored.storageKey,
+            hmac: stored.hmac,
+            keyId: stored.keyId,
+            sequenceNumber: stored.sequenceNumber,
+            integrityMetadata: stored.integrityMetadata,
+          },
+        ],
+        status: BatchStatus.PROCESSING,
+        isActive: true,
+      });
+
+      // 1. Untampered read succeeds via readOriginalContent
+      const cleanBuffer = await storageService.readOriginalContent(stored.storageKey);
+      expect(cleanBuffer.equals(content)).toBe(true);
+
+      // 2. Tamper with the physical file on disk (flip 1 byte)
+      const diskPath = path.join(testStorageDir, 'BATCH-READ-VERIFY', 'file-read-1.pdf');
+      const tamperedBytes = Buffer.from(content);
+      tamperedBytes[0] = tamperedBytes[0] ^ 0xFF;
+      await fs.promises.writeFile(diskPath, tamperedBytes);
+
+      // 3. readOriginalContent detects tamper, throws 500, and logs INTEGRITY_MISMATCH
+      auditCalls.length = 0;
+      await expect(storageService.readOriginalContent(stored.storageKey)).rejects.toThrow(
+        /Original file integrity verification failed: HMAC signature verification failed/i
+      );
+
+      expect(auditCalls).toHaveLength(1);
+      expect(auditCalls[0]).toMatchObject({
+        action: 'INTEGRITY_MISMATCH',
+        outcome: 'FAILURE',
+        entityType: 'OriginalStorage',
+        details: {
+          storageKey: stored.storageKey,
+          batchId: 'BATCH-READ-VERIFY',
+          fileId: 'file-read-1',
+        },
+      });
+
+      // 4. readOriginal also throws and logs INTEGRITY_MISMATCH
+      auditCalls.length = 0;
+      await expect(
+        storageService.readOriginal(stored.storageKey, prof._id.toString(), 'PROFESSOR')
+      ).rejects.toThrow(/Original file integrity verification failed/i);
+
+      expect(auditCalls).toHaveLength(1);
+      expect(auditCalls[0].action).toBe('INTEGRITY_MISMATCH');
     });
   });
 });

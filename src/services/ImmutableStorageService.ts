@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import mongoose from 'mongoose';
 import { IBatch, IBatchFile, IBindingMetadata } from '../models/Batch';
 import BatchRepository from '../repositories/BatchRepository';
 import { generateHmacSeal, verifyHmacSeal, HmacSealResult } from '../utils/hmacStorage';
@@ -210,6 +211,23 @@ export class ImmutableStorageService {
             );
 
             if (!verification.valid) {
+                try {
+                    await writeAuditLog({
+                        user: actingUserId || batch.uploadedBy?.toString() || 'SYSTEM_WORKER_PRINCIPAL',
+                        action: 'INTEGRITY_MISMATCH',
+                        outcome: 'FAILURE',
+                        entityType: 'OriginalStorage',
+                        details: {
+                            storageKey,
+                            batchId: batch.batchId || batch._id.toString(),
+                            fileId: file.fileId,
+                            reason: verification.reason
+                        }
+                    });
+                } catch {
+                    // Non-blocking audit failure
+                }
+
                 throw new HttpError(
                     `Original file integrity verification failed: ${verification.reason}`,
                     500
@@ -220,7 +238,8 @@ export class ImmutableStorageService {
         return { buffer, file, batch };
     }
 
-    async readOriginalContent(storageKey: string): Promise<Buffer> {
+    async readOriginalContent(storageKey: string, skipVerification = false): Promise<Buffer> {
+        let buffer: Buffer;
         const bucket = getConfiguredStorageBucket();
         if (bucket) {
             const primaryKey = storageKey.startsWith('originals/')
@@ -235,19 +254,80 @@ export class ImmutableStorageService {
                     : `originals/${storageKey}`;
 
             try {
-                const [buffer] = await bucket.file(primaryKey).download();
-                return buffer;
+                const [downloaded] = await bucket.file(primaryKey).download();
+                buffer = downloaded;
             } catch (error) {
                 if (isMissingGcsObject(error) && legacyKey !== primaryKey) {
                     const [fallbackBuffer] = await bucket.file(legacyKey).download();
-                    return fallbackBuffer;
+                    buffer = fallbackBuffer;
+                } else {
+                    throw error;
                 }
-                throw error;
+            }
+        } else {
+            const filePath = path.join(this.getStorageRoot(), storageKey.replace(/^batches\//, ''));
+            buffer = await fs.promises.readFile(filePath);
+        }
+
+        if (!skipVerification) {
+            try {
+                const normalizedKey = storageKey.replace(/^batches\//, '');
+                const BatchModel = mongoose.models.Batch || (await import('../models/Batch')).default;
+                const batch = await BatchModel.findOne({
+                    $or: [
+                        { 'files.storageKey': storageKey },
+                        { 'files.storageKey': `batches/${normalizedKey}` },
+                        { 'files.storageKey': normalizedKey }
+                    ]
+                });
+
+                if (batch) {
+                    const file = batch.files.find(
+                        (f: IBatchFile) =>
+                            f.storageKey === storageKey ||
+                            f.storageKey === `batches/${normalizedKey}` ||
+                            f.storageKey === normalizedKey
+                    );
+
+                    if (file && file.hmac && file.integrityMetadata) {
+                        const verification = verifyHmacSeal(
+                            buffer,
+                            file.integrityMetadata,
+                            file.hmac,
+                            file.keyId
+                        );
+
+                        if (!verification.valid) {
+                            try {
+                                await writeAuditLog({
+                                    user: batch.uploadedBy?.toString() || 'SYSTEM_WORKER_PRINCIPAL',
+                                    action: 'INTEGRITY_MISMATCH',
+                                    outcome: 'FAILURE',
+                                    entityType: 'OriginalStorage',
+                                    details: {
+                                        storageKey,
+                                        batchId: batch.batchId || batch._id.toString(),
+                                        fileId: file.fileId,
+                                        reason: verification.reason
+                                    }
+                                });
+                            } catch {
+                                // Non-blocking
+                            }
+
+                            throw new HttpError(
+                                `Original file integrity verification failed: ${verification.reason}`,
+                                500
+                            );
+                        }
+                    }
+                }
+            } catch (err) {
+                if (err instanceof HttpError) throw err;
             }
         }
 
-        const filePath = path.join(this.getStorageRoot(), storageKey.replace(/^batches\//, ''));
-        return fs.promises.readFile(filePath);
+        return buffer;
     }
 
     /**

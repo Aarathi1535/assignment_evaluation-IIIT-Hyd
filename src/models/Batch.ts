@@ -187,6 +187,46 @@ const BatchSchema = new Schema<IBatch>(
 
 BatchSchema.index({ uploadedBy: 1, createdAt: -1 });
 
+/**
+ * WORM Immutability Hooks:
+ * Protect sealed original scan batches and their file records from deletion or modification.
+ */
+BatchSchema.pre(['deleteOne', 'deleteMany', 'findOneAndDelete'], async function () {
+    const filter = this.getFilter();
+    const existingBatches = await (this.model as Model<IBatch>).find(filter);
+    for (const batch of existingBatches) {
+        if (batch.files && batch.files.some(f => Boolean(f.hmac))) {
+            throw new Error(`Cannot delete batch "${batch.batchId}" containing sealed original files (WORM immutability enforcement)`);
+        }
+    }
+});
+
+BatchSchema.pre('deleteOne', { document: true, query: false }, function () {
+    const doc = this as IBatch;
+    if (doc.files && doc.files.some(f => Boolean(f.hmac))) {
+        throw new Error(`Cannot delete batch "${doc.batchId}" containing sealed original files (WORM immutability enforcement)`);
+    }
+});
+
+BatchSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], async function () {
+    const filter = this.getFilter();
+    const existingBatches = await (this.model as Model<IBatch>).find(filter);
+    for (const batch of existingBatches) {
+        const hasSealedFiles = batch.files && batch.files.some(f => Boolean(f.hmac));
+        if (hasSealedFiles) {
+            const update = this.getUpdate() as Record<string, unknown> | null;
+            if (update) {
+                const set = (update.$set || update) as Record<string, unknown>;
+                const pull = update.$pull as Record<string, unknown> | undefined;
+                const push = update.$push as Record<string, unknown> | undefined;
+                if (set.files || pull?.files || push?.files) {
+                    throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                }
+            }
+        }
+    }
+});
+
 const Batch: Model<IBatch> = mongoose.models.Batch || mongoose.model<IBatch>('Batch', BatchSchema);
 
 export default Batch;
