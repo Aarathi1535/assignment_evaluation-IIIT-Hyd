@@ -214,7 +214,7 @@ describe('AE-205 regrade reviewer assignment', () => {
 
         expect(unassignedQueue.status).toBe(200);
         expect((await unassignedQueue.json()).data.requests).toHaveLength(0);
-        expect([403, 404]).toContain(deniedPages.status);
+        expect(deniedPages.status).toBe(404);
     });
 
     it('rejects student attempting to assign reviewers with 403 Forbidden', async () => {
@@ -269,12 +269,12 @@ describe('AE-205 regrade reviewer assignment', () => {
             { $set: { status: RegradeStatus.RESOLVED, isOpen: false } }
         );
 
-        // Once RESOLVED, access must be revoked (403 Forbidden or 404 Not Found)
+        // Once RESOLVED, access must be revoked with exact 404 Not Found
         const resolvedPages = await getPages(
             new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
             { params: Promise.resolve({ id: fixture.script._id.toString() }) }
         );
-        expect([403, 404]).toContain(resolvedPages.status);
+        expect(resolvedPages.status).toBe(404);
     });
 
     it('revokes reviewer access to answer pages when TA is removed from course staff', async () => {
@@ -294,7 +294,7 @@ describe('AE-205 regrade reviewer assignment', () => {
             new NextRequest(`http://localhost:3000/api/scripts/${fixture.script._id}/pages`),
             { params: Promise.resolve({ id: fixture.script._id.toString() }) }
         );
-        expect([403, 404]).toContain(removedPages.status);
+        expect(removedPages.status).toBe(404);
     });
 
     it('enforces image-route authorization: assigned reviewer TA can access while OPEN, revoked when resolved, course inactive, or TA removed', async () => {

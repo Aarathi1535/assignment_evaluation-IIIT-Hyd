@@ -213,29 +213,33 @@ export async function canManageExam(
   }
 
   const course: ICourse | null = await Course.findById(exam.course);
-  if (!course || !course.isActive) {
-    return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Course not found or inactive' };
+  if (!course) {
+    return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Exam not found' };
   }
 
   const role = user.role?.toUpperCase();
-  if (role === UserRole.ADMIN) {
-    return { canManage: true, exam, course, errorStatus: 200, errorMessage: '' };
-  }
 
-  // Role is PROFESSOR: user must be the assigned professor of the course
+  // Role validation before course status check to prevent information leaks for unrelated professors
   if (role === UserRole.PROFESSOR) {
     const profRef = course.professor as { _id?: mongoose.Types.ObjectId } | mongoose.Types.ObjectId;
     const courseProfId = profRef && '_id' in profRef && profRef._id ? profRef._id.toString() : profRef?.toString();
     if (courseProfId !== user.id) {
       return {
         canManage: false,
-        exam,
-        course,
+        exam: null,
+        course: null,
         errorStatus: 404,
         errorMessage: 'Exam not found'
       };
     }
+  }
 
+  // Course status check for authorized actors (Admin or assigned course professor)
+  if (!course.isActive) {
+    return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Course not found or inactive' };
+  }
+
+  if (role === UserRole.ADMIN || role === UserRole.PROFESSOR) {
     return { canManage: true, exam, course, errorStatus: 200, errorMessage: '' };
   }
 

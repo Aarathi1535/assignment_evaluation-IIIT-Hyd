@@ -486,10 +486,10 @@ describe('AE-219 regrade access policy', () => {
         // Course professor access:
         mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
         const profAnalytics = await getAnalytics(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}`), makeContext(examIdStr));
-        expect([200, 409]).toContain(profAnalytics.status); // 200 or 409 if no released scores
+        expect(profAnalytics.status).toBe(200);
 
         const profGraders = await getGraders(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/graders`), makeContext(examIdStr));
-        expect([200, 409]).toContain(profGraders.status);
+        expect(profGraders.status).toBe(200);
 
         const profExport = await getExport(new NextRequest(`http://localhost:3000/api/analytics/exams/${examIdStr}/export?format=csv`), makeContext(examIdStr));
         expect(profExport.status).toBe(200);
@@ -646,5 +646,113 @@ describe('AE-219 regrade access policy', () => {
         mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
         expect((await callExamGet(examIdStr)).status).toBe(404);
         expect((await callProgressGet(examIdStr)).status).toBe(404);
+    });
+
+    it('verifies canManageExam check order: unrelated professor receives identical 404 and error message for active and archived courses (no info leak)', async () => {
+        const { canManageExam } = await import('../lib/apiAuth');
+        const fixture = await createFixture();
+        const unrelatedProf = { id: fixture.unrelatedProfessor._id.toString(), role: UserRole.PROFESSOR };
+
+        // 1. With active course:
+        const activeResult = await canManageExam(unrelatedProf, fixture.exam._id);
+        expect(activeResult.canManage).toBe(false);
+        expect(activeResult.errorStatus).toBe(404);
+        expect(activeResult.errorMessage).toBe('Exam not found');
+        expect(activeResult.exam).toBeNull();
+        expect(activeResult.course).toBeNull();
+
+        // HTTP route response with active course:
+        mockSessionUser = { id: fixture.unrelatedProfessor._id.toString(), role: UserRole.PROFESSOR };
+        const activeHttpRes = await callExamGet(fixture.exam._id.toString());
+        expect(activeHttpRes.status).toBe(404);
+        const activeHttpBody = await activeHttpRes.json();
+
+        // 2. Archive course (isActive = false):
+        await Course.updateOne({ _id: fixture.course._id }, { $set: { isActive: false } });
+
+        const archivedResult = await canManageExam(unrelatedProf, fixture.exam._id);
+        expect(archivedResult.canManage).toBe(false);
+        expect(archivedResult.errorStatus).toBe(404);
+        expect(archivedResult.errorMessage).toBe('Exam not found');
+        expect(archivedResult.exam).toBeNull();
+        expect(archivedResult.course).toBeNull();
+
+        // HTTP route response with archived course:
+        const archivedHttpRes = await callExamGet(fixture.exam._id.toString());
+        expect(archivedHttpRes.status).toBe(404);
+        const archivedHttpBody = await archivedHttpRes.json();
+
+        // Exactly identical: no information leak about course lifecycle status
+        expect(archivedResult).toEqual(activeResult);
+        expect(archivedHttpBody).toEqual(activeHttpBody);
+    });
+
+    it('fails closed on unlinked batches/pages across all roles and enforces canonical policy without uploader fallback', async () => {
+        const fixture = await createFixture();
+
+        // Create an unlinked batch (no exam assigned) and unlinked page (no answerScript)
+        const unlinkedBatchId = `unlinked-batch-${Date.now()}`;
+        await Batch.create({
+            batchId: unlinkedBatchId,
+            uploadedBy: fixture.examCreator._id,
+            files: [{
+                fileId: 'f1',
+                fileIndex: 0,
+                originalFilename: 'unlinked.pdf',
+                fileType: 'pdf',
+                mimeType: 'application/pdf',
+                size: 1024,
+                pageCount: 1,
+                storageKey: `batches/${unlinkedBatchId}/unlinked.pdf`
+            }],
+            totalFiles: 1,
+            totalSize: 1024,
+            totalPageCount: 1,
+            status: BatchStatus.DONE,
+            isActive: true
+        });
+
+        const unlinkedPage = await IngestionPage.create({
+            batchId: unlinkedBatchId,
+            job: new mongoose.Types.ObjectId(),
+            fileId: 'f1',
+            fileIndex: 0,
+            storageKey: `batches/${unlinkedBatchId}/page-1.png`,
+            thumbnailKey: `batches/${unlinkedBatchId}/thumb-1.jpg`,
+            pageNumber: 1,
+            status: PageProcessingStatus.PROCESSED
+            // no answerScript!
+        });
+
+        // 1. The professor who uploaded the unlinked batch must FAIL CLOSED with 404 (no uploader fallback)
+        mockSessionUser = { id: fixture.examCreator._id.toString(), role: UserRole.PROFESSOR };
+        const uploaderImage = await callImage(unlinkedBatchId, unlinkedPage._id.toString());
+        expect(uploaderImage.status).toBe(404);
+        const uploaderThumb = await callThumbnail(unlinkedBatchId, unlinkedPage._id.toString());
+        expect(uploaderThumb.status).toBe(404);
+
+        // 2. Unrelated professor receives 404
+        mockSessionUser = { id: fixture.unrelatedProfessor._id.toString(), role: UserRole.PROFESSOR };
+        expect((await callImage(unlinkedBatchId, unlinkedPage._id.toString())).status).toBe(404);
+        expect((await callThumbnail(unlinkedBatchId, unlinkedPage._id.toString())).status).toBe(404);
+
+        // 3. TA receives 404
+        mockSessionUser = { id: fixture.ta._id.toString(), role: UserRole.TA };
+        expect((await callImage(unlinkedBatchId, unlinkedPage._id.toString())).status).toBe(404);
+        expect((await callThumbnail(unlinkedBatchId, unlinkedPage._id.toString())).status).toBe(404);
+
+        // 4. Admin receives 404 on unlinked page
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+        expect((await callImage(unlinkedBatchId, unlinkedPage._id.toString())).status).toBe(404);
+        expect((await callThumbnail(unlinkedBatchId, unlinkedPage._id.toString())).status).toBe(404);
+
+        // 5. Conversely, linked page allows current course professor and admin
+        mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
+        expect((await callImage(fixture.batch.batchId, fixture.page._id.toString())).status).toBe(200);
+        expect((await callThumbnail(fixture.batch.batchId, fixture.page._id.toString())).status).toBe(200);
+
+        mockSessionUser = { id: fixture.admin._id.toString(), role: UserRole.ADMIN };
+        expect((await callImage(fixture.batch.batchId, fixture.page._id.toString())).status).toBe(200);
+        expect((await callThumbnail(fixture.batch.batchId, fixture.page._id.toString())).status).toBe(200);
     });
 });

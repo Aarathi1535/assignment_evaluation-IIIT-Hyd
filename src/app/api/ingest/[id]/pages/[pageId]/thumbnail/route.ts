@@ -87,27 +87,25 @@ export async function GET(
       }
     }
 
-    if (examId) {
-      const manage = await canManageExam(auth.user, examId);
-      if (isProfessorOrAdmin) {
-        if (!manage.canManage) {
-          return NextResponse.json({
-            success: false,
-            message: 'Batch not found or access denied',
-            data: null
-          }, { status: 404 });
-        }
-      } else {
-        if (!manage.exam || !manage.course) {
-          return NextResponse.json({
-            success: false,
-            message: 'Batch not found or access denied',
-            data: null
-          }, { status: 404 });
-        }
+    if (!examId) {
+      return NextResponse.json({
+        success: false,
+        message: !page.answerScript ? 'Page not found' : 'Batch not found or access denied',
+        data: null
+      }, { status: 404 });
+    }
+
+    const manage = await canManageExam(auth.user, examId);
+    if (isProfessorOrAdmin) {
+      if (!manage.canManage) {
+        return NextResponse.json({
+          success: false,
+          message: 'Batch not found or access denied',
+          data: null
+        }, { status: 404 });
       }
-    } else if (isProfessor) {
-      if (batch.uploadedBy && batch.uploadedBy.toString() !== auth.user.id) {
+    } else {
+      if (!manage.exam || !manage.course) {
         return NextResponse.json({
           success: false,
           message: 'Batch not found or access denied',
