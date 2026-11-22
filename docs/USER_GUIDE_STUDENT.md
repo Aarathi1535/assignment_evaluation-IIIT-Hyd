@@ -6,54 +6,50 @@ Welcome to the Student Portal Guide. This manual explains how to access publishe
 
 ## 1. Accessing the Student Portal
 
-1. Open your browser and navigate to `https://eval.iiit.ac.in/student`.
-2. Click **Sign in with IIIT Account** (using your official `@students.iiit.ac.in` credentials).
-3. The **Student Dashboard** displays all courses you are actively enrolled in alongside newly published examination results.
+1. Open your browser and navigate to `/login`.
+2. Enter your institutional email address and password, then click **Sign In**.
+3. Upon authentication, you will be redirected to the **Student Dashboard** (`/student`).
 
 ---
 
 ## 2. Reviewing Published Evaluated Scripts
 
-1. Under the desired course, click **View Results** next to the published examination.
-2. The **Evaluated Script Viewer** opens, presenting:
+1. From the dashboard or **Results** page (`/student/results`), locate your published examination.
+2. Click on the exam to open the **Evaluated Script Viewer** (`/student/results/[scriptId]`).
+3. The viewer presents:
    - **Total Marks Obtained**: Overall score and maximum attainable points.
-   - **Itemized Question Breakdown**: Individual scores for each question.
+   - **Itemized Question Breakdown**: Individual scores and rubric criteria for each question.
    - **Interactive Script Viewer**: High-resolution scanned pages of your physical answer booklet.
 
 ### 2.1 Inspecting Evaluator Feedback
-- **Handwritten Ink Annotations**: Notes, corrections, and underlines written by the evaluator.
+- **Handwritten Ink Annotations**: Pen notes, underlines, and corrections written by the evaluator.
 - **Checkmarks & Crosses**: Visual indicators identifying correct steps and deduction points.
-- **Feedback Comments**: Expandable text comment tags detailing specific rubric feedback.
-- **Asset Watermark**: Each viewed page features a dynamic digital watermark with your roll number and view timestamp, verifying academic integrity.
+- **Sticky Comments**: Expandable text callout notes detailing specific feedback.
+- **Dynamic Watermark**: Scanned pages feature a dynamic security watermark with your student identity and timestamp to protect document integrity.
 
 ---
 
 ## 3. Submitting a Regrade Request
 
-If you believe a question was marked inconsistently with the published grading rubric or that steps were overlooked:
+If you believe a question was marked inconsistently with the published grading rubric:
 
 ### 3.1 Verification Window Check
-- Regrade appeals are only accepted while the **Regrade Window** is open (typically **7 days** following result publication).
-- The portal displays a countdown banner showing the remaining time to submit an appeal.
+- Regrade appeals are only accepted while the **Regrade Window** is active (configured by the course instructor following result publication).
+- Once the closing timestamp passes, submissions are strictly rejected (zero grace period).
 
 ### 3.2 Submission Steps
-1. In the Evaluated Script Viewer, click **Request Regrade** (`/student/regrade`).
-2. Select the specific question(s) you wish to dispute.
-3. Select your rationale category (e.g. *Scoring Arithmetic Error*, *Overlooked Derivation Step*, *Rubric Misapplication*).
-4. Enter a detailed, respectful explanation pointing directly to the specific page and line numbers of your derivation.
-5. Click **Submit Regrade Appeal**.
-
-> [!IMPORTANT]
-> Frivolous regrade requests without constructive justification may be rejected by course instructors. Ensure your appeal explicitly references the published exam rubric.
+1. In the Evaluated Script Viewer or the **Regrade Requests** page (`/student/regrade-requests`), click **Request Regrade**.
+2. Select the specific question number to dispute.
+3. Enter a clear explanation (minimum 10 characters, maximum 2,000 characters) citing the relevant rubric criteria or page derivation.
+4. Click **Submit Regrade Request**.
 
 ---
 
 ## 4. Tracking Regrade Status & Resolution
 
-1. Navigate to **My Regrade Requests** from your dashboard.
-2. Track your appeal through its lifecycle states:
-   - 🟡 **Pending Review**: Awaiting assignment or instructor review.
-   - 🔵 **Under Evaluation**: Assigned to course staff for re-examination.
-   - 🟢 **Resolved (Approved)**: Marks adjusted. The updated score is automatically reflected in your final grade.
-   - ⚪ **Resolved (Rejected)**: Original marks upheld. Detailed explanatory feedback from the instructor will be displayed.
-3. You will receive an automated email notification when your regrade decision is finalized.
+1. Navigate to **My Regrade Requests** (`/student/regrade-requests`).
+2. Track your request through its lifecycle:
+   - 🟡 **Pending**: Awaiting instructor or TA review.
+   - 🔵 **Under Review**: Assigned to course staff for re-examination.
+   - 🟢 **Approved**: Marks adjusted. The updated score is automatically reflected in your results.
+   - ⚪ **Rejected**: Original marks upheld with explanatory instructor feedback.

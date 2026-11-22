@@ -1,110 +1,146 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { SHORTCUT_MAP } from '../lib/shortcutMap';
 
-describe('AE-238: Role-Based User Manuals and Documentation Suite', () => {
+describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () => {
   const rootDir = process.cwd();
   const profGuidePath = path.join(rootDir, 'docs', 'USER_GUIDE_PROFESSOR.md');
   const taGuidePath = path.join(rootDir, 'docs', 'USER_GUIDE_TA.md');
   const studentGuidePath = path.join(rootDir, 'docs', 'USER_GUIDE_STUDENT.md');
   const adminGuidePath = path.join(rootDir, 'docs', 'USER_GUIDE_ADMIN.md');
 
-  describe('Professor User Guide (USER_GUIDE_PROFESSOR.md)', () => {
-    it('should exist and document complete instructor workflows', () => {
-      expect(fs.existsSync(profGuidePath)).toBe(true);
+  describe('Route Accuracy across all Manuals', () => {
+    it('should reference existing dashboard routes in USER_GUIDE_PROFESSOR.md', () => {
       const content = fs.readFileSync(profGuidePath, 'utf8');
 
-      // Course & Roster CSV
-      expect(content).toContain('Import Roster (CSV)');
-      expect(content).toContain('studentId,email,name');
-      // Rubric & Score steps
-      expect(content).toContain('Configure Rubrics');
-      expect(content).toContain('Score Step Granularity');
-      // Allocation & Velocity
-      expect(content).toContain('Grading Allocations');
-      expect(content).toContain('Allocation Monitor');
-      // Publication & Unpublishing
-      expect(content).toContain('Publication Preview Modal');
-      expect(content).toContain('Unpublish Results');
-      expect(content).toContain('Audit Justification Reason');
-      // Regrade arbitration
-      expect(content).toContain('Regrade Requests');
-      expect(content).toContain('Approve Regrade');
-      expect(content).toContain('Reject Regrade');
-    });
-  });
+      // Verify referenced professor pages exist in src/app/(dashboard)
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'courses', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'exams', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'exams', 'create', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'flags', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'regrade-requests', 'page.tsx'))).toBe(true);
 
-  describe('Teaching Assistant User Guide (USER_GUIDE_TA.md)', () => {
-    it('should exist and document grading tools, shortcuts, and offline mode', () => {
-      expect(fs.existsSync(taGuidePath)).toBe(true);
+      expect(content).toContain('/professor/exams');
+      expect(content).toContain('/professor/exams/create');
+      expect(content).toContain('/professor/regrade-requests');
+      expect(content).toContain('/professor/flags');
+    });
+
+    it('should reference existing dashboard routes in USER_GUIDE_TA.md', () => {
       const content = fs.readFileSync(taGuidePath, 'utf8');
 
-      // Anonymity
-      expect(content).toContain('anonymized');
-      // Annotation tools
-      expect(content).toContain('Pen Tool');
-      expect(content).toContain('Eraser Tool');
-      expect(content).toContain('Checkmark Stamp');
-      expect(content).toContain('Cross Stamp');
-      expect(content).toContain('Comment Tag');
-      // Shortcuts
-      expect(content).toContain('[Tab]');
-      expect(content).toContain('[P]');
-      expect(content).toContain('[E]');
-      expect(content).toContain('[S]');
-      expect(content).toContain('[N]');
-      expect(content).toContain('[B]');
-      // Offline sync
-      expect(content).toContain('Offline Drafts');
-      expect(content).toContain('IndexedDB');
-      // Flagging
-      expect(content).toContain('Flag Script');
-      expect(content).toContain('Illegible Handwriting');
-      expect(content).toContain('Suspected Malpractice');
-    });
-  });
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'ta', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'grading', '[scriptId]', 'page.tsx'))).toBe(true);
 
-  describe('Student User Guide (USER_GUIDE_STUDENT.md)', () => {
-    it('should exist and document script viewing, watermarks, and regrade appeals', () => {
-      expect(fs.existsSync(studentGuidePath)).toBe(true);
+      expect(content).toContain('/ta');
+      expect(content).toContain('/grading/[scriptId]');
+    });
+
+    it('should reference existing dashboard routes in USER_GUIDE_STUDENT.md', () => {
       const content = fs.readFileSync(studentGuidePath, 'utf8');
 
-      // Login & Portal
-      expect(content).toContain('@students.iiit.ac.in');
-      expect(content).toContain('Evaluated Script Viewer');
-      expect(content).toContain('digital watermark');
-      // Regrade submission
-      expect(content).toContain('Regrade Window');
-      expect(content).toContain('Request Regrade');
-      // Lifecycle
-      expect(content).toContain('Pending Review');
-      expect(content).toContain('Under Evaluation');
-      expect(content).toContain('Resolved (Approved)');
-      expect(content).toContain('Resolved (Rejected)');
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'student', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'student', 'results', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'student', 'results', '[scriptId]', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'student', 'regrade-requests', 'page.tsx'))).toBe(true);
+
+      expect(content).toContain('/student');
+      expect(content).toContain('/student/results');
+      expect(content).toContain('/student/results/[scriptId]');
+      expect(content).toContain('/student/regrade-requests');
+    });
+
+    it('should reference existing dashboard routes in USER_GUIDE_ADMIN.md', () => {
+      const content = fs.readFileSync(adminGuidePath, 'utf8');
+
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'admin', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'admin', 'users', 'page.tsx'))).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'admin', 'audit-logs', 'page.tsx'))).toBe(true);
+
+      expect(content).toContain('/admin');
+      expect(content).toContain('/admin/users');
+      expect(content).toContain('/admin/audit-logs');
+      expect(content).not.toContain('/admin/audit\n');
     });
   });
 
-  describe('Administrator User Guide (USER_GUIDE_ADMIN.md)', () => {
-    it('should exist and document terms, RBAC, HMAC verification, and operations', () => {
-      expect(fs.existsSync(adminGuidePath)).toBe(true);
-      const content = fs.readFileSync(adminGuidePath, 'utf8');
+  describe('Keyboard Shortcuts & Canvas Hotkeys Accuracy (USER_GUIDE_TA.md)', () => {
+    it('should match actual shortcut keys in SHORTCUT_MAP', () => {
+      const content = fs.readFileSync(taGuidePath, 'utf8');
 
-      // Academic config
-      expect(content).toContain('Academic Settings');
-      expect(content).toContain('Create Course');
-      // RBAC
-      expect(content).toContain('ADMIN');
-      expect(content).toContain('PROFESSOR');
-      expect(content).toContain('TEACHING_ASSISTANT');
-      expect(content).toContain('STUDENT');
-      // Audit & HMAC
-      expect(content).toContain('Audit Viewer');
-      expect(content).toContain('verifyIntegrity.ts');
-      expect(content).toContain('HMAC');
-      // Ops
-      expect(content).toContain('/api/health');
-      expect(content).toContain('backupDatabase.ts');
-      expect(content).toContain('restoreDatabase.ts');
+      // Verify that every single key combination mentioned in the manual is in SHORTCUT_MAP
+      const validKeys = new Set<string>();
+      for (const item of SHORTCUT_MAP) {
+        validKeys.add(item.key.toUpperCase());
+        if (item.keys) {
+          for (const k of item.keys) {
+            validKeys.add(k.toUpperCase());
+          }
+        }
+      }
+
+      // Hotkeys: P (Pen), E (Eraser), C (Check), X (Cross), H (Highlighter), T (Text), V (Select)
+      expect(validKeys.has('P')).toBe(true);
+      expect(validKeys.has('E')).toBe(true);
+      expect(validKeys.has('C')).toBe(true);
+      expect(validKeys.has('X')).toBe(true);
+      expect(validKeys.has('H')).toBe(true);
+      expect(validKeys.has('T')).toBe(true);
+      expect(validKeys.has('V')).toBe(true);
+
+      // Save Draft vs Submit Final: Enter is draft, Ctrl+Enter is final
+      expect(content).toContain('[Enter]');
+      expect(content).toContain('Save current question marks and feedback as draft');
+      expect(content).toContain('[Ctrl+Enter]');
+      expect(content).toContain('Finalize and submit evaluation');
+
+      // Must not claim Tab or Shift+Tab are captured for grading
+      expect(content).not.toContain('[Tab] / [Shift+Tab]');
+    });
+  });
+
+  describe('Offline Storage Integrity', () => {
+    it('should document localStorage with in-memory fallback, not IndexedDB', () => {
+      const taContent = fs.readFileSync(taGuidePath, 'utf8');
+      expect(taContent).toContain('localStorage');
+      expect(taContent).not.toContain('IndexedDB');
+    });
+  });
+
+  describe('Authentication Mechanism Accuracy', () => {
+    it('should reference standard credential login and avoid fictional IIIT SSO claims', () => {
+      const studentContent = fs.readFileSync(studentGuidePath, 'utf8');
+      expect(studentContent).toContain('/login');
+      expect(studentContent).not.toContain('IIIT SSO');
+      expect(studentContent).not.toContain('Sign in with IIIT Account');
+    });
+  });
+
+  describe('Publish Confirmation Accuracy (USER_GUIDE_PROFESSOR.md)', () => {
+    it('should accurately describe Publish Results Modal without fake confirmation phrase', () => {
+      const profContent = fs.readFileSync(profGuidePath, 'utf8');
+      expect(profContent).toContain('Publish Results Modal');
+      expect(profContent).toContain('Publish Results');
+      expect(profContent).not.toContain('faculty confirmation phrase');
+    });
+  });
+
+  describe('Disaster Recovery Safeguards (USER_GUIDE_ADMIN.md)', () => {
+    it('should NOT instruct admins to execute an unsafeguarded database restore', () => {
+      const adminContent = fs.readFileSync(adminGuidePath, 'utf8');
+      expect(adminContent).not.toMatch(/npx tsx src\/scripts\/restoreDatabase\.ts backups\/latest(?!\s+--dry-run)/);
+      expect(adminContent).toContain('--dry-run');
+      expect(adminContent).toContain('MongoDB Atlas Continuous Cloud Backups');
+    });
+
+    it('should accurately describe the /api/health JSON structure', () => {
+      const adminContent = fs.readFileSync(adminGuidePath, 'utf8');
+      expect(adminContent).toContain('/api/health');
+      expect(adminContent).toContain('"success": true');
+      expect(adminContent).toContain('"status": "healthy"');
+      expect(adminContent).toContain('"database": "connected"');
     });
   });
 });
