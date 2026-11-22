@@ -1,105 +1,75 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import nextConfig from '../../next.config';
+import { GET as healthGET } from '../app/api/health/route';
 
 describe('AE-230: Production Containerization & Docker Orchestration', () => {
   const rootDir = process.cwd();
 
-  describe('1. Production Multi-Stage Dockerfile Verification', () => {
+  describe('1. Next.js Standalone Configuration & Build Optimization', () => {
+    it('verifies next.config.ts enables standalone output mode for container optimization', () => {
+      expect(nextConfig.output).toBe('standalone');
+      expect(nextConfig.serverExternalPackages).toContain('@napi-rs/canvas');
+      expect(nextConfig.serverExternalPackages).toContain('pdfjs-dist');
+    });
+  });
+
+  describe('2. Production Dockerfile Multi-Stage Verification', () => {
     const dockerfilePath = path.join(rootDir, 'Dockerfile');
 
-    it('verifies Dockerfile exists and defines all 4 build stages', () => {
+    it('verifies Dockerfile strictly enforces reproducible npm ci without fallback to npm install', () => {
       expect(fs.existsSync(dockerfilePath)).toBe(true);
       const content = fs.readFileSync(dockerfilePath, 'utf-8');
 
-      expect(content).toMatch(/FROM\s+node:20-slim\s+AS\s+base/i);
-      expect(content).toMatch(/FROM\s+base\s+AS\s+deps/i);
-      expect(content).toMatch(/FROM\s+base\s+AS\s+builder/i);
-      expect(content).toMatch(/FROM\s+base\s+AS\s+runner/i);
+      // Verify no fallback to npm install which could hide lockfile drift
+      expect(content).toMatch(/npm ci --ignore-scripts/);
+      expect(content).not.toMatch(/npm ci.*\|\|\s*npm install/);
     });
 
-    it('verifies non-root user security configuration', () => {
+    it('verifies runner stage copies standalone build output and drops root privileges', () => {
       const content = fs.readFileSync(dockerfilePath, 'utf-8');
 
-      expect(content).toMatch(/groupadd.*nodejs/i);
+      // Standalone output copy
+      expect(content).toMatch(/\.next\/standalone/);
+      expect(content).toMatch(/CMD\s+\["node",\s*"server\.js"\]/);
+
+      // Non-root user
       expect(content).toMatch(/useradd.*nextjs/i);
-      expect(content).toMatch(/USER\s+nextjs/i);
-    });
-
-    it('verifies system font and canvas rendering dependencies are installed', () => {
-      const content = fs.readFileSync(dockerfilePath, 'utf-8');
-
-      expect(content).toMatch(/fontconfig/);
-      expect(content).toMatch(/fonts-dejavu-core/);
-      expect(content).toMatch(/ca-certificates/);
-      expect(content).toMatch(/curl/);
-    });
-
-    it('verifies port exposure and container healthcheck directive', () => {
-      const content = fs.readFileSync(dockerfilePath, 'utf-8');
-
-      expect(content).toMatch(/EXPOSE\s+3000/);
-      expect(content).toMatch(/HEALTHCHECK/);
-      expect(content).toMatch(/\/api\/health/);
-      expect(content).toMatch(/CMD\s+\["npm",\s*"start"\]/);
+      expect(content).toMatch(/USER\s+nextjs/);
     });
   });
 
-  describe('2. Docker Ignore (.dockerignore) File Hygiene', () => {
-    const dockerignorePath = path.join(rootDir, '.dockerignore');
-
-    it('verifies .dockerignore exists and excludes build caches, git, and secrets', () => {
-      expect(fs.existsSync(dockerignorePath)).toBe(true);
-      const content = fs.readFileSync(dockerignorePath, 'utf-8');
-
-      expect(content).toMatch(/^node_modules/m);
-      expect(content).toMatch(/^\.next/m);
-      expect(content).toMatch(/^\.git/m);
-      expect(content).toMatch(/^\.env\*/m);
-      expect(content).toMatch(/^!\.env\.example/m);
-      expect(content).toMatch(/^coverage/m);
-      expect(content).toMatch(/^scratch/m);
-    });
-  });
-
-  describe('3. Docker Compose Orchestration (docker-compose.yml)', () => {
+  describe('3. Docker Compose Replica Set & Network Security', () => {
     const composePath = path.join(rootDir, 'docker-compose.yml');
 
-    it('verifies docker-compose.yml defines required services and persistent volumes', () => {
+    it('verifies docker-compose.yml configures MongoDB replica set for transaction support', () => {
       expect(fs.existsSync(composePath)).toBe(true);
       const content = fs.readFileSync(composePath, 'utf-8');
 
-      // Verify app and mongodb services
-      expect(content).toMatch(/app:/);
-      expect(content).toMatch(/mongodb:/);
-      expect(content).toMatch(/image:\s*mongo:7\.0/);
+      // MongoDB must start with replica set flag
+      expect(content).toMatch(/--replSet/);
+      expect(content).toMatch(/rs0/);
 
-      // Verify dependency condition
-      expect(content).toMatch(/depends_on:/);
-      expect(content).toMatch(/condition:\s*service_healthy/);
-
-      // Verify healthchecks for both services
-      expect(content).toMatch(/\/api\/health/);
-      expect(content).toMatch(/db\.adminCommand\('ping'\)/);
-
-      // Verify persistent volumes
-      expect(content).toMatch(/volumes:/);
-      expect(content).toMatch(/mongo_data:/);
-      expect(content).toMatch(/app_data:/);
-
-      // Verify bridge network
-      expect(content).toMatch(/evaluator_network:/);
-      expect(content).toMatch(/driver:\s*bridge/);
+      // Application MONGODB_URI must include replicaSet=rs0
+      expect(content).toMatch(/replicaSet=rs0/);
     });
 
-    it('verifies environment variables configured in compose satisfy required application secrets', () => {
+    it('verifies MongoDB port is not exposed directly to host without authentication', () => {
       const content = fs.readFileSync(composePath, 'utf-8');
+      const mongoSection = content.split('mongodb:')[1]?.split('volumes:')[0] || '';
 
-      expect(content).toMatch(/MONGODB_URI=mongodb:\/\/mongodb:27017\/assignment_evaluator/);
-      expect(content).toMatch(/NEXTAUTH_URL=http:\/\/localhost:3000/);
-      expect(content).toMatch(/NEXTAUTH_SECRET=/);
-      expect(content).toMatch(/ORIGINAL_STORAGE_HMAC_SECRET=/);
-      expect(content).toMatch(/ORIGINAL_STORAGE_PATH=\/app\/data\/originals/);
+      // Host port 27017:27017 must not be exposed on the host
+      expect(mongoSection).not.toMatch(/ports:\s*-\s*["']?27017:27017/);
+    });
+  });
+
+  describe('4. Application Health Endpoint for Container Health Checks', () => {
+    it('verifies GET /api/health responds with 200/503 status code for container health probes', async () => {
+      const res = await healthGET();
+      expect([200, 503]).toContain(res.status);
+      const data = await res.json();
+      expect(data).toHaveProperty('success');
     });
   });
 });

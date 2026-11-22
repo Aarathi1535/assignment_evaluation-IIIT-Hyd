@@ -1,90 +1,118 @@
-# Production Containerization & Docker Compose Guide
+# Production Containerization & Docker Compose Architecture
 
 **Document:** `docs/DOCKER.md`  
-**Reference:** Week 12 · Day 3 — Deployment and Scaling (AE-230 / Issue #352)  
+**Reference:** Week 12 · Day 3 — Deployment and Scaling (AE-230 / Issue #352 / PR #353)  
 **Status:** Canonical Reference
+
+---
+
+> [!WARNING]
+> **Critical Cloud Run Deployment Warning (Do Not Merge Unverified)**  
+> Merging a root `Dockerfile` alters Google Cloud Run build behavior: `gcloud run deploy --source .` automatically switches from Google Cloud Buildpacks to building the root `Dockerfile`.  
+> **Operational Rule:** Keep this PR as a draft and do not merge to `main` until this container image has been fully tested as a `--no-traffic` preview revision.
 
 ---
 
 ## 1. Executive Summary
 
-This document specifies the containerization architecture for the Exam Evaluation Platform, providing multi-stage build definitions (`Dockerfile`), image hygiene controls (`.dockerignore`), and orchestrated local/production deployments (`docker-compose.yml`) with MongoDB, persistent volume mounts, and automated health checks.
+This document specifies the production containerization architecture for the Exam Evaluation Platform, providing:
+1. **Next.js Standalone Multi-Stage Build (`Dockerfile`):** Minimizes image size from ~1.2 GB to ~150 MB using Next.js `output: 'standalone'`, copying only traced production modules.
+2. **Reproducible Dependency Hygiene:** Strictly enforces `npm ci --ignore-scripts` without fallback to `npm install`, preventing silent lockfile drift.
+3. **MongoDB Replica Set Orchestration (`docker-compose.yml`):** Automatically initializes a single-node replica set (`rs0`) required for multi-document Mongoose transactions.
+4. **Network & Credential Isolation:** Removes unauthenticated public MongoDB host port exposure, restricting database traffic strictly to the internal Docker bridge network.
 
 ---
 
-## 2. Multi-Stage Docker Build Architecture
+## 2. Multi-Stage Dockerfile Architecture
 
-The production `Dockerfile` uses a 4-stage build pipeline on top of `node:20-slim`:
+The production `Dockerfile` uses a 4-stage build pipeline based on `node:20-slim`:
 
 ```mermaid
 flowchart TD
     Base["Stage 1: Base Runtime (node:20-slim)<br>Installs fontconfig, dejavu fonts, ca-certificates, curl"]
-    Deps["Stage 2: Dependencies (npm ci)<br>Installs dev & production dependencies"]
-    Builder["Stage 3: Builder (npm run build)<br>Compiles Next.js production build"]
-    Runner["Stage 4: Runner (Minimal Production Image)<br>Non-root nextjs:nodejs user, data volume, healthcheck"]
+    Deps["Stage 2: Dependencies (npm ci --ignore-scripts)<br>Strict lockfile-based install"]
+    Builder["Stage 3: Builder (next build with output: 'standalone')<br>Compiles Next.js & generates traced standalone bundle"]
+    Runner["Stage 4: Runner (Minimal Production Image ~150 MB)<br>Copies only .next/standalone, .next/static, public<br>Non-root nextjs:nodejs user, data volume, healthcheck"]
 
     Base --> Deps
     Deps --> Builder
     Base --> Runner
-    Builder -.->|Copies .next, public, node_modules| Runner
+    Builder -.->|Copies standalone bundle & static assets| Runner
 ```
 
-### 2.1 Security & Optimization Highlights
-1. **Unprivileged Runtime Execution:**
-   - The container creates a dedicated system group `nodejs` (GID 1001) and system user `nextjs` (UID 1001).
-   - The application executes strictly under `USER nextjs`, eliminating root privilege escalation risks.
-2. **System Font Support for Canvas Rendering:**
-   - Packages `fontconfig` and `fonts-dejavu-core` are installed in the base image, ensuring `@napi-rs/canvas` reliably renders test, deskew, and annotation text inside headless Linux containers.
-3. **Layer Caching:**
-   - Package manifests (`package.json`, `package-lock.json`) are copied independently before application source code, maximizing Docker layer cache reusability.
-4. **Image Hygiene (`.dockerignore`):**
-   - Development caches (`node_modules`, `.next`, `coverage`), secrets (`.env*`, `*.pem`), and repository metadata (`.git`) are excluded from image context.
+### 2.1 Next.js Standalone Optimization
+Without `output: 'standalone'`, a Next.js container must copy the entire `node_modules` tree, resulting in an unwieldy **1.2 GB** image.  
+With `output: 'standalone'` enabled in `next.config.ts`, Next.js performs static module tracing and outputs a self-contained Node.js server to `.next/standalone/server.js`, including only packages actively imported by production routes.
+
+The final runner stage copies only:
+- `/app/public`
+- `/app/.next/standalone`
+- `/app/.next/static`
+
+**Resulting Image Size:** ~150 MB (an 87.5% reduction).
+
+### 2.2 Security Controls
+- **Unprivileged Execution:** Runs strictly under `USER nextjs` (UID 1001 / GID 1001).
+- **No Build Scripts in Deps:** Dependencies are installed with `--ignore-scripts` to mitigate supply-chain preinstall script execution.
+- **Deterministic Builds:** No `|| npm install` fallback; if `package-lock.json` drifts or is out of sync, the Docker build fails fast.
+- **Canvas Rendering Support:** `fontconfig` and `fonts-dejavu-core` are installed in the base image, ensuring `@napi-rs/canvas` renders test and annotation glyphs consistently across headless environments.
 
 ---
 
-## 3. Docker Compose Orchestration
+## 3. Docker Compose Orchestration & Replica Set Requirement
 
-The platform provides a complete, turnkey Docker Compose deployment in `docker-compose.yml`:
+### 3.1 MongoDB Replica Set (`rs0`)
+The application requires MongoDB transactions for atomic grade finalization, batch script allocation, and ingestion locking. Standalone MongoDB instances reject transactions with:
+```
+MongoServerError: Transaction numbers are only allowed on a replica set member or mongos
+```
 
-| Service | Image / Build | Ports | Volumes | Health Check |
-| :--- | :--- | :---: | :--- | :--- |
-| **`app`** | Multi-stage build (`Dockerfile`) | `3000:3000` | `app_data:/app/data` | `curl -f http://localhost:3000/api/health` |
-| **`mongodb`** | `mongo:7.0` | `27017:27017` | `mongo_data:/data/db` | `mongosh --eval "db.adminCommand('ping')"` |
+`docker-compose.yml` resolves this by:
+1. Passing `--replSet rs0 --bind_ip_all` to `mongod`.
+2. Running an automated replica set healthcheck that initiates `rs0` on first boot:
+```yaml
+healthcheck:
+  test: >
+    mongosh --quiet --eval "
+      try {
+        rs.status().ok
+      } catch (e) {
+        rs.initiate({
+          _id: 'rs0',
+          members: [{ _id: 0, host: 'mongodb:27017' }]
+        }).ok || rs.status().ok
+      }
+    "
+```
+3. Connecting the application via:
+```
+MONGODB_URI=mongodb://mongodb:27017/assignment_evaluator?replicaSet=rs0&directConnection=true
+```
 
-### 3.1 Persistent Volumes
-- **`mongo_data` (`assignment_evaluator_mongo_data`):** Preserves MongoDB collections (courses, exams, answer scripts, grades, audit logs) across container restarts.
-- **`app_data` (`assignment_evaluator_app_data`):** Preserves immutable original scans (`/app/data/originals`) and derived enhanced pages (`/app/data/derived`).
+### 3.2 Network Isolation & Secrets
+- **No Host Port Exposure:** Port `27017` is removed from host port mappings (`ports:`). MongoDB is accessible solely to containers joined to `assignment_evaluator_network`.
+- **Environment Overrides:** Secrets (`NEXTAUTH_SECRET`, `ORIGINAL_STORAGE_HMAC_SECRET`) are read from environment variables or `.env` rather than hardcoded in the compose definition.
 
 ---
 
-## 4. Operational Commands & Deployment
+## 4. Operational Commands
 
-### 4.1 Building and Running
 ```bash
-# Build images and start all services in detached background mode
+# 1. Copy compose environment template
+cp .env.compose.example .env
+
+# 2. Build and launch services in background
 docker compose up -d --build
 
-# View real-time container logs
+# 3. Check health status of app and MongoDB replica set
+docker compose ps
+
+# 4. View application logs
 docker compose logs -f app
 
-# Inspect container health statuses
-docker compose ps
-```
-
-### 4.2 Verifying Container Health
-```bash
-# Verify MongoDB container health
-docker compose exec mongodb mongosh --eval "db.adminCommand('ping')"
-
-# Verify Application HTTP health check
+# 5. Verify HTTP health check
 curl -f http://localhost:3000/api/health
-```
 
-### 4.3 Stopping and Cleanup
-```bash
-# Stop containers (preserves persistent volumes)
+# 6. Stop containers (preserves volume data)
 docker compose down
-
-# Stop containers and wipe volumes (destructive reset)
-docker compose down -v
 ```

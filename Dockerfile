@@ -20,9 +20,9 @@ FROM base AS deps
 WORKDIR /app
 ENV NODE_ENV=development
 
-# Install dependencies based on package-lock.json
+# Strictly enforce reproducible clean install from package-lock.json (no fallback to npm install)
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts || npm install
+RUN npm ci --ignore-scripts
 
 # ==========================================
 # Stage 3: Application Build
@@ -36,7 +36,7 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-# Provide build-time fallback configuration for Next.js build compilation
+# Build-time environment placeholders for Next.js build compilation
 ENV MONGODB_URI="mongodb://localhost:27017/build_db"
 ENV NEXTAUTH_SECRET="build-time-secret-at-least-32-chars-long!"
 ENV NEXTAUTH_URL="http://localhost:3000"
@@ -45,7 +45,7 @@ ENV ORIGINAL_STORAGE_HMAC_SECRET="build-time-hmac-secret-at-least-32-chars-long!
 RUN npm run build
 
 # ==========================================
-# Stage 4: Production Runtime Runner
+# Stage 4: Production Runtime Runner (Standalone)
 # ==========================================
 FROM base AS runner
 WORKDIR /app
@@ -63,13 +63,10 @@ RUN groupadd --system --gid 1001 nodejs && \
 RUN mkdir -p /app/data/originals /app/data/derived && \
     chown -R nextjs:nodejs /app/data
 
-# Copy built application assets and production runtime dependencies
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/next.config.ts ./next.config.ts
+# Copy Next.js standalone build output (reduces image from ~1.2 GB to ~150 MB)
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
@@ -78,4 +75,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:3000/api/health || exit 1
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
