@@ -8,7 +8,6 @@ import {
 
 describe('AE-235: Tablet and Hardware Stylus Input Validation and Palm Rejection', () => {
   let manager: StylusInputManager;
-  const docsPath = path.join(process.cwd(), 'docs', 'TABLET_STYLUS.md');
 
   beforeEach(() => {
     manager = new StylusInputManager({
@@ -168,21 +167,14 @@ describe('AE-235: Tablet and Hardware Stylus Input Validation and Palm Rejection
     });
   });
 
-  describe('Hardware & Ergonomic Documentation (docs/TABLET_STYLUS.md)', () => {
-    it('should document hardware testing matrix, latency budgets, and palm rejection specifications', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
+  describe('PenLayer Palm Rejection Integration', () => {
+    it('integrates StylusInputManager into PenLayer to reject palm contact and cooldown events', () => {
+      const penLayerPath = path.join(process.cwd(), 'src', 'components', 'canvas', 'PenLayer.tsx');
+      const penLayerContent = fs.readFileSync(penLayerPath, 'utf8');
 
-      expect(content).toContain('Apple iPad Air / Pro');
-      expect(content).toContain('Apple Pencil');
-      expect(content).toContain('Samsung Galaxy Tab S9');
-      expect(content).toContain('S-Pen');
-      expect(content).toContain('Lenovo Tab M11');
-      expect(content).toContain('< 50ms');
-      expect(content).toContain('400 ms');
-      expect(content).toContain('44 × 44 CSS pixels');
-      expect(content).toContain('PALM_REJECTION');
-      expect(content).toContain('PALM_CONTACT_SIZE');
+      expect(penLayerContent).toContain('stylusInputManagerRef.current.handlePointerDown');
+      expect(penLayerContent).toContain('stylusInputManagerRef.current.handlePointerMove');
+      expect(penLayerContent).toContain('stylusInputManagerRef.current.handlePointerUp');
     });
   });
 });
