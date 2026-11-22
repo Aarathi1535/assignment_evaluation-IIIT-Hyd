@@ -1327,6 +1327,95 @@ class ExamService {
 
         return updatedExam;
     }
+
+    /**
+     * Transitions an exam to REVIEW_PENDING status after evaluations/allocations are completed.
+     * Can be invoked by assigned TAs, Professors, or Admins.
+     */
+    async enableReviewPending(
+        id: string,
+        actingUserId: string,
+        actingUserRole: string,
+        context?: { ipAddress?: string }
+    ): Promise<IExam> {
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            throw new HttpError('Invalid ID format', 400);
+        }
+
+        const Exam = mongoose.models.Exam || await import('../models/Exam').then(m => m.default);
+        const examBefore = await Exam.findOne({ _id: new mongoose.Types.ObjectId(id), isActive: true });
+        if (!examBefore) {
+            throw new HttpError('Exam not found', 404);
+        }
+
+        if (actingUserRole === 'PROFESSOR') {
+            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+            const course = await Course.findOne({
+                _id: examBefore.course,
+                professor: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            });
+            if (!course) {
+                throw new HttpError('Forbidden: You do not have permission to manage this exam', 403);
+            }
+        } else if (actingUserRole === 'TA') {
+            const Course = mongoose.models.Course || await import('../models/Course').then(m => m.default);
+            const course = await Course.findOne({
+                _id: examBefore.course,
+                teachingAssistants: new mongoose.Types.ObjectId(actingUserId),
+                isActive: true
+            });
+            if (!course) {
+                const Allocation = mongoose.models.Allocation || await import('../models/Allocation').then(m => m.default);
+                const hasAllocation = await Allocation.exists({
+                    exam: new mongoose.Types.ObjectId(id),
+                    assignedTo: new mongoose.Types.ObjectId(actingUserId)
+                });
+                if (!hasAllocation) {
+                    throw new HttpError('Forbidden: You are not assigned to this exam or course', 403);
+                }
+            }
+        } else if (actingUserRole !== 'ADMIN') {
+            throw new HttpError('Forbidden', 403);
+        }
+
+        if (examBefore.status === ExamStatus.REVIEW_PENDING) {
+            return examBefore;
+        }
+
+        if (examBefore.status === ExamStatus.PUBLISHED) {
+            throw new HttpError('Exam is already published', 400);
+        }
+
+        const updatedExam = await Exam.findByIdAndUpdate(
+            id,
+            { $set: { status: ExamStatus.REVIEW_PENDING } },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedExam) {
+            throw new HttpError('Failed to update exam status', 500);
+        }
+
+        if (actingUserId) {
+            await writeAuditLog({
+                user: actingUserId,
+                action: 'EXAM_STATUS_UPDATED',
+                outcome: 'SUCCESS',
+                entityId: updatedExam._id as mongoose.Types.ObjectId,
+                entityType: 'Exam',
+                details: {
+                    title: updatedExam.title,
+                    previousStatus: examBefore.status,
+                    newStatus: ExamStatus.REVIEW_PENDING,
+                    triggeredByRole: actingUserRole
+                },
+                ipAddress: context?.ipAddress
+            });
+        }
+
+        return updatedExam;
+    }
 }
 
 const examService = new ExamService();

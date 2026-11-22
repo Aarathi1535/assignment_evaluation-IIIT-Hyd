@@ -169,10 +169,38 @@ export default function ProfessorExamsPage() {
     </div>
   );
 
+  const handleMarkReviewPending = async (examId: string) => {
+    try {
+      const res = await fetch(`/api/exams/${encodeURIComponent(examId)}/review-pending`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setSuccessMsg('Exam status changed to Review Pending. You can now review and publish results.');
+        setExams((prev) =>
+          prev.map((ex) => (ex._id === examId ? { ...ex, status: 'REVIEW_PENDING' } : ex))
+        );
+      } else {
+        throw new Error(data.message || 'Failed to update exam status');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'An error occurred while updating status.';
+      setErrorMsg(message);
+    } finally {
+      setTimeout(() => {
+        setSuccessMsg(null);
+        setErrorMsg(null);
+      }, 4000);
+    }
+  };
+
   const getStatusBadgeStyle = (status: string) => {
     switch (status) {
       case 'PUBLISHED':
         return 'bg-emerald-50 text-emerald-700 border border-emerald-200';
+      case 'REVIEW_PENDING':
+        return 'bg-amber-50 text-amber-700 border border-amber-200';
       case 'SCHEDULED':
         return 'bg-blue-50 text-blue-700 border border-blue-200';
       case 'DRAFT':
@@ -401,7 +429,19 @@ export default function ProfessorExamsPage() {
                             <Send className="h-3.5 w-3.5 mr-1" />
                             <span>Publish</span>
                           </Button>
-                        ) : null}
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 px-2 text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                            aria-label={`Enable review pending for exam ${exam.title}`}
+                            data-testid={`enable-review-pending-exam-btn-${exam._id}`}
+                            onClick={() => handleMarkReviewPending(exam._id)}
+                          >
+                            <Send className="h-3.5 w-3.5 mr-1" />
+                            <span>Review Pending</span>
+                          </Button>
+                        )}
                         <Button
                           variant="destructive"
                           size="sm"

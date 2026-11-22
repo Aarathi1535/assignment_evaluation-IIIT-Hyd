@@ -96,11 +96,11 @@ export const updateExamSchema = createExamSchema.partial();
 import { ExamStatus } from '../models/Exam';
 
 const VALID_TRANSITIONS: Record<ExamStatus, ExamStatus[]> = {
-    [ExamStatus.DRAFT]: [ExamStatus.SCHEDULED],
-    [ExamStatus.SCHEDULED]: [ExamStatus.DRAFT, ExamStatus.SCANNING],
-    [ExamStatus.SCANNING]: [ExamStatus.EVALUATING],
+    [ExamStatus.DRAFT]: [ExamStatus.SCHEDULED, ExamStatus.EVALUATING, ExamStatus.REVIEW_PENDING],
+    [ExamStatus.SCHEDULED]: [ExamStatus.DRAFT, ExamStatus.SCANNING, ExamStatus.EVALUATING, ExamStatus.REVIEW_PENDING],
+    [ExamStatus.SCANNING]: [ExamStatus.EVALUATING, ExamStatus.REVIEW_PENDING],
     [ExamStatus.EVALUATING]: [ExamStatus.REVIEW_PENDING],
-    [ExamStatus.REVIEW_PENDING]: [ExamStatus.PUBLISHED],
+    [ExamStatus.REVIEW_PENDING]: [ExamStatus.PUBLISHED, ExamStatus.EVALUATING],
     [ExamStatus.PUBLISHED]: [ExamStatus.ARCHIVED],
     [ExamStatus.ARCHIVED]: []
 };

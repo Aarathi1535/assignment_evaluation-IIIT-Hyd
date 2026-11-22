@@ -57,6 +57,28 @@ export function BulkSubmitModal({
   const [previewData, setPreviewData] = useState<BulkSubmitResultData | null>(null);
   const [resultData, setResultData] = useState<BulkSubmitResultData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reviewPendingLoading, setReviewPendingLoading] = useState(false);
+  const [reviewPendingDone, setReviewPendingDone] = useState(false);
+
+  const handleEnableReviewPending = async () => {
+    if (!examId) return;
+    setReviewPendingLoading(true);
+    try {
+      const res = await fetch(`/api/exams/${encodeURIComponent(examId)}/review-pending`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json?.message || 'Failed to enable review pending');
+      }
+      setReviewPendingDone(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to enable review pending');
+    } finally {
+      setReviewPendingLoading(false);
+    }
+  };
 
   const fetchPreview = useCallback(async () => {
     if (!examId) return;
@@ -98,6 +120,8 @@ export function BulkSubmitModal({
         setPreviewData(null);
         setResultData(null);
         setError(null);
+        setReviewPendingDone(false);
+        setReviewPendingLoading(false);
       }
     }, 0);
     return () => clearTimeout(timer);
@@ -382,16 +406,36 @@ export function BulkSubmitModal({
           )}
 
           {step === 'result' && (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              data-testid="close-bulk-submit-button"
-              onClick={onClose}
-              className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
-            >
-              Done
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="bulk-enable-review-pending-button"
+                disabled={reviewPendingLoading || reviewPendingDone}
+                onClick={handleEnableReviewPending}
+                className="text-amber-700 border-amber-300 hover:bg-amber-50 font-semibold gap-1.5"
+              >
+                <Send className="h-3.5 w-3.5" />
+                <span>
+                  {reviewPendingDone
+                    ? 'Review Pending Enabled'
+                    : reviewPendingLoading
+                    ? 'Enabling...'
+                    : 'Enable Review Pending'}
+                </span>
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                data-testid="close-bulk-submit-button"
+                onClick={onClose}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+              >
+                Done
+              </Button>
+            </div>
           )}
         </div>
       </div>

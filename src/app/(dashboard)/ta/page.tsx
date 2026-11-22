@@ -40,6 +40,7 @@ interface AssignedExam {
   _id: string;
   title: string;
   examDate: string;
+  status?: string;
 }
 
 interface Pagination {
@@ -84,6 +85,31 @@ export default function TaDashboardPage() {
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [selectedExamFilter, setSelectedExamFilter] = useState<string>('ALL');
   const [isExamPickerOpen, setIsExamPickerOpen] = useState(false);
+  const [updatingExamId, setUpdatingExamId] = useState<string | null>(null);
+  const [actionSuccessMessage, setActionSuccessMessage] = useState<string | null>(null);
+
+  const handleEnableReviewPending = async (examId: string) => {
+    setUpdatingExamId(examId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/exams/${encodeURIComponent(examId)}/review-pending`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json.message || 'Failed to update exam status');
+      }
+      setAssignedExams((prev) =>
+        prev.map((e) => (e._id === examId ? { ...e, status: 'REVIEW_PENDING' } : e))
+      );
+      setActionSuccessMessage('Exam status successfully updated to Review Pending! The professor can now review and publish.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update exam status');
+    } finally {
+      setUpdatingExamId(null);
+    }
+  };
 
   const currentPageRef = useRef(currentPage);
   const activeRequest = useRef<AbortController | null>(null);
@@ -340,6 +366,23 @@ export default function TaDashboardPage() {
           </div>
         )}
 
+        {/* Success Action Banner */}
+        {actionSuccessMessage && (
+          <div role="status" aria-live="polite" className="p-4 rounded-brand bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-3 text-sm text-emerald-800 font-medium shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <CheckCircle className="h-5 w-5 text-emerald-600 shrink-0" />
+              <span>{actionSuccessMessage}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionSuccessMessage(null)}
+              className="text-xs text-emerald-600 hover:text-emerald-800 font-semibold cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Error State Banner */}
         {error && (
           <div role="alert" aria-live="assertive" className="p-4 rounded-brand bg-rose-50 border border-rose-100 flex gap-3 text-sm text-rose-700 font-medium shadow-xs">
@@ -375,12 +418,64 @@ export default function TaDashboardPage() {
             <section aria-labelledby="ta-assigned-exams-heading">
               <h3 id="ta-assigned-exams-heading" className="font-semibold text-slate-800">Exams</h3>
               {assignedExams.length > 0 ? (
-                <ul className="mt-2 space-y-2">
-                  {assignedExams.map(exam => (
-                    <li key={exam._id} className="rounded-lg border border-slate-200 px-3 py-2 text-slate-900">
-                      {exam.title}
-                    </li>
-                  ))}
+                <ul className="mt-2 space-y-2.5">
+                  {assignedExams.map(exam => {
+                    const isReviewPending = exam.status === 'REVIEW_PENDING';
+                    const isPublished = exam.status === 'PUBLISHED';
+                    return (
+                      <li
+                        key={exam._id}
+                        className="rounded-lg border border-slate-200 px-3.5 py-2.5 text-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white shadow-2xs"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-slate-900">{exam.title}</span>
+                          <span
+                            className={`text-3xs font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                              isPublished
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : isReviewPending
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}
+                          >
+                            {exam.status || 'DRAFT'}
+                          </span>
+                        </div>
+                        <div className="shrink-0 flex items-center gap-2">
+                          {isReviewPending ? (
+                            <span
+                              className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded inline-flex items-center gap-1.5"
+                              data-testid={`review-pending-badge-${exam._id}`}
+                            >
+                              <CheckCircle className="h-3.5 w-3.5 text-amber-600" />
+                              Review Pending
+                            </span>
+                          ) : isPublished ? (
+                            <span
+                              className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded inline-flex items-center gap-1.5"
+                              data-testid={`published-badge-${exam._id}`}
+                            >
+                              <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+                              Published
+                            </span>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              data-testid={`enable-review-pending-btn-${exam._id}`}
+                              disabled={updatingExamId === exam._id}
+                              onClick={() => handleEnableReviewPending(exam._id)}
+                              className="text-xs text-amber-700 border-amber-300 hover:bg-amber-50 gap-1.5 h-8 font-semibold cursor-pointer"
+                            >
+                              <Send className="h-3 w-3" />
+                              <span>{updatingExamId === exam._id ? 'Updating...' : 'Enable Review Pending'}</span>
+                            </Button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : assignmentContextLoaded ? (
                 <p className="mt-2 text-sm text-slate-500">No exams are currently available through your assigned courses.</p>
