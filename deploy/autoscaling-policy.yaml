@@ -1,94 +1,38 @@
 # ==============================================================================
-# Autoscaling Configuration and Policy Specification (AE-232)
+# Cloud Run Knative Autoscaling Policy Specification (AE-232)
 # ==============================================================================
-# This document defines dual-target declarative autoscaling policies for:
-#   1. Google Cloud Run (Knative Serving) Serverless Container Autoscaler
-#   2. Kubernetes HorizontalPodAutoscaler (autoscaling/v2)
+# This manifest defines the Knative Serving autoscaling specification for the
+# Assignment Evaluator service on Google Cloud Run.
+#
+# NOTE: Aligned with deploy/cloudrun-service.yaml (PR #355):
+# - minScale is set to "1" (warm standby instance to mitigate cold starts without over-provisioning)
+# - maxScale is set to "10" (horizontal scale limit to protect MongoDB Atlas connection pools)
+# - containerConcurrency is set to 80 (requests per container instance before horizontal scale-out)
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. Google Cloud Run Knative Autoscaling Specification
-# ------------------------------------------------------------------------------
-cloudRunPolicy:
-  apiVersion: serving.knative.dev/v1
-  kind: Service
-  metadata:
-    name: assignment-evaluator-production
-    namespace: assignment-evaluator
-    labels:
-      environment: production
-      app: assignment-evaluator
-  spec:
-    template:
-      metadata:
-        annotations:
-          # Minimum warm instances to eliminate cold start latency during exam grading
-          autoscaling.knative.dev/minScale: "2"
-          # Maximum horizontal scaling ceiling to protect database connection pools
-          autoscaling.knative.dev/maxScale: "10"
-          # Target concurrency utilization before triggering scale-up (70% of 80 = 56 concurrent requests)
-          autoscaling.knative.dev/targetUtilizationPercentage: "70"
-          # Disable CPU throttling so background canvas workers and PDF streaming run at full speed
-          run.googleapis.com/cpu-throttling: "false"
-          # Use Gen2 execution environment for full Linux POSIX and filesystem compatibility
-          run.googleapis.com/execution-environment: gen2
-      spec:
-        containerConcurrency: 80
-        timeoutSeconds: 300
-
----
-# ------------------------------------------------------------------------------
-# 2. Kubernetes HorizontalPodAutoscaler (HPA v2) Specification
-# ------------------------------------------------------------------------------
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
+apiVersion: serving.knative.dev/v1
+kind: Service
 metadata:
-  name: assignment-evaluator-hpa
-  namespace: assignment-evaluator
+  name: assignment-evaluator
+  namespace: default
   labels:
-    app.kubernetes.io/name: assignment-evaluator
-    app.kubernetes.io/component: web-service
-    app.kubernetes.io/part-of: assignment-evaluation-platform
+    cloud.googleapis.com/location: asia-south1
+    environment: production
+    app: assignment-evaluator
 spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: assignment-evaluator
-  minReplicas: 2
-  maxReplicas: 10
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 75
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
-  behavior:
-    scaleUp:
-      # Rapid scale-up to absorb grading spikes and batch ingest burst
-      stabilizationWindowSeconds: 0
-      selectPolicy: Max
-      policies:
-        - type: Pods
-          value: 2
-          periodSeconds: 15
-        - type: Percent
-          value: 50
-          periodSeconds: 15
-    scaleDown:
-      # 5-minute stabilization window to prevent flapping between grading submissions
-      stabilizationWindowSeconds: 300
-      selectPolicy: Min
-      policies:
-        - type: Percent
-          value: 10
-          periodSeconds: 60
-        - type: Pods
-          value: 1
-          periodSeconds: 60
+  template:
+    metadata:
+      annotations:
+        # Minimum warm instances (aligned with deploy/cloudrun-service.yaml minScale: 1)
+        autoscaling.knative.dev/minScale: "1"
+        # Maximum horizontal scaling ceiling (10 instances * 50 conn/instance = 500 conns, safely within Atlas M10)
+        autoscaling.knative.dev/maxScale: "10"
+        # Target concurrency utilization before triggering scale-up (70% of 80 = 56 concurrent requests)
+        autoscaling.knative.dev/targetUtilizationPercentage: "70"
+        # Disable CPU throttling so background canvas workers and PDF streaming run at full speed
+        run.googleapis.com/cpu-throttling: "false"
+        # Use Gen2 execution environment for full Linux POSIX and filesystem compatibility
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300

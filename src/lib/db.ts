@@ -19,15 +19,41 @@ if (!cached) {
 
 const mongooseCache = cached;
 
+export interface MongoPoolConfig {
+  maxPoolSize: number;
+  minPoolSize: number;
+  maxIdleTimeMS: number;
+  serverSelectionTimeoutMS: number;
+}
+
+export function getMongoPoolConfig(): MongoPoolConfig {
+  const maxPoolSize = parseInt(process.env.MONGO_MAX_POOL_SIZE || '50', 10);
+  const minPoolSize = parseInt(process.env.MONGO_MIN_POOL_SIZE || '5', 10);
+  const maxIdleTimeMS = parseInt(process.env.MONGO_MAX_IDLE_TIME_MS || '30000', 10);
+  const serverSelectionTimeoutMS = parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || '5000', 10);
+
+  return {
+    maxPoolSize: isNaN(maxPoolSize) || maxPoolSize <= 0 ? 50 : maxPoolSize,
+    minPoolSize: isNaN(minPoolSize) || minPoolSize < 0 ? 5 : minPoolSize,
+    maxIdleTimeMS: isNaN(maxIdleTimeMS) || maxIdleTimeMS <= 0 ? 30000 : maxIdleTimeMS,
+    serverSelectionTimeoutMS: isNaN(serverSelectionTimeoutMS) || serverSelectionTimeoutMS <= 0 ? 5000 : serverSelectionTimeoutMS,
+  };
+}
+
 export async function connectDB() {
   if (mongooseCache.conn) {
     return mongooseCache.conn;
   }
 
   if (!mongooseCache.promise) {
-    const opts = {
+    const poolConfig = getMongoPoolConfig();
+    const opts: mongoose.ConnectOptions = {
       bufferCommands: false,
       monitorCommands: true,
+      maxPoolSize: poolConfig.maxPoolSize,
+      minPoolSize: poolConfig.minPoolSize,
+      maxIdleTimeMS: poolConfig.maxIdleTimeMS,
+      serverSelectionTimeoutMS: poolConfig.serverSelectionTimeoutMS,
     };
 
     const MONGODB_URI = process.env.MONGODB_URI;

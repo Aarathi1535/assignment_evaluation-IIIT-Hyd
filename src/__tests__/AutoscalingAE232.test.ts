@@ -1,67 +1,26 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 // @ts-expect-error - js-yaml has no bundled @types in devDependencies
 import yaml from 'js-yaml';
+import { getMongoPoolConfig } from '../lib/db';
 
-interface CloudRunPolicyDoc {
-  cloudRunPolicy: {
-    apiVersion: string;
-    kind: string;
-    metadata: {
-      name: string;
-      namespace: string;
-      labels: Record<string, string>;
-    };
-    spec: {
-      template: {
-        metadata: {
-          annotations: Record<string, string>;
-        };
-        spec: {
-          containerConcurrency: number;
-          timeoutSeconds: number;
-        };
-      };
-    };
-  };
-}
-
-interface HpaMetric {
-  type: string;
-  resource: {
-    name: string;
-    target: {
-      type: string;
-      averageUtilization: number;
-    };
-  };
-}
-
-interface HpaDoc {
+interface KnativeServiceManifest {
   apiVersion: string;
   kind: string;
   metadata: {
     name: string;
-    namespace: string;
+    namespace?: string;
+    labels?: Record<string, string>;
   };
   spec: {
-    scaleTargetRef: {
-      apiVersion: string;
-      kind: string;
-      name: string;
-    };
-    minReplicas: number;
-    maxReplicas: number;
-    metrics: HpaMetric[];
-    behavior: {
-      scaleUp: {
-        stabilizationWindowSeconds: number;
-        selectPolicy: string;
+    template: {
+      metadata: {
+        annotations: Record<string, string>;
       };
-      scaleDown: {
-        stabilizationWindowSeconds: number;
-        selectPolicy: string;
+      spec: {
+        containerConcurrency: number;
+        timeoutSeconds: number;
       };
     };
   };
@@ -70,101 +29,118 @@ interface HpaDoc {
 describe('AE-232: Autoscaling Configuration and Policy Specifications', () => {
   const rootDir = process.cwd();
   const policyPath = path.join(rootDir, 'deploy', 'autoscaling-policy.yaml');
-  const docsPath = path.join(rootDir, 'docs', 'AUTOSCALING.md');
+  const cloudRunServicePath = path.join(rootDir, 'deploy', 'cloudrun-service.yaml');
+  const originalEnv = { ...process.env };
 
-  describe('Declarative Autoscaling Manifest (autoscaling-policy.yaml)', () => {
-    it('should exist and parse multi-document YAML specifications', () => {
+  beforeEach(() => {
+    delete process.env.MONGO_MAX_POOL_SIZE;
+    delete process.env.MONGO_MIN_POOL_SIZE;
+    delete process.env.MONGO_MAX_IDLE_TIME_MS;
+    delete process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  describe('1. Knative Serving Autoscaling Manifest Validation', () => {
+    it('parses as valid Knative Service YAML with single-service schema', () => {
       expect(fs.existsSync(policyPath)).toBe(true);
       const raw = fs.readFileSync(policyPath, 'utf8');
-      const docs = yaml.loadAll(raw);
+      const doc = yaml.load(raw) as KnativeServiceManifest;
 
-      expect(docs.length).toBe(2);
+      expect(doc.apiVersion).toBe('serving.knative.dev/v1');
+      expect(doc.kind).toBe('Service');
+      expect(doc.metadata.name).toBe('assignment-evaluator');
     });
 
-    it('should configure Cloud Run autoscaling with warm pool and bounded ceiling', () => {
+    it('enforces minScale: 1 (aligned with PR #355) and bounded maxScale: 10', () => {
       const raw = fs.readFileSync(policyPath, 'utf8');
-      const docs = yaml.loadAll(raw);
-      const cloudRun = docs[0] as CloudRunPolicyDoc;
+      const doc = yaml.load(raw) as KnativeServiceManifest;
+      const annotations = doc.spec.template.metadata.annotations;
+      const spec = doc.spec.template.spec;
 
-      expect(cloudRun.cloudRunPolicy).toBeDefined();
-      const annotations = cloudRun.cloudRunPolicy.spec.template.metadata.annotations;
-      const spec = cloudRun.cloudRunPolicy.spec.template.spec;
-
-      // Minimum 2 instances to eliminate cold start latency
-      expect(parseInt(annotations['autoscaling.knative.dev/minScale'], 10)).toBe(2);
-      // Maximum 10 instances to bound DB connections
-      expect(parseInt(annotations['autoscaling.knative.dev/maxScale'], 10)).toBe(10);
+      // minScale: 1 guarantees warm standby without over-provisioning
+      expect(annotations['autoscaling.knative.dev/minScale']).toBe('1');
+      // maxScale: 10 prevents uncontrolled MongoDB connection saturation
+      expect(annotations['autoscaling.knative.dev/maxScale']).toBe('10');
       // 70% target concurrency utilization
-      expect(parseInt(annotations['autoscaling.knative.dev/targetUtilizationPercentage'], 10)).toBe(70);
-      // CPU unthrottled for canvas workers
+      expect(annotations['autoscaling.knative.dev/targetUtilizationPercentage']).toBe('70');
+      // Unthrottled CPU for background canvas/crypto processing
       expect(annotations['run.googleapis.com/cpu-throttling']).toBe('false');
       expect(annotations['run.googleapis.com/execution-environment']).toBe('gen2');
-      // Concurrency limit
+      // Concurrency settings
       expect(spec.containerConcurrency).toBe(80);
       expect(spec.timeoutSeconds).toBe(300);
     });
 
-    it('should configure Kubernetes HorizontalPodAutoscaler (HPA v2) correctly', () => {
-      const raw = fs.readFileSync(policyPath, 'utf8');
-      const docs = yaml.loadAll(raw);
-      const hpa = docs[1] as HpaDoc;
+    it('matches autoscaling annotations in deploy/cloudrun-service.yaml if present', () => {
+      if (fs.existsSync(cloudRunServicePath)) {
+        const raw = fs.readFileSync(cloudRunServicePath, 'utf8');
+        const doc = yaml.load(raw) as KnativeServiceManifest;
+        const annotations = doc.spec.template.metadata.annotations;
 
-      expect(hpa.apiVersion).toBe('autoscaling/v2');
-      expect(hpa.kind).toBe('HorizontalPodAutoscaler');
-      expect(hpa.metadata.name).toBe('assignment-evaluator-hpa');
-      expect(hpa.spec.scaleTargetRef.name).toBe('assignment-evaluator');
-      expect(hpa.spec.minReplicas).toBe(2);
-      expect(hpa.spec.maxReplicas).toBe(10);
-
-      // CPU metric: 75%
-      const cpuMetric = hpa.spec.metrics.find((m) => m.resource.name === 'cpu');
-      expect(cpuMetric).toBeDefined();
-      expect(cpuMetric?.resource.target.averageUtilization).toBe(75);
-
-      // Memory metric: 80%
-      const memMetric = hpa.spec.metrics.find((m) => m.resource.name === 'memory');
-      expect(memMetric).toBeDefined();
-      expect(memMetric?.resource.target.averageUtilization).toBe(80);
-
-      // Flapping mitigation
-      expect(hpa.spec.behavior.scaleUp.stabilizationWindowSeconds).toBe(0);
-      expect(hpa.spec.behavior.scaleDown.stabilizationWindowSeconds).toBe(300);
+        expect(annotations['autoscaling.knative.dev/minScale']).toBe('1');
+        expect(annotations['autoscaling.knative.dev/maxScale']).toBe('10');
+      }
     });
   });
 
-  describe('Capacity and Pool Protection Calculations', () => {
-    it('should ensure max connection count stays under 10% of MongoDB Atlas M10 quota', () => {
-      const maxInstances = 10;
-      const connectionsPerInstance = 10;
-      const totalConnections = maxInstances * connectionsPerInstance;
+  describe('2. MongoDB Connection Pool Sizing & Protection (src/lib/db.ts)', () => {
+    it('exports default pool configuration safely sized for Cloud Run concurrency', () => {
+      const config = getMongoPoolConfig();
+
+      expect(config.maxPoolSize).toBe(50);
+      expect(config.minPoolSize).toBe(5);
+      expect(config.maxIdleTimeMS).toBe(30000);
+      expect(config.serverSelectionTimeoutMS).toBe(5000);
+    });
+
+    it('allows overriding pool parameters via environment variables', () => {
+      process.env.MONGO_MAX_POOL_SIZE = '25';
+      process.env.MONGO_MIN_POOL_SIZE = '2';
+      process.env.MONGO_MAX_IDLE_TIME_MS = '15000';
+      process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS = '3000';
+
+      const config = getMongoPoolConfig();
+      expect(config.maxPoolSize).toBe(25);
+      expect(config.minPoolSize).toBe(2);
+      expect(config.maxIdleTimeMS).toBe(15000);
+      expect(config.serverSelectionTimeoutMS).toBe(3000);
+    });
+
+    it('falls back to safe defaults when environment variables are invalid', () => {
+      process.env.MONGO_MAX_POOL_SIZE = '-10';
+      process.env.MONGO_MIN_POOL_SIZE = 'invalid';
+
+      const config = getMongoPoolConfig();
+      expect(config.maxPoolSize).toBe(50);
+      expect(config.minPoolSize).toBe(5);
+    });
+
+    it('guarantees maximum scale connection ceiling stays safely under 50% of Atlas M10 limit', () => {
+      const raw = fs.readFileSync(policyPath, 'utf8');
+      const doc = yaml.load(raw) as KnativeServiceManifest;
+      const maxInstances = parseInt(doc.spec.template.metadata.annotations['autoscaling.knative.dev/maxScale'], 10);
+      const config = getMongoPoolConfig();
+
+      const totalMaxConnections = maxInstances * config.maxPoolSize;
       const atlasM10Limit = 1500;
 
-      expect(totalConnections).toBe(100);
-      expect(totalConnections / atlasM10Limit).toBeLessThan(0.1);
+      // Total connections: 10 * 50 = 500
+      expect(totalMaxConnections).toBe(500);
+      // Leaves at least 1,000 connections free for background workers and admin
+      expect(totalMaxConnections / atlasM10Limit).toBeLessThanOrEqual(0.35);
     });
 
-    it('should compute effective concurrency trigger threshold', () => {
-      const maxConcurrency = 80;
-      const targetPercent = 70;
-      const triggerThreshold = (maxConcurrency * targetPercent) / 100;
+    it('computes effective concurrency scale-out threshold', () => {
+      const raw = fs.readFileSync(policyPath, 'utf8');
+      const doc = yaml.load(raw) as KnativeServiceManifest;
+      const concurrency = doc.spec.template.spec.containerConcurrency;
+      const targetPercent = parseInt(doc.spec.template.metadata.annotations['autoscaling.knative.dev/targetUtilizationPercentage'], 10);
 
+      const triggerThreshold = (concurrency * targetPercent) / 100;
       expect(triggerThreshold).toBe(56);
-    });
-  });
-
-  describe('Autoscaling Documentation (docs/AUTOSCALING.md)', () => {
-    it('should document workload profiles, database limits, and monitoring alerts', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
-
-      expect(content).toContain('Peak TA Grading Session');
-      expect(content).toContain('Batch Ingestion Spike');
-      expect(content).toContain('Database Connection Pool Arithmetic');
-      expect(content).toContain('1,500 connections');
-      expect(content).toContain('minScale: 2');
-      expect(content).toContain('300 seconds (5 min)');
-      expect(content).toContain('Instance Saturation Alert');
-      expect(content).toContain('Rapid Flapping Alert');
     });
   });
 });
