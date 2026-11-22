@@ -23,16 +23,17 @@ All core UI color pairs have been validated using the official W3C relative lumi
 
 | Element Description | Foreground Hex | Background Hex | Contrast Ratio | WCAG AA Req | WCAG AAA Req | Compliance Status |
 |---------------------|----------------|----------------|----------------|-------------|--------------|-------------------|
-| **Body Primary Text** | `#111827` (Slate 900) | `#FFFFFF` (White) | **15.34 : 1** | 4.5 : 1 | 7.0 : 1 | **Passes AAA** |
-| **Body Secondary Text** | `#374151` (Gray 700) | `#FFFFFF` (White) | **9.53 : 1** | 4.5 : 1 | 7.0 : 1 | **Passes AAA** |
-| **Muted Caption Text** | `#4B5563` (Gray 600) | `#FFFFFF` (White) | **7.08 : 1** | 4.5 : 1 | 7.0 : 1 | **Passes AAA** |
-| **Primary Action Button**| `#FFFFFF` (White) | `#2563EB` (Blue 600) | **4.56 : 1** | 4.5 : 1 | 4.5 : 1 (Lg) | **Passes AA** |
-| **Danger / Flag Button** | `#FFFFFF` (White) | `#DC2626` (Red 600) | **4.58 : 1** | 4.5 : 1 | 4.5 : 1 (Lg) | **Passes AA** |
-| **Success / Approved** | `#FFFFFF` (White) | `#16A34A` (Green 600) | **4.52 : 1** | 4.5 : 1 | 4.5 : 1 (Lg) | **Passes AA** |
-| **UI Form Borders** | `#767676` (Gray 500) | `#FFFFFF` (White) | **4.54 : 1** | 3.0 : 1 (UI) | — | **Passes AA (UI Component)** |
-| **Focus Indicator Ring**| `#2563EB` (Blue 600) | `#FFFFFF` (White) | **4.56 : 1** | 3.0 : 1 (UI) | — | **Passes AA (UI Component)** |
+| **Body Primary Text** | `#111827` (Slate 900) | `#FFFFFF` (White) | **17.74 : 1** | 4.5 : 1 | 7.0 : 1 | **Passes AAA** |
+| **Body Secondary Text** | `#374151` (Gray 700) | `#FFFFFF` (White) | **10.31 : 1** | 4.5 : 1 | 7.0 : 1 | **Passes AAA** |
+| **Muted Caption Text** | `#4B5563` (Gray 600) | `#FFFFFF` (White) | **7.56 : 1** | 4.5 : 1 | 7.0 : 1 | **Passes AAA** |
+| **Primary Action Button**| `#FFFFFF` (White) | `#2563EB` (Blue 600) | **5.17 : 1** | 4.5 : 1 | 4.5 : 1 (Lg) | **Passes AA (AAA for Large Text)** |
+| **Danger / Flag Button** | `#FFFFFF` (White) | `#DC2626` (Red 600) | **4.83 : 1** | 4.5 : 1 | 4.5 : 1 (Lg) | **Passes AA (AAA for Large Text)** |
+| **Success / Approved (Normal Text)**| `#FFFFFF` (White) | `#15803D` (Green 700) | **4.56 : 1** | 4.5 : 1 | 4.5 : 1 (Lg) | **Passes AA** |
+| **Success / Approved (UI/Large Text)**| `#FFFFFF` (White) | `#16A34A` (Green 600) | **3.30 : 1** | 3.0 : 1 (UI) | — | **Passes AA for UI & Large Text; Fails Normal Text (< 4.5:1)** |
+| **UI Form Borders / Controls** | `#767676` (Gray 500) | `#FFFFFF` (White) | **4.54 : 1** | 3.0 : 1 (UI) | — | **Passes AA (UI Component & Normal Text)** |
+| **Focus Indicator Ring**| `#2563EB` (Blue 600) | `#FFFFFF` (White) | **5.17 : 1** | 3.0 : 1 (UI) | — | **Passes AA (UI Component)** |
 
-*Note: Gray 500 (`#767676`) or darker is enforced for all interactive controls and borders. All body text utilizes Gray 700 (`#374151`) or higher.*
+*Note: Gray 500 (`#767676`) or darker is enforced for all interactive controls and borders. For normal body text, green buttons must use Green 700 (`#15803D`, 4.56:1) to satisfy AA; Green 600 (`#16A34A`, 3.30:1) is reserved for large headings and UI icons/components only.*
 
 ---
 

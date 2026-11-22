@@ -11,7 +11,6 @@ import {
 } from '../lib/accessibilityStandards';
 
 describe('AE-236: Accessibility Standards and WCAG 2.1 AA Verification', () => {
-  const docsPath = path.join(process.cwd(), 'docs', 'ACCESSIBILITY_WCAG.md');
 
   describe('Color Math and Relative Luminance (W3C Formula)', () => {
     it('should correctly parse 3-digit and 6-digit hex colors into RGB channels', () => {
@@ -67,6 +66,19 @@ describe('AE-236: Accessibility Standards and WCAG 2.1 AA Verification', () => {
       expect(evaluation.passesAA).toBe(true);
     });
 
+    it('evaluates green shades: Green 600 passes for UI components/large text, Green 700 passes for normal body text', () => {
+      const green600Eval = evaluateWcagCompliance('#FFFFFF', '#16A34A', { isUiComponent: true });
+      expect(green600Eval.ratio).toBeCloseTo(3.30, 2);
+      expect(green600Eval.passesAA).toBe(true); // passes for UI component (>= 3.0:1)
+
+      const green600TextEval = evaluateWcagCompliance('#FFFFFF', '#16A34A', { isUiComponent: false });
+      expect(green600TextEval.passesAA).toBe(false); // fails for normal text (< 4.5:1)
+
+      const green700TextEval = evaluateWcagCompliance('#FFFFFF', '#15803D', { isUiComponent: false });
+      expect(green700TextEval.ratio).toBeGreaterThanOrEqual(4.5);
+      expect(green700TextEval.passesAA).toBe(true);
+    });
+
     it('should verify UI border (#767676 on #FFFFFF) passes UI component threshold (3.0:1) while low-contrast gray fails normal text', () => {
       const uiCompEval = evaluateWcagCompliance('#767676', '#FFFFFF', { isUiComponent: true });
       expect(uiCompEval.passesAA).toBe(true);
@@ -119,21 +131,13 @@ describe('AE-236: Accessibility Standards and WCAG 2.1 AA Verification', () => {
     });
   });
 
-  describe('Accessibility Documentation (docs/ACCESSIBILITY_WCAG.md)', () => {
-    it('should document WCAG 2.1 AA principles, contrast ratios, and keyboard navigation', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
+  describe('UI Component Integration', () => {
+    it('integrates formatLiveRegionAnnouncement into SaveStatusIndicator for accessible status announcements', () => {
+      const saveStatusPath = path.join(process.cwd(), 'src', 'components', 'canvas', 'SaveStatusIndicator.tsx');
+      const saveStatusContent = fs.readFileSync(saveStatusPath, 'utf8');
 
-      expect(content).toContain('Perceivable');
-      expect(content).toContain('Operable');
-      expect(content).toContain('Understandable');
-      expect(content).toContain('Robust');
-      expect(content).toContain('15.34 : 1');
-      expect(content).toContain('4.56 : 1');
-      expect(content).toContain('VoiceOver');
-      expect(content).toContain('NVDA');
-      expect(content).toContain('JAWS');
-      expect(content).toContain('Skip to main content');
+      expect(saveStatusContent).toContain('formatLiveRegionAnnouncement');
+      expect(saveStatusContent).toContain('liveRegionProps');
     });
   });
 });

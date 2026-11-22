@@ -1,5 +1,6 @@
 import React from 'react';
 import type { SaveStatus } from './types';
+import { formatLiveRegionAnnouncement } from '@/lib/accessibilityStandards';
 
 export interface SaveStatusIndicatorProps {
   status: SaveStatus;
@@ -38,6 +39,10 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
 
   const lockedActive = status === 'locked' || isLocked;
   const isAlertRole = status === 'error' || status === 'conflict' || lockedActive;
+  const liveRegionProps = formatLiveRegionAnnouncement(
+    status === 'error' && errorMessage ? errorMessage : `Autosave status: ${status}`,
+    isAlertRole ? 'assertive' : 'polite'
+  );
 
   return (
     <div
@@ -60,8 +65,9 @@ export const SaveStatusIndicator: React.FC<SaveStatusIndicatorProps> = ({
       } ${className}`}
       data-testid="save-status-indicator"
       data-status={lockedActive ? 'locked' : status}
-      role={isAlertRole ? 'alert' : 'status'}
-      aria-live={isAlertRole ? 'assertive' : 'polite'}
+      role={liveRegionProps.role}
+      aria-live={liveRegionProps['aria-live']}
+      aria-atomic={liveRegionProps['aria-atomic']}
       title={status === 'error' && errorMessage ? errorMessage : undefined}
     >
       {(status === 'saving' || status === 'syncing') && (
