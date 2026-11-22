@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { NextRequest } from 'next/server';
 import {
@@ -24,7 +24,12 @@ import { POST as resetPOST } from '../app/api/auth/reset/route';
 
 describe('AE-229: Rate Limiting and Input Validation Hardening', () => {
   beforeEach(() => {
+    process.env.ENABLE_RATE_LIMIT_TEST = 'true';
     resetRateLimitStore();
+  });
+
+  afterEach(() => {
+    delete process.env.ENABLE_RATE_LIMIT_TEST;
   });
 
   describe('1. Sliding-Window Rate Limiting Engine', () => {
