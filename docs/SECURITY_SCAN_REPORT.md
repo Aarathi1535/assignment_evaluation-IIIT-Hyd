@@ -1,76 +1,98 @@
 # Security Scan & Dependency Audit Report
 
 **Document:** `docs/SECURITY_SCAN_REPORT.md`  
-**Reference:** Week 12 · Day 2 — Security and Compliance (AE-228 / Issue #348)  
+**Reference:** Week 12 · Day 2 — Security and Compliance (AE-228 / Issue #348 / PR #349)  
 **Status:** Canonical Reference
 
 ---
 
 ## 1. Executive Summary
 
-A comprehensive security scan and vulnerability audit of the Exam Evaluation Platform was performed, covering:
-1. **Third-Party Dependency Audit:** Automated CVE/GHSA analysis across all direct and transitive production/development packages.
-2. **Secrets & Credential Hygiene:** Automated repository-wide regex and entropy scanning for hardcoded secrets, API keys, private keys, and live database credentials.
-3. **Environment Variable Management:** Verification of configuration validation schemas, secret isolation, and `.gitignore` file boundary enforcement.
-4. **Data Sanitization & Leakage Defenses:** Verification of credential stripping from API responses and sensitive field filtering in audit logs.
+A comprehensive security scan, package vulnerability upgrade, and git history secrets audit of the Exam Evaluation Platform was performed, covering:
+1. **Third-Party Dependency Audit & Remediation:** Automated CVE/GHSA analysis across all direct and transitive production dependencies, followed by package upgrades to eliminate reported vulnerabilities.
+2. **Secrets & Credential History Scan (Gitleaks):** Exhaustive repository-wide commit history scanning across all 639 commits using Gitleaks for exposed API keys, private keys, tokens, and database credentials.
+3. **Environment Variable Configuration Validation:** Auditing runtime configuration schemas in `src/config/env.ts` and `.gitignore` file boundary enforcement.
+4. **Application Data Sanitization Defenses:** Verifying real production sanitization mechanisms across audit logging, file validation, ingestion error handling, and spreadsheet export.
+5. **Architectural Gap Analysis:** Correcting inaccurate assumptions regarding input validation strictness, body parser limits, and secret length rules.
 
-**Result Summary:**
-- **Committed Live Secrets:** **0** (Clean; 100% compliant).
+**Key Results:**
+- **Production Vulnerabilities (`--omit=dev`):** **0** (All critical and high vulnerabilities in `next`, `mongoose`, `zod`, and transitive dependencies resolved).
+- **Git History Secrets Scan (Gitleaks):** Clean (0 live production secrets; identified template comments and test fixtures documented).
 - **Environment Leakage Protection:** Fully enforced (`.env*` excluded by `.gitignore`).
-- **Dependency Advisories:** Mitigated through strict architectural boundaries, input validation guards, and reverse proxy configuration.
 
 ---
 
-## 2. Dependency Vulnerability Analysis (SBOM & Audit)
+## 2. Dependency Vulnerability Remediation (SBOM & npm Audit)
 
-### 2.1 Package Inventory Summary
-- **Total Packages Analyzed:** 738 (153 Production, 526 Development, 162 Optional, 22 Peer).
-- **Core Production Stack:**
-  - Next.js: `16.2.12`
-  - React / React-DOM: `19.2.4`
-  - Mongoose: `9.9.0`
-  - Zod: `4.4.3`
-  - Google Cloud Storage: `7.16.0`
-  - Canvas: `@napi-rs/canvas 0.1.100`
+### 2.1 Upgraded Core Production Stack
+All production packages with known advisories have been upgraded:
 
-### 2.2 Severity Breakdown
-```mermaid
-pie title Dependency Vulnerability Distribution
-    "Critical (2)" : 2
-    "High (10)" : 10
-    "Moderate (14)" : 14
-    "Low (1)" : 1
+| Package | Previous Version | Upgraded Version | Resolved Advisories / CVEs |
+| :--- | :---: | :---: | :--- |
+| **`next`** | `16.2.12` | **`16.4.6`** | **Critical:** GHSA-p293-qw3h-jr36 (Windows RCE), GHSA-2xp9-vwfh-vxw4 (AVIF RCE), GHSA-2464-fhr4-w9xw (SVG RCE), GHSA-vcvr-r3jv-pc5j (ImageResponse RCE), GHSA-673q-mjm6-r5xr, GHSA-p3m5-59mp-jv5r (DoS), GHSA-f3mh-rxg3-f5g2 (HttpOnly Cookie Leak). |
+| **`mongoose`** | `9.9.0` | **`9.12.3`** | **Critical:** GHSA-gg4r-jv3p-qx3c (Connection-level sanitizeFilter), GHSA-pcrw-h46h-c93h (countDocuments filter injection), GHSA-wr5m-5jph-8m96 (Discriminator prototype bypass), GHSA-8332-j7wj-wjw4 (Inherited property DoS), GHSA-6972-9mcm-vhwj (Prototype pollution). |
+| **`zod`** | `4.4.3` | **`4.6.7`** | **High:** GHSA-mrhx-c7xc-m3w5 (Memory exhaustion on oversized constrained collections). |
+| **`@google-cloud/storage`** | `7.16.0` | **`7.22.0`** | Replaced vulnerable `fast-xml-parser` subdependency. |
+| **`eslint-config-next`** | `16.2.12` | **`16.4.6`** | Aligned with Next.js 16.4.6 core runtime. |
+| **`fast-uri`** (override) | `<3.1.9` | **`^3.1.9`** | **High:** GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf (SSRF / Host Confusion). |
+| **`source-map-js`** (override) | `<1.2.4` | **`^1.2.4`** | **High:** GHSA-68fv-2mgg-jv7q (Event-loop denial of service). |
+| **`uuid`** (override) | `<11.1.1` | **`^11.1.1`** | **Moderate:** GHSA-w5hq-g745-h8pq (Buffer bounds check in v3/v5/v6). |
+
+### 2.2 Audit Verification
+Running `npm audit --omit=dev` verifies the production dependency tree:
+```bash
+$ npm audit --omit=dev
+found 0 vulnerabilities
 ```
-
-### 2.3 Critical & High Vulnerabilities: Detailed Risk Assessment & Mitigations
-
-| Package | Severity | Advisory / CVE | Architectural Mitigation & Defense-in-Depth | Status |
-| :--- | :---: | :--- | :--- | :---: |
-| **`next`** (16.2.12) | **Critical** | GHSA-p293-qw3h-jr36<br>GHSA-2xp9-vwfh-vxw4<br>GHSA-2464-fhr4-w9xw | **Image Optimization Disabled for Untrusted Remote Sources:**<br>1. Next.js image optimization is restricted; no untrusted remote domains are permitted in `next.config.ts`.<br>2. Uploaded exam scan pages are rendered via isolated `@napi-rs/canvas` or `pdfjs-dist` engines on the backend rather than the Next.js SVG/AVIF optimizer.<br>3. Production deployment targets containerized Linux (Cloud Run), neutralizing Windows-specific path traversal vectors (GHSA-p293-qw3h-jr36). | **Mitigated** |
-| **`mongoose`** (9.9.0) | **Critical** | GHSA-pcrw-h46h-c93h<br>GHSA-gg4r-jv3p-qx3c<br>(Filter / Prototype Injection) | **Strict Zod Input Validation Pre-Flight:**<br>1. Every API route handler passes request bodies and query parameters through strict Zod schemas (`.strict()`) before constructing database queries.<br>2. No raw user JSON or unvalidated objects are passed to `find()`, `findOne()`, or `countDocuments()`.<br>3. Mongoose queries use strongly-typed IDs and scalar values, preventing MongoDB operator injection (`$where`, `$gt`, `$regex`). | **Mitigated** |
-| **`zod`** (4.4.3) | **High** | GHSA-mrhx-c7xc-m3w5<br>(Memory Exhaustion on Oversized Collections) | **Reverse Proxy & Body Parser Payload Limits:**<br>1. Maximum request payload is enforced at 10MB for scan uploads and 1MB for JSON API requests.<br>2. Deeply nested objects or unbound arrays are rejected at proxy boundary before reaching the Zod parsing layer. | **Mitigated** |
-| **`brace-expansion`**, **`minimatch`** | **High** | GHSA-q2hr-2g5m-vwhr<br>(Quadratic ReDoS in Glob Expansion) | **DevDependency Only:**<br>Isolated to ESLint and TypeScript toolchains during build time. Not executed on user-controlled inputs in production runtime. | **Dev-Only** |
+All production-facing vulnerabilities have been eliminated. The remaining 14 advisories reported by a full `npm audit` reside exclusively in build-time and test-time `devDependencies` (`vite`, `vitest`, `eslint`, `jsdom`), which are never packaged or exposed in the Cloud Run production container.
 
 ---
 
-## 3. Repository Secrets & Credential Audit
+## 3. Honest Architectural Gap Analysis
 
-An exhaustive automated pattern scan of all git-tracked files was performed across all directories:
-```
-Patterns Evaluated:
-- RSA / OpenSSH / EC Private Keys: -----BEGIN [A-Z ]+ PRIVATE KEY-----
-- Google Cloud API Keys: AIza[0-9A-Za-z-_]{35}
-- GitHub Personal Access Tokens: gh[pousr]_[0-9a-zA-Z]{36}
-- AWS Access Key IDs: AKIA[0-9A-Z]{16}
-- Generic Secrets / Passwords / Bearer Tokens: (?:secret|password|key)\s*[:=]\s*['"][A-Za-z0-9+/=_\-]{16,}['"]
-```
+To maintain rigorous security integrity, this section transparently documents where previous claims exceeded actual code capabilities:
 
-### 3.1 Scan Findings
-- **Live Production Secrets Found:** **0**
-- **Test / Mock Occurrences:** Identified in test suites (`smoke.test.ts`, `UserApi.test.ts`, `TaCreationAllocationFlow.test.ts`, `ImmutableStorage.test.ts`). All occurrences are strictly mock fixtures (e.g. `'password123'`, `'test-secure-hmac-secret-32-chars-long'`) and do not correspond to any active cloud or database credential.
+### 3.1 Input Validation Schema Strictness
+- **Previous Claim:** Every API route handler passes requests through strict Zod schemas (`.strict()`) before constructing database queries.
+- **Actual Reality:** `.strict()` is currently implemented on only 4 of 90 route handlers (e.g., student results, rubric updates). The remaining handlers validate typed fields against standard Zod schemas without the `.strict()` modifier.
+- **Risk Assessment:** While standard Zod validation parses and types expected fields, extra unvalidated fields are not rejected automatically by non-strict schemas unless explicitly stripped before passing to database queries.
+- **Action Item:** Incrementally adopt `.strict()` across remaining route schemas in future sprint tickets.
 
-### 3.2 Git Boundary Enforcement
-The `.gitignore` file enforces:
+### 3.2 Request Body & Payload Limits
+- **Previous Claim:** Maximum request payload is enforced at 10MB for scan uploads and 1MB for JSON API requests via application middleware.
+- **Actual Reality:** There are no custom body-limit middleware wrappers in `src/`. The application relies on Next.js default App Router body parsing (4MB limit).
+- **Risk Assessment:** Next.js protects against gigabyte-scale memory exhaustion out-of-the-box, but fine-grained limits (10MB for multipart batches, 1MB for API JSON) must be enforced at the reverse-proxy layer (Cloud Run max request size / Cloud Armor).
+- **Action Item:** Configure Cloud Run / Cloud Armor ingress payload policies during infrastructure setup.
+
+### 3.3 Secret Length Validation Rules
+- **Previous Claim:** `NEXTAUTH_SECRET` and `ORIGINAL_STORAGE_HMAC_SECRET` enforce 32+ character entropy validation on application startup.
+- **Actual Reality:** `src/config/env.ts` enforces `z.string().min(1)` (presence validation only).
+- **Reason:** Existing CI workflows and test configurations pass short test values (e.g. `ci-test-secret`, length 14). Hardcoding `min(32)` unconditionally in `env.ts` breaks test fixtures and CI builds.
+- **Action Item:** Introduce environment-aware secret length checks (e.g., enforce `min(32)` when `NODE_ENV === 'production'`) or validate secret entropy in production deployment scripts.
+
+---
+
+## 4. Git History Secrets Audit (Gitleaks)
+
+An automated history scan was executed across all 639 commits in the repository using `gitleaks detect -v`.
+
+### 4.1 Scan Summary
+- **Commits Scanned:** 639 commits (~81.1 MB).
+- **Total Pattern Matches:** 18 findings across historical commits.
+- **Live Production Credentials Leaked:** **0**
+
+### 4.2 Categorization of Historical Matches
+1. **Template Comment Placeholder (`deploy/identity/.env.example` line 8):**
+   - Matched: `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----`
+   - Analysis: This is an example placeholder commented out in `.env.example` illustrating the expected RSA key format for asymmetric token signing. It is not an active or usable private key.
+2. **Test Suite Mock Values (`GradingLifecycleAE178.test.ts`, `TaCreationAllocationFlow.test.ts`):**
+   - Matched: `'test-assembly-approval-secret-32-chars'`, `'thumb-cs201-p1'`.
+   - Analysis: Unit test fixtures used to verify cryptographic HMAC signing and thumbnail caching in MongoDB memory server.
+3. **Vendor Extracted Chunks (`next_extracted/`):**
+   - Matched: Obfuscated variable names in Next.js bundle analyzer chunks (e.g. `internalPropsKey=`, `remainingKeys=`). False positives from vendor JavaScript minification.
+
+### 4.3 Git Boundary Enforcement
+The root `.gitignore` enforces exclusion of real secrets:
 ```gitignore
 # env files
 .env*
@@ -78,38 +100,21 @@ The `.gitignore` file enforces:
 *.pem
 *.key
 ```
-- Only `.env.example` (containing empty/placeholder variable names) is tracked in version control.
-- Actual `.env` and `.env.local` files are ignored, preventing accidental check-ins.
+Confirmed via `git ls-files "*.env*"`: Only `.env.example` is tracked. No live `.env`, `.env.local`, or certificate key files exist in version control.
 
 ---
 
-## 4. Environment Variable & Secret Management Policy
+## 5. Application Data Sanitization Defenses
 
-### 4.1 Schema-Driven Configuration Validation
-Environment variables are validated on application startup via `src/config/env.ts`:
-- **`MONGODB_URI`:** Required connection string.
-- **`NEXTAUTH_SECRET`:** Required 32+ character entropy string for JWT cookie signing.
-- **`NEXTAUTH_URL`:** Required canonical deployment origin.
-- **`ORIGINAL_STORAGE_HMAC_SECRET`:** Required 32+ character secret for immutable asset and audit log hash seals.
-- **`ORIGINAL_STORAGE_KEY_ID`:** Key version identifier for cryptographic key rotation.
+The codebase enforces active sanitization across operational data flows:
 
-If any required secret is missing or empty, the application refuses to start and throws an explicit validation error:
-$$\text{Missing Secret} \implies \text{Process Abort with Exit Code 1}$$
-
-### 4.2 Production Secret Delivery
-In staging and production environments:
-1. Secrets are injected at runtime via **Google Cloud Secret Manager** into Cloud Run environment variables.
-2. No secret values are baked into Docker container images or CI workflow files.
-3. Access to Secret Manager is governed by least-privilege IAM roles bound to the service account.
-
----
-
-## 5. Credential Sanitization in Application Runtime
-
-1. **User Passwords:**
-   - Passwords are encrypted using `bcryptjs` with high salt rounds before storage.
-   - The `password` field is configured with `select: false` or explicitly stripped (`delete user.password`) before returning user objects in API endpoints (`/api/users`, `/api/auth/*`).
-2. **Audit Logs:**
-   - `AuditLog` sanitization filters out sensitive parameters (`password`, `secret`, `token`, `storageKey`, `storagePath`, `file(path|name)`) before persisting details to MongoDB.
-3. **Information Disclosure Prevention:**
-   - API endpoints return generic error messages for 401 Unauthorized and 403 Forbidden without leaking whether a requested user, exam, or course exists.
+1. **Audit Log Sanitization (`src/lib/audit.ts`):**
+   - `sanitizeAuditFeedback` traverses payload objects up to depth 6, replacing circular references and deep trees with safe placeholders.
+   - Long comment fields exceeding 2,000 characters are safely truncated to prevent MongoDB memory bloat.
+   - `sanitizeIpAddress` normalizes IPv4 and IPv6 addresses, stripping non-standard header formats.
+2. **File Path Traversal Sanitization (`src/utils/fileValidation.ts`):**
+   - `sanitizeDisplayFilename` removes control characters (`\x00-\x1f\x7f`), directory traversal sequences (`../`, `..\`), and limits filename length to 255 characters.
+3. **Ingestion Error Sanitization (`src/validations/ingestionValidation.ts`):**
+   - `sanitizeFailureReason` strips internal server file paths, raw Node.js stack traces, and whitespace noise before persisting to `IngestionJob.failureReason` or returning to API callers.
+4. **CSV / Spreadsheet Injection Sanitization (`src/lib/gradeExport.ts`):**
+   - `sanitizeSpreadsheetCell` prefixes cells starting with `=`, `+`, `-`, `@`, `\t`, or `\r` with a single quote (`'`), preventing formula execution when opening exported CSVs in Microsoft Excel or Google Sheets.
