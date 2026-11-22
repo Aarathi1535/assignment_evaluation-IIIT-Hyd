@@ -1,7 +1,10 @@
 import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
+import mongoose from 'mongoose';
 import { authOptions } from './auth';
 import { hasPermission, Permission, UserRole } from '../constants/permissions';
+import type { IExam } from '../models/Exam';
+import type { ICourse } from '../models/Course';
 
 export type AuthResult =
   | {
@@ -165,4 +168,86 @@ export async function requireAnyPermission(permissions: Permission[]): Promise<A
  */
 export async function requireGradingOrAnnotationAccess(): Promise<AuthResult> {
   return requireAnyPermission(GRADING_OR_CANVAS_PERMISSIONS);
+}
+
+export interface CanManageExamResult {
+  canManage: boolean;
+  exam: IExam | null;
+  course: ICourse | null;
+  errorStatus: 200 | 400 | 401 | 403 | 404;
+  errorMessage: string;
+}
+
+/**
+ * AE-219 Canonical exam management access policy:
+ * Admin, or the current active professor of the exam's active course.
+ * Both exam and course must be active (isActive: true).
+ */
+export async function canManageExam(
+  user: { id: string; role: string } | null | undefined,
+  examOrId: string | mongoose.Types.ObjectId | IExam | null | undefined
+): Promise<CanManageExamResult> {
+  if (!user) {
+    return { canManage: false, exam: null, course: null, errorStatus: 401, errorMessage: 'Unauthorized' };
+  }
+
+  if (!examOrId) {
+    return { canManage: false, exam: null, course: null, errorStatus: 400, errorMessage: 'Invalid exam ID' };
+  }
+
+  const Exam = mongoose.models.Exam || (await import('../models/Exam')).default;
+  const Course = mongoose.models.Course || (await import('../models/Course')).default;
+
+  let exam: IExam | null = null;
+  if (typeof examOrId === 'string' || examOrId instanceof mongoose.Types.ObjectId) {
+    if (!mongoose.Types.ObjectId.isValid(examOrId.toString())) {
+      return { canManage: false, exam: null, course: null, errorStatus: 400, errorMessage: 'Invalid exam ID' };
+    }
+    exam = await Exam.findById(examOrId);
+  } else {
+    exam = examOrId;
+  }
+
+  if (!exam || !exam.isActive) {
+    return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Exam not found' };
+  }
+
+  const course: ICourse | null = await Course.findById(exam.course);
+  if (!course) {
+    return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Exam not found' };
+  }
+
+  const role = user.role?.toUpperCase();
+
+  // Role validation before course status check to prevent information leaks for unrelated professors
+  if (role === UserRole.PROFESSOR) {
+    const profRef = course.professor as { _id?: mongoose.Types.ObjectId } | mongoose.Types.ObjectId;
+    const courseProfId = profRef && '_id' in profRef && profRef._id ? profRef._id.toString() : profRef?.toString();
+    if (courseProfId !== user.id) {
+      return {
+        canManage: false,
+        exam: null,
+        course: null,
+        errorStatus: 404,
+        errorMessage: 'Exam not found'
+      };
+    }
+  }
+
+  // Course status check for authorized actors (Admin or assigned course professor)
+  if (!course.isActive) {
+    return { canManage: false, exam: null, course: null, errorStatus: 404, errorMessage: 'Course not found or inactive' };
+  }
+
+  if (role === UserRole.ADMIN || role === UserRole.PROFESSOR) {
+    return { canManage: true, exam, course, errorStatus: 200, errorMessage: '' };
+  }
+
+  return {
+    canManage: false,
+    exam,
+    course,
+    errorStatus: 403,
+    errorMessage: 'Forbidden: Role cannot manage this exam'
+  };
 }
