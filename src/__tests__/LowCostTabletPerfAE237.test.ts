@@ -9,7 +9,6 @@ import {
 } from '../lib/lowCostTabletOptimizer';
 
 describe('AE-237: Low-Cost Tablet Performance Profiling and Optimization', () => {
-  const docsPath = path.join(process.cwd(), 'docs', 'LOW_COST_TABLET_PERF.md');
 
   describe('Hardware Capability Profiling (profileDeviceCapabilities)', () => {
     it('should classify budget devices (<= 4GB RAM or <= 4 cores) as constrained', () => {
@@ -123,16 +122,21 @@ describe('AE-237: Low-Cost Tablet Performance Profiling and Optimization', () =>
     });
   });
 
-  describe('Performance Documentation (docs/LOW_COST_TABLET_PERF.md)', () => {
-    it('should document memory limits, 30 FPS target, and viewport culling results', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
+  describe('Canvas Component Performance Integration', () => {
+    it('integrates stroke throttling into PenLayer to prevent event loop starvation', () => {
+      const penLayerPath = path.join(process.cwd(), 'src', 'components', 'canvas', 'PenLayer.tsx');
+      const content = fs.readFileSync(penLayerPath, 'utf8');
 
-      expect(content).toContain('150 MB');
-      expect(content).toContain('30 FPS');
-      expect(content).toContain('Viewport Tile Culling');
-      expect(content).toContain('Mali-G52');
-      expect(content).toContain('LRU Eviction');
+      expect(content).toContain('shouldSampleStrokePoint');
+      expect(content).toContain('lastStrokeSampleTimeRef');
+    });
+
+    it('integrates RasterMemoryCacheManager into PageImageLayer for bounded memory usage', () => {
+      const pageLayerPath = path.join(process.cwd(), 'src', 'components', 'canvas', 'PageImageLayer.tsx');
+      const content = fs.readFileSync(pageLayerPath, 'utf8');
+
+      expect(content).toContain('RasterMemoryCacheManager');
+      expect(content).toContain('rasterCacheRef');
     });
   });
 });

@@ -22,6 +22,7 @@ import {
   markCanvasProfile,
   measureCanvasProfile,
 } from '@/lib/canvasProfiling';
+import { RasterMemoryCacheManager } from '@/lib/lowCostTabletOptimizer';
 
 export function PageImageLayer({
   src,
@@ -49,6 +50,7 @@ export function PageImageLayer({
   const imageNodeRef = useRef<Konva.Image | null>(null);
   const loadedImageRef = useRef<HTMLImageElement | null>(null);
   const baseBoundsRef = useRef<RenderedImageBounds | null>(null);
+  const rasterCacheRef = useRef<RasterMemoryCacheManager>(new RasterMemoryCacheManager(150));
 
   // Internal transform state (used if propTransform is not controlled)
   const [internalTransform, setInternalTransform] = useState<PanZoomTransform>({
@@ -161,6 +163,12 @@ export function PageImageLayer({
       );
       baseBoundsRef.current = baseBounds;
 
+      // Track texture size in LRU raster memory cache manager (AE-237)
+      if (src) {
+        const textureSizeBytes = (img.naturalWidth || img.width || 800) * (img.naturalHeight || img.height || 1000) * 4;
+        rasterCacheRef.current.setPageTexture(src, textureSizeBytes);
+      }
+
       if (!groupRef.current) {
         const group = new Konva.Group({
           name: 'page-image-group',
@@ -193,7 +201,7 @@ export function PageImageLayer({
       layerRef.current.batchDraw();
       return baseBounds;
     },
-    [fitMode, applyImageFilters, syncGroupTransform]
+    [fitMode, applyImageFilters, syncGroupTransform, src]
   );
 
   // Initialize Konva Layer
@@ -302,6 +310,12 @@ export function PageImageLayer({
         fitMode
       );
       baseBoundsRef.current = baseBounds;
+
+      // Track texture size in LRU raster memory cache manager (AE-237)
+      if (src) {
+        const textureSizeBytes = (img.naturalWidth || img.width || 800) * (img.naturalHeight || img.height || 1000) * 4;
+        rasterCacheRef.current.setPageTexture(src, textureSizeBytes);
+      }
 
       // Initialize transform to base fit coordinates
       const initialTransform: PanZoomTransform = {

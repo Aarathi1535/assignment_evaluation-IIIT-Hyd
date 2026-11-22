@@ -27,6 +27,7 @@ import {
 } from '@/lib/canvasProfiling';
 
 import type { RenderedImageBounds } from '@/lib/annotations';
+import { shouldSampleStrokePoint } from '@/lib/lowCostTabletOptimizer';
 
 export interface PenLayerProps {
   /** Parent Konva stage instance */
@@ -107,6 +108,7 @@ export function PenLayer({
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
   const baseBoundsRef = useRef(baseBounds);
+  const lastStrokeSampleTimeRef = useRef<number>(0);
 
   useEffect(() => {
     transformRef.current = transform;
@@ -411,6 +413,12 @@ export function PenLayer({
     };
 
     const handlePointerMove = (e: PointerEvent) => {
+      // Throttle high-frequency stylus/touch events on constrained devices to protect the event loop (AE-237)
+      if (!shouldSampleStrokePoint(lastStrokeSampleTimeRef.current, e.timeStamp, 6)) {
+        return;
+      }
+      lastStrokeSampleTimeRef.current = e.timeStamp;
+
       const pointerEventTime = e.timeStamp;
       const isDevProfiling = isCanvasProfilingEnabled();
 
