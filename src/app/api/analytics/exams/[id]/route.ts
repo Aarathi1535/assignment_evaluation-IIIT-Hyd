@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { Permission, UserRole } from '../../../../../constants/permissions';
-import { requirePermission } from '../../../../../lib/apiAuth';
+import { canManageExam, requirePermission } from '../../../../../lib/apiAuth';
 import { connectDB } from '../../../../../lib/db';
 import {
     calculateDescriptiveStatistics,
@@ -10,7 +10,6 @@ import {
 } from '../../../../../lib/stats';
 import { ExamStatus } from '../../../../../models/Exam';
 import Rubric from '../../../../../models/Rubric';
-import ExamRepository from '../../../../../repositories/ExamRepository';
 import StudentResultService from '../../../../../services/StudentResultService';
 
 export const dynamic = 'force-dynamic';
@@ -40,13 +39,14 @@ export async function GET(
 
     try {
         await connectDB();
-        const exam = await ExamRepository.getExamById(id, auth.user.id, auth.user.role);
-        if (!exam) {
+        const manage = await canManageExam(auth.user, id);
+        if (!manage.canManage || !manage.exam) {
             return NextResponse.json(
-                { success: false, message: 'Exam not found', data: null },
-                { status: 404, headers: { 'Cache-Control': 'private, no-store' } }
+                { success: false, message: manage.errorMessage || 'Exam not found', data: null },
+                { status: manage.errorStatus === 200 ? 404 : manage.errorStatus, headers: { 'Cache-Control': 'private, no-store' } }
             );
         }
+        const exam = manage.exam;
         if (!exam.isActive || exam.status !== ExamStatus.PUBLISHED) {
             return NextResponse.json(
                 { success: false, message: 'Analytics are available only for published exams', data: null },

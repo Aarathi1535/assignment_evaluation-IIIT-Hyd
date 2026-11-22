@@ -46,22 +46,40 @@ export async function GET(request: NextRequest) {
     try {
         await connectDB();
 
-        const ownedExams = auth.user.role === UserRole.ADMIN
-            ? await Exam.find(examId ? { _id: examId } : {}).select('_id').lean()
-            : auth.user.role === UserRole.PROFESSOR
-                ? await Exam.find({
-                    createdBy: auth.user.id,
-                    ...(examId ? { _id: examId } : {})
-                }).select('_id').lean()
-                : [];
-        const ownedExamIds = ownedExams.map(exam => exam._id);
+        let ownedExamIds: mongoose.Types.ObjectId[] = [];
+        const activeCourses = await Course.find({ isActive: true }).select('_id').lean();
+        const activeCourseIds = activeCourses.map(c => c._id);
+        const activeExams = await Exam.find({
+            course: { $in: activeCourseIds },
+            isActive: true,
+            ...(examId ? { _id: examId } : {})
+        }).select('_id').lean();
+        const activeExamIds = activeExams.map(exam => exam._id);
+
+        if (auth.user.role === UserRole.ADMIN) {
+            ownedExamIds = activeExamIds;
+        } else if (auth.user.role === UserRole.PROFESSOR) {
+            const profCourses = await Course.find({
+                professor: new mongoose.Types.ObjectId(auth.user.id),
+                isActive: true
+            }).select('_id').lean();
+            const profCourseIds = profCourses.map(c => c._id);
+            const ownedExams = await Exam.find({
+                course: { $in: profCourseIds },
+                isActive: true,
+                ...(examId ? { _id: examId } : {})
+            }).select('_id').lean();
+            ownedExamIds = ownedExams.map(exam => exam._id);
+        }
+
         const baseFilter = examId ? { exam: new mongoose.Types.ObjectId(examId) } : {};
         const accessFilter = auth.user.role === UserRole.ADMIN
-            ? baseFilter
+            ? { ...baseFilter, exam: { $in: activeExamIds } }
             : auth.user.role === UserRole.TA
-                ? { ...baseFilter, assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
+                ? { ...baseFilter, exam: { $in: activeExamIds }, assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
                 : {
                     ...baseFilter,
+                    exam: { $in: activeExamIds },
                     $or: [
                         { exam: { $in: ownedExamIds } },
                         { assignedTo: new mongoose.Types.ObjectId(auth.user.id) }
@@ -139,7 +157,7 @@ export async function GET(request: NextRequest) {
             const student = studentById.get(item.student.toString());
             const course = exam ? courseById.get(exam.course.toString()) : undefined;
             const isExamOwner = auth.user.role === UserRole.ADMIN ||
-                (auth.user.role === UserRole.PROFESSOR && exam?.createdBy.toString() === auth.user.id);
+                (auth.user.role === UserRole.PROFESSOR && course?.professor.toString() === auth.user.id);
             const assignedTo = item.assignedTo ? candidateById.get(item.assignedTo.toString()) : undefined;
             const reviewers = (course && isExamOwner)
                 ? [...new Set([
