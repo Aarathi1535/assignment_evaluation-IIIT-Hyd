@@ -3,6 +3,7 @@ import CredentialsProvider from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { connectDB } from './db';
 import User, { UserRole } from '../models/User';
+import { getRecommendedCookieOptions } from './browserCompatibility';
 
 export const authOptions: AuthOptions = {
   providers: [
@@ -91,6 +92,12 @@ export const authOptions: AuthOptions = {
   session: {
     strategy: 'jwt',
     maxAge: 30 * 24 * 60 * 60, // 30 days
+  },
+  cookies: {
+    sessionToken: {
+      name: process.env.NODE_ENV === 'production' ? '__Secure-next-auth.session-token' : 'next-auth.session-token',
+      options: getRecommendedCookieOptions(process.env.NODE_ENV === 'production'),
+    },
   },
   events: {
     async signOut({ token }) {

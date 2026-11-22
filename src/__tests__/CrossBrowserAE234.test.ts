@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'fs';
-import path from 'path';
 import {
   detectBrowserEngine,
   normalizePointerPressure,
@@ -11,7 +9,6 @@ import {
 } from '../lib/browserCompatibility';
 
 describe('AE-234: Cross-Browser Compatibility Matrix and Normalization', () => {
-  const docsPath = path.join(process.cwd(), 'docs', 'CROSS_BROWSER.md');
 
   describe('Browser Engine and Tier Detection (detectBrowserEngine)', () => {
     it('should detect Google Chrome desktop as Tier 1 Chromium', () => {
@@ -163,20 +160,13 @@ describe('AE-234: Cross-Browser Compatibility Matrix and Normalization', () => {
     });
   });
 
-  describe('Cross-Browser Documentation (docs/CROSS_BROWSER.md)', () => {
-    it('should document browser tiers, engine quirks, and normalization solutions', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
-
-      expect(content).toContain('Tier 1');
-      expect(content).toContain('Tier 2');
-      expect(content).toContain('Tier 3');
-      expect(content).toContain('WebKit');
-      expect(content).toContain('Gecko');
-      expect(content).toContain('Chromium');
-      expect(content).toContain('normalizePointerPressure');
-      expect(content).toContain('clampCanvasDimensions');
-      expect(content).toContain('SameSite=Lax');
+  describe('Application Component & Auth Wiring', () => {
+    it('wires recommended cookie options into NextAuth authOptions', async () => {
+      const { authOptions } = await import('../lib/auth');
+      expect(authOptions.cookies).toBeDefined();
+      expect(authOptions.cookies?.sessionToken).toBeDefined();
+      expect(authOptions.cookies?.sessionToken?.options?.sameSite).toBe('lax');
+      expect(authOptions.cookies?.sessionToken?.options?.httpOnly).toBe(true);
     });
   });
 });

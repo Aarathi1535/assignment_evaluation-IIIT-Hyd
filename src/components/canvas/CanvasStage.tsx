@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import Konva from 'konva';
 import type { CanvasDimensions, CanvasStageProps } from './types';
+import { clampCanvasDimensions } from '@/lib/browserCompatibility';
 
 interface CanvasStageContextValue {
   stage: Konva.Stage | null;
@@ -40,8 +41,10 @@ export function CanvasStage({
   // Resize handler
   const handleDimensionUpdate = useCallback(
     (w: number, h: number) => {
-      const validW = Math.max(0, Math.floor(w));
-      const validH = Math.max(0, Math.floor(h));
+      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+      const clamped = clampCanvasDimensions(w, h, dpr);
+      const validW = Math.max(0, clamped.width);
+      const validH = Math.max(0, clamped.height);
 
       setDimensions((prev) => {
         if (prev.width === validW && prev.height === validH) return prev;
@@ -72,10 +75,13 @@ export function CanvasStage({
         ? height
         : containerRef.current.clientHeight || 600;
 
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    const clamped = clampCanvasDimensions(initialW, initialH, dpr);
+
     const newStage = new Konva.Stage({
       container: containerRef.current,
-      width: initialW,
-      height: initialH,
+      width: clamped.width,
+      height: clamped.height,
     });
 
     stageRef.current = newStage;
