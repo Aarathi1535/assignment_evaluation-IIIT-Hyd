@@ -13,7 +13,7 @@ export interface ClassroomAuthTokenPayload {
   exp: number;
 }
 
-const SECRET = process.env.CLASSROOM_AUTH_SECRET || process.env.NEXTAUTH_SECRET || 'classroom-activity-independent-secret-key-salt-32chars';
+const SECRET = process.env.CLASSROOM_AUTH_SECRET || process.env.CLASSROOM_JWT_SECRET || 'classroom-activity-independent-secret-key-salt-32chars';
 
 export function signClassroomToken(payload: Omit<ClassroomAuthTokenPayload, 'exp'>, expiresInSeconds = 7 * 24 * 3600): string {
   const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
@@ -105,20 +105,22 @@ export async function getClassroomUser(req?: NextRequest) {
     }
   }
 
-  // Fallback to NextAuth session in unified development environment
-  try {
-    const session = await getServerSession(authOptions);
-    if (session?.user) {
-      return {
-        id: session.user.id,
-        email: session.user.email || '',
-        name: session.user.name || '',
-        role: (session.user.role as ClassroomUserRole) || 'PROFESSOR',
-        exp: Math.floor(Date.now() / 1000) + 86400,
-      };
+  // Optional Phase 2 shared platform login: strictly disabled by default to guarantee auth isolation
+  if (process.env.CLASSROOM_ENABLE_SHARED_AUTH === 'true') {
+    try {
+      const session = await getServerSession(authOptions);
+      if (session?.user) {
+        return {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: session.user.name || '',
+          role: (session.user.role as ClassroomUserRole) || 'PROFESSOR',
+          exp: Math.floor(Date.now() / 1000) + 86400,
+        };
+      }
+    } catch {
+      // Non-blocking
     }
-  } catch {
-    // Non-blocking
   }
 
   return null;

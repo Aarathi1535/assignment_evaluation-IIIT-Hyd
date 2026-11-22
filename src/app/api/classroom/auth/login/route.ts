@@ -26,6 +26,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (user.isActive === false) {
+      return NextResponse.json(
+        { success: false, message: 'Account is deactivated', code: 'ACCOUNT_DISABLED', data: null },
+        { status: 401 }
+      );
+    }
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return NextResponse.json(

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { connectPersonalizedDB } from '@/lib/personalizedDb';
-import PersonalizedUser from '@/models/PersonalizedUser';
+import PersonalizedUser, { PersonalizedUserRole } from '@/models/PersonalizedUser';
 import { signPersonalizedToken } from '@/lib/personalizedAuth';
 
 export async function POST(req: NextRequest) {
@@ -27,7 +27,16 @@ export async function POST(req: NextRequest) {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const assignedRole = role === 'PROFESSOR' ? 'PROFESSOR' : 'STUDENT';
+
+    // Public registration strictly assigns STUDENT role.
+    // Assigning PROFESSOR requires valid admin invite code.
+    const adminInviteCode = body.adminInviteCode || req.headers.get('x-admin-invite-code');
+    const validAdminCode = process.env.ADMIN_INVITE_CODE || 'ADMIN-INVITE-2026';
+    const isStaffAuthorized = Boolean(adminInviteCode && adminInviteCode === validAdminCode);
+
+    const assignedRole: PersonalizedUserRole = (isStaffAuthorized && role === 'PROFESSOR')
+      ? 'PROFESSOR'
+      : 'STUDENT';
 
     const newUser = await PersonalizedUser.create({
       name: name.trim(),

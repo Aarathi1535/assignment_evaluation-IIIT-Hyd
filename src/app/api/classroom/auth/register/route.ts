@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { connectClassroomDB } from '@/lib/classroomDb';
-import ClassroomUser from '@/models/ClassroomUser';
+import ClassroomUser, { ClassroomUserRole } from '@/models/ClassroomUser';
 import { signClassroomToken } from '@/lib/classroomAuth';
 
 export async function POST(req: NextRequest) {
@@ -27,7 +27,18 @@ export async function POST(req: NextRequest) {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const assignedRole = role === 'STUDENT' ? 'STUDENT' : role === 'TA' ? 'TA' : 'PROFESSOR';
+
+    // Public registration strictly assigns STUDENT role.
+    // Assigning PROFESSOR or TA requires valid admin invite code.
+    const adminInviteCode = body.adminInviteCode || req.headers.get('x-admin-invite-code');
+    const validAdminCode = process.env.ADMIN_INVITE_CODE || 'ADMIN-INVITE-2026';
+    const isStaffAuthorized = Boolean(adminInviteCode && adminInviteCode === validAdminCode);
+
+    let assignedRole: ClassroomUserRole = 'STUDENT';
+    if (isStaffAuthorized) {
+      if (role === 'PROFESSOR') assignedRole = 'PROFESSOR';
+      else if (role === 'TA') assignedRole = 'TA';
+    }
 
     const newUser = await ClassroomUser.create({
       name: name.trim(),

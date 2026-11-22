@@ -13,7 +13,7 @@ export interface PersonalizedAuthTokenPayload {
   exp: number;
 }
 
-const SECRET = process.env.PERSONALIZED_AUTH_SECRET || process.env.NEXTAUTH_SECRET || 'personalized-learning-independent-secret-key-salt-32chars';
+const SECRET = process.env.PERSONALIZED_AUTH_SECRET || process.env.PERSONALIZED_JWT_SECRET || 'personalized-learning-independent-secret-key-salt-32chars';
 
 export function signPersonalizedToken(payload: Omit<PersonalizedAuthTokenPayload, 'exp'>, expiresInSeconds = 7 * 24 * 3600): string {
   const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
@@ -66,20 +66,22 @@ export async function getPersonalizedUser(req?: NextRequest) {
     }
   }
 
-  // Fallback to NextAuth session in unified development environment
-  try {
-    const session = await getServerSession(authOptions);
-    if (session?.user) {
-      return {
-        id: session.user.id,
-        email: session.user.email || '',
-        name: session.user.name || '',
-        role: (session.user.role as PersonalizedUserRole) || 'STUDENT',
-        exp: Math.floor(Date.now() / 1000) + 86400,
-      };
+  // Optional Phase 2 shared platform login: strictly disabled by default to guarantee auth isolation
+  if (process.env.PERSONALIZED_ENABLE_SHARED_AUTH === 'true') {
+    try {
+      const session = await getServerSession(authOptions);
+      if (session?.user) {
+        return {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: session.user.name || '',
+          role: (session.user.role as PersonalizedUserRole) || 'STUDENT',
+          exp: Math.floor(Date.now() / 1000) + 86400,
+        };
+      }
+    } catch {
+      // Non-blocking
     }
-  } catch {
-    // Non-blocking
   }
 
   return null;

@@ -35,7 +35,7 @@ const ClassroomUserSchema = new Schema<IClassroomUser>(
     role: {
       type: String,
       enum: ['PROFESSOR', 'STUDENT', 'TA'],
-      default: 'PROFESSOR',
+      default: 'STUDENT',
     },
     department: {
       type: String,
