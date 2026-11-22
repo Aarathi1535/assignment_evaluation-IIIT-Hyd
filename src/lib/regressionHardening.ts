@@ -29,24 +29,24 @@ export interface MarkSanitizationResult {
 }
 
 /**
- * Evaluates whether an examination regrade window is open with clock-skew compensation.
+ * Evaluates whether an examination regrade window is open.
+ * Strictly enforces start and end deadlines with NO late grace period.
  */
 export function isRegradeWindowOpen(
   windowStart: Date | string | number,
   windowEnd: Date | string | number,
-  currentTimestamp: Date | string | number = Date.now(),
-  clockSkewToleranceMs = 5000
+  currentTimestamp: Date | string | number = Date.now()
 ): RegradeWindowStatus {
   const start = new Date(windowStart).getTime();
   const end = new Date(windowEnd).getTime();
   const now = new Date(currentTimestamp).getTime();
 
-  if (isNaN(start) || isNaN(end) || isNaN(now)) {
+  if (isNaN(start) || isNaN(end) || isNaN(now) || start > end) {
     throw new Error('Invalid date parameter provided to isRegradeWindowOpen');
   }
 
   // Before window start
-  if (now < start - clockSkewToleranceMs) {
+  if (now < start) {
     return {
       isOpen: false,
       status: 'NOT_OPEN_YET',
@@ -54,8 +54,8 @@ export function isRegradeWindowOpen(
     };
   }
 
-  // Within window (with grace tolerance at the closing boundary)
-  if (now <= end + clockSkewToleranceMs) {
+  // Strictly within window (no late grace tolerance)
+  if (now <= end) {
     const remainingMs = Math.max(0, end - now);
     return {
       isOpen: true,

@@ -1,3 +1,5 @@
+import { isRegradeWindowOpen as hardenedIsRegradeWindowOpen } from '../lib/regressionHardening';
+
 export interface RegradeWindow {
     regradeWindowOpensAt?: Date | null;
     regradeWindowClosesAt?: Date | null;
@@ -13,13 +15,11 @@ export function isRegradeWindowOpen(
         return false;
     }
 
-    const nowTime = now.getTime();
-    const opensTime = opensAt.getTime();
-    const closesTime = closesAt.getTime();
-    return Number.isFinite(nowTime)
-        && Number.isFinite(opensTime)
-        && Number.isFinite(closesTime)
-        && opensTime <= nowTime
-        && nowTime <= closesTime;
+    try {
+        const result = hardenedIsRegradeWindowOpen(opensAt, closesAt, now);
+        return result.isOpen;
+    } catch {
+        return false;
+    }
 }
 

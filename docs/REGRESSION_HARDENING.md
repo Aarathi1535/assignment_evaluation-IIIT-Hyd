@@ -22,7 +22,7 @@ Prior to final demonstration and institutional handover, a comprehensive regress
 | **1. Ingestion** | Spoofed MIME-type upload (e.g. `.exe` renamed to `.pdf`) | Ingestion worker crash or buffer overflow | `detectFileTypeByMagicBytes` inspects binary headers; `validatePayloadSize` caps memory allocation at 15 MB. |
 | **2. Concurrency**| Concurrent TA grading on same student script | Silent overwrite of marks and annotations | MongoDB replica set transactions with version locks; second write fails with conflict status. |
 | **3. Offline Sync**| TA opens grading workspace in multiple browser tabs | Outdated tab overwrites newer annotations | `resolveDraftConflict` evaluates monotonic version vectors; higher version wins deterministically. |
-| **4. Regrades** | Submission at the exact closing second of the 7-day window | Client/server clock skew causes false 403 rejection | `isRegradeWindowOpen` incorporates a 5,000 ms clock-skew grace period at the closing boundary. |
+| **4. Regrades** | Submission after window expiration | Late regrades admitted past deadline | `isRegradeWindowOpen` strictly enforces start and end deadlines with zero grace period. |
 | **4. Scoring** | Manual input of negative marks, `NaN`, or non-step fractions | Database corruption or score calculation anomalies | `sanitizeMark` strictly validates numeric bounds `[0, maxMarks]` and snaps to rubric score step (e.g. 0.5). |
 | **5. Storage** | Tampering with stored physical scans or audit records | Academic dispute or grading audit failure | SHA-256 HMAC cryptographic seals verified via `verifyIntegrity.ts`; GCS WORM object locks prevent deletion. |
 
@@ -34,12 +34,10 @@ Prior to final demonstration and institutional handover, a comprehensive regress
 ```
 [Day 0: Results Published] ──────────────────────────────────────────► [Day 7: Window Closes]
                                                                                 │
-                                                                                ├─► Within closing second: ACCEPTED
-                                                                                ├─► Up to +5000ms (Clock Skew): ACCEPTED
-                                                                                └─► > +5001ms: REJECTED (HTTP 403 EXPIRED)
+                                                                                ├─► Within window (now <= end): ACCEPTED (OPEN)
+                                                                                └─► Past deadline (now > end): REJECTED (EXPIRED, HTTP 403)
 ```
-- **Clock Skew Compensation**: Evaluates `isRegradeWindowOpen(start, end, now, toleranceMs = 5000)`.
-- Eliminates student frustration caused by NTP drift between campus client devices and cloud server instances.
+- **Strict Boundary Enforcement**: Evaluates `isRegradeWindowOpen(start, end, now)`. No late submissions or clock-skew grace periods are permitted, ensuring fairness across all student submissions.
 
 ### 3.2 Offline Draft Conflict Resolution
 When an evaluator edits an exam question across multiple devices or browser tabs:

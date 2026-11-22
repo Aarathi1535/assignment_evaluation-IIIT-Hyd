@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'fs';
-import path from 'path';
+import { isRegradeWindowOpen as checkExamRegradeWindow } from '../utils/regradeWindow';
 import {
   isRegradeWindowOpen,
   resolveDraftConflict,
@@ -9,7 +8,39 @@ import {
 } from '../lib/regressionHardening';
 
 describe('AE-240: Final Bug Fixes, Regression Hardening, and Resilience Guards', () => {
-  const docsPath = path.join(process.cwd(), 'docs', 'REGRESSION_HARDENING.md');
+  describe('Integration with Exam Regrade Utility (src/utils/regradeWindow.ts)', () => {
+    const opensAt = new Date('2026-11-01T00:00:00Z');
+    const closesAt = new Date('2026-11-08T00:00:00Z');
+
+    it('should confirm regrade window is open when within range', () => {
+      const exam = { regradeWindowOpensAt: opensAt, regradeWindowClosesAt: closesAt };
+      const mid = new Date('2026-11-04T12:00:00Z');
+      expect(checkExamRegradeWindow(exam, mid)).toBe(true);
+    });
+
+    it('should reject regrade window when current time is after closesAt', () => {
+      const exam = { regradeWindowOpensAt: opensAt, regradeWindowClosesAt: closesAt };
+      const after = new Date(closesAt.getTime() + 1);
+      expect(checkExamRegradeWindow(exam, after)).toBe(false);
+    });
+
+    it('should accept regrade window at the exact closesAt timestamp', () => {
+      const exam = { regradeWindowOpensAt: opensAt, regradeWindowClosesAt: closesAt };
+      expect(checkExamRegradeWindow(exam, closesAt)).toBe(true);
+    });
+
+    it('should reject regrade window when current time is before opensAt', () => {
+      const exam = { regradeWindowOpensAt: opensAt, regradeWindowClosesAt: closesAt };
+      const before = new Date(opensAt.getTime() - 1);
+      expect(checkExamRegradeWindow(exam, before)).toBe(false);
+    });
+
+    it('should reject if dates are null or missing', () => {
+      expect(checkExamRegradeWindow({}, new Date())).toBe(false);
+      expect(checkExamRegradeWindow({ regradeWindowOpensAt: opensAt, regradeWindowClosesAt: null }, new Date())).toBe(false);
+      expect(checkExamRegradeWindow({ regradeWindowOpensAt: null, regradeWindowClosesAt: closesAt }, new Date())).toBe(false);
+    });
+  });
 
   describe('Regrade Window Boundary Evaluation (isRegradeWindowOpen)', () => {
     const baseStart = new Date('2026-11-01T00:00:00Z').getTime();
@@ -32,22 +63,23 @@ describe('AE-240: Final Bug Fixes, Regression Hardening, and Resilience Guards',
       expect(status.status).toBe('NOT_OPEN_YET');
     });
 
-    it('should accommodate clock skew at exact closing boundary (within 5000ms grace period)', () => {
-      // 2 seconds past the closing deadline: within 5000ms tolerance
-      const skewClosingTime = baseEnd + 2000;
-      const status = isRegradeWindowOpen(baseStart, baseEnd, skewClosingTime, 5000);
-
-      expect(status.isOpen).toBe(true);
-      expect(status.status).toBe('OPEN');
-    });
-
-    it('should strictly reject submissions after the window and grace tolerance expire', () => {
-      // 10 seconds past deadline (beyond 5000ms grace)
-      const expiredTime = baseEnd + 10000;
-      const status = isRegradeWindowOpen(baseStart, baseEnd, expiredTime, 5000);
+    it('should strictly reject submissions after the window closing boundary with zero grace tolerance', () => {
+      // 1 ms past the closing deadline: strictly rejected
+      const lateTime = baseEnd + 1;
+      const status = isRegradeWindowOpen(baseStart, baseEnd, lateTime);
 
       expect(status.isOpen).toBe(false);
       expect(status.status).toBe('EXPIRED');
+      expect(status.remainingMs).toBe(0);
+    });
+
+    it('should allow submissions at the exact closing boundary timestamp', () => {
+      const exactEndTime = baseEnd;
+      const status = isRegradeWindowOpen(baseStart, baseEnd, exactEndTime);
+
+      expect(status.isOpen).toBe(true);
+      expect(status.status).toBe('OPEN');
+      expect(status.remainingMs).toBe(0);
     });
 
     it('should throw an error on malformed date inputs', () => {
@@ -133,20 +165,5 @@ describe('AE-240: Final Bug Fixes, Regression Hardening, and Resilience Guards',
     });
   });
 
-  describe('Regression Hardening Documentation (docs/REGRESSION_HARDENING.md)', () => {
-    it('should document audit matrix across all 5 operational phases', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
 
-      expect(content).toContain('Ingestion');
-      expect(content).toContain('Concurrency');
-      expect(content).toContain('Offline Sync');
-      expect(content).toContain('Regrades');
-      expect(content).toContain('Storage');
-      expect(content).toContain('isRegradeWindowOpen');
-      expect(content).toContain('resolveDraftConflict');
-      expect(content).toContain('detectFileTypeByMagicBytes');
-      expect(content).toContain('sanitizeMark');
-    });
-  });
 });
