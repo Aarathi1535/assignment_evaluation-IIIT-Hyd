@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
+import { EJSON } from 'bson';
 import mongoose from 'mongoose';
 import { connectDB } from '../lib/db';
 
@@ -28,6 +29,32 @@ export interface BackupOptions {
   connection?: mongoose.Connection;
 }
 
+/**
+ * Computes a deterministic SHA-256 hash across all manifest metadata including collection checksums.
+ */
+export function computeManifestHash(manifest: Omit<BackupManifest, 'manifestSha256'>): string {
+  const sortedCollections = Object.keys(manifest.collections)
+    .sort()
+    .reduce<Record<string, CollectionBackupMeta>>((acc, key) => {
+      acc[key] = manifest.collections[key];
+      return acc;
+    }, {});
+
+  const canonicalPayload = {
+    version: manifest.version,
+    timestamp: manifest.timestamp,
+    database: manifest.database,
+    totalDocuments: manifest.totalDocuments,
+    collections: sortedCollections,
+  };
+
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalPayload)).digest('hex');
+}
+
+/**
+ * Creates an offline BSON/Canonical EJSON database backup.
+ * Preserves MongoDB types (ObjectId, Date, Binary) using Canonical EJSON.
+ */
 export async function createDatabaseBackup(options: BackupOptions = {}): Promise<{
   backupDir: string;
   manifest: BackupManifest;
@@ -49,7 +76,7 @@ export async function createDatabaseBackup(options: BackupOptions = {}): Promise
     throw new Error('Database connection is not ready or has no active db instance');
   }
 
-  // Enumerate collections
+  // Enumerate non-system collections
   const collectionsList = await db.listCollections().toArray();
   const availableCollectionNames = collectionsList
     .map((c) => c.name)
@@ -60,7 +87,7 @@ export async function createDatabaseBackup(options: BackupOptions = {}): Promise
     : availableCollectionNames;
 
   const manifest: BackupManifest = {
-    version: '1.0.0',
+    version: '2.0.0',
     timestamp: new Date().toISOString(),
     database: db.databaseName,
     collections: {},
@@ -70,7 +97,9 @@ export async function createDatabaseBackup(options: BackupOptions = {}): Promise
   for (const colName of targetCollections) {
     const col = db.collection(colName);
     const docs = await col.find({}).sort({ _id: 1 }).toArray();
-    const serialized = JSON.stringify(docs, null, 2);
+
+    // Use Canonical EJSON to preserve BSON types (ObjectId, Date, Binary, etc.)
+    const serialized = EJSON.stringify(docs, { relaxed: false }, 2);
 
     const hash = crypto.createHash('sha256').update(serialized).digest('hex');
     const isCompressed = options.compress ?? false;
@@ -93,10 +122,8 @@ export async function createDatabaseBackup(options: BackupOptions = {}): Promise
     manifest.totalDocuments += docs.length;
   }
 
-  // Compute overall manifest hash (excluding manifestSha256 property itself)
-  const manifestRaw = JSON.stringify(manifest, Object.keys(manifest).sort(), 2);
-  const manifestHash = crypto.createHash('sha256').update(manifestRaw).digest('hex');
-  manifest.manifestSha256 = manifestHash;
+  // Seal manifest with deterministic SHA-256 hash across collection metadata and hashes
+  manifest.manifestSha256 = computeManifestHash(manifest);
 
   fs.writeFileSync(path.join(backupDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 
@@ -109,6 +136,7 @@ if (require.main === module) {
     .then(({ backupDir, manifest }) => {
       console.log(`✅ Backup successfully created at: ${backupDir}`);
       console.log(`📦 Total documents: ${manifest.totalDocuments} across ${Object.keys(manifest.collections).length} collections`);
+      console.log(`🔒 Manifest SHA-256: ${manifest.manifestSha256}`);
       process.exit(0);
     })
     .catch((err) => {

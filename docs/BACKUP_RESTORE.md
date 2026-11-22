@@ -1,6 +1,6 @@
-# Backup, Disaster Recovery Procedures, and Restoration Engine (AE-233)
+# Backup, Disaster Recovery Procedures, and Restoration Strategy (AE-233)
 
-This document establishes the official disaster recovery (DR) strategy, recovery objectives, automated backup procedures, integrity verification protocols, and step-by-step restoration runbook for the IIIT Hyderabad Assignment Evaluation Platform.
+This document establishes the official disaster recovery (DR) architecture, recovery objectives, production MongoDB Atlas backup procedures, and offline backup/restoration tooling for the IIIT Hyderabad Assignment Evaluation Platform.
 
 ---
 
@@ -8,162 +8,92 @@ This document establishes the official disaster recovery (DR) strategy, recovery
 
 | Metric | Target | Description & Mechanism |
 |--------|--------|-------------------------|
-| **RPO** (Recovery Point Objective) | **< 1 hour** | Maximum acceptable data loss window. Supported via MongoDB Atlas continuous oplog tailing, hourly snapshots, and idempotent event replay. |
-| **RTO** (Recovery Time Objective) | **< 30 minutes** | Maximum allowable platform downtime during a disaster. Script-based restore engine restores typical 5,000-page exam datasets in under 5 minutes. |
+| **RPO** (Recovery Point Objective) | **< 1 hour** | Maximum acceptable data loss window. Supported in production via MongoDB Atlas continuous oplog tailing (Point-in-Time Recovery with 1-minute granularity). |
+| **RTO** (Recovery Time Objective) | **< 30 minutes** | Maximum allowable platform downtime during a disaster event. Achieved through automated Atlas snapshot restore or point-in-time replica set provisioning. |
 
 ---
 
-## 2. Multi-Tiered Backup Architecture
+## 2. Production Backup Architecture: MongoDB Atlas Cloud Backups
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Primary Operations Layer                        │
-│  - Cloud Run / App Pods                                               │
-│  - MongoDB Atlas M10 Replica Set (3-node cross-AZ in Mumbai)          │
-│  - GCS Standard Bucket (Encrypted, Versioning Enabled)                │
-└────────────────────────────────────┬───────────────────────────────────┘
-                                     │
-           ┌─────────────────────────┴─────────────────────────┐
-           │                                                   │
-           ▼                                                   ▼
-┌───────────────────────────────┐           ┌───────────────────────────────────┐
-│     Automated PITR Backups    │           │    Portable Application Backups   │
-│ - Continuous oplog retention  │           │ - Timestamped snapshot manifests  │
-│ - 7-day granular rollback     │           │ - Per-collection SHA-256 checksum │
-│ - Daily Atlas snapshots       │           │ - Gzip compressed collection dumps│
-└───────────────────────────────┘           └─────────────────┬─────────────────┘
-                                                              │
-                                                              ▼
-                                            ┌───────────────────────────────────┐
-                                            │      Encrypted Offsite Storage    │
-                                            │ - Coldline / Archive GCS bucket   │
-                                            │ - WORM Object Retention Policy    │
-                                            │ - Geo-redundant storage           │
-                                            └───────────────────────────────────┘
-```
+In production, backups are managed natively by **MongoDB Atlas** rather than application-layer cron scripts. This ensures zero CPU/memory overhead on Cloud Run application containers and eliminates risks of lock contention or partial snapshots.
+
+### Key Capabilities:
+1. **Continuous Cloud Backups (Point-in-Time Recovery - PITR)**:
+   - Atlas continuously streams the MongoDB oplog to dedicated cloud backup storage.
+   - Allows restoring the cluster to any exact second within the 7-day retention window.
+2. **Automated Scheduled Snapshots**:
+   - Daily snapshots retained for 30 days.
+   - Weekly snapshots retained for 12 weeks.
+3. **Cross-Region Redundancy**:
+   - Snapshot data is geo-redundantly stored to protect against regional cloud outages.
+
+### Production Restoration Procedures (Atlas):
+When disaster recovery is required:
+1. Navigate to **MongoDB Atlas Console** > **Deployment** > **Database** > **Backups**.
+2. Select **Restore** and choose between:
+   - **Point in Time**: Enter the target timestamp immediately preceding the corruption or incident.
+   - **Snapshot**: Select the desired daily snapshot.
+3. Choose the destination:
+   - **Restore to New Cluster** (Recommended for forensic verification and disaster drills).
+   - **Restore In-Place** (Overwrites existing cluster once confirmed by lead infrastructure engineer).
 
 ---
 
-## 3. Backup Retention Schedule
+## 3. Offline Backup & Restore Utilities (`src/scripts/`)
 
-| Tier | Frequency | Retention Window | Storage Target |
-|------|-----------|------------------|----------------|
-| **Nearline Oplog** | Continuous | 7 days | MongoDB Atlas Managed Cloud Backup |
-| **Hourly Snapshots** | Every 60 min | 48 hours | GCS Nearline (`iiit-eval-backups-hourly`) |
-| **Daily Snapshots** | Daily at 02:00 IST | 30 days | GCS Coldline (`iiit-eval-backups-daily`) |
-| **Semester Archives** | Post-Grading Complete | 3 Years | GCS Archive with Object Lock (WORM) |
+For local development, testing, staging data transfers, and offline disaster drills, the platform provides dedicated TypeScript utilities:
+- `src/scripts/backupDatabase.ts`
+- `src/scripts/restoreDatabase.ts`
+
+> [!WARNING]
+> These offline scripts are intended for developer workstations, CI testing, and staging environments. Production disaster recovery must always utilize MongoDB Atlas Point-in-Time Recovery.
+
+### 1. BSON Type Preservation (Canonical EJSON)
+Standard `JSON.stringify` drops BSON data types, converting MongoDB `ObjectId`, `Date`, and `Binary` buffers into plain strings, which corrupts database references upon restoration.
+The backup engine uses **Canonical EJSON** (`import { EJSON } from 'bson'`), faithfully preserving all MongoDB data types:
+- `_id: { "$oid": "..." }` -> deserialized as `ObjectId`
+- `createdAt: { "$date": "..." }` -> deserialized as native `Date`
+- `data: { "$binary": ... }` -> deserialized as BSON `Binary`
+
+### 2. Cryptographic Manifest Integrity (`manifestSha256`)
+Every backup generates a `manifest.json` recording:
+- Database name, ISO timestamp, and document counts.
+- SHA-256 checksum for every collection dump.
+- An overall `manifestSha256` seal calculated across the entire manifest structure.
+
+Before modifying any collection during restoration, `restoreDatabase.ts`:
+1. Recomputes and validates `manifestSha256` against the manifest contents.
+2. Computes the SHA-256 hash of each collection file on disk and verifies an exact match against the manifest checksum. If any file has been modified or corrupted, restoration immediately aborts without touching the database.
+
+### 3. Operational Safety Guards
+To prevent accidental data loss:
+- **Production Guard**: Restoration is unconditionally blocked if `NODE_ENV === 'production'` unless `allowProductionRestore: true` (or `--allow-production-restore`) is passed.
+- **Confirmation for Destructive Drops**: The `--drop-existing` option requires an explicit `--confirm-destructive` flag. Drops are never performed by default.
+- **Atomic Transactions**: When connected to a replica set (transactions enabled), restoration runs inside `session.withTransaction()`. Any error triggers an immediate, atomic rollback.
 
 ---
 
-## 4. Automated Backup Utility (`src/scripts/backupDatabase.ts`)
-
-The backup utility exports all database collections into deterministic JSON or Gzip archives and produces a cryptographically sealed `manifest.json`.
-
-### Features:
-- **Per-Collection Hashing**: Every collection archive is hashed with SHA-256.
-- **Manifest Tamper Detection**: The manifest contains record counts and file hashes, sealed with an overall `manifestSha256`.
-- **Zero Downtime**: Reads are executed using non-locking queries compatible with active grading operations.
+## 4. Using the Offline Utilities
 
 ### Running a Backup:
 ```bash
-# Standard backup (JSON format)
+# Standard compressed backup (.json.gz)
 npx tsx src/scripts/backupDatabase.ts
 
-# Programmatic invocation in TypeScript
-import { createDatabaseBackup } from './src/scripts/backupDatabase';
+# Programmatic invocation
+import { createDatabaseBackup } from '../scripts/backupDatabase';
 
 const { backupDir, manifest } = await createDatabaseBackup({
   compress: true,
-  targetDir: './backups/backup-2026-11-19',
+  targetDir: './backups/backup-2026-11-22',
 });
 ```
 
-Sample `manifest.json`:
-```json
-{
-  "version": "1.0.0",
-  "timestamp": "2026-11-19T12:00:00.000Z",
-  "database": "assignment-evaluator",
-  "collections": {
-    "courses": {
-      "name": "courses",
-      "count": 5,
-      "sha256": "3a8b...1f2",
-      "fileName": "courses.json.gz"
-    },
-    "auditlogs": {
-      "name": "auditlogs",
-      "count": 1420,
-      "sha256": "9b12...c44",
-      "fileName": "auditlogs.json.gz"
-    }
-  },
-  "totalDocuments": 1425,
-  "manifestSha256": "7e14...a09"
-}
-```
-
----
-
-## 5. Deterministic Restoration Engine (`src/scripts/restoreDatabase.ts`)
-
-The restore engine provides guaranteed recovery with strict pre-flight validation.
-
-### Pre-flight Integrity Guarantees:
-1. **Checksum Verification**: Before modifying any collection, the engine decompresses and recomputes the SHA-256 hash of every collection file, validating it against `manifest.json`. If even one byte differs, restore immediately halts.
-2. **Schema & Array Validation**: Verifies that files contain valid document arrays.
-3. **Dry-Run Mode (`--dry-run`)**: Allows operators to test backup integrity, disk access, and database connectivity without altering any live records.
-
 ### Running a Restore:
-
-#### 1. Dry-Run Verification (Mandatory First Step)
 ```bash
-npx tsx src/scripts/restoreDatabase.ts backups/backup-2026-11-19 --dry-run
-```
+# 1. Dry-run verification (recomputes checksums, does not modify database)
+npx tsx src/scripts/restoreDatabase.ts backups/backup-2026-11-22 --dry-run
 
-Output:
-```
-✅ [DRY RUN] Restore completed successfully!
-📦 Validated 1,425 documents across 2 collections (Checksums 100% matched)
-```
-
-#### 2. Live Database Restoration
-```bash
-npx tsx src/scripts/restoreDatabase.ts backups/backup-2026-11-19
-```
-
----
-
-## 6. Disaster Recovery Drill Runbook
-
-Follow this step-by-step checklist during a disaster recovery drill or live recovery event:
-
-```
-[Phase 1: Incident Isolation]
-  │
-  ├─► 1. Divert traffic to Maintenance Page (set CLOUD_RUN_MAINTENANCE=true)
-  ├─► 2. Lock write permissions on corrupted cluster
-  │
-[Phase 2: Backup Selection & Verification]
-  │
-  ├─► 3. Identify target backup directory (local or pulled from GCS)
-  ├─► 4. Run Dry-Run verification:
-  │      `npx tsx src/scripts/restoreDatabase.ts <backup_dir> --dry-run`
-  │      (Verify: all collection checksums return OK)
-  │
-[Phase 3: Restoration]
-  │
-  ├─► 5. Execute live restoration:
-  │      `npx tsx src/scripts/restoreDatabase.ts <backup_dir>`
-  │
-[Phase 4: Post-Restore Audit & Health Check]
-  │
-  ├─► 6. Run audit log HMAC seal verification:
-  │      `npx tsx src/scripts/verifyIntegrity.ts`
-  ├─► 7. Query `/api/health` to confirm MongoDB connectivity
-  ├─► 8. Verify document counts against manifest totals
-  │
-[Phase 5: Resumption]
-  │
-  └─► 9. Route traffic back to platform and monitor latency
+# 2. Live restore (requires explicit confirmation if dropping existing collections)
+npx tsx src/scripts/restoreDatabase.ts backups/backup-2026-11-22 --drop-existing --confirm-destructive
 ```

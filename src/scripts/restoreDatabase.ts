@@ -2,14 +2,17 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
+import { EJSON } from 'bson';
 import mongoose from 'mongoose';
-import { connectDB } from '../lib/db';
-import { BackupManifest } from './backupDatabase';
+import { connectDB, isTransactionCapable } from '../lib/db';
+import { BackupManifest, computeManifestHash } from './backupDatabase';
 
 export interface RestoreOptions {
   backupDir: string;
   dryRun?: boolean;
   dropExisting?: boolean;
+  confirmDestructive?: boolean;
+  allowProductionRestore?: boolean;
   collections?: string[];
   connection?: mongoose.Connection;
 }
@@ -23,15 +26,49 @@ export interface RestoreResult {
 }
 
 export async function restoreDatabase(options: RestoreOptions): Promise<RestoreResult> {
-  const { backupDir, dryRun = false, dropExisting = false } = options;
-  const manifestPath = path.join(backupDir, 'manifest.json');
+  const { backupDir, dryRun = false, dropExisting = false, confirmDestructive = false } = options;
 
+  // Safety Guard 1: Block production restoration unless explicitly granted
+  if (process.env.NODE_ENV === 'production' && !options.allowProductionRestore) {
+    throw new Error(
+      'CRITICAL SAFETY ERROR: Direct database restoration is blocked in NODE_ENV=production. ' +
+      'Use MongoDB Atlas Point-in-Time Recovery (PITR) for production disaster recovery, ' +
+      'or pass allowProductionRestore: true for verified recovery drills.'
+    );
+  }
+
+  // Safety Guard 2: Require explicit confirmation for destructive collection drop
+  if (dropExisting && !confirmDestructive && !dryRun) {
+    throw new Error(
+      'DESTRUCTIVE OPERATION BLOCKED: dropExisting requires explicit confirmDestructive: true'
+    );
+  }
+
+  const manifestPath = path.join(backupDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
     throw new Error(`Backup manifest not found at: ${manifestPath}`);
   }
 
   const manifestRaw = fs.readFileSync(manifestPath, 'utf8');
-  const manifest: BackupManifest = JSON.parse(manifestRaw);
+  let manifest: BackupManifest;
+  try {
+    manifest = JSON.parse(manifestRaw);
+  } catch (err) {
+    throw new Error(`Invalid manifest JSON format: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const errors: string[] = [];
+
+  // Safety Guard 3: Verify manifest integrity seal before processing
+  if (!manifest.manifestSha256) {
+    errors.push('Backup manifest is missing manifestSha256 integrity seal');
+  } else {
+    const { manifestSha256, ...manifestWithoutHash } = manifest;
+    const expectedManifestHash = computeManifestHash(manifestWithoutHash);
+    if (manifestSha256 !== expectedManifestHash) {
+      errors.push(`Manifest integrity hash mismatch: expected ${expectedManifestHash}, got ${manifestSha256}`);
+    }
+  }
 
   let conn = options.connection;
   if (!conn) {
@@ -50,7 +87,6 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
 
   const restoredCollections: Record<string, { count: number; verifiedSha256: boolean }> = {};
   let totalDocs = 0;
-  const errors: string[] = [];
 
   // Step 1: Pre-flight Integrity & Checksum Verification
   const parsedDataPerCollection: Record<string, Record<string, unknown>[]> = {};
@@ -86,9 +122,10 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
     }
 
     try {
-      const docs = JSON.parse(uncompressedContent);
+      // Deserialize with Canonical EJSON to faithfully restore ObjectIds, Dates, and Binary
+      const docs = EJSON.parse(uncompressedContent) as Record<string, unknown>[];
       if (!Array.isArray(docs)) {
-        errors.push(`File for collection '${colName}' does not contain a JSON array of documents`);
+        errors.push(`File for collection '${colName}' does not contain an array of documents`);
         continue;
       }
       parsedDataPerCollection[colName] = docs;
@@ -99,7 +136,7 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
       totalDocs += docs.length;
     } catch (parseErr: unknown) {
       const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-      errors.push(`Failed to parse JSON for collection '${colName}': ${msg}`);
+      errors.push(`Failed to parse EJSON for collection '${colName}': ${msg}`);
     }
   }
 
@@ -123,21 +160,41 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
     };
   }
 
-  // Step 3: Execution / Restore into Database
-  for (const colName of targetCollectionNames) {
-    const docs = parsedDataPerCollection[colName];
-    const col = db.collection(colName);
+  // Step 3: Transactional Execution (if replica set supports transactions)
+  const supportsTransactions = isTransactionCapable(conn);
 
-    if (dropExisting) {
-      await col.deleteMany({});
+  if (supportsTransactions) {
+    const session = await conn.startSession();
+    try {
+      await session.withTransaction(async () => {
+        for (const colName of targetCollectionNames) {
+          const docs = parsedDataPerCollection[colName];
+          const col = db.collection(colName);
+
+          if (dropExisting) {
+            await col.deleteMany({}, { session });
+          }
+
+          if (docs.length > 0) {
+            await col.insertMany(docs, { ordered: false, session });
+          }
+        }
+      });
+    } finally {
+      await session.endSession();
     }
+  } else {
+    // Standalone fallback for isolated local development
+    for (const colName of targetCollectionNames) {
+      const docs = parsedDataPerCollection[colName];
+      const col = db.collection(colName);
 
-    if (docs.length > 0) {
-      // Restore documents in batches of 500
-      const batchSize = 500;
-      for (let i = 0; i < docs.length; i += batchSize) {
-        const batch = docs.slice(i, i + batchSize);
-        await col.insertMany(batch, { ordered: false });
+      if (dropExisting) {
+        await col.deleteMany({});
+      }
+
+      if (docs.length > 0) {
+        await col.insertMany(docs, { ordered: false });
       }
     }
   }
@@ -154,26 +211,36 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
 if (require.main === module) {
   const args = process.argv.slice(2);
   const isDryRun = args.includes('--dry-run');
+  const dropExisting = args.includes('--drop-existing');
+  const confirmDestructive = args.includes('--confirm-destructive');
+  const allowProd = args.includes('--allow-production-restore');
   const backupDirArg = args.find((a) => !a.startsWith('--'));
 
   if (!backupDirArg) {
-    console.error('Usage: tsx src/scripts/restoreDatabase.ts <backup-directory> [--dry-run]');
+    console.error('Usage: tsx src/scripts/restoreDatabase.ts <backup-directory> [--dry-run] [--drop-existing --confirm-destructive]');
     process.exit(1);
   }
 
-  restoreDatabase({ backupDir: backupDirArg, dryRun: isDryRun, dropExisting: true })
+  restoreDatabase({
+    backupDir: backupDirArg,
+    dryRun: isDryRun,
+    dropExisting,
+    confirmDestructive,
+    allowProductionRestore: allowProd,
+  })
     .then((res) => {
       if (res.success) {
         console.log(`✅ ${res.dryRun ? '[DRY RUN] ' : ''}Restore completed successfully!`);
         console.log(`📦 Restored ${res.totalDocuments} documents across ${Object.keys(res.restoredCollections).length} collections`);
         process.exit(0);
       } else {
-        console.error('❌ Restore failed with integrity errors:', res.errors);
+        console.error('❌ Restore failed with integrity errors:');
+        res.errors?.forEach((e) => console.error(`  - ${e}`));
         process.exit(1);
       }
     })
     .catch((err) => {
-      console.error('❌ Restore failed:', err);
+      console.error('❌ Restore error:', err.message);
       process.exit(1);
     });
 }
