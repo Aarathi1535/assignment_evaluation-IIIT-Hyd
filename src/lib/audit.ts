@@ -127,16 +127,19 @@ export async function writeAuditLog(params: AuditLogParams): Promise<boolean> {
             ipAddress: sanitizedIp
         };
 
+        if (params.session) {
+            // When in a transaction, writes must not retry on the same session because
+            // any database error immediately aborts the MongoDB transaction.
+            const entry = new AuditLog(auditDoc);
+            entry.$session(params.session);
+            await entry.save({ session: params.session });
+            return true;
+        }
+
         const maxAttempts = 3;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                if (params.session) {
-                    const entry = new AuditLog(auditDoc);
-                    entry.$session(params.session);
-                    await entry.save({ session: params.session });
-                } else {
-                    await AuditLog.create(auditDoc);
-                }
+                await AuditLog.create(auditDoc);
                 return true;
             } catch (error) {
                 if (isDuplicateKeyError(error) && attempt < maxAttempts) {

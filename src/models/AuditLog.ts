@@ -106,6 +106,7 @@ async function sleep(ms: number): Promise<void> {
 export interface ReconcileOptions {
     maxWaitMs?: number;
     force?: boolean;
+    session?: mongoose.ClientSession;
 }
 
 /**
@@ -125,10 +126,13 @@ export async function reconcileOrphanedIntegrityState(
     state: IAuditLogIntegrityState,
     options: ReconcileOptions = {}
 ): Promise<IAuditLogIntegrityState> {
-    // Check actual latest committed record in AuditLog
+    const session = options.session || null;
+
+    // Check actual latest committed record in AuditLog (session-aware)
     const actualLatestRecord = await AuditLog.findOne({
         sequence: { $exists: true, $ne: null }
     })
+        .session(session)
         .select('+integritySeal sequence')
         .sort({ sequence: -1 })
         .lean()
@@ -175,7 +179,7 @@ export async function reconcileOrphanedIntegrityState(
         return state;
     }
 
-    let recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+    let recordExists = await AuditLog.exists({ sequence: state.lastSequence }).session(session);
     if (recordExists) {
         return state;
     }
@@ -193,7 +197,7 @@ export async function reconcileOrphanedIntegrityState(
         const startTime = Date.now();
         while (Date.now() - startTime < maxWaitMs) {
             await sleep(pollInterval);
-            recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+            recordExists = await AuditLog.exists({ sequence: state.lastSequence }).session(session);
             if (recordExists) {
                 return state;
             }
@@ -204,7 +208,7 @@ export async function reconcileOrphanedIntegrityState(
     }
 
     // Re-check existence after wait
-    recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+    recordExists = await AuditLog.exists({ sequence: state.lastSequence }).session(session);
     if (recordExists) {
         return state;
     }
@@ -291,11 +295,12 @@ export async function allocateAuditSequence(
         ipAddress?: string;
         createdAt?: Date;
     },
-    options?: { leaseDurationMs?: number }
+    options?: { leaseDurationMs?: number; session?: mongoose.ClientSession }
 ): Promise<AllocatedAuditSequence> {
     return withSequenceLock(async () => {
         const maxRetries = 10;
         let lastError: unknown = null;
+        const session = options?.session || null;
         const leaseDurationMs = options?.leaseDurationMs ?? (process.env.AUDIT_ALLOCATION_LEASE_MS
             ? parseInt(process.env.AUDIT_ALLOCATION_LEASE_MS, 10)
             : 5000);
@@ -329,11 +334,11 @@ export async function allocateAuditSequence(
                 }
 
                 // Check and reconcile any crashed/orphaned allocation before advancing sequence.
-                state = await reconcileOrphanedIntegrityState(state);
+                state = await reconcileOrphanedIntegrityState(state, { session: options?.session });
 
                 // If another instance is actively persisting state.lastSequence within its lease,
                 // wait for it to commit before allocating nextSequence.
-                if (state.lastSequence > 0 && !await AuditLog.exists({ sequence: state.lastSequence })) {
+                if (state.lastSequence > 0 && !await AuditLog.exists({ sequence: state.lastSequence }).session(session)) {
                     const isLeaseActive = state.leaseExpiresAt && new Date(state.leaseExpiresAt).getTime() > Date.now();
                     if (isLeaseActive && attempt < maxRetries) {
                         await sleep(50 * attempt);
@@ -342,7 +347,7 @@ export async function allocateAuditSequence(
                 }
 
                 let nextSequence = state.lastSequence + 1;
-                while (await AuditLog.exists({ sequence: nextSequence })) {
+                while (await AuditLog.exists({ sequence: nextSequence }).session(session)) {
                     nextSequence++;
                 }
 
@@ -354,6 +359,7 @@ export async function allocateAuditSequence(
                     previousSeal = state.lastRecordHmac || 'GENESIS';
                 } else {
                     const precedingRecord = await AuditLog.findOne({ sequence: nextSequence - 1 })
+                        .session(session)
                         .select('+integritySeal')
                         .lean()
                         .exec();
@@ -435,6 +441,8 @@ AuditLogSchema.pre('save', async function () {
         throw new Error('AuditLog records are immutable and cannot be updated.');
     }
 
+    const session = this.$session() || undefined;
+
     // 1. If sequence was not yet allocated, allocate it now
     if (!this.sequence) {
         const allocation = await allocateAuditSequence({
@@ -446,7 +454,7 @@ AuditLogSchema.pre('save', async function () {
             details: this.details,
             ipAddress: this.ipAddress,
             createdAt: this.createdAt
-        });
+        }, { session });
 
         this.sequence = allocation.sequence;
         this.previousSeal = allocation.previousSeal;

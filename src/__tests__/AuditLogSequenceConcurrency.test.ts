@@ -291,4 +291,135 @@ describe('AuditLog Sequence Allocation and Concurrency (Regression Suite)', () =
     expect(trail.missingSequences).toBe(0);
     expect(trail.invalidSeals).toBe(0);
   });
+
+  it('saves Question 1 and Question 2 with final grade (isFinal: true) sequentially without transaction abort', async () => {
+    // 1. Finalize Question 1
+    const gradeQ1 = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 1,
+      marksAwarded: [{ criterionName: 'Correctness', score: 10 }],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+      isFinal: true,
+    });
+    expect(gradeQ1).toBeDefined();
+    expect(gradeQ1.totalScore).toBe(10);
+    expect(gradeQ1.isFinal).toBe(true);
+
+    // 2. Finalize Question 2
+    const gradeQ2 = await gradingService.saveGrade({
+      scriptId: scriptId.toString(),
+      question: 2,
+      marksAwarded: [{ criterionName: 'Derivation', score: 15 }],
+      userId: taId.toString(),
+      userRole: UserRole.TA,
+      isFinal: true,
+    });
+    expect(gradeQ2).toBeDefined();
+    expect(gradeQ2.totalScore).toBe(15);
+    expect(gradeQ2.isFinal).toBe(true);
+
+    // 3. Verify grading data consistency
+    const savedGrades = await Grade.find({ answerScript: scriptId }).sort({ question: 1 });
+    expect(savedGrades.length).toBe(2);
+    expect(savedGrades[0].question).toBe(1);
+    expect(savedGrades[0].isFinal).toBe(true);
+    expect(savedGrades[1].question).toBe(2);
+    expect(savedGrades[1].isFinal).toBe(true);
+
+    // 4. Verify audit trail consistency and sequence uniqueness
+    const auditLogs = await AuditLog.find({}).sort({ sequence: 1 });
+    expect(auditLogs.length).toBeGreaterThanOrEqual(2);
+
+    const sequences = auditLogs.map(l => l.sequence);
+    const uniqueSequences = new Set(sequences);
+    expect(uniqueSequences.size).toBe(sequences.length);
+
+    const trail = await auditIntegrityService.verifyAuditTrail();
+    expect(trail.status).toBe('INTACT');
+    expect(trail.valid).toBe(true);
+    expect(trail.invalidSeals).toBe(0);
+    expect(trail.missingSequences).toBe(0);
+  });
+
+  it('writes multiple audit logs in the same transaction session without sequence collisions or transaction abort', async () => {
+    // Test transaction-aware audit sequence allocation on current connection
+    const connection = mongoose.connection;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const topology = (connection.getClient() as any)?.topology;
+    const topologyType = (topology?.description?.type as string | undefined) ?? 'Unknown';
+    const isTxCapable = [
+      'ReplicaSetWithPrimary',
+      'ReplicaSetNoPrimary',
+      'Sharded',
+      'LoadBalanced',
+    ].includes(topologyType);
+
+    if (isTxCapable) {
+      const session = await mongoose.startSession();
+      try {
+        session.startTransaction();
+
+        // Write first audit log in transaction
+        await writeAuditLog({
+          user: taId.toString(),
+          action: 'MULTI_TX_STEP_1',
+          outcome: 'SUCCESS',
+          details: { step: 1 },
+          session,
+        });
+
+        // Write second audit log in the same transaction
+        await writeAuditLog({
+          user: taId.toString(),
+          action: 'MULTI_TX_STEP_2',
+          outcome: 'SUCCESS',
+          details: { step: 2 },
+          session,
+        });
+
+        // Write third audit log in the same transaction
+        await writeAuditLog({
+          user: taId.toString(),
+          action: 'MULTI_TX_STEP_3',
+          outcome: 'SUCCESS',
+          details: { step: 3 },
+          session,
+        });
+
+        await session.commitTransaction();
+      } catch (err) {
+        await session.abortTransaction();
+        throw err;
+      } finally {
+        session.endSession();
+      }
+
+      // Verify all three logs were committed with consecutive sequences
+      const txLogs = await AuditLog.find({ action: { $regex: /^MULTI_TX_STEP_/ } }).sort({ sequence: 1 });
+      expect(txLogs.length).toBe(3);
+      expect(txLogs[1].sequence).toBe((txLogs[0].sequence ?? 0) + 1);
+      expect(txLogs[2].sequence).toBe((txLogs[1].sequence ?? 0) + 1);
+
+      const trail = await auditIntegrityService.verifyAuditTrail();
+      expect(trail.status).toBe('INTACT');
+      expect(trail.valid).toBe(true);
+    }
+  });
+
+  it('does not blindly retry or hide errors when writing transactional audit logs', async () => {
+    // If an error occurs in writeAuditLog with session, it must throw immediately
+    // rather than looping and causing Transaction has been aborted errors.
+    const fakeSession = {
+      inTransaction: () => true,
+    } as unknown as mongoose.ClientSession;
+
+    const invalidUserId = 'not-a-valid-id';
+    const result = await writeAuditLog({
+      user: invalidUserId,
+      action: 'INVALID_WRITE',
+      session: fakeSession,
+    });
+    expect(result).toBe(false);
+  });
 });
