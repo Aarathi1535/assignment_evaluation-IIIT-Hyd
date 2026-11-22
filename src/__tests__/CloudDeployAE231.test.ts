@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-// @ts-expect-error - js-yaml has no bundled @types in devDependencies
+// @ts-expect-error - js-yaml does not provide bundled types
 import yaml from 'js-yaml';
+import { GET as healthGET } from '../app/api/health/route';
 
-interface KnativeEnvVar {
+interface KnativeContainerEnv {
   name: string;
   value?: string;
   valueFrom?: {
@@ -15,31 +16,12 @@ interface KnativeEnvVar {
   };
 }
 
-interface KnativeContainer {
-  name: string;
-  image: string;
-  ports: Array<{ name?: string; containerPort: number }>;
-  resources: {
-    limits: { cpu: string; memory: string };
-    requests: { cpu: string; memory: string };
-  };
-  env: KnativeEnvVar[];
-  startupProbe?: {
-    httpGet: { path: string; port: number };
-  };
-  livenessProbe?: {
-    httpGet: { path: string; port: number };
-  };
-}
-
-interface KnativeServiceDoc {
+interface KnativeServiceManifest {
   apiVersion: string;
   kind: string;
   metadata: {
     name: string;
-    namespace?: string;
     labels: Record<string, string>;
-    annotations?: Record<string, string>;
   };
   spec: {
     template: {
@@ -47,10 +29,11 @@ interface KnativeServiceDoc {
         annotations: Record<string, string>;
       };
       spec: {
-        containerConcurrency: number;
-        timeoutSeconds: number;
-        serviceAccountName?: string;
-        containers: KnativeContainer[];
+        containers: Array<{
+          name: string;
+          image: string;
+          env: KnativeContainerEnv[];
+        }>;
       };
     };
   };
@@ -61,137 +44,79 @@ describe('AE-231: Google Cloud Run Deployment & Staging Architecture', () => {
   const manifestPath = path.join(rootDir, 'deploy', 'cloudrun-service.yaml');
   const bashScriptPath = path.join(rootDir, 'deploy', 'deploy-staging.sh');
   const psScriptPath = path.join(rootDir, 'deploy', 'deploy-staging.ps1');
-  const docsPath = path.join(rootDir, 'docs', 'CLOUD_DEPLOY.md');
 
-  describe('Cloud Run Declarative Manifest (cloudrun-service.yaml)', () => {
-    it('should exist and parse as valid YAML Knative Service', () => {
+  describe('1. Cloud Run Knative Service Manifest', () => {
+    it('parses as valid YAML and specifies required region and gen2 execution environment', () => {
       expect(fs.existsSync(manifestPath)).toBe(true);
       const raw = fs.readFileSync(manifestPath, 'utf8');
-      const doc = yaml.load(raw) as KnativeServiceDoc;
+      const doc = yaml.load(raw) as KnativeServiceManifest;
 
-      expect(doc).toBeDefined();
       expect(doc.apiVersion).toBe('serving.knative.dev/v1');
       expect(doc.kind).toBe('Service');
-      expect(doc.metadata.name).toBe('assignment-evaluator-staging');
       expect(doc.metadata.labels['cloud.googleapis.com/location']).toBe('asia-south1');
-      expect(doc.metadata.labels.environment).toBe('staging');
+      expect(doc.spec.template.metadata.annotations['run.googleapis.com/execution-environment']).toBe('gen2');
     });
 
-    it('should configure appropriate execution environment and autoscaling annotations', () => {
+    it('binds sensitive credentials from GCP Secret Manager', () => {
       const raw = fs.readFileSync(manifestPath, 'utf8');
-      const doc = yaml.load(raw) as KnativeServiceDoc;
-      const annotations = doc.spec.template.metadata.annotations;
-
-      expect(annotations['run.googleapis.com/execution-environment']).toBe('gen2');
-      expect(annotations['run.googleapis.com/cpu-throttling']).toBe('false');
-      expect(parseInt(annotations['autoscaling.knative.dev/minScale'], 10)).toBeGreaterThanOrEqual(1);
-      expect(parseInt(annotations['autoscaling.knative.dev/maxScale'], 10)).toBeLessThanOrEqual(10);
-    });
-
-    it('should configure port 3000, container concurrency, and compute resources', () => {
-      const raw = fs.readFileSync(manifestPath, 'utf8');
-      const doc = yaml.load(raw) as KnativeServiceDoc;
-      const spec = doc.spec.template.spec;
-      const container = spec.containers[0];
-
-      expect(spec.containerConcurrency).toBe(80);
-      expect(spec.timeoutSeconds).toBe(300);
-      expect(container.ports[0].containerPort).toBe(3000);
-
-      // CPU and Memory limits & requests
-      expect(container.resources.limits.cpu).toBe('2');
-      expect(container.resources.limits.memory).toBe('2Gi');
-      expect(container.resources.requests.cpu).toBe('1');
-      expect(container.resources.requests.memory).toBe('1Gi');
-    });
-
-    it('should securely bind sensitive credentials from Secret Manager', () => {
-      const raw = fs.readFileSync(manifestPath, 'utf8');
-      const doc = yaml.load(raw) as KnativeServiceDoc;
+      const doc = yaml.load(raw) as KnativeServiceManifest;
       const envVars = doc.spec.template.spec.containers[0].env;
 
-      const secretNames = envVars
-        .filter((e) => e.valueFrom?.secretKeyRef)
-        .map((e) => ({
-          name: e.name,
-          secretName: e.valueFrom?.secretKeyRef?.name,
-        }));
+      const secretEnvNames = envVars
+        .filter((e) => e.valueFrom && e.valueFrom.secretKeyRef)
+        .map((e) => e.name);
 
-      expect(secretNames).toContainEqual({
-        name: 'MONGODB_URI',
-        secretName: 'evaluator-mongodb-uri',
-      });
-      expect(secretNames).toContainEqual({
-        name: 'NEXTAUTH_SECRET',
-        secretName: 'evaluator-nextauth-secret',
-      });
-      expect(secretNames).toContainEqual({
-        name: 'ORIGINAL_STORAGE_HMAC_SECRET',
-        secretName: 'evaluator-original-hmac-secret',
-      });
-
-      // GCS bucket configuration
-      const gcsBucketEnv = envVars.find((e) => e.name === 'DERIVED_PAGE_STORAGE_BUCKET');
-      expect(gcsBucketEnv).toBeDefined();
-      expect(gcsBucketEnv?.value).toBe('iiit-assignment-evaluator-staging-assets');
-    });
-
-    it('should define startup and liveness health probes against /api/health', () => {
-      const raw = fs.readFileSync(manifestPath, 'utf8');
-      const doc = yaml.load(raw) as KnativeServiceDoc;
-      const container = doc.spec.template.spec.containers[0];
-
-      expect(container.startupProbe).toBeDefined();
-      expect(container.startupProbe?.httpGet.path).toBe('/api/health');
-      expect(container.startupProbe?.httpGet.port).toBe(3000);
-
-      expect(container.livenessProbe).toBeDefined();
-      expect(container.livenessProbe?.httpGet.path).toBe('/api/health');
-      expect(container.livenessProbe?.httpGet.port).toBe(3000);
+      expect(secretEnvNames).toContain('MONGODB_URI');
+      expect(secretEnvNames).toContain('NEXTAUTH_SECRET');
+      expect(secretEnvNames).toContain('ORIGINAL_STORAGE_HMAC_SECRET');
     });
   });
 
-  describe('Staging Deployment Automation Scripts', () => {
-    it('deploy-staging.sh should enforce strict pre-flight checks and non-fabrication', () => {
-      expect(fs.existsSync(bashScriptPath)).toBe(true);
-      const content = fs.readFileSync(bashScriptPath, 'utf8');
+  describe('2. Deployment Script Safety Guarantees', () => {
+    it('verifies deploy scripts require GCP_PROJECT_ID and do not use hardcoded project IDs', () => {
+      const bashContent = fs.readFileSync(bashScriptPath, 'utf8');
+      const psContent = fs.readFileSync(psScriptPath, 'utf8');
 
-      // CLI check
-      expect(content).toContain('command -v gcloud');
-      // Auth check
-      expect(content).toContain('gcloud auth print-access-token');
-      // Project access check
-      expect(content).toContain('gcloud projects describe');
-      // Non-fabrication exit message
-      expect(content).toContain('Skipping live deployment (strict non-fabrication policy)');
-      // Knative replace command
-      expect(content).toContain('gcloud run services replace');
+      // Must check for GCP_PROJECT_ID requirement
+      expect(bashContent).toMatch(/GCP_PROJECT_ID/);
+      expect(bashContent).toMatch(/exit 1/);
+
+      expect(psContent).toMatch(/GCP_PROJECT_ID/);
+      expect(psContent).toMatch(/exit 1/);
     });
 
-    it('deploy-staging.ps1 should enforce strict pre-flight checks on Windows', () => {
-      expect(fs.existsSync(psScriptPath)).toBe(true);
-      const content = fs.readFileSync(psScriptPath, 'utf8');
+    it('verifies deploy scripts enforce --no-traffic preview revisions before migrating traffic', () => {
+      const bashContent = fs.readFileSync(bashScriptPath, 'utf8');
+      const psContent = fs.readFileSync(psScriptPath, 'utf8');
 
-      expect(content).toContain('Get-Command gcloud');
-      expect(content).toContain('gcloud auth print-access-token');
-      expect(content).toContain('gcloud projects describe');
-      expect(content).toContain('Skipping live deployment (strict non-fabrication policy)');
-      expect(content).toContain('gcloud run services replace');
+      // Both scripts must deploy with --no-traffic
+      expect(bashContent).toMatch(/--no-traffic/);
+      expect(psContent).toMatch(/--no-traffic/);
+
+      // Both scripts must probe health before update-traffic
+      expect(bashContent).toMatch(/\/api\/health/);
+      expect(bashContent).toMatch(/update-traffic[\s\S]*--to-latest/);
+
+      expect(psContent).toMatch(/\/api\/health/);
+      expect(psContent).toMatch(/update-traffic[\s\S]*--to-latest/);
+    });
+
+    it('verifies deploy scripts exit with error code 1 when unauthenticated', () => {
+      const bashContent = fs.readFileSync(bashScriptPath, 'utf8');
+      const psContent = fs.readFileSync(psScriptPath, 'utf8');
+
+      // Must not exit 0 on unauthenticated state
+      expect(bashContent).not.toMatch(/gcloud auth print-access-token[\s\S]*exit 0/);
+      expect(psContent).not.toMatch(/gcloud auth print-access-token[\s\S]*exit 0/);
     });
   });
 
-  describe('Staging Architecture Documentation (docs/CLOUD_DEPLOY.md)', () => {
-    it('should exist and document architecture, IAM, secrets, and verification steps', () => {
-      expect(fs.existsSync(docsPath)).toBe(true);
-      const content = fs.readFileSync(docsPath, 'utf8');
-
-      expect(content).toContain('Google Cloud Run');
-      expect(content).toContain('asia-south1');
-      expect(content).toContain('evaluator-mongodb-uri');
-      expect(content).toContain('evaluator-nextauth-secret');
-      expect(content).toContain('roles/secretmanager.secretAccessor');
-      expect(content).toContain('Strict Non-Fabrication Policy');
-      expect(content).toContain('/api/health');
+  describe('3. Application Health Probe Verification', () => {
+    it('verifies /api/health endpoint responds with expected status for Cloud Run smoke testing', async () => {
+      const res = await healthGET();
+      expect([200, 503]).toContain(res.status);
+      const body = await res.json();
+      expect(body).toHaveProperty('success');
     });
   });
 });

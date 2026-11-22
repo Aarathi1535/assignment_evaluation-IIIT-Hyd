@@ -2,13 +2,25 @@
 set -euo pipefail
 
 # ==============================================================================
-# Staging Deployment Script: Google Cloud Run
+# Staging Deployment Script: Google Cloud Run (Draft / Reference Template)
 # ==============================================================================
-PROJECT_ID="${GCP_PROJECT_ID:-iiit-hyd-assignment-eval}"
+# NOTE: Review comments on PR #355:
+# - Do not use made-up project IDs; require GCP_PROJECT_ID explicitly.
+# - Exit non-zero on auth/access errors (never exit 0 on missing auth).
+# - Deploy with --no-traffic preview first, run health smoke test, then shift traffic.
+# - Do not grant allUsers invoker on every run.
+# ==============================================================================
+
+if [[ -z "${GCP_PROJECT_ID:-}" ]]; then
+    echo "❌ ERROR: GCP_PROJECT_ID environment variable is required."
+    echo "Usage: GCP_PROJECT_ID=my-project-id [GCP_REGION=asia-south1] $0"
+    exit 1
+fi
+
+PROJECT_ID="${GCP_PROJECT_ID}"
 REGION="${GCP_REGION:-asia-south1}"
 SERVICE_NAME="assignment-evaluator-staging"
 IMAGE_TAG="gcr.io/${PROJECT_ID}/assignment-evaluator:staging-latest"
-MANIFEST_PATH="deploy/cloudrun-service.yaml"
 
 echo "=== IIIT Hyd Assignment Evaluation Platform: Staging Deploy ==="
 echo "Target Project: ${PROJECT_ID}"
@@ -19,42 +31,52 @@ echo ""
 # Pre-flight Check 1: Verify gcloud CLI is available
 if ! command -v gcloud &> /dev/null; then
     echo "❌ ERROR: 'gcloud' CLI is not installed or not in PATH."
-    echo "Please install the Google Cloud SDK before running this deployment script."
     exit 1
 fi
 
-# Pre-flight Check 2: Verify active authenticated session
+# Pre-flight Check 2: Verify active authenticated session (exit 1 if unauthenticated)
 echo "Checking Google Cloud authentication status..."
 if ! gcloud auth print-access-token &> /dev/null; then
-    echo "⚠️  AUTHENTICATION REQUIRED:"
-    echo "No active Google Cloud credentials detected."
+    echo "❌ ERROR: No active Google Cloud credentials detected."
     echo "Run 'gcloud auth login' or configure GOOGLE_APPLICATION_CREDENTIALS before deploying."
-    echo "Skipping live deployment (strict non-fabrication policy)."
-    exit 0
+    exit 1
 fi
 
-# Pre-flight Check 3: Check project access
+# Pre-flight Check 3: Check project access (exit 1 if inaccessible)
 echo "Verifying project access for '${PROJECT_ID}'..."
 if ! gcloud projects describe "${PROJECT_ID}" &> /dev/null; then
-    echo "⚠️  PROJECT ACCESS REQUIRED:"
-    echo "Authenticated principal does not have access to project '${PROJECT_ID}'."
-    echo "Ensure your service account or user has roles/run.admin and roles/iam.serviceAccountUser."
-    echo "Skipping live deployment (strict non-fabrication policy)."
-    exit 0
+    echo "❌ ERROR: Authenticated principal does not have access to project '${PROJECT_ID}'."
+    exit 1
 fi
 
-echo "✅ Authenticated. Building and submitting container image via Cloud Build..."
+echo "Building and submitting container image via Cloud Build..."
 gcloud builds submit --project="${PROJECT_ID}" --tag="${IMAGE_TAG}" .
 
-echo "Deploying Cloud Run service from manifest '${MANIFEST_PATH}'..."
-gcloud run services replace "${MANIFEST_PATH}" --project="${PROJECT_ID}" --region="${REGION}"
-
-echo "Configuring public/unauthenticated access for staging URL..."
-gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+echo "Deploying new revision to Cloud Run with --no-traffic (Preview Phase)..."
+TAG_NAME="preview-$(date +%s)"
+gcloud run deploy "${SERVICE_NAME}" \
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
-    --member="allUsers" \
-    --role="roles/run.invoker"
+    --image="${IMAGE_TAG}" \
+    --no-traffic \
+    --tag="${TAG_NAME}"
+
+PREVIEW_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --format="value(status.traffic[0].url)")
+
+echo "Running smoke test on preview revision URL: ${PREVIEW_URL}/api/health..."
+if curl -sf --max-time 15 "${PREVIEW_URL}/api/health"; then
+    echo "✅ Smoke test passed. Migrating 100% traffic to latest revision..."
+    gcloud run services update-traffic "${SERVICE_NAME}" \
+        --project="${PROJECT_ID}" \
+        --region="${REGION}" \
+        --to-latest
+else
+    echo "❌ Smoke test failed on preview revision. Rolling back / leaving existing traffic intact."
+    exit 1
+fi
 
 SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" --project="${PROJECT_ID}" --region="${REGION}" --format="value(status.url)")
 echo ""

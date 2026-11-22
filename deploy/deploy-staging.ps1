@@ -1,17 +1,25 @@
+﻿# ==============================================================================
+# Staging Deployment Script: Google Cloud Run (PowerShell - Draft / Reference)
 # ==============================================================================
-# Staging Deployment Script: Google Cloud Run (PowerShell)
+# NOTE: Review comments on PR #355:
+# - Do not use made-up project IDs; require GCP_PROJECT_ID explicitly.
+# - Exit non-zero on auth/access errors (never exit 0 on missing auth).
+# - Deploy with --no-traffic preview first, run health smoke test, then shift traffic.
+# - Do not grant allUsers invoker on every run.
 # ==============================================================================
 param (
     [string]$ProjectId = $env:GCP_PROJECT_ID,
-    [string]$Region = $env:GCP_REGION,
-    [string]$ServiceName = "assignment-evaluator-staging",
-    [string]$ManifestPath = "deploy/cloudrun-service.yaml"
+    [string]$Region = $(if ($env:GCP_REGION) { $env:GCP_REGION } else { "asia-south1" }),
+    [string]$ServiceName = "assignment-evaluator-staging"
 )
 
 $ErrorActionPreference = "Stop"
 
-if (-not $ProjectId) { $ProjectId = "iiit-hyd-assignment-eval" }
-if (-not $Region) { $Region = "asia-south1" }
+if (-not $ProjectId) {
+    Write-Host "❌ ERROR: GCP_PROJECT_ID is required. Pass -ProjectId or set `$env:GCP_PROJECT_ID." -ForegroundColor Red
+    exit 1
+}
+
 $ImageTag = "gcr.io/$ProjectId/assignment-evaluator:staging-latest"
 
 Write-Host "=== IIIT Hyd Assignment Evaluation Platform: Staging Deploy ===" -ForegroundColor Cyan
@@ -24,56 +32,63 @@ Write-Host ""
 $gcloudCmd = Get-Command gcloud -ErrorAction SilentlyContinue
 if (-not $gcloudCmd) {
     Write-Host "❌ ERROR: 'gcloud' CLI is not installed or not in PATH." -ForegroundColor Red
-    Write-Host "Please install the Google Cloud SDK before running this deployment script."
     exit 1
 }
 
-# Pre-flight Check 2: Verify active authenticated session
+# Pre-flight Check 2: Verify active authenticated session (exit 1 if unauthenticated)
 Write-Host "Checking Google Cloud authentication status..."
 try {
-    $authCheck = & gcloud auth print-access-token 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "No active credentials"
-    }
+    $null = & gcloud auth print-access-token 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "No active credentials" }
 }
 catch {
-    Write-Host "⚠️  AUTHENTICATION REQUIRED:" -ForegroundColor Yellow
-    Write-Host "No active Google Cloud credentials detected."
+    Write-Host "❌ ERROR: No active Google Cloud credentials detected." -ForegroundColor Red
     Write-Host "Run 'gcloud auth login' or configure GOOGLE_APPLICATION_CREDENTIALS before deploying."
-    Write-Host "Skipping live deployment (strict non-fabrication policy)."
-    exit 0
+    exit 1
 }
 
-# Pre-flight Check 3: Check project access
+# Pre-flight Check 3: Check project access (exit 1 if inaccessible)
 Write-Host "Verifying project access for '$ProjectId'..."
 try {
-    $projectCheck = & gcloud projects describe $ProjectId 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Project inaccessible"
-    }
+    $null = & gcloud projects describe $ProjectId 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Project inaccessible" }
 }
 catch {
-    Write-Host "⚠️  PROJECT ACCESS REQUIRED:" -ForegroundColor Yellow
-    Write-Host "Authenticated principal does not have access to project '$ProjectId'."
-    Write-Host "Ensure your service account or user has roles/run.admin and roles/iam.serviceAccountUser."
-    Write-Host "Skipping live deployment (strict non-fabrication policy)."
-    exit 0
+    Write-Host "❌ ERROR: Authenticated principal does not have access to project '$ProjectId'." -ForegroundColor Red
+    exit 1
 }
 
-Write-Host "✅ Authenticated. Building and submitting container image via Cloud Build..." -ForegroundColor Green
+Write-Host "Building and submitting container image via Cloud Build..." -ForegroundColor Green
 & gcloud builds submit --project="$ProjectId" --tag="$ImageTag" .
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Deploying Cloud Run service from manifest '$ManifestPath'..."
-& gcloud run services replace "$ManifestPath" --project="$ProjectId" --region="$Region"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "Configuring public/unauthenticated access for staging URL..."
-& gcloud run services add-iam-policy-binding $ServiceName `
+Write-Host "Deploying new revision with --no-traffic (Preview Phase)..." -ForegroundColor Yellow
+$timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$tagName = "preview-$timestamp"
+& gcloud run deploy $ServiceName `
     --project="$ProjectId" `
     --region="$Region" `
-    --member="allUsers" `
-    --role="roles/run.invoker"
+    --image="$ImageTag" `
+    --no-traffic `
+    --tag="$tagName"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$previewUrl = (& gcloud run services describe $ServiceName --project="$ProjectId" --region="$Region" --format="value(status.traffic[0].url)").Trim()
+
+Write-Host "Running smoke test on preview revision URL: $previewUrl/api/health..."
+try {
+    $healthCheck = Invoke-RestMethod -Uri "$previewUrl/api/health" -TimeoutSec 15
+    if ($healthCheck.success -ne $true -and $healthCheck.status -ne 'healthy') {
+        throw "Health probe returned unhealthy payload"
+    }
+    Write-Host "✅ Smoke test passed. Migrating 100% traffic to latest revision..." -ForegroundColor Green
+    & gcloud run services update-traffic $ServiceName --project="$ProjectId" --region="$Region" --to-latest
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+catch {
+    Write-Host "❌ Smoke test failed on preview revision. Rolling back / leaving existing traffic intact." -ForegroundColor Red
+    exit 1
+}
 
 $ServiceUrl = (& gcloud run services describe $ServiceName --project="$ProjectId" --region="$Region" --format="value(status.url)").Trim()
 Write-Host ""
