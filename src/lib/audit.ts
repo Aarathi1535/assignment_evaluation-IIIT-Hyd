@@ -127,12 +127,24 @@ export async function writeAuditLog(params: AuditLogParams): Promise<boolean> {
             ipAddress: sanitizedIp
         };
 
-        if (params.session) {
-            const entry = new AuditLog(auditDoc);
-            entry.$session(params.session);
-            await entry.save({ session: params.session });
-        } else {
-            await AuditLog.create(auditDoc);
+        const maxAttempts = 3;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                if (params.session) {
+                    const entry = new AuditLog(auditDoc);
+                    entry.$session(params.session);
+                    await entry.save({ session: params.session });
+                } else {
+                    await AuditLog.create(auditDoc);
+                }
+                return true;
+            } catch (error) {
+                if (isDuplicateKeyError(error) && attempt < maxAttempts) {
+                    await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+                    continue;
+                }
+                throw error;
+            }
         }
         return true;
     } catch (error) {

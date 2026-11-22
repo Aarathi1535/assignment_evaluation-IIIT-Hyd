@@ -1,3 +1,4 @@
+
 import mongoose, { Schema, Document, Model } from 'mongoose';
 import crypto from 'crypto';
 import AuditLogIntegrityState, { IAuditLogIntegrityState } from './AuditLogIntegrityState';
@@ -124,22 +125,67 @@ export async function reconcileOrphanedIntegrityState(
     state: IAuditLogIntegrityState,
     options: ReconcileOptions = {}
 ): Promise<IAuditLogIntegrityState> {
+    // Check actual latest committed record in AuditLog
+    const actualLatestRecord = await AuditLog.findOne({
+        sequence: { $exists: true, $ne: null }
+    })
+        .select('+integritySeal sequence')
+        .sort({ sequence: -1 })
+        .lean()
+        .exec();
+
+    const actualSequence = actualLatestRecord?.sequence ?? 0;
+    const actualHmac = actualLatestRecord?.integritySeal || undefined;
+    const cutoverSequence = state.cutoverSequence ?? 1;
+
+    // 1. If integrity state is lagging behind actual committed records in AuditLog,
+    // immediately advance and synchronize it to prevent sequence collision.
+    if (actualSequence > state.lastSequence) {
+        const healedStateSeal = createAuditIntegrityStateSeal(actualSequence, actualHmac, cutoverSequence);
+        const advancedState = await AuditLogIntegrityState.findOneAndUpdate(
+            {
+                _id: 'global',
+                lastSequence: state.lastSequence
+            },
+            {
+                $set: {
+                    lastSequence: actualSequence,
+                    lastRecordHmac: actualHmac || null,
+                    cutoverSequence,
+                    integritySeal: healedStateSeal.hmac || null,
+                    integrityKeyId: healedStateSeal.keyId || null,
+                    lastAllocatedAt: new Date()
+                },
+                $unset: {
+                    leaseExpiresAt: 1,
+                    allocationToken: 1
+                }
+            },
+            { returnDocument: 'after', lean: true }
+        );
+        return advancedState || (await AuditLogIntegrityState.findById('global').lean().exec()) || state;
+    }
+
     if (state.lastSequence <= 0) {
         return state;
     }
 
-    // 1. Check if the record for state.lastSequence actually exists in AuditLog
+    // 2. If the actual latest committed sequence matches state.lastSequence, everything is in sync
+    if (actualSequence === state.lastSequence) {
+        return state;
+    }
+
     let recordExists = await AuditLog.exists({ sequence: state.lastSequence });
     if (recordExists) {
         return state;
     }
 
-    // 2. Check if an active instance holds a valid allocation lease
+    // 3. state.lastSequence > actualSequence: check if an active instance holds a valid allocation lease
     const now = Date.now();
     const leaseExpiresAt = state.leaseExpiresAt ? new Date(state.leaseExpiresAt).getTime() : 0;
     const isLeaseActive = !options.force && leaseExpiresAt > now;
 
-    // 3. If an active lease is held and wait is allowed, coordinate by waiting
+    // If an active lease is held and wait is allowed, coordinate by waiting
     // for the in-flight write to finish persisting.
     const maxWaitMs = options.maxWaitMs ?? (isLeaseActive ? Math.min(leaseExpiresAt - now, 2000) : 0);
     if (maxWaitMs > 0) {
@@ -157,31 +203,19 @@ export async function reconcileOrphanedIntegrityState(
         }
     }
 
-    // 4. Re-check existence after wait
+    // Re-check existence after wait
     recordExists = await AuditLog.exists({ sequence: state.lastSequence });
     if (recordExists) {
         return state;
     }
 
-    // 5. If the lease is STILL active (or unforced), this write is actively in-flight
-    // on another Cloud Run instance. We MUST NOT treat it as an orphan or roll it back.
+    // If the lease is STILL active (or unforced), this write is actively in-flight
+    // on another instance. We MUST NOT treat it as an orphan or roll it back.
     if (!options.force && state.leaseExpiresAt && new Date(state.leaseExpiresAt).getTime() > Date.now()) {
         return state;
     }
 
-    // 6. Confirmed crash/orphan (lease expired or absent): heal state back to actual committed record
-    const actualLatestRecord = await AuditLog.findOne({
-        sequence: { $exists: true, $ne: null }
-    })
-        .select('+integritySeal sequence')
-        .sort({ sequence: -1 })
-        .lean()
-        .exec();
-
-    const actualSequence = actualLatestRecord?.sequence ?? 0;
-    const actualHmac = actualLatestRecord?.integritySeal || undefined;
-    const cutoverSequence = state.cutoverSequence ?? 1;
-
+    // 4. Confirmed crash/orphan (lease expired or absent): heal state back to actual committed record
     const healedStateSeal = actualSequence > 0
         ? createAuditIntegrityStateSeal(actualSequence, actualHmac, cutoverSequence)
         : { hmac: undefined, keyId: undefined };
@@ -307,11 +341,24 @@ export async function allocateAuditSequence(
                     }
                 }
 
-                const nextSequence = state.lastSequence + 1;
+                let nextSequence = state.lastSequence + 1;
+                while (await AuditLog.exists({ sequence: nextSequence })) {
+                    nextSequence++;
+                }
+
                 const cutoverSequence = state.cutoverSequence ?? 1;
-                const previousSeal = nextSequence <= cutoverSequence
-                    ? 'GENESIS'
-                    : (state.lastRecordHmac || 'GENESIS');
+                let previousSeal: string;
+                if (nextSequence <= cutoverSequence) {
+                    previousSeal = 'GENESIS';
+                } else if (nextSequence === state.lastSequence + 1) {
+                    previousSeal = state.lastRecordHmac || 'GENESIS';
+                } else {
+                    const precedingRecord = await AuditLog.findOne({ sequence: nextSequence - 1 })
+                        .select('+integritySeal')
+                        .lean()
+                        .exec();
+                    previousSeal = precedingRecord?.integritySeal || state.lastRecordHmac || 'GENESIS';
+                }
 
                 const createdAt = recordData.createdAt || new Date();
                 const allocationToken = crypto.randomUUID();
@@ -418,7 +465,7 @@ AuditLogSchema.pre('save', async function () {
             : false;
 
         const isCurrent = currentState &&
-            currentState.lastSequence === this.sequence &&
+            currentState.lastSequence >= this.sequence &&
             currentState.allocationToken === this.allocationToken &&
             isLeaseActive;
 
@@ -433,14 +480,17 @@ AuditLogSchema.pre('save', async function () {
 AuditLogSchema.post('save', async function () {
     if (this.sequence && this.allocationToken) {
         try {
-            await AuditLogIntegrityState.updateOne(
-                {
-                    _id: 'global',
-                    lastSequence: this.sequence,
-                    allocationToken: this.allocationToken
-                },
-                { $unset: { leaseExpiresAt: 1, allocationToken: 1 } }
-            );
+            const session = this.$session();
+            if (!session || !session.inTransaction()) {
+                await AuditLogIntegrityState.updateOne(
+                    {
+                        _id: 'global',
+                        lastSequence: this.sequence,
+                        allocationToken: this.allocationToken
+                    },
+                    { $unset: { leaseExpiresAt: 1, allocationToken: 1 } }
+                );
+            }
         } catch {
             // Best-effort cleanup: the document already exists in AuditLog
         }
