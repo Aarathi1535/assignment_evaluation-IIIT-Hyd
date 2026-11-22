@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import AuthService from '@/services/AuthService';
 import { z } from 'zod';
+import { checkRateLimit, createRateLimitResponse, getClientIdentifier, RATE_LIMIT_TIERS } from '@/lib/rateLimit';
 
 const resetSchema = z.object({
   email: z.string().trim().email({ message: 'Invalid email address' }),
@@ -9,6 +10,12 @@ const resetSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    const clientId = getClientIdentifier(req);
+    const rateLimitResult = checkRateLimit(`auth:reset:${clientId}`, RATE_LIMIT_TIERS.AUTH);
+    if (!rateLimitResult.allowed) {
+      return createRateLimitResponse(rateLimitResult, 'Too many password reset attempts. Please try again later.');
+    }
+
     await connectDB();
 
     let body;

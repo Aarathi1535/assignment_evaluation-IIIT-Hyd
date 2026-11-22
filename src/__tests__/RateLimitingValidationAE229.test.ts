@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
+import { NextRequest } from 'next/server';
 import {
   checkRateLimit,
   getClientIdentifier,
   createRateLimitResponse,
   resetRateLimitStore,
+  pruneRateLimitStore,
+  getRateLimitStoreSize,
   RATE_LIMIT_TIERS,
 } from '../lib/rateLimit';
 import {
@@ -16,6 +19,8 @@ import {
 } from '../utils/fileValidation';
 import { registerSchema } from '../validations/authValidation';
 import { createCourseSchema } from '../validations/courseValidation';
+import { POST as registerPOST } from '../app/api/auth/register/route';
+import { POST as resetPOST } from '../app/api/auth/reset/route';
 
 describe('AE-229: Rate Limiting and Input Validation Hardening', () => {
   beforeEach(() => {
@@ -107,14 +112,16 @@ describe('AE-229: Rate Limiting and Input Validation Hardening', () => {
       expect(resB.remaining).toBe(2);
     });
 
-    it('resolves client identifiers correctly from request headers', () => {
+    it('resolves client identifiers correctly and safely from request headers', () => {
+      // Behind reverse proxy: rightmost entry is the proxy-appended upstream client IP
       const mockReqXForwarded = {
         headers: {
           get: (header: string) => (header === 'x-forwarded-for' ? '203.0.113.195, 70.41.3.18' : null),
         },
       };
-      expect(getClientIdentifier(mockReqXForwarded)).toBe('ip:203.0.113.195');
+      expect(getClientIdentifier(mockReqXForwarded)).toBe('ip:70.41.3.18');
 
+      // Edge proxy x-real-ip
       const mockReqXReal = {
         headers: {
           get: (header: string) => (header === 'x-real-ip' ? '198.51.100.22' : null),
@@ -122,10 +129,21 @@ describe('AE-229: Rate Limiting and Input Validation Hardening', () => {
       };
       expect(getClientIdentifier(mockReqXReal)).toBe('ip:198.51.100.22');
 
+      // Authenticated user priority
       const mockReqUser = {
         headers: { get: () => null },
       };
       expect(getClientIdentifier(mockReqUser, 'student-42')).toBe('user:student-42');
+    });
+
+    it('prunes expired rate limit entries to prevent memory leaks', () => {
+      const now = 1700000000000;
+      checkRateLimit('key:expire', { maxRequests: 2, windowMs: 1000 }, now);
+      expect(getRateLimitStoreSize()).toBe(1);
+
+      // Advance clock past max window and sweep
+      pruneRateLimitStore(now + 25 * 60 * 60 * 1000);
+      expect(getRateLimitStoreSize()).toBe(0);
     });
 
     it('verifies predefined tiers match documented security thresholds', () => {
@@ -276,6 +294,74 @@ describe('AE-229: Rate Limiting and Input Validation Hardening', () => {
           academicYear: 'invalid',
         }).success
       ).toBe(false);
+    });
+  });
+
+  describe('5. Real Route Integration: Auth Rate Limiting Enforcement', () => {
+    it('enforces 429 Too Many Requests on POST /api/auth/register after quota is exceeded', async () => {
+      const testIp = '198.51.100.99';
+
+      // 5 attempts allowed within 1 minute
+      for (let i = 0; i < 5; i++) {
+        const req = new NextRequest('http://localhost:3000/api/auth/register', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-real-ip': testIp,
+          },
+          body: JSON.stringify({ email: 'invalid-email' }),
+        });
+        const res = await registerPOST(req);
+        // Returns 400 validation error, not 429
+        expect(res.status).toBe(400);
+      }
+
+      // 6th attempt must be rejected with 429 Too Many Requests
+      const req6 = new NextRequest('http://localhost:3000/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-real-ip': testIp,
+        },
+        body: JSON.stringify({ email: 'invalid-email' }),
+      });
+      const res6 = await registerPOST(req6);
+      expect(res6.status).toBe(429);
+      expect(res6.headers.get('Retry-After')).toBeDefined();
+      expect(res6.headers.get('X-RateLimit-Limit')).toBe('5');
+      expect(res6.headers.get('X-RateLimit-Remaining')).toBe('0');
+      const body6 = await res6.json();
+      expect(body6.message).toMatch(/too many.*attempts/i);
+    });
+
+    it('enforces 429 Too Many Requests on POST /api/auth/reset after quota is exceeded', async () => {
+      const testIp = '198.51.100.100';
+
+      for (let i = 0; i < 5; i++) {
+        const req = new NextRequest('http://localhost:3000/api/auth/reset', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-real-ip': testIp,
+          },
+          body: JSON.stringify({ email: 'test@example.com' }),
+        });
+        const res = await resetPOST(req);
+        expect(res.status).toBe(200);
+      }
+
+      // 6th attempt rejected with 429
+      const req6 = new NextRequest('http://localhost:3000/api/auth/reset', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-real-ip': testIp,
+        },
+        body: JSON.stringify({ email: 'test@example.com' }),
+      });
+      const res6 = await resetPOST(req6);
+      expect(res6.status).toBe(429);
+      expect(res6.headers.get('Retry-After')).toBeDefined();
     });
   });
 });

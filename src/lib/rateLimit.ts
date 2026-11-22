@@ -37,13 +37,40 @@ export const RATE_LIMIT_TIERS = {
   },
 } as const;
 
+// Maximum number of distinct tracking keys to hold in memory
+export const MAX_RATE_LIMIT_ENTRIES = 10_000;
+
 // In-memory sliding window storage: key -> timestamps
 const rateLimitStore = new Map<string, number[]>();
 
 /**
+ * Prunes expired timestamps across the rate limit store to prevent memory leaks.
+ */
+export function pruneRateLimitStore(now: number = Date.now()): void {
+  for (const [key, timestamps] of rateLimitStore.entries()) {
+    // Find highest window bound among tiers or default 24h
+    const maxWindow = 24 * 60 * 60 * 1000;
+    const windowStart = now - maxWindow;
+    const active = timestamps.filter((ts) => ts > windowStart);
+    if (active.length === 0) {
+      rateLimitStore.delete(key);
+    } else if (active.length < timestamps.length) {
+      rateLimitStore.set(key, active);
+    }
+  }
+}
+
+/**
+ * Returns the current count of active rate limit buckets.
+ */
+export function getRateLimitStoreSize(): number {
+  return rateLimitStore.size;
+}
+
+/**
  * Checks if a request is permitted under the sliding-window rate limit policy.
  *
- * @param key Unique key for the rate limit subject (e.g. 'auth:ip:192.168.1.1' or 'export:user:usr-123')
+ * @param key Unique key for the rate limit subject (e.g. 'auth:register:ip:192.168.1.1' or 'export:user:usr-123')
  * @param config Max requests and window duration in milliseconds
  * @param now Optional timestamp override for deterministic testing
  */
@@ -77,6 +104,11 @@ export function checkRateLimit(
     };
   }
 
+  // Cap total entries to prevent unbounded memory growth
+  if (rateLimitStore.size >= MAX_RATE_LIMIT_ENTRIES && !rateLimitStore.has(key)) {
+    pruneRateLimitStore(now);
+  }
+
   // Record current request
   activeTimestamps.push(now);
   rateLimitStore.set(key, activeTimestamps);
@@ -94,6 +126,12 @@ export function checkRateLimit(
 
 /**
  * Extracts a sanitized client identifier from request headers or user context.
+ *
+ * When behind a reverse proxy (e.g. Cloud Run, Cloud Load Balancing, Nginx):
+ * - `x-real-ip` is authoritative from the edge proxy and cannot be forged by the client.
+ * - In `x-forwarded-for`, the client controls the initial entries. Reverse proxies append
+ *   the true upstream peer IP to the rightmost side of the list. We use the rightmost IP
+ *   or x-real-ip to prevent client spoofing.
  */
 export function getClientIdentifier(
   req: { headers: { get: (name: string) => string | null } },
@@ -103,15 +141,25 @@ export function getClientIdentifier(
     return `user:${userId.trim()}`;
   }
 
-  const forwardedFor = req.headers.get('x-forwarded-for');
-  if (forwardedFor) {
-    const clientIp = forwardedFor.split(',')[0].trim();
-    if (clientIp) return `ip:${clientIp}`;
-  }
-
   const realIp = req.headers.get('x-real-ip');
   if (realIp && realIp.trim()) {
     return `ip:${realIp.trim()}`;
+  }
+
+  const forwardedFor = req.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    const parts = forwardedFor
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    // Prefer the last entry appended by the trusted reverse proxy to defend against client spoofing
+    if (parts.length > 0) {
+      const trustedClientIp = parts[parts.length - 1];
+      if (trustedClientIp) {
+        return `ip:${trustedClientIp}`;
+      }
+    }
   }
 
   return 'ip:127.0.0.1';

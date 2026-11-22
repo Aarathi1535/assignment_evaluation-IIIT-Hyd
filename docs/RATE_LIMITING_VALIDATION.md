@@ -1,14 +1,14 @@
 # Rate Limiting & Input Validation Architecture
 
 **Document:** `docs/RATE_LIMITING_VALIDATION.md`  
-**Reference:** Week 12 · Day 2 — Security and Compliance (AE-229 / Issue #350)  
+**Reference:** Week 12 · Day 2 — Security and Compliance (AE-229 / Issue #350 / PR #351)  
 **Status:** Canonical Reference
 
 ---
 
 ## 1. Executive Summary
 
-This document specifies the platform's multi-tiered rate limiting architecture, payload size controls, magic byte file validation rules, and schema validation defenses. These mechanisms protect the platform from denial-of-service (DoS) attacks, brute-force credential stuffing, malicious file uploads, and resource exhaustion.
+This document specifies the platform's sliding-window rate limiting engine, client IP resolution model, memory management bounds, input validation schemas, and magic byte file inspection rules. It provides an honest **Gap Analysis** contrasting node-local in-memory sliding windows with distributed cloud rate limiting (Cloud Armor / Redis).
 
 ---
 
@@ -18,10 +18,11 @@ The platform enforces sliding-window rate limiting across sensitive operations v
 
 ```mermaid
 flowchart TD
-    Client["Incoming HTTP Request"] --> Proxy["Reverse Proxy / IP Identification"]
-    Proxy --> RouteCheck{"Target Endpoint Tier"}
+    Client["Incoming HTTP Request"] --> Proxy["Reverse Proxy / Ingress Gateway"]
+    Proxy --> HeaderExtract["Safe IP Resolution (x-real-ip / rightmost x-forwarded-for)"]
+    HeaderExtract --> RouteCheck{"Target Endpoint Tier"}
 
-    RouteCheck -->|Authentication| AuthLimit["Auth Tier: 5 req / 1 min per IP"]
+    RouteCheck -->|Registration / Reset| AuthLimit["Auth Tier: 5 req / 1 min per IP"]
     RouteCheck -->|Batch Upload| UploadLimit["Upload Tier: 10 uploads / 1 hr per User/IP"]
     RouteCheck -->|PDF Export| ExportLimit["Export Tier: 5 exports / 1 hr per Student"]
     RouteCheck -->|Regrade Submission| RegradeLimit["Regrade Tier: 10 req / 24 hr per Student"]
@@ -31,7 +32,7 @@ flowchart TD
     ExportLimit --> CheckLimit
     RegradeLimit --> CheckLimit
 
-    CheckLimit -->|Yes| Allow["200/201 Success (Decrement Remaining)"]
+    CheckLimit -->|Yes| Allow["200/201 Success (Record Timestamp)"]
     CheckLimit -->|No| Reject["429 Too Many Requests (Retry-After Header)"]
 ```
 
@@ -39,13 +40,59 @@ flowchart TD
 
 | Tier | Window | Max Quota | Key Namespace | Target Attack / Risk Mitigated |
 | :--- | :---: | :---: | :--- | :--- |
-| **`AUTH`** | 1 minute | 5 requests | `auth:ip:<clientIp>` | Brute-force credential stuffing, password reset spamming, registration flooding |
+| **`AUTH`** | 1 minute | 5 requests | `auth:register:ip:<ip>`, `auth:reset:ip:<ip>` | Brute-force credential stuffing, registration flooding, password reset spamming |
 | **`UPLOAD`** | 1 hour | 10 uploads | `upload:user:<userId>` | Storage backend flooding, OCR worker overload, disk exhaustion |
 | **`STUDENT_EXPORT`** | 1 hour | 5 exports | `export:user:<studentId>` | Canvas rendering CPU exhaustion, memory buffer starvation |
 | **`REGRADE_REQUEST`** | 24 hours | 10 requests | `regrade:user:<studentId>` | Teaching assistant evaluation queue spamming |
 
-### 2.2 Standard HTTP 429 Response & Headers
-When a client exceeds their quota, the platform returns `HTTP 429 Too Many Requests` with RFC-compliant headers:
+---
+
+## 3. Architecture & Gap Analysis: In-Memory vs. Distributed Cloud Limiting
+
+### 3.1 Node-Local In-Memory Scope
+- **Mechanism:** In-process sliding-window bucket store (`Map<string, number[]>`) in `src/lib/rateLimit.ts`.
+- **Application Endpoints:** Enforced directly in route handlers:
+  - `POST /api/auth/register` (5 attempts / 60s per IP)
+  - `POST /api/auth/reset` (5 attempts / 60s per IP)
+- **Single-Instance Guarantee:** On a single server instance or local container, bursts exceeding the threshold are immediately rejected with `429 Too Many Requests`.
+
+### 3.2 Horizontal Scaling Limitation (Cloud Run Multi-Instance)
+> [!IMPORTANT]
+> **Cloud Run Multi-Instance Gap Analysis**  
+> In serverless environments like Google Cloud Run, requests are distributed across multiple ephemeral container instances. An in-memory store in Container A cannot observe requests hitting Container B. A distributed attacker whose requests round-robin across 5 instances could theoretically make up to $5 \times 5 = 25$ attempts before individual containers saturate.
+
+### 3.3 Target Cloud Architecture
+For true cluster-wide rate limiting across horizontal Cloud Run instances:
+1. **Google Cloud Armor (Recommended at Ingress):**
+   - Configured on Google Cloud HTTP(S) Load Balancer.
+   - Throttles malicious IP ranges and credential stuffing before traffic ever reaches Cloud Run containers, saving compute resources.
+2. **Centralized Redis Store (Memorystore):**
+   - Cloud Run instances connect via Serverless VPC Access to a managed Redis instance.
+   - Atomic Redis commands (`ZADD`, `ZREMRANGEBYSCORE`, `ZCARD`) provide cluster-synchronized sliding windows.
+3. **MongoDB Token Bucket (Low Traffic Alternative):**
+   - Atomic `$inc` and TTL index document updates directly in MongoDB collections.
+
+---
+
+## 4. Safe Client IP Resolution & Memory Management
+
+### 4.1 Client-Controlled `X-Forwarded-For` Vulnerability Defense
+- **The Vulnerability:** An attacker can craft requests with `X-Forwarded-For: 1.1.1.1`. If an application blindly reads `x-forwarded-for.split(',')[0]`, the attacker can rotate the header value on every request to bypass rate limiting completely.
+- **The Defense:** `getClientIdentifier` in `src/lib/rateLimit.ts`:
+  1. Checks `x-real-ip` first (set directly by the authoritative edge reverse-proxy).
+  2. If using `x-forwarded-for`, reads the **rightmost** (last) entry appended by the trusted ingress reverse proxy (`parts[parts.length - 1]`), ensuring client-injected headers cannot bypass quota tracking.
+  3. Falls back to user identifier (`user:<userId>`) for authenticated student/instructor routes.
+
+### 4.2 Memory Leak Prevention & Eviction Bounds
+- **Bounded Capacity:** Capped at `MAX_RATE_LIMIT_ENTRIES = 10,000` entries.
+- **Active Timestamp Pruning:** Expired timestamps older than the sliding window are pruned on every check.
+- **Store Size Recovery:** When the store reaches capacity, `pruneRateLimitStore()` executes a sweep, deleting inactive buckets where all timestamps have lapsed.
+
+---
+
+## 5. Standard HTTP 429 Response & Headers
+
+When quota is exceeded, the server returns `HTTP 429 Too Many Requests` with standard RFC headers:
 ```http
 HTTP/1.1 429 Too Many Requests
 Content-Type: application/json
@@ -57,7 +104,7 @@ Cache-Control: no-store, private
 
 {
   "success": false,
-  "message": "Too many requests. Please try again later.",
+  "message": "Too many registration attempts. Please try again later.",
   "data": {
     "retryAfterSeconds": 48
   }
@@ -66,47 +113,18 @@ Cache-Control: no-store, private
 
 ---
 
-## 3. Strict Input & File Payload Validation
+## 6. Input Validation & Magic Byte Defense
 
-### 3.1 Magic Byte File Validation (Content Sniffing Protection)
-Rather than relying on client-supplied `Content-Type` headers or file extensions (which can be easily spoofed), `src/utils/fileValidation.ts` inspects initial byte signatures:
-
-| File Format | Header / Magic Bytes | Byte Inspection Rule |
-| :--- | :--- | :--- |
-| **PDF** | `%PDF-` (`0x25 0x50 0x44 0x46`) | Scanned within first 1,024 bytes of buffer |
-| **JPEG** | `0xFF 0xD8 0xFF` | First 3 bytes of buffer |
-| **PNG** | `0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A` | First 8 bytes of buffer |
-| **WebP** | `RIFF` (`0..3`) + `WEBP` (`8..11`) | Byte positions 0–3 and 8–11 |
-| **TIFF** | `0x49 0x49 0x2A 0x00` (LE) or `0x4D 0x4D 0x00 0x2A` (BE) | First 4 bytes of buffer |
-
-Any file whose magic bytes do not match an allowed format is immediately rejected with `400 Bad Request`, preventing executable or script injection.
-
-### 3.2 Resource & Batch Bounds
-To prevent memory exhaustion during PDF parsing and image manipulation:
-- **`MAX_SINGLE_FILE_SIZE`:** 50 MB (`52,428,800` bytes). Rejects oversized files with `413 Payload Too Large`.
-- **`MAX_FILES_PER_BATCH`:** 20 files per upload batch.
-- **`MAX_TOTAL_REQUEST_SIZE`:** 200 MB (`209,715,200` bytes).
-- **`MAX_PDF_PAGE_COUNT`:** 200 pages per PDF document.
-
-### 3.3 Identifier & Parameter Sanitization
-1. **MongoDB ObjectId Format:**
-   - All entity parameters (`examId`, `courseId`, `scriptId`, `userId`) are strictly validated using 24-character hexadecimal regex (`/^[0-9a-fA-F]{24}$/`) before query execution.
-   - Non-hex strings, object injection payloads (`{"$gt": ""}`), or SQL injection fragments are rejected with `400 Invalid Identifier Format`.
-2. **Schema-Level Validation (Zod):**
-   - User Registration: Name min 3 chars, valid email, password min 8 chars, role constrained strictly to `'STUDENT'`.
-   - Course Creation: Code trimmed and uppercase, title min 3 max 100 chars.
-   - Regrade Submission: Reason string trimmed min 10 max 2,000 chars, positive question number integer.
-
----
-
-## 4. Abuse Prevention Matrix
-
-| Attack Vector | Defense Mechanism | Response |
-| :--- | :--- | :---: |
-| **Credential Stuffing / Password Guessing** | 5 attempts / min per IP on `/api/auth/*` | `429 Too Many Requests` |
-| **Malicious Executable Disguised as PDF** | Magic byte inspection (`%PDF-`) | `400 Unsupported file format` |
-| **Zip Bomb / 500MB Scan Payload** | `MAX_SINGLE_FILE_SIZE` (50MB) check | `413 Payload Too Large` |
-| **10,000 Page PDF Denial of Service** | `MAX_PDF_PAGE_COUNT` (200 pages) check | `400 Page count exceeds limit` |
-| **Concurrent PDF Export Memory Exhaustion** | 1 concurrent export semaphore + 5/hr rate limit | `429 / 503 Capacity reached` |
-| **NoSQL Operator Injection (`$where`, `$gt`)** | Zod scalar parsing & 24-char ObjectId validation | `400 Validation failed` |
-| **Regrade Queue Flooding** | 10 requests / 24 hr per student | `429 Too Many Requests` |
+1. **Magic Byte Inspection (`src/utils/fileValidation.ts`):**
+   - PDF: `%PDF-` (`0x25 0x50 0x44 0x46`)
+   - JPEG: `0xFF 0xD8 0xFF`
+   - PNG: `0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A`
+   - WebP: `RIFF` + `WEBP`
+   - TIFF: `II*\0` (LE) or `MM\0*` (BE)
+2. **Batch & Resource Limits:**
+   - Single file size: 50MB
+   - Total batch size: 200MB
+   - Files per batch: 20
+   - PDF page count: 200 pages
+3. **Identifier Sanitization:**
+   - 24-character hexadecimal MongoDB ObjectIds strictly validated before database queries.
