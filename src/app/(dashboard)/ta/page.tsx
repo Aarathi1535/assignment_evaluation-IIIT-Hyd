@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight, Bell, Send } from 'lucide-react';
+import { BookOpen, Clock, CheckCircle, HelpCircle, FileText, ClipboardList, CheckSquare, AlertCircle, ArrowRight, Bell, Send, CheckCheck } from 'lucide-react';
 import { DashboardLayout } from '@/components/ui/DashboardLayout';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -84,6 +84,38 @@ export default function TaDashboardPage() {
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [selectedExamFilter, setSelectedExamFilter] = useState<string>('ALL');
   const [isExamPickerOpen, setIsExamPickerOpen] = useState(false);
+  const [reviewPendingSuccess, setReviewPendingSuccess] = useState<string | null>(null);
+  const [reviewPendingLoading, setReviewPendingLoading] = useState<string | null>(null);
+
+  const handleEnableReviewPending = async (targetExamId?: string) => {
+    const examToSubmit = targetExamId || (selectedExamFilter !== 'ALL' && selectedExamFilter ? selectedExamFilter : uniqueExamIds[0]);
+    if (!examToSubmit) {
+      setError('No exam available to submit for review.');
+      return;
+    }
+
+    setReviewPendingLoading(examToSubmit);
+    setError(null);
+    setReviewPendingSuccess(null);
+
+    try {
+      const res = await fetch(`/api/exams/${encodeURIComponent(examToSubmit)}/review-pending`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to update exam status to REVIEW_PENDING');
+      }
+
+      setReviewPendingSuccess('Exam status updated to REVIEW PENDING! Professor dashboard will now show REVIEW_PENDING.');
+      refreshAllocations(currentPage);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to enable review pending');
+    } finally {
+      setReviewPendingLoading(null);
+    }
+  };
 
   const currentPageRef = useRef(currentPage);
   const activeRequest = useRef<AbortController | null>(null);
@@ -272,17 +304,32 @@ export default function TaDashboardPage() {
         </Button>
       </Link>
       {allocations.length > 0 && (
-        <Button
-          type="button"
-          variant="primary"
-          size="md"
-          data-testid="bulk-submit-exam-button"
-          onClick={() => handleBulkSubmitClick()}
-          className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs cursor-pointer"
-        >
-          <Send className="h-4 w-4" />
-          <span>Bulk Submit Exam</span>
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            data-testid="bulk-submit-exam-button"
+            onClick={() => handleBulkSubmitClick()}
+            className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs cursor-pointer"
+          >
+            <Send className="h-4 w-4" />
+            <span>Bulk Submit Exam</span>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="md"
+            data-testid="enable-review-pending-button"
+            onClick={() => handleEnableReviewPending()}
+            disabled={Boolean(reviewPendingLoading)}
+            className="gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 font-semibold shadow-xs cursor-pointer"
+            title="Mark this exam as ready for professor review"
+          >
+            <CheckCheck className="h-4 w-4 text-amber-700" />
+            <span>{reviewPendingLoading ? 'Updating...' : 'Enable Review Pending'}</span>
+          </Button>
+        </>
       )}
     </div>
   );
@@ -337,6 +384,14 @@ export default function TaDashboardPage() {
             >
               <span>View Notifications</span>
             </Button>
+          </div>
+        )}
+
+        {/* Success State Banner */}
+        {reviewPendingSuccess && (
+          <div role="status" aria-live="polite" className="p-4 rounded-brand bg-emerald-50 border border-emerald-200 flex gap-3 text-sm text-emerald-800 font-semibold shadow-xs">
+            <CheckCheck className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+            <span>{reviewPendingSuccess}</span>
           </div>
         )}
 
@@ -487,7 +542,7 @@ export default function TaDashboardPage() {
                           <td className="px-6 py-4.5 text-slate-650 font-medium whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <span>Exam ID: {alloc.exam}</span>
-                              {uniqueExamIds.length > 1 && (
+                              <div className="flex items-center gap-1.5 ml-1">
                                 <button
                                   type="button"
                                   data-testid={`bulk-submit-exam-row-${alloc.exam}`}
@@ -497,7 +552,17 @@ export default function TaDashboardPage() {
                                 >
                                   Submit Exam
                                 </button>
-                              )}
+                                <button
+                                  type="button"
+                                  data-testid={`enable-review-pending-row-${alloc.exam}`}
+                                  onClick={() => handleEnableReviewPending(alloc.exam)}
+                                  disabled={reviewPendingLoading === alloc.exam}
+                                  className="text-3xs text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5 font-bold cursor-pointer transition-colors"
+                                  title={`Set Exam ${alloc.exam} status to REVIEW_PENDING for professor`}
+                                >
+                                  {reviewPendingLoading === alloc.exam ? 'Updating...' : 'Enable Review Pending'}
+                                </button>
+                              </div>
                             </div>
                           </td>
 

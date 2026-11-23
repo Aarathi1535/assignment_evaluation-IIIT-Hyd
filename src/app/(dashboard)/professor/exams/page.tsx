@@ -36,6 +36,31 @@ export default function ProfessorExamsPage() {
   const [deleting, setDeleting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [publishingId, setPublishingId] = useState<string | null>(null);
+
+  const handlePublishExam = async (examId: string) => {
+    setPublishingId(examId);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await fetch(`/api/exams/${examId}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to publish exam');
+      }
+
+      setExams(prev => prev.map(e => e._id === examId ? { ...e, status: 'PUBLISHED' } : e));
+      setSuccessMsg('Exam results published successfully! Students can now view their scores and feedback.');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to publish exam results');
+    } finally {
+      setPublishingId(null);
+    }
+  };
 
   const deleteDialogRef = useRef<HTMLDivElement>(null);
   const cancelBtnRef = useRef<HTMLButtonElement>(null);
@@ -144,6 +169,8 @@ export default function ProfessorExamsPage() {
         return 'bg-emerald-50 text-emerald-700 border border-emerald-200';
       case 'SCHEDULED':
         return 'bg-blue-50 text-blue-700 border border-blue-200';
+      case 'REVIEW_PENDING':
+        return 'bg-amber-100 text-amber-800 border border-amber-300 font-extrabold';
       case 'DRAFT':
       default:
         return 'bg-slate-100 text-slate-700 border border-slate-200';
@@ -321,6 +348,23 @@ export default function ProfessorExamsPage() {
                             <span>Progress</span>
                           </Button>
                         </Link>
+                        {exam.status !== 'PUBLISHED' && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            className="flex-1 min-w-[75px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-9 text-xs px-2 shadow-2xs"
+                            onClick={() => handlePublishExam(exam._id)}
+                            disabled={publishingId === exam._id}
+                            title="Publish exam results to students"
+                          >
+                            {publishingId === exam._id ? (
+                              <LoadingSpinner size="sm" />
+                            ) : (
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                            )}
+                            <span>Publish</span>
+                          </Button>
+                        )}
                         {exam.status === 'PUBLISHED' && (
                           <>
                             <Link href={`/professor/exams/${exam._id}/analytics`} className="flex-1 min-w-[90px]">

@@ -1,22 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
-import { requireAuth } from '@/lib/apiAuth';
+import { requireClassroomProfessor } from '@/lib/classroomAuth';
 import ClassroomSession from '@/models/ClassroomSession';
 import classroomSessionService from '@/services/ClassroomSessionService';
 import { HttpError } from '@/lib/errors';
 
-export async function GET() {
-  const auth = await requireAuth();
+export async function GET(req: NextRequest) {
+  const auth = await requireClassroomProfessor(req);
   if (!auth.authorized) {
     return auth.response;
-  }
-
-  if (auth.user.role !== 'PROFESSOR') {
-    return NextResponse.json({
-      success: false,
-      message: 'Forbidden: Only professors can view classroom sessions',
-      data: null
-    }, { status: 403 });
   }
 
   try {
@@ -53,17 +45,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth();
+  const auth = await requireClassroomProfessor(req);
   if (!auth.authorized) {
     return auth.response;
-  }
-
-  if (auth.user.role !== 'PROFESSOR') {
-    return NextResponse.json({
-      success: false,
-      message: 'Forbidden: Only professors can create classroom sessions',
-      data: null
-    }, { status: 403 });
   }
 
   try {
@@ -79,7 +63,7 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const { title, questionPrompt, referenceAnswer, timeLimit, courseId } = body;
+    const { title, questionPrompt, referenceAnswer, timeLimit, courseId, allowedStudents } = body;
 
     const context = {
       actingUserId: auth.user.id,
@@ -93,7 +77,8 @@ export async function POST(req: NextRequest) {
         questionPrompt,
         referenceAnswer,
         timeLimit: typeof timeLimit === 'number' ? timeLimit : 180,
-        courseId
+        courseId,
+        allowedStudents
       },
       context
     );
@@ -113,4 +98,3 @@ export async function POST(req: NextRequest) {
     }, { status });
   }
 }
-

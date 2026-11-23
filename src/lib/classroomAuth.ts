@@ -105,22 +105,20 @@ export async function getClassroomUser(req?: NextRequest) {
     }
   }
 
-  // Optional Phase 2 shared platform login: strictly disabled by default to guarantee auth isolation
-  if (process.env.CLASSROOM_ENABLE_SHARED_AUTH === 'true') {
-    try {
-      const session = await getServerSession(authOptions);
-      if (session?.user) {
-        return {
-          id: session.user.id,
-          email: session.user.email || '',
-          name: session.user.name || '',
-          role: (session.user.role as ClassroomUserRole) || 'PROFESSOR',
-          exp: Math.floor(Date.now() / 1000) + 86400,
-        };
-      }
-    } catch {
-      // Non-blocking
+  // Also accept active NextAuth session for seamless platform navigation
+  try {
+    const session = await getServerSession(authOptions);
+    if (session?.user?.id) {
+      return {
+        id: session.user.id,
+        email: session.user.email || '',
+        name: session.user.name || '',
+        role: (session.user.role as ClassroomUserRole) || 'PROFESSOR',
+        exp: Math.floor(Date.now() / 1000) + 86400,
+      };
     }
+  } catch {
+    // Non-blocking
   }
 
   return null;
@@ -153,7 +151,8 @@ export async function requireClassroomProfessor(req?: NextRequest) {
     return auth;
   }
 
-  if (auth.user.role !== 'PROFESSOR') {
+  const role = (auth.user.role || '').toUpperCase();
+  if (role !== 'PROFESSOR' && role !== 'ADMIN') {
     return {
       authorized: false as const,
       user: auth.user,
@@ -162,6 +161,33 @@ export async function requireClassroomProfessor(req?: NextRequest) {
         { status: 403 }
       ),
     };
+  }
+
+  // Check admin-granted classroom access if role is PROFESSOR
+  if (role === 'PROFESSOR') {
+    try {
+      const { connectDB } = await import('./db');
+      await connectDB();
+      const User = (await import('../models/User')).default;
+      const dbUser = await User.findById(auth.user.id).select('classroomAccess role').lean();
+      if (dbUser && !dbUser.classroomAccess) {
+        return {
+          authorized: false as const,
+          user: auth.user,
+          response: NextResponse.json(
+            {
+              success: false,
+              code: 'CLASSROOM_ACCESS_DENIED',
+              message: 'Forbidden: Classroom Activity access has not been granted by administrator. Access is available on request only.',
+              data: null,
+            },
+            { status: 403 }
+          ),
+        };
+      }
+    } catch {
+      // Allow fallback if lookup fails
+    }
   }
 
   return auth;

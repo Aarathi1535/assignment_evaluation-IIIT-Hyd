@@ -81,6 +81,11 @@ export default function ProfessorClassroomPage() {
   const [questionPrompt, setQuestionPrompt] = useState('');
   const [referenceAnswer, setReferenceAnswer] = useState('');
   const [timeLimit, setTimeLimit] = useState(180); // 3 mins default
+  const [studentRosterText, setStudentRosterText] = useState('');
+
+  // Access state
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [accessRequestSent, setAccessRequestSent] = useState(false);
 
   // Review Modal State
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
@@ -102,6 +107,11 @@ export default function ProfessorClassroomPage() {
         const res = await fetch('/api/classroom/sessions');
         const data = await res.json();
         if (!active) return;
+        if (data.code === 'CLASSROOM_ACCESS_DENIED' || res.status === 403) {
+          setAccessDenied(true);
+          setErrorMessage(data.message || 'Classroom Activity access has not been granted by administrator. Access is available on request only.');
+          return;
+        }
         if (data.success && Array.isArray(data.data)) {
           setSessions(data.data);
           if (data.data.length > 0) {
@@ -119,6 +129,29 @@ export default function ProfessorClassroomPage() {
     loadSessions();
     return () => { active = false; };
   }, []);
+
+  const handleRequestAccess = async () => {
+    setActionLoading(true);
+    setErrorMessage('');
+    try {
+      const res = await fetch('/api/classroom/access-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAccessRequestSent(true);
+        setSuccessMessage('Classroom access request submitted successfully. Administrator has been notified.');
+      } else {
+        setErrorMessage(data.message || 'Failed to submit access request');
+      }
+    } catch {
+      setErrorMessage('Failed to submit access request');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   // Fetch Submissions for Current Activity
   const fetchSubmissions = useCallback(async (sessionCode: string) => {
@@ -274,6 +307,11 @@ export default function ProfessorClassroomPage() {
     setActionLoading(true);
     setErrorMessage('');
     try {
+      const allowedStudents = studentRosterText
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
       const res = await fetch('/api/classroom/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -281,8 +319,9 @@ export default function ProfessorClassroomPage() {
           title: sessionTitle.trim(),
           questionPrompt: questionPrompt.trim(),
           referenceAnswer: referenceAnswer.trim() || undefined,
-          timeLimit
-        })
+          timeLimit,
+          allowedStudents,
+        }),
       });
 
       const data = await res.json();
@@ -534,6 +573,29 @@ export default function ProfessorClassroomPage() {
             </Button>
           </div>
         </div>
+
+        {/* Access Denied Banner */}
+        {accessDenied && (
+          <div className="p-6 bg-amber-50 border-2 border-amber-300 rounded-2xl text-amber-950 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="font-bold text-base text-amber-950">Classroom Activity Access Required</h3>
+                <p className="text-xs text-amber-800 font-medium mt-1">
+                  Access to the Classroom Activity module is granted by administrators on request only. You can request access below.
+                </p>
+              </div>
+            </div>
+            <Button
+              onClick={handleRequestAccess}
+              disabled={actionLoading || accessRequestSent}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-bold shrink-0"
+            >
+              {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin mr-1.5" /> : null}
+              {accessRequestSent ? 'Request Pending Admin Review' : 'Request Access from Admin'}
+            </Button>
+          </div>
+        )}
 
         {/* Notifications */}
         {errorMessage && (
@@ -887,6 +949,27 @@ export default function ProfessorClassroomPage() {
                     <option value={600}>10 Minutes</option>
                     <option value={0}>Untimed (Manual close)</option>
                   </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      Allowed Students Roster (Emails or Roll Numbers)
+                    </label>
+                    <span className="text-3xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                      Gated Access
+                    </span>
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={studentRosterText}
+                    onChange={(e) => setStudentRosterText(e.target.value)}
+                    placeholder="Enter student emails or roll numbers separated by comma or new line. Only students in this list can join and upload answers."
+                    className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 font-semibold focus:outline-none focus:border-blue-600 text-sm resize-none"
+                  />
+                  <p className="text-2xs text-slate-500 font-medium mt-1">
+                    Only students included in this list will be permitted to log in, join the session, and upload their answer sheets.
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 pt-4 border-t-2 border-slate-200">

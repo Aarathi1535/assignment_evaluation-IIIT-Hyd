@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
-import { connectClassroomDB } from '@/lib/classroomDb';
+import { connectDB } from '@/lib/db';
+import User from '@/models/User';
 import ClassroomUser from '@/models/ClassroomUser';
 import { signClassroomToken } from '@/lib/classroomAuth';
 
 export async function POST(req: NextRequest) {
   try {
-    await connectClassroomDB();
+    await connectDB();
     const body = await req.json();
     const { email, password } = body;
 
@@ -18,7 +19,20 @@ export async function POST(req: NextRequest) {
     }
 
     const trimmedEmail = email.trim().toLowerCase();
-    const user = await ClassroomUser.findOne({ email: trimmedEmail });
+
+    // Check institutional platform User collection first
+    let user = await User.findOne({ email: trimmedEmail });
+    let isIndependentClassroomUser = false;
+
+    if (!user) {
+      // Check independent ClassroomUser if exists
+      const cu = await ClassroomUser.findOne({ email: trimmedEmail });
+      if (cu) {
+        user = cu as any;
+        isIndependentClassroomUser = true;
+      }
+    }
+
     if (!user) {
       return NextResponse.json(
         { success: false, message: 'Invalid email or password', data: null },
@@ -41,11 +55,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const role = (user.role || '').toUpperCase();
+    if (role !== 'PROFESSOR' && role !== 'ADMIN') {
+      return NextResponse.json(
+        { success: false, message: 'Classroom portal login is restricted to faculty professors and administrators', data: null },
+        { status: 403 }
+      );
+    }
+
+    // Classroom Activity access gate: Admin grants access on request only
+    const hasClassroomAccess = role === 'ADMIN' || Boolean(user.classroomAccess);
+    if (!hasClassroomAccess) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: 'CLASSROOM_ACCESS_DENIED',
+          message: 'Classroom Activity access has not been granted by administrator. Access is available on request only.',
+          requestStatus: user.classroomRequestStatus || 'NONE',
+          data: null,
+        },
+        { status: 403 }
+      );
+    }
+
     const tokenPayload = {
       id: user._id.toString(),
       email: user.email,
       name: user.name,
-      role: user.role,
+      role: (user.role as any) || 'PROFESSOR',
     };
 
     const token = signClassroomToken(tokenPayload);
@@ -56,6 +93,7 @@ export async function POST(req: NextRequest) {
         message: 'Classroom login successful',
         data: {
           user: tokenPayload,
+          classroomUser: tokenPayload,
           token,
         },
       },
@@ -76,4 +114,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, message, data: null }, { status: 500 });
   }
 }
-

@@ -7,6 +7,9 @@ export interface IClassroomSession extends Document {
     joinCode: string;
     qrCodeSvg: string;
     createdBy: mongoose.Types.ObjectId;
+    course?: mongoose.Types.ObjectId | null;
+    allowedStudents?: string[];
+    restrictedRoster: boolean;
     status: ClassroomSessionStatus;
     currentActivity?: mongoose.Types.ObjectId | null;
     defaultTimeLimit: number;
@@ -39,6 +42,19 @@ const ClassroomSessionSchema = new Schema<IClassroomSession>(
             ref: 'User',
             required: true,
             index: true
+        },
+        course: {
+            type: Schema.Types.ObjectId,
+            ref: 'Course',
+            default: null
+        },
+        allowedStudents: {
+            type: [String],
+            default: []
+        },
+        restrictedRoster: {
+            type: Boolean,
+            default: true
         },
         status: {
             type: String,

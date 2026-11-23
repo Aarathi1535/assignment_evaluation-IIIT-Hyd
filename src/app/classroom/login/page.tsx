@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { MonitorPlay, LogIn, ArrowLeft } from 'lucide-react';
+import { MonitorPlay, LogIn, ArrowLeft, AlertCircle, CheckCircle2, Send } from 'lucide-react';
 
 export default function ClassroomLoginPage() {
   const router = useRouter();
@@ -11,10 +11,16 @@ export default function ClassroomLoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [requestStatus, setRequestStatus] = useState<string | null>(null);
+  const [requestLoading, setRequestLoading] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setAccessDenied(false);
+    setRequestMessage(null);
     setLoading(true);
 
     try {
@@ -25,6 +31,11 @@ export default function ClassroomLoginPage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.code === 'CLASSROOM_ACCESS_DENIED') {
+          setAccessDenied(true);
+          setRequestStatus(data.requestStatus || 'NONE');
+          throw new Error(data.message || 'Access to Classroom Activity has not been granted by administrator.');
+        }
         throw new Error(data.message || 'Login failed');
       }
 
@@ -33,6 +44,30 @@ export default function ClassroomLoginPage() {
       setError(err instanceof Error ? err.message : 'An error occurred during login');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRequestAccess = async () => {
+    if (!email) return;
+    setRequestLoading(true);
+    setRequestMessage(null);
+
+    try {
+      const res = await fetch('/api/classroom/access-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Failed to submit request');
+      }
+      setRequestMessage('Access request submitted successfully! Your administrator has been notified.');
+      setRequestStatus('REQUESTED');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to submit access request');
+    } finally {
+      setRequestLoading(false);
     }
   };
 
@@ -53,12 +88,45 @@ export default function ClassroomLoginPage() {
               <MonitorPlay className="w-6 h-6" />
             </div>
             <h1 className="text-2xl font-bold">Classroom Login</h1>
-            <p className="text-xs text-neutral-400">Independent authentication for Classroom Activity</p>
+            <p className="text-xs text-neutral-400">Faculty access for live Classroom Activity</p>
           </div>
 
           {error && (
-            <div className="p-3 bg-red-950/80 border border-red-800 text-red-200 text-xs rounded-xl text-center">
-              {error}
+            <div className="p-3.5 bg-red-950/80 border border-red-800 text-red-200 text-xs rounded-xl flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+              <div className="flex-1 leading-relaxed">{error}</div>
+            </div>
+          )}
+
+          {accessDenied && (
+            <div className="p-4 bg-amber-950/60 border border-amber-800 rounded-2xl text-xs space-y-3">
+              <div className="text-amber-200 font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Classroom Access is on Request Only</span>
+              </div>
+              <p className="text-neutral-300 leading-relaxed">
+                {requestStatus === 'REQUESTED'
+                  ? 'Your access request has already been submitted and is currently pending administrator review.'
+                  : 'You do not have active classroom activity permissions. Click below to submit an access request to the administrator.'}
+              </p>
+              {requestStatus !== 'REQUESTED' && (
+                <button
+                  type="button"
+                  onClick={handleRequestAccess}
+                  disabled={requestLoading}
+                  className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{requestLoading ? 'Submitting Request...' : 'Request Access from Admin'}</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {requestMessage && (
+            <div className="p-3.5 bg-emerald-950/80 border border-emerald-800 text-emerald-200 text-xs rounded-xl flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>{requestMessage}</span>
             </div>
           )}
 
@@ -97,11 +165,8 @@ export default function ClassroomLoginPage() {
             </button>
           </form>
 
-          <div className="pt-4 border-t border-neutral-800 text-center text-xs text-neutral-400">
-            Don&apos;t have an independent classroom account?{' '}
-            <Link href="/classroom/register" className="text-teal-400 hover:underline font-semibold">
-              Register here
-            </Link>
+          <div className="pt-4 border-t border-neutral-800 text-center text-xs text-neutral-500">
+            IIIT Hyderabad &bull; Classroom Activity Management
           </div>
         </div>
       </div>

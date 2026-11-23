@@ -61,6 +61,34 @@ export default function AdminUsersPage() {
     setDeactivateUser(user);
   };
 
+  const handleToggleClassroomAccess = async (userId: string, access: boolean) => {
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/classroom-access`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setUsers((prev) =>
+          prev.map((u) =>
+            u._id === userId
+              ? {
+                  ...u,
+                  classroomAccess: access,
+                  classroomRequestStatus: access ? 'APPROVED' : 'REJECTED',
+                }
+              : u
+          )
+        );
+      } else {
+        setError(data.message || 'Failed to update classroom access');
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error updating classroom access');
+    }
+  };
+
   const filteredUsers = users.filter((u) => {
     const q = searchQuery.toLowerCase().trim();
     return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
@@ -157,6 +185,7 @@ export default function AdminUsersPage() {
           users={filteredUsers}
           isLoading={isLoading}
           onDeactivate={handleDeactivateClick}
+          onToggleClassroomAccess={handleToggleClassroomAccess}
         />
 
         {/* Modals */}

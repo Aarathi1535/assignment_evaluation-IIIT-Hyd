@@ -67,22 +67,18 @@ export default function ClassroomPortalPage() {
           </form>
         </div>
 
-        {/* Independent Auth for Instructors / Account Holders */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Auth Entry for Professors */}
+        <div>
           <Link
             href="/classroom/login"
-            className="flex items-center justify-center gap-2 py-3 px-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded-xl text-white font-medium text-sm transition"
+            className="flex items-center justify-center gap-2 py-3.5 px-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded-xl text-white font-medium text-sm transition shadow-md"
           >
             <LogIn className="w-4 h-4 text-teal-400" />
-            <span>Classroom Login</span>
+            <span>Professor / Admin Login</span>
           </Link>
-          <Link
-            href="/classroom/register"
-            className="flex items-center justify-center gap-2 py-3 px-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded-xl text-white font-medium text-sm transition"
-          >
-            <UserPlus className="w-4 h-4 text-teal-400" />
-            <span>Register Account</span>
-          </Link>
+          <p className="text-center text-xs text-neutral-500 mt-2">
+            Classroom access is granted to professors by administrator on request only.
+          </p>
         </div>
       </main>
 

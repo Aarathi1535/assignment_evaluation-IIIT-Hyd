@@ -24,6 +24,7 @@ export interface CreateSessionAndActivityInput {
     referenceAnswer?: string;
     timeLimit?: number;
     courseId?: string;
+    allowedStudents?: string[];
 }
 
 export interface JoinSessionResponse {
@@ -96,6 +97,35 @@ export class ClassroomSessionService {
         const now = new Date();
         const expiresAt = timeLimit > 0 ? new Date(now.getTime() + timeLimit * 1000) : null;
 
+        // Resolve allowed student list provided by professor or via course enrollment
+        let allowedStudentsList: string[] = [];
+        if (Array.isArray(input.allowedStudents)) {
+            allowedStudentsList = input.allowedStudents
+                .map(s => String(s).trim().toLowerCase())
+                .filter(Boolean);
+        }
+
+        if (input.courseId && mongoose.Types.ObjectId.isValid(input.courseId)) {
+            try {
+                const Course = (await import('../models/Course')).default;
+                const courseDoc = await Course.findById(input.courseId).populate('enrolledStudents', 'email name').lean();
+                if (courseDoc && Array.isArray((courseDoc as any).enrolledStudents)) {
+                    for (const std of (courseDoc as any).enrolledStudents) {
+                        if (std.email) allowedStudentsList.push(std.email.toLowerCase());
+                        if (std.name) allowedStudentsList.push(std.name.toLowerCase());
+                    }
+                }
+                const StudentMapping = (await import('../models/StudentMapping')).default;
+                const mappings = await StudentMapping.find({ course: input.courseId }).select('rollNumber').lean();
+                for (const m of mappings) {
+                    if (m.rollNumber) allowedStudentsList.push(m.rollNumber.toLowerCase());
+                }
+            } catch {
+                // Ignore course lookup error
+            }
+        }
+        allowedStudentsList = Array.from(new Set(allowedStudentsList));
+
         // Generate QR code SVG linking to student join URL
         const joinUrl = `/classroom/session/${joinCode}`;
         const qrCodeSvg = generateQRCodeSvg(joinUrl, 280);
@@ -106,6 +136,9 @@ export class ClassroomSessionService {
             joinCode,
             qrCodeSvg,
             createdBy: new mongoose.Types.ObjectId(context.actingUserId),
+            course: input.courseId && mongoose.Types.ObjectId.isValid(input.courseId) ? new mongoose.Types.ObjectId(input.courseId) : null,
+            allowedStudents: allowedStudentsList,
+            restrictedRoster: allowedStudentsList.length > 0,
             status: 'ACTIVE',
             defaultTimeLimit: timeLimit,
             participantCount: 0
@@ -192,6 +225,41 @@ export class ClassroomSessionService {
 
         if (!session) {
             throw new HttpError('Classroom session not found or is closed', 404);
+        }
+
+        // Roster Gating: Only respective students list provided by professor will get access to join and upload
+        if (session.restrictedRoster && session.allowedStudents && session.allowedStudents.length > 0) {
+            const candidateIdentifiers: string[] = [
+                cleanName.toLowerCase(),
+                optionalToken?.toLowerCase() || '',
+            ];
+
+            if (optionalUserId) {
+                candidateIdentifiers.push(optionalUserId.toLowerCase());
+            }
+
+            if (optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)) {
+                try {
+                    const User = (await import('../models/User')).default;
+                    const u = await User.findById(optionalUserId).select('email name').lean();
+                    if (u) {
+                        if (u.email) candidateIdentifiers.push(u.email.toLowerCase());
+                        if (u.name) candidateIdentifiers.push(u.name.toLowerCase());
+                    }
+                } catch {
+                    // Ignore lookup error
+                }
+            }
+
+            const allowedSet = new Set(session.allowedStudents.map(s => s.toLowerCase()));
+            const isAllowed = candidateIdentifiers.some(id => id && allowedSet.has(id));
+
+            if (!isAllowed) {
+                throw new HttpError(
+                    'Access denied: You are not in the enrolled student list provided by the professor for this classroom session. Only designated students can join and upload.',
+                    403
+                );
+            }
         }
 
         // Check if participant already joined this specific session

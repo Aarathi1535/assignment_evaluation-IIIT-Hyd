@@ -92,6 +92,32 @@ export default function ReviewDashboardView({ examId, role }: ReviewDashboardVie
   const [savingId, setSavingId] = useState(false);
   const [saveError, setSaveError] = useState('');
 
+  // Exam Publish State
+  const [publishing, setPublishing] = useState(false);
+  const [publishSuccess, setPublishSuccess] = useState<string | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
+  const handlePublish = async () => {
+    setPublishing(true);
+    setPublishError(null);
+    setPublishSuccess(null);
+    try {
+      const res = await fetch(`/api/exams/${examId}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to publish exam results');
+      }
+      setPublishSuccess('Exam results published successfully to students!');
+    } catch (err: unknown) {
+      setPublishError(err instanceof Error ? err.message : 'Failed to publish exam');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   const loadSummary = useCallback(async () => {
     try {
       setLoading(true);
@@ -322,13 +348,41 @@ export default function ReviewDashboardView({ examId, role }: ReviewDashboardVie
           <div className="text-2xs font-extrabold text-slate-400 uppercase tracking-wider">Ingestion Summary Dashboard</div>
           <h2 className="text-xl font-black text-slate-800 tracking-tight">Review Exam Ingest</h2>
         </div>
-        <Link href={role === 'PROFESSOR' ? '/professor/exams' : '/admin/exams/batches'}>
-          <Button variant="outline" size="sm">
-            <ArrowLeft className="h-4 w-4 mr-1.5" />
-            <span>Back to Exams</span>
-          </Button>
-        </Link>
+        <div className="flex items-center gap-3">
+          {role === 'PROFESSOR' && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handlePublish}
+              disabled={publishing}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1.5 shadow-xs"
+            >
+              {publishing ? <LoadingSpinner size="sm" /> : <CheckCircle2 className="h-4 w-4" />}
+              <span>{publishing ? 'Publishing...' : 'Publish Results'}</span>
+            </Button>
+          )}
+          <Link href={role === 'PROFESSOR' ? '/professor/exams' : '/admin/exams/batches'}>
+            <Button variant="outline" size="sm">
+              <ArrowLeft className="h-4 w-4 mr-1.5" />
+              <span>Back to Exams</span>
+            </Button>
+          </Link>
+        </div>
       </div>
+
+      {publishSuccess && (
+        <div className="flex items-center gap-2 p-3.5 bg-emerald-50 border border-emerald-200 rounded-brand text-emerald-800 text-sm font-semibold">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+          <span>{publishSuccess}</span>
+        </div>
+      )}
+
+      {publishError && (
+        <div className="flex items-center gap-2 p-3.5 bg-rose-50 border border-rose-200 rounded-brand text-rose-800 text-sm font-semibold">
+          <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+          <span>{publishError}</span>
+        </div>
+      )}
 
       {/* Aggregate Counts Card Tiles */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">

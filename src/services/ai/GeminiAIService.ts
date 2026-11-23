@@ -250,11 +250,11 @@ export class GeminiAIService {
         const parts = candidate.content?.parts || [];
         rawText = parts
           .filter(
-            (p): p is { text: string; thought?: boolean } =>
+            (p: any): p is { text: string; thought?: boolean } =>
               typeof (p as { text?: unknown })?.text === 'string' &&
               !(p as { thought?: unknown })?.thought
           )
-          .map((p) => p.text)
+          .map((p: any) => p.text)
           .join('');
       }
 

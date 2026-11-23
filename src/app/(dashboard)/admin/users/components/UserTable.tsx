@@ -10,12 +10,15 @@ export interface UserItem {
   email: string;
   role: string;
   isActive: boolean;
+  classroomAccess?: boolean;
+  classroomRequestStatus?: 'NONE' | 'REQUESTED' | 'APPROVED' | 'REJECTED';
 }
 
 interface UserTableProps {
   users: UserItem[];
   isLoading: boolean;
   onDeactivate: (user: { id: string; name: string; email: string }) => void;
+  onToggleClassroomAccess?: (userId: string, access: boolean) => void;
 }
 
 const roleBadgeStyles: Record<string, string> = {
@@ -25,7 +28,7 @@ const roleBadgeStyles: Record<string, string> = {
   STUDENT: 'bg-emerald-50 text-emerald-700 border-emerald-200 border',
 };
 
-export const UserTable = ({ users, isLoading, onDeactivate }: UserTableProps) => {
+export const UserTable = ({ users, isLoading, onDeactivate, onToggleClassroomAccess }: UserTableProps) => {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center p-12 bg-white rounded-brand-lg border border-slate-200 shadow-xs">
@@ -58,6 +61,7 @@ export const UserTable = ({ users, isLoading, onDeactivate }: UserTableProps) =>
               <th className="px-6 py-4">User Name</th>
               <th className="px-6 py-4">Email Address</th>
               <th className="px-6 py-4">Security Role</th>
+              <th className="px-6 py-4 text-center">Classroom Access</th>
               <th className="px-6 py-4 text-center">Status</th>
               <th className="px-6 py-4 text-right">Actions</th>
             </tr>
@@ -87,6 +91,57 @@ export const UserTable = ({ users, isLoading, onDeactivate }: UserTableProps) =>
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase tracking-wide ${roleStyle}`}>
                       {user.role}
                     </span>
+                  </td>
+                  {/* Classroom Access (Faculty/Admin) */}
+                  <td className="px-6 py-4.5 whitespace-nowrap text-center">
+                    {user.role.toUpperCase() === 'ADMIN' ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase bg-blue-50 text-blue-700 border border-blue-200">
+                        Always Granted
+                      </span>
+                    ) : user.role.toUpperCase() === 'PROFESSOR' ? (
+                      <div className="flex items-center justify-center gap-1.5">
+                        {user.classroomAccess ? (
+                          <>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase bg-teal-50 text-teal-700 border border-teal-200">
+                              Granted
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onToggleClassroomAccess?.(user._id, false)}
+                              className="text-xs text-rose-600 hover:text-rose-800 underline font-semibold cursor-pointer ml-1"
+                              title="Revoke access"
+                            >
+                              Revoke
+                            </button>
+                          </>
+                        ) : user.classroomRequestStatus === 'REQUESTED' ? (
+                          <>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase bg-amber-50 text-amber-700 border border-amber-300 animate-pulse">
+                              Requested
+                            </span>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              className="h-7 text-xs px-2 bg-amber-600 hover:bg-amber-700 text-white ml-1 font-bold"
+                              onClick={() => onToggleClassroomAccess?.(user._id, true)}
+                            >
+                              Grant Access
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs px-2 border-slate-300 text-slate-700 hover:bg-teal-50 hover:text-teal-700 font-semibold"
+                            onClick={() => onToggleClassroomAccess?.(user._id, true)}
+                          >
+                            Grant Access
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
                   </td>
                   {/* Status */}
                   <td className="px-6 py-4.5 whitespace-nowrap text-center">

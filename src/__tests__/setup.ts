@@ -1,8 +1,17 @@
 import { loadEnvConfig } from '@next/env';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
-import { beforeAll, beforeEach, afterAll } from 'vitest';
+import { beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { GlobalFonts } from '@napi-rs/canvas';
+
+// Globally mock @google/genai for offline test execution
+vi.mock('@google/genai', () => ({
+  GoogleGenAI: class MockGoogleGenAI {
+    models = {
+      generateContent: vi.fn(),
+    };
+  },
+}));
 
 // Load environment configuration (.env.local) if present
 loadEnvConfig(process.cwd());

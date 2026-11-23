@@ -8,6 +8,7 @@ import {
   Flag,
   AlertTriangle,
   X,
+  CheckCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 
@@ -57,6 +58,28 @@ export function BulkSubmitModal({
   const [previewData, setPreviewData] = useState<BulkSubmitResultData | null>(null);
   const [resultData, setResultData] = useState<BulkSubmitResultData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settingReviewPending, setSettingReviewPending] = useState(false);
+  const [reviewPendingDone, setReviewPendingDone] = useState(false);
+
+  const handleEnableReviewPending = async () => {
+    if (!examId) return;
+    setSettingReviewPending(true);
+    try {
+      const res = await fetch(`/api/exams/${encodeURIComponent(examId)}/review-pending`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to update exam status');
+      }
+      setReviewPendingDone(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to enable review pending');
+    } finally {
+      setSettingReviewPending(false);
+    }
+  };
 
   const fetchPreview = useCallback(async () => {
     if (!examId) return;
@@ -382,16 +405,30 @@ export function BulkSubmitModal({
           )}
 
           {step === 'result' && (
-            <Button
-              type="button"
-              variant="primary"
-              size="sm"
-              data-testid="close-bulk-submit-button"
-              onClick={onClose}
-              className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
-            >
-              Done
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleEnableReviewPending}
+                disabled={settingReviewPending || reviewPendingDone}
+                className="bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100 font-semibold gap-1.5"
+                title="Update exam status to REVIEW_PENDING so professor can publish results"
+              >
+                <CheckCheck className="h-3.5 w-3.5 text-amber-700" />
+                <span>{settingReviewPending ? 'Enabling...' : reviewPendingDone ? 'Review Pending Enabled!' : 'Enable Review Pending'}</span>
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                data-testid="close-bulk-submit-button"
+                onClick={onClose}
+                className="bg-slate-900 hover:bg-slate-800 text-white font-semibold"
+              >
+                Done
+              </Button>
+            </>
           )}
         </div>
       </div>

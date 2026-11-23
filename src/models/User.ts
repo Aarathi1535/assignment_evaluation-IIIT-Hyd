@@ -9,6 +9,9 @@ export interface IUser extends Document {
     password: string;
     role: UserRole;
     isActive: boolean;
+    classroomAccess?: boolean;
+    classroomRequestStatus?: 'NONE' | 'REQUESTED' | 'APPROVED' | 'REJECTED';
+    classroomRequestedAt?: Date | null;
     resetPasswordToken?: string;
     resetPasswordExpires?: Date;
     createdAt: Date;
@@ -41,6 +44,19 @@ const UserSchema = new Schema<IUser>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        classroomAccess: {
+            type: Boolean,
+            default: false
+        },
+        classroomRequestStatus: {
+            type: String,
+            enum: ['NONE', 'REQUESTED', 'APPROVED', 'REJECTED'],
+            default: 'NONE'
+        },
+        classroomRequestedAt: {
+            type: Date,
+            default: null
         },
         resetPasswordToken: {
             type: String,
