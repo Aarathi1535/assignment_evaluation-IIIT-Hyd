@@ -121,54 +121,95 @@ export default function DashboardLayout({
   const isClassroomEnabled = isFeatureEnabled('CLASSROOM_ASSESSMENT');
   const isPersonalizedEnabled = isFeatureEnabled('PERSONALIZED_ASSESSMENT');
 
-  const adminNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
-    { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
-    { label: 'Users', href: '/admin/users', icon: Users },
-    { label: 'Audit History', href: '/admin/audit-logs', icon: ClipboardList },
-  ];
-  if (isClassroomEnabled) {
-    adminNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
-  }
+  const isClassroomMode = pathname.includes('/classroom');
+  const isPersonalizedMode = pathname.includes('/personalized');
 
-  const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
-    { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
-    { label: 'Courses', href: '/professor/courses', icon: BookOpen },
-    { label: 'Exams', href: '/professor/exams', icon: FileText },
-    { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
-    { label: 'Audit History', href: '/professor/audit-logs', icon: ClipboardList },
-    { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
-    { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
-  ];
-  if (isClassroomEnabled) {
-    professorNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
-  }
-  if (isPersonalizedEnabled) {
-    professorNavItems.push({ label: 'Personalized Learning', href: '/professor/personalized', icon: Calendar });
-  }
+  let activeBrandTitle = 'IIIT Hyderabad';
+  let activeBrandSubtitle = 'Evaluator';
+  let ActiveBrandIcon = GraduationCap;
+  let brandColorClass = 'bg-brand-primary';
 
-  const taNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
-    { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
-  ];
+  let menuItems: Array<{ label: string; href: string; icon: LucideIcon }> = [];
 
-  const studentNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
-    { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
-  ];
-  if (isClassroomEnabled) {
-    studentNavItems.push({ label: 'Classroom Activity', href: '/student/classroom', icon: Sparkles });
+  if (isClassroomMode) {
+    activeBrandTitle = 'Classroom Activity';
+    activeBrandSubtitle = 'Live Interaction';
+    ActiveBrandIcon = Sparkles;
+    brandColorClass = 'bg-indigo-600';
+
+    if (role === 'PROFESSOR' || role === 'ADMIN') {
+      menuItems = [
+        { label: 'Live Session Studio', href: '/professor/classroom', icon: Sparkles },
+      ];
+    } else {
+      menuItems = [
+        { label: 'Classroom Activity', href: '/student/classroom', icon: Sparkles },
+      ];
+    }
+  } else if (isPersonalizedMode) {
+    activeBrandTitle = 'Personalised';
+    activeBrandSubtitle = 'Learning Track';
+    ActiveBrandIcon = Calendar;
+    brandColorClass = 'bg-violet-600';
+
+    if (role === 'PROFESSOR' || role === 'ADMIN') {
+      menuItems = [
+        { label: 'Course & Question Studio', href: '/professor/personalized', icon: Calendar },
+      ];
+    } else {
+      menuItems = [
+        { label: 'My Learning Track', href: '/student/personalized', icon: Calendar },
+      ];
+    }
+  } else {
+    const adminNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+      { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+      { label: 'Users', href: '/admin/users', icon: Users },
+      { label: 'Audit History', href: '/admin/audit-logs', icon: ClipboardList },
+    ];
+    if (isClassroomEnabled) {
+      adminNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
+    }
+
+    const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+      { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
+      { label: 'Courses', href: '/professor/courses', icon: BookOpen },
+      { label: 'Exams', href: '/professor/exams', icon: FileText },
+      { label: 'Flag Review Queue', href: '/professor/flags', icon: Flag },
+      { label: 'Audit History', href: '/professor/audit-logs', icon: ClipboardList },
+      { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
+      { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
+    ];
+    if (isClassroomEnabled) {
+      professorNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
+    }
+    if (isPersonalizedEnabled) {
+      professorNavItems.push({ label: 'Personalized Learning', href: '/professor/personalized', icon: Calendar });
+    }
+
+    const taNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+      { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
+    ];
+
+    const studentNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
+      { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
+    ];
+    if (isClassroomEnabled) {
+      studentNavItems.push({ label: 'Classroom Activity', href: '/student/classroom', icon: Sparkles });
+    }
+    if (isPersonalizedEnabled) {
+      studentNavItems.push({ label: 'Personalized Learning', href: '/student/personalized', icon: Calendar });
+    }
+
+    const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
+      ADMIN: adminNavItems,
+      PROFESSOR: professorNavItems,
+      TA: taNavItems,
+      STUDENT: studentNavItems,
+    };
+
+    menuItems = navItemsByRole[role] || navItemsByRole.STUDENT;
   }
-  if (isPersonalizedEnabled) {
-    studentNavItems.push({ label: 'Personalized Learning', href: '/student/personalized', icon: Calendar });
-  }
-
-  // Define navigation items per role
-  const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
-    ADMIN: adminNavItems,
-    PROFESSOR: professorNavItems,
-    TA: taNavItems,
-    STUDENT: studentNavItems,
-  };
-
-  const menuItems = navItemsByRole[role] || navItemsByRole.STUDENT;
 
   const roleBadgeStyles: Record<string, string> = {
     ADMIN: 'bg-rose-50 text-rose-700 border-rose-200 border',
@@ -182,7 +223,8 @@ export default function DashboardLayout({
 
   const handleSignOut = () => {
     clearUserDrafts(session?.user?.id);
-    signOut({ callbackUrl: '/login' });
+    const callbackUrl = isClassroomMode ? '/classroom/login' : isPersonalizedMode ? '/personalized/login' : '/login';
+    signOut({ callbackUrl });
   };
 
   return (
@@ -199,12 +241,12 @@ export default function DashboardLayout({
       <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 bg-white border-r border-slate-200 z-20" aria-label="Desktop Sidebar Navigation">
         {/* Sidebar Header */}
         <div className="h-16 flex items-center gap-3 px-6 border-b border-slate-200 bg-white select-none">
-          <div className="h-9 w-9 rounded-brand bg-brand-primary flex items-center justify-center text-white" aria-hidden="true">
-            <GraduationCap className="h-5 w-5" />
+          <div className={`h-9 w-9 rounded-brand ${brandColorClass} flex items-center justify-center text-white`} aria-hidden="true">
+            <ActiveBrandIcon className="h-5 w-5" />
           </div>
           <div>
-            <h1 className="text-sm font-black text-slate-900 tracking-tight leading-none">IIIT Hyderabad</h1>
-            <p className="text-3xs font-extrabold text-brand-primary uppercase tracking-widest mt-1">Evaluator</p>
+            <h1 className="text-sm font-black text-slate-900 tracking-tight leading-none">{activeBrandTitle}</h1>
+            <p className="text-3xs font-extrabold text-brand-primary uppercase tracking-widest mt-1">{activeBrandSubtitle}</p>
           </div>
         </div>
 
@@ -223,12 +265,12 @@ export default function DashboardLayout({
       {/* Mobile Top Header */}
       <header className="lg:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
         <div className="flex items-center gap-2.5 select-none">
-          <div className="h-8 w-8 rounded bg-brand-primary flex items-center justify-center text-white" aria-hidden="true">
-            <GraduationCap className="h-4.5 w-4.5" />
+          <div className={`h-8 w-8 rounded ${brandColorClass} flex items-center justify-center text-white`} aria-hidden="true">
+            <ActiveBrandIcon className="h-4.5 w-4.5" />
           </div>
           <div>
-            <h1 className="text-xs font-black text-slate-900 tracking-tight leading-none">IIIT Hyderabad</h1>
-            <p className="text-4xs font-extrabold text-brand-primary uppercase tracking-widest mt-0.5">Evaluator</p>
+            <h1 className="text-xs font-black text-slate-900 tracking-tight leading-none">{activeBrandTitle}</h1>
+            <p className="text-4xs font-extrabold text-brand-primary uppercase tracking-widest mt-0.5">{activeBrandSubtitle}</p>
           </div>
         </div>
         <button
@@ -260,12 +302,12 @@ export default function DashboardLayout({
             {/* Drawer Header */}
             <div className="h-16 flex items-center justify-between px-6 border-b border-slate-200">
               <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded bg-brand-primary flex items-center justify-center text-white" aria-hidden="true">
-                  <GraduationCap className="h-4.5 w-4.5" />
+                <div className={`h-8 w-8 rounded ${brandColorClass} flex items-center justify-center text-white`} aria-hidden="true">
+                  <ActiveBrandIcon className="h-4.5 w-4.5" />
                 </div>
                 <div>
-                  <h1 className="text-xs font-black text-slate-900 tracking-tight leading-none">IIIT Hyderabad</h1>
-                  <p className="text-4xs font-extrabold text-brand-primary uppercase tracking-widest mt-0.5">Evaluator</p>
+                  <h1 className="text-xs font-black text-slate-900 tracking-tight leading-none">{activeBrandTitle}</h1>
+                  <p className="text-4xs font-extrabold text-brand-primary uppercase tracking-widest mt-0.5">{activeBrandSubtitle}</p>
                 </div>
               </div>
               <button

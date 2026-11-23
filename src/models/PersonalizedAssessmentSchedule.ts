@@ -14,6 +14,11 @@ export interface IPersonalizedAssessmentSchedule extends Document {
     dailyWindowStartTime: string;
     dailyWindowEndTime: string;
     enrolledStudents: mongoose.Types.ObjectId[];
+    targetSections?: string[];
+    cadence?: string;
+    difficulty?: string;
+    syllabusText?: string;
+    syllabusTopics?: string[];
     questionPool: mongoose.Types.ObjectId[];
     scheduleMatrixGenerated: boolean;
     status: ScheduleStatus;
@@ -86,6 +91,26 @@ const PersonalizedAssessmentScheduleSchema = new Schema<IPersonalizedAssessmentS
                 ref: 'User'
             }
         ],
+        targetSections: {
+            type: [String],
+            default: []
+        },
+        cadence: {
+            type: String,
+            default: '3_PER_DAY'
+        },
+        difficulty: {
+            type: String,
+            default: 'ADAPTIVE'
+        },
+        syllabusText: {
+            type: String,
+            default: ''
+        },
+        syllabusTopics: {
+            type: [String],
+            default: []
+        },
         questionPool: [
             {
                 type: Schema.Types.ObjectId,

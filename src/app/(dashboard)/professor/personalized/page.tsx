@@ -92,7 +92,7 @@ interface StudentProgressItem {
     completionPercentage: number;
 }
 
-type TabType = 'TAXONOMY' | 'SYLLABUS' | 'QUESTION_BANK' | 'SCHEDULES';
+type TabType = 'TAXONOMY' | 'SYLLABUS' | 'NOTEBOOK_STUDIO' | 'QUESTION_BANK' | 'SCHEDULES';
 
 export default function ProfessorPersonalizedAssessmentPage() {
     const [loading, setLoading] = useState(true);
@@ -130,6 +130,17 @@ export default function ProfessorPersonalizedAssessmentPage() {
     const [startTime, setStartTime] = useState('09:00');
     const [endTime, setEndTime] = useState('22:00');
     const [creating, setCreating] = useState(false);
+    const [scheduleCadence, setScheduleCadence] = useState('3_PER_DAY');
+    const [scheduleDifficulty, setScheduleDifficulty] = useState('ADAPTIVE');
+    const [scheduleTargetSections, setScheduleTargetSections] = useState('Section A, Section B');
+
+    // NotebookLLM Studio State
+    const [draftPrompt, setDraftPrompt] = useState('');
+    const [draftTopic, setDraftTopic] = useState('');
+    const [draftDifficulty, setDraftDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+    const [redesigning, setRedesigning] = useState(false);
+    const [redesignedQuestion, setRedesignedQuestion] = useState<any | null>(null);
+    const [savingToBank, setSavingToBank] = useState(false);
 
     // Notifications
     const [formError, setFormError] = useState<string | null>(null);
@@ -189,14 +200,14 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 (res.status === 401
                     ? 'UNAUTHORIZED'
                     : res.status === 403
-                    ? 'FORBIDDEN'
-                    : res.status === 400
-                    ? 'VALIDATION_FAILED'
-                    : res.status === 404
-                    ? 'NOT_FOUND'
-                    : res.status === 503
-                    ? 'AI_NOT_CONFIGURED'
-                    : 'SERVER_ERROR');
+                        ? 'FORBIDDEN'
+                        : res.status === 400
+                            ? 'VALIDATION_FAILED'
+                            : res.status === 404
+                                ? 'NOT_FOUND'
+                                : res.status === 503
+                                    ? 'AI_NOT_CONFIGURED'
+                                    : 'SERVER_ERROR');
 
             const message =
                 payload?.error?.message ||
@@ -204,12 +215,12 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 (res.status === 401
                     ? 'Session expired or unauthenticated. Please log in again.'
                     : res.status === 403
-                    ? 'You do not have permission to perform this action.'
-                    : res.status === 400
-                    ? 'Validation failed: Please check input fields.'
-                    : res.status === 404
-                    ? 'Requested resource not found.'
-                    : `Request failed with status ${res.status}`);
+                        ? 'You do not have permission to perform this action.'
+                        : res.status === 400
+                            ? 'Validation failed: Please check input fields.'
+                            : res.status === 404
+                                ? 'Requested resource not found.'
+                                : `Request failed with status ${res.status}`);
 
             return {
                 ok: false,
@@ -417,6 +428,11 @@ export default function ProfessorPersonalizedAssessmentPage() {
             return;
         }
 
+        const parsedSections = scheduleTargetSections
+            .split(/[\n,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+
         const result = await safeFetchJson('/api/personalized/schedules', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -428,6 +444,11 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 dailyWindowStartTime: startTime,
                 dailyWindowEndTime: endTime,
                 enrolledStudents: enrolled,
+                targetSections: parsedSections,
+                cadence: scheduleCadence,
+                difficulty: scheduleDifficulty,
+                syllabusText: syllabus?.rawText || '',
+                syllabusTopics: syllabus?.extractedTopics || [],
                 totalQuestionsTarget: 100,
                 totalWeeks: 16
             })
@@ -448,6 +469,65 @@ export default function ProfessorPersonalizedAssessmentPage() {
             setFormError(formatError(result, 'Failed to create schedule'));
         }
         setCreating(false);
+    };
+
+    const handleRedesignQuestion = async () => {
+        if (!draftPrompt.trim()) {
+            setFormError('Please enter a draft question prompt or concept.');
+            return;
+        }
+
+        setRedesigning(true);
+        setFormError(null);
+        setFormSuccess(null);
+
+        const res = await safeFetchJson<{ redesigned: any }>('/api/personalized/questions/redesign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                rawPrompt: draftPrompt.trim(),
+                topic: draftTopic || syllabus?.extractedTopics?.[0] || 'Core Concepts',
+                difficulty: draftDifficulty,
+                syllabusContext: syllabus?.rawText || '',
+                courseId: selectedCourseId
+            })
+        });
+
+        if (res.ok && res.data?.redesigned) {
+            setRedesignedQuestion(res.data.redesigned);
+            setFormSuccess('Question successfully redesigned and grounded in course syllabus!');
+        } else {
+            setFormError(formatError(res, 'Failed to redesign question with AI'));
+        }
+        setRedesigning(false);
+    };
+
+    const handleSaveRedesignedToBank = async () => {
+        if (!redesignedQuestion) return;
+        setSavingToBank(true);
+        setFormError(null);
+
+        const res = await safeFetchJson<{ savedQuestion: any }>('/api/personalized/questions/redesign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                rawPrompt: redesignedQuestion.questionPrompt,
+                topic: redesignedQuestion.topic,
+                difficulty: redesignedQuestion.difficulty,
+                courseId: selectedCourseId,
+                saveToBank: true
+            })
+        });
+
+        if (res.ok) {
+            setFormSuccess('Redesigned question saved to Question Bank successfully!');
+            await loadCourseQuestions(selectedCourseId);
+            setRedesignedQuestion(null);
+            setDraftPrompt('');
+        } else {
+            setFormError(formatError(res, 'Failed to save question to question bank'));
+        }
+        setSavingToBank(false);
     };
 
 
@@ -521,11 +601,10 @@ export default function ProfessorPersonalizedAssessmentPage() {
             <div className="flex items-center gap-2 border-b border-slate-200">
                 <button
                     onClick={() => setActiveTab('TAXONOMY')}
-                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
-                        activeTab === 'TAXONOMY'
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${activeTab === 'TAXONOMY'
                             ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
                             : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
+                        }`}
                 >
                     <Sparkles className="h-4 w-4" />
                     <span>Taxonomy & AI Bank</span>
@@ -535,11 +614,10 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 </button>
                 <button
                     onClick={() => setActiveTab('SYLLABUS')}
-                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
-                        activeTab === 'SYLLABUS'
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${activeTab === 'SYLLABUS'
                             ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
                             : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
+                        }`}
                 >
                     <BookOpen className="h-4 w-4" />
                     <span>1. Semester Syllabus</span>
@@ -548,12 +626,22 @@ export default function ProfessorPersonalizedAssessmentPage() {
                     )}
                 </button>
                 <button
+                    onClick={() => setActiveTab('NOTEBOOK_STUDIO')}
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${activeTab === 'NOTEBOOK_STUDIO'
+                            ? 'border-violet-600 text-violet-700 bg-violet-50'
+                            : 'border-transparent text-slate-500 hover:text-slate-800'
+                        }`}
+                >
+                    <Sparkles className="h-4 w-4 text-violet-600" />
+                    <span>Notebook AI Studio</span>
+                    <span className="text-3xs font-extrabold uppercase px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">AI Redesign</span>
+                </button>
+                <button
                     onClick={() => setActiveTab('QUESTION_BANK')}
-                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
-                        activeTab === 'QUESTION_BANK'
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${activeTab === 'QUESTION_BANK'
                             ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
                             : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
+                        }`}
                 >
                     <Layers className="h-4 w-4" />
                     <span>2. Question Bank ({questions.length})</span>
@@ -563,11 +651,10 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 </button>
                 <button
                     onClick={() => setActiveTab('SCHEDULES')}
-                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${
-                        activeTab === 'SCHEDULES'
+                    className={`flex items-center gap-2 px-4 py-3 text-sm font-bold border-b-2 transition-all ${activeTab === 'SCHEDULES'
                             ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
                             : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
+                        }`}
                 >
                     <Calendar className="h-4 w-4" />
                     <span>3. Assessment Schedules ({schedules.length})</span>
@@ -732,6 +819,238 @@ Unit 4: Advanced Data Structures
                 </div>
             )}
 
+            {/* TAB: NOTEBOOK AI QUESTION STUDIO */}
+            {activeTab === 'NOTEBOOK_STUDIO' && (
+                <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <h2 className="text-lg font-bold text-slate-900">NotebookLLM Question Designer Studio</h2>
+                                <span className="bg-violet-100 text-violet-800 text-3xs font-extrabold uppercase px-2 py-0.5 rounded-full border border-violet-200">
+                                    AI Grounded
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                                Ground your questions directly in course syllabus notes. Draft raw ideas and let AI redesign them into complete learning exercises.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                        {/* Left column: Source context & Drafting */}
+                        <div className="lg:col-span-6 space-y-5">
+                            {/* Source Grounding info */}
+                            <Card className="p-5 bg-white border-slate-200 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <BookOpen className="h-4 w-4 text-violet-600" />
+                                        <h3 className="text-sm font-bold text-slate-900">Syllabus Grounding Source</h3>
+                                    </div>
+                                    <span className="text-2xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                        {syllabus?.extractedTopics?.length || 0} Topics Available
+                                    </span>
+                                </div>
+                                <p className="text-xs text-slate-600">
+                                    {syllabus?.rawText ? `${syllabus.rawText.slice(0, 250)}...` : 'No syllabus raw text uploaded yet. Using standard computer science coursework principles.'}
+                                </p>
+                                {syllabus?.extractedTopics && syllabus.extractedTopics.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5 pt-2">
+                                        {syllabus.extractedTopics.slice(0, 8).map((topic, i) => (
+                                            <button
+                                                key={i}
+                                                type="button"
+                                                onClick={() => setDraftTopic(topic)}
+                                                className={`text-2xs font-semibold px-2 py-1 rounded-md border transition-colors ${draftTopic === topic
+                                                        ? 'bg-violet-600 text-white border-violet-600'
+                                                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-violet-50'
+                                                    }`}
+                                            >
+                                                {topic}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </Card>
+
+                            {/* Question Crafting form */}
+                            <Card className="p-5 bg-white border-slate-200 space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <Sparkles className="h-4 w-4 text-violet-600" />
+                                    <h3 className="text-sm font-bold text-slate-900">Craft or Draft Raw Question</h3>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                            Target Topic
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={draftTopic}
+                                            onChange={(e) => setDraftTopic(e.target.value)}
+                                            placeholder="e.g. AVL Tree Rotations, Dynamic Programming"
+                                            className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-semibold"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                            Difficulty Level
+                                        </label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {(['EASY', 'MEDIUM', 'HARD'] as const).map((lvl) => (
+                                                <button
+                                                    key={lvl}
+                                                    type="button"
+                                                    onClick={() => setDraftDifficulty(lvl)}
+                                                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${draftDifficulty === lvl
+                                                            ? lvl === 'EASY'
+                                                                ? 'bg-emerald-600 text-white border-emerald-600'
+                                                                : lvl === 'MEDIUM'
+                                                                    ? 'bg-amber-600 text-white border-amber-600'
+                                                                    : 'bg-rose-600 text-white border-rose-600'
+                                                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                                        }`}
+                                                >
+                                                    {lvl}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                            Draft Question / Core Concept Idea *
+                                        </label>
+                                        <textarea
+                                            rows={4}
+                                            value={draftPrompt}
+                                            onChange={(e) => setDraftPrompt(e.target.value)}
+                                            placeholder="e.g. Ask how to insert a key into a binary search tree without violating the binary search property, and what happens when the tree is unbalanced."
+                                            className="w-full rounded-xl border border-slate-300 p-3 text-xs leading-relaxed"
+                                        />
+                                    </div>
+
+                                    <Button
+                                        variant="primary"
+                                        size="md"
+                                        type="button"
+                                        onClick={handleRedesignQuestion}
+                                        disabled={redesigning || !draftPrompt.trim()}
+                                        className="w-full bg-violet-600 hover:bg-violet-700 text-white"
+                                    >
+                                        <Sparkles className="h-4 w-4 mr-1.5" />
+                                        <span>{redesigning ? 'Redesigning with LLM Grounding...' : 'Redesign with LLM (Notebook Style)'}</span>
+                                    </Button>
+                                </div>
+                            </Card>
+                        </div>
+
+                        {/* Right column: Live Redesigned Question Artifact */}
+                        <div className="lg:col-span-6 space-y-4">
+                            {redesignedQuestion ? (
+                                <Card className="p-6 bg-gradient-to-br from-violet-50/50 via-white to-slate-50 border-2 border-violet-200 space-y-5 shadow-sm">
+                                    <div className="flex items-center justify-between pb-3 border-b border-violet-100">
+                                        <div>
+                                            <span className="text-3xs font-extrabold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-800">
+                                                AI Redesigned Result
+                                            </span>
+                                            <h3 className="text-base font-bold text-slate-900 mt-1">
+                                                {redesignedQuestion.title}
+                                            </h3>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-2xs font-extrabold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                                                {redesignedQuestion.topic}
+                                            </span>
+                                            <span className="text-2xs font-extrabold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+                                                {redesignedQuestion.difficulty}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-700 uppercase mb-1">Scenario Problem Statement</p>
+                                        <p className="text-xs text-slate-900 leading-relaxed bg-white p-3.5 rounded-xl border border-slate-200">
+                                            {redesignedQuestion.questionPrompt}
+                                        </p>
+                                    </div>
+
+                                    {redesignedQuestion.options && redesignedQuestion.options.length > 0 && (
+                                        <div>
+                                            <p className="text-xs font-bold text-slate-700 uppercase mb-2">Options & Distractors</p>
+                                            <div className="space-y-2">
+                                                {redesignedQuestion.options.map((opt: string, i: number) => {
+                                                    const isCorrect = opt === redesignedQuestion.correctAnswer || (redesignedQuestion.correctAnswer && opt.includes(redesignedQuestion.correctAnswer));
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            className={`p-2.5 rounded-lg text-xs font-medium border flex items-start gap-2 ${isCorrect
+                                                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold'
+                                                                    : 'bg-white border-slate-200 text-slate-700'
+                                                                }`}
+                                                        >
+                                                            <span className="shrink-0">{isCorrect ? '✅' : '○'}</span>
+                                                            <span>{opt}</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {redesignedQuestion.hints && redesignedQuestion.hints.length > 0 && (
+                                        <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
+                                            <p className="text-2xs font-bold text-amber-900 uppercase">Conceptual Guidance Hints</p>
+                                            {redesignedQuestion.hints.map((h: string, idx: number) => (
+                                                <p key={idx} className="text-xs text-amber-800">• {h}</p>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {redesignedQuestion.explanation && (
+                                        <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
+                                            <p className="text-2xs font-bold text-blue-900 uppercase">Syllabus-Grounded Explanation</p>
+                                            <p className="text-xs text-blue-800 leading-relaxed">{redesignedQuestion.explanation}</p>
+                                        </div>
+                                    )}
+
+                                    <div className="flex items-center justify-end gap-3 pt-3 border-t border-violet-100">
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            onClick={() => setRedesignedQuestion(null)}
+                                        >
+                                            Discard
+                                        </Button>
+                                        <Button
+                                            variant="primary"
+                                            size="sm"
+                                            onClick={handleSaveRedesignedToBank}
+                                            disabled={savingToBank}
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                        >
+                                            <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                                            <span>{savingToBank ? 'Saving to Question Bank...' : 'Save to Course Question Bank'}</span>
+                                        </Button>
+                                    </div>
+                                </Card>
+                            ) : (
+                                <Card className="p-12 text-center bg-slate-50 border-dashed border-2 border-slate-300 rounded-2xl flex flex-col items-center justify-center space-y-3">
+                                    <div className="h-12 w-12 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center">
+                                        <Sparkles className="h-6 w-6" />
+                                    </div>
+                                    <h4 className="text-sm font-bold text-slate-800">AI Redesign Preview Waiting</h4>
+                                    <p className="text-xs text-slate-500 max-w-sm">
+                                        Enter your raw question or lecture topic on the left and click &quot;Redesign with LLM&quot;. Your scenario-based question, options, hints, and explanations will appear here.
+                                    </p>
+                                </Card>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* TAB 2: QUESTION BANK */}
             {activeTab === 'QUESTION_BANK' && (
                 <div className="space-y-6">
@@ -833,13 +1152,12 @@ Unit 4: Advanced Data Structures
                                                 </td>
                                                 <td className="p-3">
                                                     <span
-                                                        className={`px-2 py-0.5 rounded text-2xs font-extrabold ${
-                                                            q.difficulty === 'EASY'
+                                                        className={`px-2 py-0.5 rounded text-2xs font-extrabold ${q.difficulty === 'EASY'
                                                                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                                                 : q.difficulty === 'MEDIUM'
-                                                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                                                : 'bg-rose-50 text-rose-700 border border-rose-200'
-                                                        }`}
+                                                                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                                                    : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                                            }`}
                                                     >
                                                         {q.difficulty}
                                                     </span>
@@ -905,11 +1223,10 @@ Unit 4: Advanced Data Structures
                                                 setSelectedSchedule(sched);
                                                 loadScheduleProgress(sched._id);
                                             }}
-                                            className={`w-full text-left p-4 rounded-xl border transition-all ${
-                                                selectedSchedule?._id === sched._id
+                                            className={`w-full text-left p-4 rounded-xl border transition-all ${selectedSchedule?._id === sched._id
                                                     ? 'bg-brand-primary/5 border-brand-primary ring-1 ring-brand-primary'
                                                     : 'bg-white border-slate-200 hover:border-slate-300'
-                                            }`}
+                                                }`}
                                         >
                                             <div className="flex items-center justify-between mb-1">
                                                 <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-slate-100 text-slate-700">
@@ -1187,11 +1504,10 @@ Unit 4: Advanced Data Structures
                                                                             prev.includes(top) ? prev.filter((t) => t !== top) : [...prev, top]
                                                                         );
                                                                     }}
-                                                                    className={`px-2 py-0.5 rounded text-3xs font-medium border transition-colors ${
-                                                                        isTopicSelected
+                                                                    className={`px-2 py-0.5 rounded text-3xs font-medium border transition-colors ${isTopicSelected
                                                                             ? 'bg-indigo-100 text-indigo-800 border-indigo-300'
                                                                             : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                                                                    }`}
+                                                                        }`}
                                                                 >
                                                                     {top}
                                                                 </button>
@@ -1358,6 +1674,60 @@ Unit 4: Advanced Data Structures
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                        Access Cadence
+                                    </label>
+                                    <select
+                                        value={scheduleCadence}
+                                        onChange={(e) => setScheduleCadence(e.target.value)}
+                                        className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-semibold"
+                                    >
+                                        <option value="3_PER_DAY">3 Questions a Day (Standard)</option>
+                                        <option value="3_PER_WEEK">3 Questions a Week (Paced)</option>
+                                        <option value="1_PER_DAY">1 Question Daily (Bite-sized)</option>
+                                        <option value="5_PER_WEEK">5 Questions a Week (Intensive)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                        Default Difficulty
+                                    </label>
+                                    <select
+                                        value={scheduleDifficulty}
+                                        onChange={(e) => setScheduleDifficulty(e.target.value)}
+                                        className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-semibold"
+                                    >
+                                        <option value="ADAPTIVE">Adaptive (Recommended)</option>
+                                        <option value="EASY">Easy / Foundational</option>
+                                        <option value="MEDIUM">Medium / Balanced</option>
+                                        <option value="HARD">Hard / Advanced</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <label className="block text-xs font-bold text-slate-700 uppercase">
+                                        Target Sections (Section-Wise Access)
+                                    </label>
+                                    <span className="text-3xs font-bold text-violet-700 bg-violet-50 px-2 py-0.5 rounded border border-violet-200">
+                                        Section Gating
+                                    </span>
+                                </div>
+                                <input
+                                    type="text"
+                                    value={scheduleTargetSections}
+                                    onChange={(e) => setScheduleTargetSections(e.target.value)}
+                                    placeholder="e.g. Section A, Section B (leave empty for all sections)"
+                                    className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-medium"
+                                />
+                                <p className="text-3xs text-slate-500 mt-1">
+                                    Only students in these sections will have access to this personalized assessment track.
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                                         Start Date
                                     </label>
                                     <input
@@ -1391,11 +1761,10 @@ Unit 4: Advanced Data Structures
                             </div>
 
                             {/* Pool Capacity Status */}
-                            <div className={`p-3 rounded-xl border text-xs space-y-1 ${
-                                hasQuestions
+                            <div className={`p-3 rounded-xl border text-xs space-y-1 ${hasQuestions
                                     ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                                     : 'bg-amber-50 border-amber-200 text-amber-900'
-                            }`}>
+                                }`}>
                                 <p className="font-bold">Question Bank Capacity Status:</p>
                                 <p>• Current question pool: <strong>{questions.length} questions</strong></p>
                                 <p>• Enrolled cohort: <strong>{enrolledCount} students</strong></p>

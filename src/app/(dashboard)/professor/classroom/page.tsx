@@ -82,6 +82,7 @@ export default function ProfessorClassroomPage() {
   const [referenceAnswer, setReferenceAnswer] = useState('');
   const [timeLimit, setTimeLimit] = useState(180); // 3 mins default
   const [studentRosterText, setStudentRosterText] = useState('');
+  const [allowedSectionsText, setAllowedSectionsText] = useState('Section A, Section B');
 
   // Access state
   const [accessDenied, setAccessDenied] = useState(false);
@@ -312,6 +313,11 @@ export default function ProfessorClassroomPage() {
         .map((s) => s.trim())
         .filter(Boolean);
 
+      const allowedSections = allowedSectionsText
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
       const res = await fetch('/api/classroom/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -321,6 +327,7 @@ export default function ProfessorClassroomPage() {
           referenceAnswer: referenceAnswer.trim() || undefined,
           timeLimit,
           allowedStudents,
+          allowedSections,
         }),
       });
 
@@ -969,6 +976,27 @@ export default function ProfessorClassroomPage() {
                   />
                   <p className="text-2xs text-slate-500 font-medium mt-1">
                     Only students included in this list will be permitted to log in, join the session, and upload their answer sheets.
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                      Allowed Sections (Section-Wise Gating)
+                    </label>
+                    <span className="text-3xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                      Section Access
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={allowedSectionsText}
+                    onChange={(e) => setAllowedSectionsText(e.target.value)}
+                    placeholder="e.g. Section A, Section B (leave empty for all sections)"
+                    className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-slate-900 placeholder:text-slate-400 font-semibold focus:outline-none focus:border-blue-600 text-sm"
+                  />
+                  <p className="text-2xs text-slate-500 font-medium mt-1">
+                    Only students belonging to these designated sections will be allowed access to join and submit.
                   </p>
                 </div>
 

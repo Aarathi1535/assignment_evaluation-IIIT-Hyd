@@ -117,6 +117,29 @@ export default function StudentPersonalizedAssessmentPage() {
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [showHints, setShowHints] = useState(false);
 
+    // Student Choice (Topic & Difficulty Selection) State
+    const [activeMode, setActiveMode] = useState<'TRACK' | 'CHOICE'>('TRACK');
+    const [selectedTopic, setSelectedTopic] = useState<string>('ALL');
+    const [selectedDifficulty, setSelectedDifficulty] = useState<'EASY' | 'MEDIUM' | 'HARD'>('MEDIUM');
+    const [practiceQuestion, setPracticeQuestion] = useState<any | null>(null);
+    const [loadingPractice, setLoadingPractice] = useState(false);
+    const [practiceSelectedOption, setPracticeSelectedOption] = useState<string>('');
+    const [practiceAnswerText, setPracticeAnswerText] = useState<string>('');
+    const [evaluatingPractice, setEvaluatingPractice] = useState(false);
+    const [practiceResult, setPracticeResult] = useState<any | null>(null);
+    const [studentSection, setStudentSection] = useState<string | null>(null);
+
+    const availableTopics = [
+        'ALL',
+        'Foundations & Asymptotics',
+        'Binary Search Trees & AVL Trees',
+        'Dynamic Programming & Optimization',
+        'Graph Algorithms & Shortest Paths',
+        'Divide and Conquer',
+        'Hash Tables & Collision Handling',
+        'Disjoint Set Union & MST'
+    ];
+
     const loadAssessmentData = async () => {
         setLoading(true);
         setErrorMsg(null);
@@ -162,7 +185,7 @@ export default function StudentPersonalizedAssessmentPage() {
         return () => {
             mounted = false;
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleStartAssignment = async () => {
@@ -273,6 +296,67 @@ export default function StudentPersonalizedAssessmentPage() {
         }
     };
 
+    const handleFetchPracticeQuestion = async () => {
+        setLoadingPractice(true);
+        setErrorMsg(null);
+        setPracticeResult(null);
+        setPracticeSelectedOption('');
+        setPracticeAnswerText('');
+        try {
+            const queryParams = new URLSearchParams({
+                topic: selectedTopic,
+                difficulty: selectedDifficulty
+            });
+            const res = await fetch(`/api/personalized/practice?${queryParams.toString()}`);
+            const json = await res.json();
+            if (json.success && json.data) {
+                setPracticeQuestion(json.data.question);
+                if (json.data.studentSection) {
+                    setStudentSection(json.data.studentSection);
+                }
+            } else {
+                setErrorMsg(json.message || 'Failed to fetch practice question');
+            }
+        } catch {
+            setErrorMsg('Network error fetching practice question');
+        } finally {
+            setLoadingPractice(false);
+        }
+    };
+
+    const handleSubmitPracticeAnswer = async () => {
+        if (!practiceQuestion) return;
+        if (!practiceSelectedOption && !practiceAnswerText.trim()) {
+            setErrorMsg('Please select an option or type your answer before submitting.');
+            return;
+        }
+
+        setEvaluatingPractice(true);
+        setErrorMsg(null);
+        try {
+            const res = await fetch('/api/personalized/practice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    questionId: practiceQuestion._id,
+                    selectedOption: practiceSelectedOption,
+                    answerText: practiceAnswerText.trim(),
+                    referenceAnswer: practiceQuestion.referenceAnswer || practiceQuestion.options?.[0]
+                })
+            });
+            const json = await res.json();
+            if (json.success && json.data) {
+                setPracticeResult(json.data);
+            } else {
+                setErrorMsg(json.message || 'Failed to evaluate practice answer');
+            }
+        } catch {
+            setErrorMsg('Network error evaluating practice answer');
+        } finally {
+            setEvaluatingPractice(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -337,6 +421,38 @@ export default function StudentPersonalizedAssessmentPage() {
                 )}
             </div>
 
+            {/* Mode Switcher Tabs */}
+            <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
+                <button
+                    onClick={() => setActiveMode('TRACK')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${activeMode === 'TRACK'
+                            ? 'bg-violet-600 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                >
+                    <Calendar className="h-4 w-4" />
+                    <span>Assigned Cadence Track</span>
+                </button>
+                <button
+                    onClick={() => {
+                        setActiveMode('CHOICE');
+                        if (!practiceQuestion) {
+                            handleFetchPracticeQuestion();
+                        }
+                    }}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${activeMode === 'CHOICE'
+                            ? 'bg-violet-600 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                >
+                    <Award className="h-4 w-4" />
+                    <span>Practice: Choose Topic & Difficulty</span>
+                    <span className="text-3xs font-extrabold px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 ml-1">
+                        Student Choice
+                    </span>
+                </button>
+            </div>
+
             {/* Error / Success Notifications */}
             {errorMsg && (
                 <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-3 text-rose-800 text-sm">
@@ -351,423 +467,649 @@ export default function StudentPersonalizedAssessmentPage() {
                 </div>
             )}
 
-            {/* Main Daily Assessment Hero Section */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 space-y-6">
-                    {todayData ? (
-                        <Card className="p-6 border-slate-200 shadow-sm relative overflow-hidden">
-                            {/* Card Top Banner */}
-                            <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
-                                <div className="flex items-center gap-2.5">
-                                    <span className="h-8 w-8 rounded-full bg-brand-primary/10 text-brand-primary flex items-center justify-center font-bold text-sm">
-                                        {todayData.dayNumber}
-                                    </span>
-                                    <div>
-                                        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
-                                            Day {todayData.dayNumber} of {scheduleInfo.totalQuestionsTarget}
-                                        </span>
-                                        <h2 className="text-lg font-bold text-slate-900">
-                                            {todayData.question?.title || 'Daily Assessment'}
-                                        </h2>
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                    {todayData.status === 'AVAILABLE' && (
-                                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                            Window Open
-                                        </span>
-                                    )}
-                                    {todayData.status === 'IN_PROGRESS' && (
-                                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                            In Progress
-                                        </span>
-                                    )}
-                                    {todayData.status === 'SUBMITTED' && (
-                                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                            Submitted
-                                        </span>
-                                    )}
-                                    {todayData.status === 'MISSED' && (
-                                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                                            Window Expired
-                                        </span>
-                                    )}
-                                    {todayData.status === 'LOCKED' && (
-                                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                                            Locked
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Status Specific Content */}
-                            {todayData.status === 'LOCKED' && (
-                                <div className="py-8 text-center space-y-3">
-                                    <Lock className="h-10 w-10 text-slate-400 mx-auto" />
-                                    <h3 className="text-base font-bold text-slate-800">
-                                        Today&apos;s Question Unlocks at {scheduleInfo.dailyWindowStartTime}
-                                    </h3>
-                                    <p className="text-sm text-slate-500 max-w-md mx-auto">
-                                        The daily question will become available during your cohort&apos;s configured time window.
-                                        Check back shortly.
-                                    </p>
-                                </div>
-                            )}
-
-                            {todayData.status === 'MISSED' && (
-                                <div className="py-8 text-center space-y-3">
-                                    <XCircle className="h-10 w-10 text-rose-500 mx-auto" />
-                                    <h3 className="text-base font-bold text-slate-900">
-                                        Assessment Window Expired
-                                    </h3>
-                                    <p className="text-sm text-slate-600 max-w-md mx-auto">
-                                        The daily submission window for this question closed at {scheduleInfo.dailyWindowEndTime}.
-                                        Questions cannot be submitted after the daily window closes.
-                                    </p>
-                                </div>
-                            )}
-
-                            {todayData.status === 'SUBMITTED' && (
-                                <div className="space-y-4">
-                                    <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-3">
-                                        <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
-                                        <div>
-                                            <p className="text-sm font-bold text-emerald-900">
-                                                Response Successfully Recorded!
-                                            </p>
-                                            <p className="text-xs text-emerald-700 mt-0.5">
-                                                Submitted on{' '}
-                                                {todayData.submittedAt
-                                                    ? new Date(todayData.submittedAt).toLocaleTimeString([], {
-                                                          hour: '2-digit',
-                                                          minute: '2-digit'
-                                                      })
-                                                    : 'Today'}
-                                            </p>
+            {/* Scheduled Track View */}
+            {activeMode === 'TRACK' && (
+                <>
+                    {/* Main Daily Assessment Hero Section */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-2 space-y-6">
+                            {todayData ? (
+                                <Card className="p-6 border-slate-200 shadow-sm relative overflow-hidden">
+                                    {/* Card Top Banner */}
+                                    <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+                                        <div className="flex items-center gap-2.5">
+                                            <span className="h-8 w-8 rounded-full bg-brand-primary/10 text-brand-primary flex items-center justify-center font-bold text-sm">
+                                                {todayData.dayNumber}
+                                            </span>
+                                            <div>
+                                                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
+                                                    Day {todayData.dayNumber} of {scheduleInfo.totalQuestionsTarget}
+                                                </span>
+                                                <h2 className="text-lg font-bold text-slate-900">
+                                                    {todayData.question?.title || 'Daily Assessment'}
+                                                </h2>
+                                            </div>
                                         </div>
-                                    </div>
 
-                                    {/* Question prompt recap */}
-                                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
-                                            Question Prompt
-                                        </p>
-                                        <p className="text-sm text-slate-800 whitespace-pre-wrap font-medium">
-                                            {todayData.question?.questionPrompt}
-                                        </p>
-                                    </div>
-
-                                    {/* Submitted Answer view */}
-                                    <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
-                                                Your Submitted Response
-                                            </p>
-                                            {todayData.submissionType && (
-                                                <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200">
-                                                    {todayData.submissionType === 'PHOTO' ? 'Photo' : 'Text'}
+                                        <div className="flex items-center gap-2">
+                                            {todayData.status === 'AVAILABLE' && (
+                                                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                                    Window Open
+                                                </span>
+                                            )}
+                                            {todayData.status === 'IN_PROGRESS' && (
+                                                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                                    In Progress
+                                                </span>
+                                            )}
+                                            {todayData.status === 'SUBMITTED' && (
+                                                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                    Submitted
+                                                </span>
+                                            )}
+                                            {todayData.status === 'MISSED' && (
+                                                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                                    Window Expired
+                                                </span>
+                                            )}
+                                            {todayData.status === 'LOCKED' && (
+                                                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                                    Locked
                                                 </span>
                                             )}
                                         </div>
-                                        <pre className="text-sm text-slate-800 whitespace-pre-wrap font-mono bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                            {todayData.studentAnswer}
-                                        </pre>
                                     </div>
 
-                                    {/* Photo evaluation result (score + feedback) when graded */}
-                                    {todayData.evaluationStatus === 'FAILED' && (
-                                        <div className="p-4 bg-orange-50/60 rounded-xl border border-orange-100 space-y-2">
-                                            <p className="text-xs font-bold text-orange-700 uppercase tracking-wide">
-                                                Evaluation Status
-                                            </p>
-                                            <p className="text-sm font-bold text-slate-900">
-                                                Submission received, but AI evaluation failed.
-                                            </p>
-                                            <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                                Your submission has been safely recorded. A professor or teaching assistant will review your assignment manually.
-                                            </p>
-                                        </div>
-                                    )}
-
-                                    {todayData.evaluationStatus === 'PENDING' && (
-                                        <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
-                                            <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">
-                                                Evaluation Status
-                                            </p>
-                                            <p className="text-sm font-bold text-slate-900">
-                                                AI Evaluation is pending...
+                                    {/* Status Specific Content */}
+                                    {todayData.status === 'LOCKED' && (
+                                        <div className="py-8 text-center space-y-3">
+                                            <Lock className="h-10 w-10 text-slate-400 mx-auto" />
+                                            <h3 className="text-base font-bold text-slate-800">
+                                                Today&apos;s Question Unlocks at {scheduleInfo.dailyWindowStartTime}
+                                            </h3>
+                                            <p className="text-sm text-slate-500 max-w-md mx-auto">
+                                                The daily question will become available during your cohort&apos;s configured time window.
+                                                Check back shortly.
                                             </p>
                                         </div>
                                     )}
 
-                                    {(todayData.score != null || todayData.feedback) && todayData.evaluationStatus !== 'FAILED' && (
-                                        <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-2">
-                                            <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">
-                                                Evaluation Result
+                                    {todayData.status === 'MISSED' && (
+                                        <div className="py-8 text-center space-y-3">
+                                            <XCircle className="h-10 w-10 text-rose-500 mx-auto" />
+                                            <h3 className="text-base font-bold text-slate-900">
+                                                Assessment Window Expired
+                                            </h3>
+                                            <p className="text-sm text-slate-600 max-w-md mx-auto">
+                                                The daily submission window for this question closed at {scheduleInfo.dailyWindowEndTime}.
+                                                Questions cannot be submitted after the daily window closes.
                                             </p>
-                                            {todayData.score != null && (
-                                                <p className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                                                    {todayData.isProvisional ? 'Provisional Score:' : 'Score:'}
-                                                    <span className="text-brand-primary">
-                                                        {todayData.score}
-                                                        {todayData.question?.maxMarks != null
-                                                            ? ` / ${todayData.question.maxMarks}`
-                                                            : ''}
-                                                    </span>
-                                                </p>
-                                            )}
-                                            {todayData.isProvisional && (
-                                                <p className="text-xs text-slate-500 italic">
-                                                    * This score is AI-generated and provisional. It is not an official or final grade.
-                                                </p>
-                                            )}
-                                            {todayData.feedback && (
-                                                <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                                    {todayData.feedback}
-                                                </p>
-                                            )}
                                         </div>
                                     )}
-                                </div>
-                            )}
 
-                            {(todayData.status === 'AVAILABLE' || todayData.status === 'IN_PROGRESS') && (
-                                <div className="space-y-5">
-                                    {/* Question Meta & Prompt */}
-                                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-                                        <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
-                                            <span>Topic: {todayData.question?.topic}</span>
-                                            <span>Max Marks: {todayData.question?.maxMarks}</span>
-                                        </div>
-                                        <div className="text-sm text-slate-900 font-medium whitespace-pre-wrap">
-                                            {todayData.question?.questionPrompt}
-                                        </div>
-
-                                        {todayData.question?.hints && todayData.question.hints.length > 0 && (
-                                            <div>
-                                                <button
-                                                    onClick={() => setShowHints(!showHints)}
-                                                    className="text-xs font-bold text-brand-primary flex items-center gap-1 hover:underline"
-                                                >
-                                                    <HelpCircle className="h-3.5 w-3.5" />
-                                                    {showHints ? 'Hide Hints' : 'View Hints'}
-                                                </button>
-                                                {showHints && (
-                                                    <ul className="mt-2 text-xs text-slate-600 bg-white p-2.5 rounded-lg border border-slate-200 list-disc list-inside space-y-1">
-                                                        {todayData.question.hints.map((hint, i) => (
-                                                            <li key={i}>{hint}</li>
-                                                        ))}
-                                                    </ul>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* Action State: Start vs Submit */}
-                                    {todayData.status === 'AVAILABLE' ? (
-                                        <div className="text-center py-4 space-y-3">
-                                            <p className="text-sm text-slate-600">
-                                                Ready to solve today&apos;s question? Click Start to begin your session.
-                                            </p>
-                                            <Button
-                                                variant="primary"
-                                                size="md"
-                                                onClick={handleStartAssignment}
-                                                disabled={starting}
-                                            >
-                                                <Play className="h-4 w-4" />
-                                                <span>{starting ? 'Starting...' : 'Start Solving Today’s Question'}</span>
-                                            </Button>
-                                        </div>
-                                    ) : (
-                                        /* In Progress Answer Box */
+                                    {todayData.status === 'SUBMITTED' && (
                                         <div className="space-y-4">
-                                            <div className="space-y-3">
-                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
-                                                    Typed Solution (optional if uploading a photo)
-                                                </label>
-                                                <textarea
-                                                    value={answerText}
-                                                    onChange={(e) => setAnswerText(e.target.value)}
-                                                    rows={8}
-                                                    placeholder="Write your answer, derivation, or code solution here..."
-                                                    className="w-full rounded-xl border border-slate-300 p-3.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary font-mono transition-all resize-y"
-                                                />
-                                                <p className="text-xs text-slate-500">{answerText.length} characters</p>
-                                            </div>
-
-                                            <div className="space-y-2">
-                                                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
-                                                    Handwritten / Photo Answer
-                                                </label>
-                                                <p className="text-xs text-slate-500">
-                                                    Upload a JPEG, PNG, or WebP image (max 10MB). Photo answers are graded automatically.
-                                                </p>
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50">
-                                                        <ImagePlus className="h-4 w-4 text-brand-primary" />
-                                                        <span>{photoFile ? 'Replace Photo' : 'Choose Photo'}</span>
-                                                        <input
-                                                            type="file"
-                                                            accept={PHOTO_ACCEPT}
-                                                            className="hidden"
-                                                            onChange={handlePhotoSelected}
-                                                        />
-                                                    </label>
-                                                    {photoFile && (
-                                                        <div className="flex items-center gap-2 text-xs text-slate-600">
-                                                            <span className="font-medium truncate max-w-[220px]" title={photoFile.name}>
-                                                                {photoFile.name}
-                                                            </span>
-                                                            <span>({(photoFile.size / 1024).toFixed(1)} KB)</span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setPhotoFile(null)}
-                                                                className="inline-flex items-center gap-1 text-rose-600 hover:underline"
-                                                            >
-                                                                <Trash2 className="h-3.5 w-3.5" />
-                                                                Remove
-                                                            </button>
-                                                        </div>
-                                                    )}
+                                            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-3">
+                                                <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
+                                                <div>
+                                                    <p className="text-sm font-bold text-emerald-900">
+                                                        Response Successfully Recorded!
+                                                    </p>
+                                                    <p className="text-xs text-emerald-700 mt-0.5">
+                                                        Submitted on{' '}
+                                                        {todayData.submittedAt
+                                                            ? new Date(todayData.submittedAt).toLocaleTimeString([], {
+                                                                hour: '2-digit',
+                                                                minute: '2-digit'
+                                                            })
+                                                            : 'Today'}
+                                                    </p>
                                                 </div>
                                             </div>
 
-                                            <div className="flex justify-end">
-                                                <Button
-                                                    variant="primary"
-                                                    size="md"
-                                                    onClick={handleSubmitAnswer}
-                                                    disabled={submitting || (!answerText.trim() && !photoFile)}
-                                                >
-                                                    <Send className="h-4 w-4" />
-                                                    <span>
-                                                        {submitting
-                                                            ? photoFile
-                                                                ? 'Evaluating Photo...'
-                                                                : 'Submitting...'
-                                                            : photoFile
-                                                              ? 'Submit Photo Answer'
-                                                              : 'Submit Today’s Answer'}
-                                                    </span>
-                                                </Button>
+                                            {/* Question prompt recap */}
+                                            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                                                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+                                                    Question Prompt
+                                                </p>
+                                                <p className="text-sm text-slate-800 whitespace-pre-wrap font-medium">
+                                                    {todayData.question?.questionPrompt}
+                                                </p>
                                             </div>
+
+                                            {/* Submitted Answer view */}
+                                            <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">
+                                                        Your Submitted Response
+                                                    </p>
+                                                    {todayData.submissionType && (
+                                                        <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wide bg-slate-100 text-slate-600 border border-slate-200">
+                                                            {todayData.submissionType === 'PHOTO' ? 'Photo' : 'Text'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <pre className="text-sm text-slate-800 whitespace-pre-wrap font-mono bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                                    {todayData.studentAnswer}
+                                                </pre>
+                                            </div>
+
+                                            {/* Photo evaluation result (score + feedback) when graded */}
+                                            {todayData.evaluationStatus === 'FAILED' && (
+                                                <div className="p-4 bg-orange-50/60 rounded-xl border border-orange-100 space-y-2">
+                                                    <p className="text-xs font-bold text-orange-700 uppercase tracking-wide">
+                                                        Evaluation Status
+                                                    </p>
+                                                    <p className="text-sm font-bold text-slate-900">
+                                                        Submission received, but AI evaluation failed.
+                                                    </p>
+                                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                                        Your submission has been safely recorded. A professor or teaching assistant will review your assignment manually.
+                                                    </p>
+                                                </div>
+                                            )}
+
+                                            {todayData.evaluationStatus === 'PENDING' && (
+                                                <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 space-y-2">
+                                                    <p className="text-xs font-bold text-blue-700 uppercase tracking-wide">
+                                                        Evaluation Status
+                                                    </p>
+                                                    <p className="text-sm font-bold text-slate-900">
+                                                        AI Evaluation is pending...
+                                                    </p>
+                                                </div>
+                                            )}
+
+                                            {(todayData.score != null || todayData.feedback) && todayData.evaluationStatus !== 'FAILED' && (
+                                                <div className="p-4 bg-indigo-50/60 rounded-xl border border-indigo-100 space-y-2">
+                                                    <p className="text-xs font-bold text-indigo-700 uppercase tracking-wide">
+                                                        Evaluation Result
+                                                    </p>
+                                                    {todayData.score != null && (
+                                                        <p className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                                                            {todayData.isProvisional ? 'Provisional Score:' : 'Score:'}
+                                                            <span className="text-brand-primary">
+                                                                {todayData.score}
+                                                                {todayData.question?.maxMarks != null
+                                                                    ? ` / ${todayData.question.maxMarks}`
+                                                                    : ''}
+                                                            </span>
+                                                        </p>
+                                                    )}
+                                                    {todayData.isProvisional && (
+                                                        <p className="text-xs text-slate-500 italic">
+                                                            * This score is AI-generated and provisional. It is not an official or final grade.
+                                                        </p>
+                                                    )}
+                                                    {todayData.feedback && (
+                                                        <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                                            {todayData.feedback}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {(todayData.status === 'AVAILABLE' || todayData.status === 'IN_PROGRESS') && (
+                                        <div className="space-y-5">
+                                            {/* Question Meta & Prompt */}
+                                            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                                                <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+                                                    <span>Topic: {todayData.question?.topic}</span>
+                                                    <span>Max Marks: {todayData.question?.maxMarks}</span>
+                                                </div>
+                                                <div className="text-sm text-slate-900 font-medium whitespace-pre-wrap">
+                                                    {todayData.question?.questionPrompt}
+                                                </div>
+
+                                                {todayData.question?.hints && todayData.question.hints.length > 0 && (
+                                                    <div>
+                                                        <button
+                                                            onClick={() => setShowHints(!showHints)}
+                                                            className="text-xs font-bold text-brand-primary flex items-center gap-1 hover:underline"
+                                                        >
+                                                            <HelpCircle className="h-3.5 w-3.5" />
+                                                            {showHints ? 'Hide Hints' : 'View Hints'}
+                                                        </button>
+                                                        {showHints && (
+                                                            <ul className="mt-2 text-xs text-slate-600 bg-white p-2.5 rounded-lg border border-slate-200 list-disc list-inside space-y-1">
+                                                                {todayData.question.hints.map((hint, i) => (
+                                                                    <li key={i}>{hint}</li>
+                                                                ))}
+                                                            </ul>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Action State: Start vs Submit */}
+                                            {todayData.status === 'AVAILABLE' ? (
+                                                <div className="text-center py-4 space-y-3">
+                                                    <p className="text-sm text-slate-600">
+                                                        Ready to solve today&apos;s question? Click Start to begin your session.
+                                                    </p>
+                                                    <Button
+                                                        variant="primary"
+                                                        size="md"
+                                                        onClick={handleStartAssignment}
+                                                        disabled={starting}
+                                                    >
+                                                        <Play className="h-4 w-4" />
+                                                        <span>{starting ? 'Starting...' : 'Start Solving Today’s Question'}</span>
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                /* In Progress Answer Box */
+                                                <div className="space-y-4">
+                                                    <div className="space-y-3">
+                                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                                                            Typed Solution (optional if uploading a photo)
+                                                        </label>
+                                                        <textarea
+                                                            value={answerText}
+                                                            onChange={(e) => setAnswerText(e.target.value)}
+                                                            rows={8}
+                                                            placeholder="Write your answer, derivation, or code solution here..."
+                                                            className="w-full rounded-xl border border-slate-300 p-3.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary font-mono transition-all resize-y"
+                                                        />
+                                                        <p className="text-xs text-slate-500">{answerText.length} characters</p>
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                                                            Handwritten / Photo Answer
+                                                        </label>
+                                                        <p className="text-xs text-slate-500">
+                                                            Upload a JPEG, PNG, or WebP image (max 10MB). Photo answers are graded automatically.
+                                                        </p>
+                                                        <div className="flex flex-wrap items-center gap-3">
+                                                            <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50">
+                                                                <ImagePlus className="h-4 w-4 text-brand-primary" />
+                                                                <span>{photoFile ? 'Replace Photo' : 'Choose Photo'}</span>
+                                                                <input
+                                                                    type="file"
+                                                                    accept={PHOTO_ACCEPT}
+                                                                    className="hidden"
+                                                                    onChange={handlePhotoSelected}
+                                                                />
+                                                            </label>
+                                                            {photoFile && (
+                                                                <div className="flex items-center gap-2 text-xs text-slate-600">
+                                                                    <span className="font-medium truncate max-w-[220px]" title={photoFile.name}>
+                                                                        {photoFile.name}
+                                                                    </span>
+                                                                    <span>({(photoFile.size / 1024).toFixed(1)} KB)</span>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setPhotoFile(null)}
+                                                                        className="inline-flex items-center gap-1 text-rose-600 hover:underline"
+                                                                    >
+                                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                                        Remove
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex justify-end">
+                                                        <Button
+                                                            variant="primary"
+                                                            size="md"
+                                                            onClick={handleSubmitAnswer}
+                                                            disabled={submitting || (!answerText.trim() && !photoFile)}
+                                                        >
+                                                            <Send className="h-4 w-4" />
+                                                            <span>
+                                                                {submitting
+                                                                    ? photoFile
+                                                                        ? 'Evaluating Photo...'
+                                                                        : 'Submitting...'
+                                                                    : photoFile
+                                                                        ? 'Submit Photo Answer'
+                                                                        : 'Submit Today’s Answer'}
+                                                            </span>
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </Card>
+                            ) : (
+                                <Card className="p-8 text-center space-y-3 border-slate-200">
+                                    <Clock className="h-10 w-10 text-slate-400 mx-auto" />
+                                    <h3 className="text-base font-bold text-slate-800">No Assessment Scheduled Today</h3>
+                                    <p className="text-sm text-slate-500">
+                                        Today is a scheduled rest or review day according to your cohort&apos;s weekly timetable.
+                                    </p>
+                                </Card>
+                            )}
+                        </div>
+
+                        {/* Right Column: Progress Metrics & Cohort Invariants */}
+                        <div className="space-y-6">
+                            {/* Stats Card */}
+                            <Card className="p-5 border-slate-200 space-y-4">
+                                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
+                                    Overall Completion Progress
+                                </h3>
+
+                                {stats && (
+                                    <div className="space-y-3">
+                                        <div>
+                                            <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                                <span>Target: 100 Questions</span>
+                                                <span>{Math.round(stats.completionPercentage)}%</span>
+                                            </div>
+                                            <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                                                <div
+                                                    className="bg-brand-primary h-2.5 rounded-full transition-all duration-500"
+                                                    style={{ width: `${Math.min(stats.completionPercentage, 100)}%` }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-2 pt-2">
+                                            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 text-center">
+                                                <p className="text-2xs font-bold text-slate-400 uppercase">Submitted</p>
+                                                <p className="text-lg font-black text-emerald-600">{stats.completed}</p>
+                                            </div>
+                                            <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 text-center">
+                                                <p className="text-2xs font-bold text-slate-400 uppercase">Missed</p>
+                                                <p className="text-lg font-black text-rose-600">{stats.missed}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </Card>
+
+                            {/* Guidelines Card */}
+                            <Card className="p-5 border-slate-200 bg-indigo-50/50 space-y-3">
+                                <div className="flex items-center gap-2 text-indigo-950 font-bold text-sm">
+                                    <Info className="h-4 w-4 text-brand-primary" />
+                                    <span>Daily Assessment Guidelines</span>
+                                </div>
+                                <ul className="text-xs text-indigo-900 space-y-2 list-disc list-inside">
+                                    <li>Each student receives 100 distinct personalized questions across 16 weeks.</li>
+                                    <li>Daily questions are tailored individually for each student.</li>
+                                    <li>Each question is solvable strictly within today&apos;s daily window.</li>
+                                    <li>Completed questions count towards your daily streak.</li>
+                                </ul>
+                            </Card>
+                        </div>
+                    </div>
+
+                    {/* Assessment Visual Journey Grid */}
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h2 className="text-lg font-bold text-slate-900">Assessment Roadmap</h2>
+                                <p className="text-xs text-slate-500">Your personalized daily assessment journey across the semester</p>
+                            </div>
+                            <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
+                                <span className="flex items-center gap-1.5">
+                                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Submitted
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> Missed
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="h-2.5 w-2.5 rounded-full bg-brand-primary" /> Active/Today
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <span className="h-2.5 w-2.5 rounded-full bg-slate-300" /> Locked
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-5 sm:grid-cols-10 md:grid-cols-20 gap-2 p-4 bg-white rounded-xl border border-slate-200">
+                            {allSlots.map((slot) => {
+                                let bgClass = 'bg-slate-100 text-slate-400 border-slate-200';
+                                if (slot.status === 'SUBMITTED') {
+                                    bgClass = 'bg-emerald-50 text-emerald-700 border-emerald-300 font-bold';
+                                } else if (slot.status === 'MISSED') {
+                                    bgClass = 'bg-rose-50 text-rose-700 border-rose-300 font-bold';
+                                } else if (slot.status === 'AVAILABLE' || slot.status === 'IN_PROGRESS') {
+                                    bgClass = 'bg-brand-primary text-white border-brand-primary font-extrabold shadow-sm';
+                                }
+
+                                return (
+                                    <div
+                                        key={slot._id}
+                                        title={`Day ${slot.dayNumber}: ${slot.status} (${new Date(slot.scheduledDate).toLocaleDateString()})`}
+                                        className={`h-10 flex flex-col items-center justify-center rounded-lg border text-xs transition-all ${bgClass}`}
+                                    >
+                                        <span>{slot.dayNumber}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </>
+            )}
+
+            {/* Student Choice Mode: Choose Topic & Difficulty */}
+            {activeMode === 'CHOICE' && (
+                <div className="space-y-6">
+                    {/* Topic & Difficulty Selection Toolbar */}
+                    <Card className="p-6 bg-white border-slate-200 space-y-4 shadow-sm">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <h2 className="text-lg font-bold text-slate-900">Adaptive Practice Studio</h2>
+                                    <span className="bg-violet-100 text-violet-800 text-3xs font-extrabold uppercase px-2 py-0.5 rounded-full border border-violet-200">
+                                        Self-Paced
+                                    </span>
+                                </div>
+                                <p className="text-xs text-slate-500 mt-0.5">
+                                    Select any syllabus topic and target difficulty level to practice questions at your own pace.
+                                    {studentSection && (
+                                        <span className="ml-2 font-bold text-violet-700">
+                                            (Enrolled Section: {studentSection})
+                                        </span>
+                                    )}
+                                </p>
+                            </div>
+
+                            <Button
+                                variant="primary"
+                                size="md"
+                                onClick={handleFetchPracticeQuestion}
+                                disabled={loadingPractice}
+                                className="bg-violet-600 hover:bg-violet-700 text-white shrink-0"
+                            >
+                                <Award className="h-4 w-4 mr-1.5" />
+                                <span>{loadingPractice ? 'Loading Question...' : 'Fetch Practice Question'}</span>
+                            </Button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-100">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                                    Select Topic
+                                </label>
+                                <select
+                                    value={selectedTopic}
+                                    onChange={(e) => setSelectedTopic(e.target.value)}
+                                    className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-semibold text-slate-900"
+                                >
+                                    {availableTopics.map((t) => (
+                                        <option key={t} value={t}>
+                                            {t === 'ALL' ? '🌟 All Syllabus Topics' : t}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                                    Select Difficulty
+                                </label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {(['EASY', 'MEDIUM', 'HARD'] as const).map((diff) => (
+                                        <button
+                                            key={diff}
+                                            type="button"
+                                            onClick={() => setSelectedDifficulty(diff)}
+                                            className={`py-2 text-xs font-bold rounded-xl border transition-all ${selectedDifficulty === diff
+                                                    ? diff === 'EASY'
+                                                        ? 'bg-emerald-600 text-white border-emerald-600'
+                                                        : diff === 'MEDIUM'
+                                                            ? 'bg-amber-600 text-white border-amber-600'
+                                                            : 'bg-rose-600 text-white border-rose-600'
+                                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                                }`}
+                                        >
+                                            {diff}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+
+                    {/* Practice Question Card */}
+                    {practiceQuestion ? (
+                        <Card className="p-6 bg-white border-slate-200 space-y-6 shadow-sm">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-3xs font-extrabold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-800">
+                                            {practiceQuestion.topic || selectedTopic}
+                                        </span>
+                                        <span className="text-3xs font-extrabold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+                                            {practiceQuestion.difficulty || selectedDifficulty}
+                                        </span>
+                                    </div>
+                                    <h3 className="text-base font-bold text-slate-900 mt-1">
+                                        {practiceQuestion.title}
+                                    </h3>
+                                </div>
+                                <span className="text-xs font-bold text-slate-500">
+                                    Max Marks: {practiceQuestion.maxMarks || 5}
+                                </span>
+                            </div>
+
+                            <div>
+                                <p className="text-xs font-bold text-slate-700 uppercase mb-1.5">Question Statement</p>
+                                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-900 leading-relaxed font-medium">
+                                    {practiceQuestion.questionPrompt}
+                                </div>
+                            </div>
+
+                            {/* Options if available */}
+                            {practiceQuestion.options && practiceQuestion.options.length > 0 ? (
+                                <div className="space-y-2">
+                                    <p className="text-xs font-bold text-slate-700 uppercase mb-1">Select Best Option</p>
+                                    {practiceQuestion.options.map((opt: string, idx: number) => (
+                                        <label
+                                            key={idx}
+                                            className={`flex items-start gap-3 p-3 rounded-xl border text-xs cursor-pointer transition-all ${practiceSelectedOption === opt
+                                                    ? 'bg-violet-50 border-violet-500 text-violet-950 font-semibold'
+                                                    : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+                                                }`}
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="practiceOption"
+                                                value={opt}
+                                                checked={practiceSelectedOption === opt}
+                                                onChange={() => setPracticeSelectedOption(opt)}
+                                                className="mt-0.5 text-violet-600 focus:ring-violet-500"
+                                            />
+                                            <span>{opt}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div>
+                                    <p className="text-xs font-bold text-slate-700 uppercase mb-1.5">Your Response</p>
+                                    <textarea
+                                        rows={4}
+                                        value={practiceAnswerText}
+                                        onChange={(e) => setPracticeAnswerText(e.target.value)}
+                                        placeholder="Type your explanation or conceptual answer here..."
+                                        className="w-full rounded-xl border border-slate-300 p-3 text-xs leading-relaxed"
+                                    />
+                                </div>
+                            )}
+
+                            {/* Hints Accordion */}
+                            {practiceQuestion.hints && practiceQuestion.hints.length > 0 && (
+                                <div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowHints(!showHints)}
+                                        className="text-xs font-bold text-amber-700 hover:text-amber-800 flex items-center gap-1.5"
+                                    >
+                                        <HelpCircle className="h-4 w-4" />
+                                        <span>{showHints ? 'Hide Conceptual Hints' : 'Show Conceptual Hints'}</span>
+                                    </button>
+                                    {showHints && (
+                                        <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1">
+                                            {practiceQuestion.hints.map((h: string, idx: number) => (
+                                                <p key={idx} className="text-xs text-amber-900">• {h}</p>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
                             )}
+
+                            {/* Evaluation Result Alert */}
+                            {practiceResult && (
+                                <div className={`p-4 rounded-xl border flex items-start gap-3 ${practiceResult.isCorrect
+                                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                                        : 'bg-rose-50 border-rose-300 text-rose-900'
+                                    }`}>
+                                    {practiceResult.isCorrect ? (
+                                        <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                                    ) : (
+                                        <AlertCircle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+                                    )}
+                                    <div className="space-y-1">
+                                        <p className="text-xs font-extrabold uppercase">
+                                            {practiceResult.isCorrect ? 'Correct! Full Score' : 'Needs Review'} (Score: {practiceResult.score}/{practiceResult.maxScore})
+                                        </p>
+                                        <p className="text-xs leading-relaxed">{practiceResult.feedback}</p>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                                <Button
+                                    variant="secondary"
+                                    size="md"
+                                    onClick={handleFetchPracticeQuestion}
+                                    disabled={loadingPractice}
+                                >
+                                    Try Another Question
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    size="md"
+                                    onClick={handleSubmitPracticeAnswer}
+                                    disabled={evaluatingPractice || (!practiceSelectedOption && !practiceAnswerText.trim())}
+                                    className="bg-violet-600 hover:bg-violet-700 text-white"
+                                >
+                                    <span>{evaluatingPractice ? 'Evaluating with AI...' : 'Submit Practice Answer'}</span>
+                                </Button>
+                            </div>
                         </Card>
                     ) : (
-                        <Card className="p-8 text-center space-y-3 border-slate-200">
-                            <Clock className="h-10 w-10 text-slate-400 mx-auto" />
-                            <h3 className="text-base font-bold text-slate-800">No Assessment Scheduled Today</h3>
-                            <p className="text-sm text-slate-500">
-                                Today is a scheduled rest or review day according to your cohort&apos;s weekly timetable.
+                        <Card className="p-12 text-center bg-slate-50 border-dashed border-2 border-slate-300 rounded-2xl flex flex-col items-center justify-center space-y-3">
+                            <div className="h-12 w-12 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center">
+                                <Award className="h-6 w-6" />
+                            </div>
+                            <h4 className="text-sm font-bold text-slate-800">Ready to Practice</h4>
+                            <p className="text-xs text-slate-500 max-w-sm">
+                                Choose your desired topic and difficulty level above, then click &quot;Fetch Practice Question&quot; to begin your adaptive exercise.
                             </p>
                         </Card>
                     )}
                 </div>
-
-                {/* Right Column: Progress Metrics & Cohort Invariants */}
-                <div className="space-y-6">
-                    {/* Stats Card */}
-                    <Card className="p-5 border-slate-200 space-y-4">
-                        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">
-                            Overall Completion Progress
-                        </h3>
-
-                        {stats && (
-                            <div className="space-y-3">
-                                <div>
-                                    <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                        <span>Target: 100 Questions</span>
-                                        <span>{Math.round(stats.completionPercentage)}%</span>
-                                    </div>
-                                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                                        <div
-                                            className="bg-brand-primary h-2.5 rounded-full transition-all duration-500"
-                                            style={{ width: `${Math.min(stats.completionPercentage, 100)}%` }}
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-2 pt-2">
-                                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 text-center">
-                                        <p className="text-2xs font-bold text-slate-400 uppercase">Submitted</p>
-                                        <p className="text-lg font-black text-emerald-600">{stats.completed}</p>
-                                    </div>
-                                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 text-center">
-                                        <p className="text-2xs font-bold text-slate-400 uppercase">Missed</p>
-                                        <p className="text-lg font-black text-rose-600">{stats.missed}</p>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </Card>
-
-                    {/* Guidelines Card */}
-                    <Card className="p-5 border-slate-200 bg-indigo-50/50 space-y-3">
-                        <div className="flex items-center gap-2 text-indigo-950 font-bold text-sm">
-                            <Info className="h-4 w-4 text-brand-primary" />
-                            <span>Daily Assessment Guidelines</span>
-                        </div>
-                        <ul className="text-xs text-indigo-900 space-y-2 list-disc list-inside">
-                            <li>Each student receives 100 distinct personalized questions across 16 weeks.</li>
-                            <li>Daily questions are tailored individually for each student.</li>
-                            <li>Each question is solvable strictly within today&apos;s daily window.</li>
-                            <li>Completed questions count towards your daily streak.</li>
-                        </ul>
-                    </Card>
-                </div>
-            </div>
-
-            {/* Assessment Visual Journey Grid */}
-            <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h2 className="text-lg font-bold text-slate-900">Assessment Roadmap</h2>
-                        <p className="text-xs text-slate-500">Your personalized daily assessment journey across the semester</p>
-                    </div>
-                    <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
-                        <span className="flex items-center gap-1.5">
-                            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> Submitted
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                            <span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> Missed
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                            <span className="h-2.5 w-2.5 rounded-full bg-brand-primary" /> Active/Today
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                            <span className="h-2.5 w-2.5 rounded-full bg-slate-300" /> Locked
-                        </span>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-5 sm:grid-cols-10 md:grid-cols-20 gap-2 p-4 bg-white rounded-xl border border-slate-200">
-                    {allSlots.map((slot) => {
-                        let bgClass = 'bg-slate-100 text-slate-400 border-slate-200';
-                        if (slot.status === 'SUBMITTED') {
-                            bgClass = 'bg-emerald-50 text-emerald-700 border-emerald-300 font-bold';
-                        } else if (slot.status === 'MISSED') {
-                            bgClass = 'bg-rose-50 text-rose-700 border-rose-300 font-bold';
-                        } else if (slot.status === 'AVAILABLE' || slot.status === 'IN_PROGRESS') {
-                            bgClass = 'bg-brand-primary text-white border-brand-primary font-extrabold shadow-sm';
-                        }
-
-                        return (
-                            <div
-                                key={slot._id}
-                                title={`Day ${slot.dayNumber}: ${slot.status} (${new Date(slot.scheduledDate).toLocaleDateString()})`}
-                                className={`h-10 flex flex-col items-center justify-center rounded-lg border text-xs transition-all ${bgClass}`}
-                            >
-                                <span>{slot.dayNumber}</span>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
+            )}
         </div>
     );
 }

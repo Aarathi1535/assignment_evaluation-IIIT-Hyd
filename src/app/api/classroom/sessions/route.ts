@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const { title, questionPrompt, referenceAnswer, timeLimit, courseId, allowedStudents } = body;
+    const { title, questionPrompt, referenceAnswer, timeLimit, courseId, allowedStudents, allowedSections } = body;
 
     const context = {
       actingUserId: auth.user.id,
@@ -78,7 +78,8 @@ export async function POST(req: NextRequest) {
         referenceAnswer,
         timeLimit: typeof timeLimit === 'number' ? timeLimit : 180,
         courseId,
-        allowedStudents
+        allowedStudents,
+        allowedSections
       },
       context
     );

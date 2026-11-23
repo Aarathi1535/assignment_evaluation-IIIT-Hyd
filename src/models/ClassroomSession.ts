@@ -9,6 +9,7 @@ export interface IClassroomSession extends Document {
     createdBy: mongoose.Types.ObjectId;
     course?: mongoose.Types.ObjectId | null;
     allowedStudents?: string[];
+    allowedSections?: string[];
     restrictedRoster: boolean;
     status: ClassroomSessionStatus;
     currentActivity?: mongoose.Types.ObjectId | null;
@@ -49,6 +50,10 @@ const ClassroomSessionSchema = new Schema<IClassroomSession>(
             default: null
         },
         allowedStudents: {
+            type: [String],
+            default: []
+        },
+        allowedSections: {
             type: [String],
             default: []
         },

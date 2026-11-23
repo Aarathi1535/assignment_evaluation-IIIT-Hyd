@@ -54,6 +54,11 @@ export interface CreatePersonalizedScheduleInput {
     dailyWindowStartTime?: string; // HH:MM
     dailyWindowEndTime?: string; // HH:MM
     enrolledStudents: string[];
+    targetSections?: string[];
+    cadence?: string;
+    difficulty?: string;
+    syllabusText?: string;
+    syllabusTopics?: string[];
     questionPool?: string[];
 }
 
@@ -418,6 +423,11 @@ export class PersonalizedAssessmentService {
             dailyWindowStartTime: startTime,
             dailyWindowEndTime: endTime,
             enrolledStudents: input.enrolledStudents.map((id) => new mongoose.Types.ObjectId(id)),
+            targetSections: input.targetSections || [],
+            cadence: input.cadence || '3_PER_DAY',
+            difficulty: input.difficulty || 'ADAPTIVE',
+            syllabusText: input.syllabusText || '',
+            syllabusTopics: input.syllabusTopics || [],
             questionPool: questionPoolIds.map((id) => new mongoose.Types.ObjectId(id)),
             scheduleMatrixGenerated: true,
             status: 'ACTIVE',

@@ -101,12 +101,41 @@ export class PersonalizedAssessmentRepository {
             return null;
         }
         const studentObjId = new mongoose.Types.ObjectId(studentId.toString());
-        return PersonalizedAssessmentSchedule.findOne({
+        const schedules = await PersonalizedAssessmentSchedule.find({
             enrolledStudents: studentObjId,
             status: 'ACTIVE'
         })
             .populate('course', 'courseCode courseName')
             .sort({ startDate: -1 });
+
+        if (!schedules || schedules.length === 0) {
+            return null;
+        }
+
+        // Section-wise filtering: if targetSections is defined, check student's section
+        let studentSection: string | null = null;
+        try {
+            const User = (await import('../models/User')).default;
+            const u = await User.findById(studentObjId).select('section').lean();
+            if (u && (u as any).section) {
+                studentSection = String((u as any).section).trim().toUpperCase();
+            }
+        } catch {
+            // ignore lookup error
+        }
+
+        for (const sched of schedules) {
+            if (!sched.targetSections || sched.targetSections.length === 0) {
+                return sched;
+            }
+            const normTargets = sched.targetSections.map(s => s.trim().toUpperCase());
+            if (studentSection && normTargets.includes(studentSection)) {
+                return sched;
+            }
+        }
+
+        // If all active schedules are section-gated and none match the student's section
+        return null;
     }
 
     async updateSchedule(

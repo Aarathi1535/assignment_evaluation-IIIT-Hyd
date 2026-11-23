@@ -25,6 +25,7 @@ export interface CreateSessionAndActivityInput {
     timeLimit?: number;
     courseId?: string;
     allowedStudents?: string[];
+    allowedSections?: string[];
 }
 
 export interface JoinSessionResponse {
@@ -126,6 +127,13 @@ export class ClassroomSessionService {
         }
         allowedStudentsList = Array.from(new Set(allowedStudentsList));
 
+        let allowedSectionsList: string[] = [];
+        if (Array.isArray(input.allowedSections)) {
+            allowedSectionsList = input.allowedSections
+                .map(s => String(s).trim())
+                .filter(Boolean);
+        }
+
         // Generate QR code SVG linking to student join URL
         const joinUrl = `/classroom/session/${joinCode}`;
         const qrCodeSvg = generateQRCodeSvg(joinUrl, 280);
@@ -138,7 +146,8 @@ export class ClassroomSessionService {
             createdBy: new mongoose.Types.ObjectId(context.actingUserId),
             course: input.courseId && mongoose.Types.ObjectId.isValid(input.courseId) ? new mongoose.Types.ObjectId(input.courseId) : null,
             allowedStudents: allowedStudentsList,
-            restrictedRoster: allowedStudentsList.length > 0,
+            allowedSections: allowedSectionsList,
+            restrictedRoster: allowedStudentsList.length > 0 || allowedSectionsList.length > 0,
             status: 'ACTIVE',
             defaultTimeLimit: timeLimit,
             participantCount: 0
@@ -257,6 +266,45 @@ export class ClassroomSessionService {
             if (!isAllowed) {
                 throw new HttpError(
                     'Access denied: You are not in the enrolled student list provided by the professor for this classroom session. Only designated students can join and upload.',
+                    403
+                );
+            }
+        }
+
+        // Section-wise Gating: If the session has allowedSections specified, verify the student's section
+        if (session.allowedSections && session.allowedSections.length > 0) {
+            let studentSection: string | null = null;
+            if (optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)) {
+                try {
+                    const User = (await import('../models/User')).default;
+                    const u = await User.findById(optionalUserId).select('section').lean();
+                    if (u && (u as any).section) {
+                        studentSection = (u as any).section;
+                    }
+                } catch {
+                    // Ignore lookup error
+                }
+            }
+
+            // Also check StudentMapping if course is attached
+            if (!studentSection && session.course && optionalUserId && mongoose.Types.ObjectId.isValid(optionalUserId)) {
+                try {
+                    const StudentMapping = (await import('../models/StudentMapping')).default;
+                    const mapping = await StudentMapping.findOne({ course: session.course, user: optionalUserId }).select('section').lean();
+                    if (mapping && (mapping as any).section) {
+                        studentSection = (mapping as any).section;
+                    }
+                } catch {
+                    // Ignore lookup error
+                }
+            }
+
+            const allowedSectionsNormalized = session.allowedSections.map(s => s.trim().toUpperCase());
+            const hasSectionAccess = studentSection && allowedSectionsNormalized.includes(studentSection.trim().toUpperCase());
+
+            if (!hasSectionAccess) {
+                throw new HttpError(
+                    `Access denied: This classroom session is restricted to section(s): ${session.allowedSections.join(', ')}. ${studentSection ? `Your assigned section is ${studentSection}.` : 'Your account is not assigned to any allowed section.'}`,
                     403
                 );
             }

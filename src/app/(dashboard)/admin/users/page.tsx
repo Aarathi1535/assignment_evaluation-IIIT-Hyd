@@ -89,6 +89,34 @@ export default function AdminUsersPage() {
     }
   };
 
+  const handleTogglePersonalizedAccess = async (userId: string, access: boolean) => {
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/personalized-access`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setUsers((prev) =>
+          prev.map((u) =>
+            u._id === userId
+              ? {
+                  ...u,
+                  personalizedAccess: access,
+                  personalizedRequestStatus: access ? 'APPROVED' : 'REJECTED',
+                }
+              : u
+          )
+        );
+      } else {
+        setError(data.message || 'Failed to update personalized access');
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Error updating personalized access');
+    }
+  };
+
   const filteredUsers = users.filter((u) => {
     const q = searchQuery.toLowerCase().trim();
     return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
@@ -186,6 +214,7 @@ export default function AdminUsersPage() {
           isLoading={isLoading}
           onDeactivate={handleDeactivateClick}
           onToggleClassroomAccess={handleToggleClassroomAccess}
+          onTogglePersonalizedAccess={handleTogglePersonalizedAccess}
         />
 
         {/* Modals */}

@@ -98,6 +98,11 @@ export const createPersonalizedScheduleSchema = z
         dailyWindowStartTime: z.string().regex(timeStringRegex, 'Start time must be in HH:MM format').default('09:00'),
         dailyWindowEndTime: z.string().regex(timeStringRegex, 'End time must be in HH:MM format').default('22:00'),
         enrolledStudents: z.array(objectIdSchema).min(1, 'At least one student must be enrolled'),
+        targetSections: z.array(z.string().trim()).optional(),
+        cadence: z.string().trim().optional(),
+        difficulty: z.string().trim().optional(),
+        syllabusText: z.string().optional(),
+        syllabusTopics: z.array(z.string().trim()).optional(),
         questionPool: z.array(objectIdSchema).optional()
     })
     .strict()

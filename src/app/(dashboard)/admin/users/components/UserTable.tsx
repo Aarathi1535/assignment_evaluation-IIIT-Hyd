@@ -12,6 +12,8 @@ export interface UserItem {
   isActive: boolean;
   classroomAccess?: boolean;
   classroomRequestStatus?: 'NONE' | 'REQUESTED' | 'APPROVED' | 'REJECTED';
+  personalizedAccess?: boolean;
+  personalizedRequestStatus?: 'NONE' | 'REQUESTED' | 'APPROVED' | 'REJECTED';
 }
 
 interface UserTableProps {
@@ -19,6 +21,7 @@ interface UserTableProps {
   isLoading: boolean;
   onDeactivate: (user: { id: string; name: string; email: string }) => void;
   onToggleClassroomAccess?: (userId: string, access: boolean) => void;
+  onTogglePersonalizedAccess?: (userId: string, access: boolean) => void;
 }
 
 const roleBadgeStyles: Record<string, string> = {
@@ -28,7 +31,7 @@ const roleBadgeStyles: Record<string, string> = {
   STUDENT: 'bg-emerald-50 text-emerald-700 border-emerald-200 border',
 };
 
-export const UserTable = ({ users, isLoading, onDeactivate, onToggleClassroomAccess }: UserTableProps) => {
+export const UserTable = ({ users, isLoading, onDeactivate, onToggleClassroomAccess, onTogglePersonalizedAccess }: UserTableProps) => {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center p-12 bg-white rounded-brand-lg border border-slate-200 shadow-xs">
@@ -62,6 +65,7 @@ export const UserTable = ({ users, isLoading, onDeactivate, onToggleClassroomAcc
               <th className="px-6 py-4">Email Address</th>
               <th className="px-6 py-4">Security Role</th>
               <th className="px-6 py-4 text-center">Classroom Access</th>
+              <th className="px-6 py-4 text-center">Personalized Access</th>
               <th className="px-6 py-4 text-center">Status</th>
               <th className="px-6 py-4 text-right">Actions</th>
             </tr>
@@ -134,6 +138,57 @@ export const UserTable = ({ users, isLoading, onDeactivate, onToggleClassroomAcc
                             size="sm"
                             className="h-7 text-xs px-2 border-slate-300 text-slate-700 hover:bg-teal-50 hover:text-teal-700 font-semibold"
                             onClick={() => onToggleClassroomAccess?.(user._id, true)}
+                          >
+                            Grant Access
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
+                  </td>
+                  {/* Personalized Learning Access */}
+                  <td className="px-6 py-4.5 whitespace-nowrap text-center">
+                    {user.role.toUpperCase() === 'ADMIN' ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase bg-purple-100 text-purple-800 border border-purple-200">
+                        All-Access
+                      </span>
+                    ) : user.role.toUpperCase() === 'PROFESSOR' ? (
+                      <div className="flex items-center justify-center gap-1.5">
+                        {user.personalizedAccess ? (
+                          <>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase bg-purple-50 text-purple-700 border border-purple-200">
+                              Granted
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onTogglePersonalizedAccess?.(user._id, false)}
+                              className="text-xs text-rose-600 hover:text-rose-800 underline font-semibold cursor-pointer ml-1"
+                              title="Revoke access"
+                            >
+                              Revoke
+                            </button>
+                          </>
+                        ) : user.personalizedRequestStatus === 'REQUESTED' ? (
+                          <>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-3xs font-extrabold uppercase bg-amber-50 text-amber-700 border border-amber-300 animate-pulse">
+                              Requested
+                            </span>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              className="h-7 text-xs px-2 bg-amber-600 hover:bg-amber-700 text-white ml-1 font-bold"
+                              onClick={() => onTogglePersonalizedAccess?.(user._id, true)}
+                            >
+                              Grant Access
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs px-2 border-slate-300 text-slate-700 hover:bg-purple-50 hover:text-purple-700 font-semibold"
+                            onClick={() => onTogglePersonalizedAccess?.(user._id, true)}
                           >
                             Grant Access
                           </Button>

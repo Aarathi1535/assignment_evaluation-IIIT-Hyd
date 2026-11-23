@@ -65,7 +65,7 @@ export async function PATCH(
       // Non-blocking
     });
 
-    const sanitized = user.toObject() as Record<string, unknown>;
+    const sanitized = user.toObject() as unknown as Record<string, unknown>;
     delete sanitized.password;
 
     return NextResponse.json(

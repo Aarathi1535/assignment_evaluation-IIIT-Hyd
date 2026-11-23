@@ -79,21 +79,17 @@ export default function PersonalizedPortalPage() {
         </div>
 
         {/* Independent Auth for Personalized Learning */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-3">
           <Link
             href="/personalized/login"
-            className="flex items-center justify-center gap-2 py-3 px-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded-xl text-white font-medium text-sm transition"
+            className="flex items-center justify-center gap-2 py-3.5 px-4 bg-purple-600 hover:bg-purple-500 rounded-xl text-white font-bold text-sm transition shadow-lg"
           >
-            <LogIn className="w-4 h-4 text-purple-400" />
-            <span>Personalized Login</span>
+            <LogIn className="w-4 h-4" />
+            <span>Personalized Portal Login</span>
           </Link>
-          <Link
-            href="/personalized/register"
-            className="flex items-center justify-center gap-2 py-3 px-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 rounded-xl text-white font-medium text-sm transition"
-          >
-            <UserPlus className="w-4 h-4 text-purple-400" />
-            <span>Register Account</span>
-          </Link>
+          <p className="text-center text-xs text-neutral-400">
+            Access to Personalised Learning is granted to faculty by administrators on request only.
+          </p>
         </div>
       </main>
 
