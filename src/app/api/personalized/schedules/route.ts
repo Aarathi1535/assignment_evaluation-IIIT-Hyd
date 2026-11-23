@@ -3,7 +3,7 @@ import { Types as MongooseTypes } from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import personalizedAssessmentService from '../../../../services/PersonalizedAssessmentService';
 import { createPersonalizedScheduleSchema } from '../../../../validations/personalizedAssessmentValidation';
-import { requireAuth, requireFeature } from '../../../../lib/apiAuth';
+import { requireAuth, requireFeature, requirePersonalizedProfessor } from '../../../../lib/apiAuth';
 import { HttpError } from '../../../../lib/errors';
 
 export async function GET() {
@@ -12,20 +12,9 @@ export async function GET() {
         return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
     }
 
-    const auth = await requireAuth();
+    const auth = await requirePersonalizedProfessor();
     if (!auth.authorized) {
         return auth.response;
-    }
-
-    if (auth.user.role !== 'PROFESSOR' && auth.user.role !== 'ADMIN') {
-        return NextResponse.json(
-            {
-                success: false,
-                message: 'Forbidden: Only professors or admins can list schedules',
-                data: null
-            },
-            { status: 403 }
-        );
     }
 
     if (!auth.user.id || !MongooseTypes.ObjectId.isValid(auth.user.id)) {
@@ -71,20 +60,9 @@ export async function POST(req: NextRequest) {
         return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
     }
 
-    const auth = await requireAuth();
+    const auth = await requirePersonalizedProfessor();
     if (!auth.authorized) {
         return auth.response;
-    }
-
-    if (auth.user.role !== 'PROFESSOR' && auth.user.role !== 'ADMIN') {
-        return NextResponse.json(
-            {
-                success: false,
-                message: 'Forbidden: Only professors or admins can create schedules',
-                data: null
-            },
-            { status: 403 }
-        );
     }
 
     try {

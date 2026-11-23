@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { signIn } from 'next-auth/react';
 import { Brain, LogIn, ArrowLeft, AlertCircle, CheckCircle2, Send } from 'lucide-react';
 
 export default function PersonalizedLoginPage() {
@@ -37,6 +38,17 @@ export default function PersonalizedLoginPage() {
           throw new Error(data.message || 'Access to Personalised Learning has not been granted by administrator.');
         }
         throw new Error(data.message || 'Login failed');
+      }
+
+      // Establish NextAuth session so dashboard layout recognizes authenticated user
+      const nextAuthRes = await signIn('credentials', {
+        email: email.trim(),
+        password,
+        redirect: false,
+      });
+
+      if (nextAuthRes?.error) {
+        throw new Error(nextAuthRes.error);
       }
 
       if (data.data?.user?.role === 'PROFESSOR') {

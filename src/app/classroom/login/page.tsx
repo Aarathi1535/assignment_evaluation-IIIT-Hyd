@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { signIn } from 'next-auth/react';
 import { MonitorPlay, LogIn, ArrowLeft, AlertCircle, CheckCircle2, Send } from 'lucide-react';
 
 export default function ClassroomLoginPage() {
@@ -39,7 +40,22 @@ export default function ClassroomLoginPage() {
         throw new Error(data.message || 'Login failed');
       }
 
-      router.push('/professor/classroom');
+      // Establish NextAuth session so dashboard layout recognizes authenticated user
+      const nextAuthRes = await signIn('credentials', {
+        email: email.trim(),
+        password,
+        redirect: false,
+      });
+
+      if (nextAuthRes?.error) {
+        throw new Error(nextAuthRes.error);
+      }
+
+      if (data.data?.user?.role === 'STUDENT') {
+        router.push('/student/classroom');
+      } else {
+        router.push('/professor/classroom');
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'An error occurred during login');
     } finally {

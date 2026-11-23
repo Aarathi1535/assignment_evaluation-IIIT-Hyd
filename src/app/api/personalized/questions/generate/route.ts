@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '../../../../../lib/db';
 import personalizedQuestionGenerationService from '../../../../../services/PersonalizedQuestionGenerationService';
 import { generateQuestionsSchema } from '../../../../../validations/personalizedAssessmentValidation';
-import { requireAuth, requireFeature } from '../../../../../lib/apiAuth';
+import { requireAuth, requireFeature, requirePersonalizedProfessor } from '../../../../../lib/apiAuth';
 import { HttpError } from '../../../../../lib/errors';
 
 export async function POST(req: NextRequest) {
@@ -11,21 +11,9 @@ export async function POST(req: NextRequest) {
         return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
     }
 
-    const auth = await requireAuth();
+    const auth = await requirePersonalizedProfessor();
     if (!auth.authorized) {
         return auth.response;
-    }
-
-    if (auth.user.role !== 'PROFESSOR' && auth.user.role !== 'ADMIN') {
-        return NextResponse.json(
-            {
-                success: false,
-                message: 'Forbidden: Only professors or admins can generate questions',
-                error: { code: 'FORBIDDEN', message: 'Forbidden: Only professors or admins can generate questions' },
-                data: null
-            },
-            { status: 403 }
-        );
     }
 
     try {

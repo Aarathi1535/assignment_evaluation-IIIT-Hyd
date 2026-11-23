@@ -118,11 +118,11 @@ export default function DashboardLayout({
   const rawRole = user.role || 'STUDENT';
   const role = rawRole.toUpperCase();
 
-  const isClassroomEnabled = isFeatureEnabled('CLASSROOM_ASSESSMENT');
-  const isPersonalizedEnabled = isFeatureEnabled('PERSONALIZED_ASSESSMENT');
-
   const isClassroomMode = pathname.includes('/classroom');
   const isPersonalizedMode = pathname.includes('/personalized');
+
+  const isClassroomForbidden = isClassroomMode && role === 'PROFESSOR' && !(user as any).classroomAccess;
+  const isPersonalizedForbidden = isPersonalizedMode && role === 'PROFESSOR' && !(user as any).personalizedAccess;
 
   let activeBrandTitle = 'IIIT Hyderabad';
   let activeBrandSubtitle = 'Evaluator';
@@ -162,14 +162,12 @@ export default function DashboardLayout({
       ];
     }
   } else {
+    // Pure Assignment Evaluation Module Navigation — strictly no other modules visible
     const adminNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
       { label: 'Dashboard', href: '/admin', icon: LayoutDashboard },
       { label: 'Users', href: '/admin/users', icon: Users },
       { label: 'Audit History', href: '/admin/audit-logs', icon: ClipboardList },
     ];
-    if (isClassroomEnabled) {
-      adminNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
-    }
 
     const professorNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
       { label: 'Dashboard', href: '/professor', icon: LayoutDashboard },
@@ -180,12 +178,6 @@ export default function DashboardLayout({
       { label: 'Create Course', href: '/professor/courses/create', icon: Plus },
       { label: 'Create Exam', href: '/professor/exams/create', icon: Plus },
     ];
-    if (isClassroomEnabled) {
-      professorNavItems.push({ label: 'Classroom Activity', href: '/professor/classroom', icon: Sparkles });
-    }
-    if (isPersonalizedEnabled) {
-      professorNavItems.push({ label: 'Personalized Learning', href: '/professor/personalized', icon: Calendar });
-    }
 
     const taNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
       { label: 'Dashboard', href: '/ta', icon: LayoutDashboard },
@@ -194,12 +186,6 @@ export default function DashboardLayout({
     const studentNavItems: Array<{ label: string; href: string; icon: LucideIcon }> = [
       { label: 'Dashboard', href: '/student', icon: LayoutDashboard },
     ];
-    if (isClassroomEnabled) {
-      studentNavItems.push({ label: 'Classroom Activity', href: '/student/classroom', icon: Sparkles });
-    }
-    if (isPersonalizedEnabled) {
-      studentNavItems.push({ label: 'Personalized Learning', href: '/student/personalized', icon: Calendar });
-    }
 
     const navItemsByRole: Record<string, Array<{ label: string; href: string; icon: LucideIcon }>> = {
       ADMIN: adminNavItems,
@@ -340,7 +326,61 @@ export default function DashboardLayout({
       {/* Main Content Area */}
       <div className="lg:pl-64 flex flex-col min-h-screen">
         <main id="main-content" tabIndex={-1} className="flex-1 outline-none">
-          {children}
+          {isClassroomForbidden ? (
+            <div className="min-h-[80vh] flex items-center justify-center p-6">
+              <div className="max-w-md w-full bg-white rounded-2xl border-2 border-slate-200 p-8 text-center space-y-4 shadow-sm">
+                <div className="h-14 w-14 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+                  <Sparkles className="h-7 w-7" />
+                </div>
+                <h2 className="text-xl font-black text-slate-900">Classroom Activity Access Required</h2>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Your professor account does not currently have permission to access the Classroom Activity module. Access is granted by administrators on request only.
+                </p>
+                <div className="pt-2 flex flex-col gap-2.5">
+                  <Link
+                    href="/classroom/login"
+                    className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition-colors block"
+                  >
+                    Request Access / Classroom Portal
+                  </Link>
+                  <Link
+                    href="/professor"
+                    className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors block"
+                  >
+                    Go to Assignment Evaluation Dashboard
+                  </Link>
+                </div>
+              </div>
+            </div>
+          ) : isPersonalizedForbidden ? (
+            <div className="min-h-[80vh] flex items-center justify-center p-6">
+              <div className="max-w-md w-full bg-white rounded-2xl border-2 border-slate-200 p-8 text-center space-y-4 shadow-sm">
+                <div className="h-14 w-14 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+                  <Calendar className="h-7 w-7" />
+                </div>
+                <h2 className="text-xl font-black text-slate-900">Personalised Learning Access Required</h2>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  Your professor account does not currently have permission to access the Personalised Learning module. Access is granted by administrators on request only.
+                </p>
+                <div className="pt-2 flex flex-col gap-2.5">
+                  <Link
+                    href="/personalized/login"
+                    className="w-full py-2.5 px-4 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl text-sm transition-colors block"
+                  >
+                    Request Access / Personalised Portal
+                  </Link>
+                  <Link
+                    href="/professor"
+                    className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors block"
+                  >
+                    Go to Assignment Evaluation Dashboard
+                  </Link>
+                </div>
+              </div>
+            </div>
+          ) : (
+            children
+          )}
         </main>
       </div>
     </div>

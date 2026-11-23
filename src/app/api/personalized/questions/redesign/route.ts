@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
 import { connectDB } from '../../../../../lib/db';
-import { requireAuth, requireFeature } from '../../../../../lib/apiAuth';
+import { requireAuth, requireFeature, requirePersonalizedProfessor } from '../../../../../lib/apiAuth';
 import { geminiAIService } from '../../../../../services/ai/GeminiAIService';
 import PersonalizedQuestion from '../../../../../models/PersonalizedQuestion';
 import CourseSyllabus from '../../../../../models/CourseSyllabus';
@@ -15,16 +15,9 @@ export async function POST(req: NextRequest) {
         );
     }
 
-    const auth = await requireAuth();
+    const auth = await requirePersonalizedProfessor();
     if (!auth.authorized) {
         return auth.response;
-    }
-
-    if (auth.user.role !== 'PROFESSOR' && auth.user.role !== 'ADMIN') {
-        return NextResponse.json(
-            { success: false, message: 'Forbidden: Only professors or admins can redesign questions', data: null },
-            { status: 403 }
-        );
     }
 
     try {

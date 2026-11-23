@@ -4,7 +4,7 @@ import { connectDB } from '../../../../lib/db';
 import CourseSyllabus from '../../../../models/CourseSyllabus';
 import PersonalizedQuestion, { IPersonalizedQuestion } from '../../../../models/PersonalizedQuestion';
 import Course from '../../../../models/Course';
-import { requireAuth, requireFeature } from '../../../../lib/apiAuth';
+import { requireAuth, requireFeature, requirePersonalizedProfessor } from '../../../../lib/apiAuth';
 import { HttpError } from '../../../../lib/errors';
 
 export interface TaxonomySubtopic {
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
         );
     }
 
-    const auth = await requireAuth();
+    const auth = await requirePersonalizedProfessor();
     if (!auth.authorized) {
         return auth.response;
     }

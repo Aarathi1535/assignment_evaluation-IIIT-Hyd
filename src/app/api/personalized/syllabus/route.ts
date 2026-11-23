@@ -3,7 +3,7 @@ import { Types as MongooseTypes, Error as MongooseError } from 'mongoose';
 import { connectDB } from '../../../../lib/db';
 import syllabusProcessingService from '../../../../services/SyllabusProcessingService';
 import { uploadSyllabusSchema } from '../../../../validations/personalizedAssessmentValidation';
-import { requireAuth, requireFeature } from '../../../../lib/apiAuth';
+import { requireAuth, requireFeature, requirePersonalizedProfessor } from '../../../../lib/apiAuth';
 import { HttpError } from '../../../../lib/errors';
 
 export async function GET(req: NextRequest) {
@@ -94,29 +94,9 @@ export async function POST(req: NextRequest) {
         return featureCheck.response ?? NextResponse.json({ success: false, message: 'Personalized assessment feature is disabled', data: null }, { status: 404 });
     }
 
-    const auth = await requireAuth();
+    const auth = await requirePersonalizedProfessor();
     if (!auth.authorized) {
-        return NextResponse.json(
-            {
-                success: false,
-                message: 'Authentication required. Please log in to upload syllabus.',
-                error: { code: 'UNAUTHORIZED', message: 'Authentication required. Please log in to upload syllabus.' },
-                data: null
-            },
-            { status: 401 }
-        );
-    }
-
-    if (auth.user.role !== 'PROFESSOR' && auth.user.role !== 'ADMIN') {
-        return NextResponse.json(
-            {
-                success: false,
-                message: 'Forbidden: Only professors or admins can upload course syllabi',
-                error: { code: 'FORBIDDEN', message: 'Forbidden: Only professors or admins can upload course syllabi' },
-                data: null
-            },
-            { status: 403 }
-        );
+        return auth.response;
     }
 
     try {

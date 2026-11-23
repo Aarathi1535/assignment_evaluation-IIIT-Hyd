@@ -62,7 +62,12 @@ export const authOptions: AuthOptions = {
           email: user.email,
           name: user.name,
           role: user.role as UserRole,
-        };
+          classroomAccess: Boolean(user.classroomAccess),
+          classroomRequestStatus: user.classroomRequestStatus || 'NONE',
+          personalizedAccess: Boolean(user.personalizedAccess),
+          personalizedRequestStatus: user.personalizedRequestStatus || 'NONE',
+          section: user.section || null,
+        } as any;
       }
     })
   ],
@@ -70,7 +75,27 @@ export const authOptions: AuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as import('next-auth').User).role;
+        token.role = (user as any).role;
+        token.classroomAccess = (user as any).classroomAccess;
+        token.classroomRequestStatus = (user as any).classroomRequestStatus;
+        token.personalizedAccess = (user as any).personalizedAccess;
+        token.personalizedRequestStatus = (user as any).personalizedRequestStatus;
+        token.section = (user as any).section;
+      } else if (token.id) {
+        // Refresh permissions from DB so admin access grants reflect immediately
+        try {
+          const { default: UserModel } = await import('@/models/User');
+          const latest = await UserModel.findById(token.id).select('classroomAccess classroomRequestStatus personalizedAccess personalizedRequestStatus section').lean();
+          if (latest) {
+            token.classroomAccess = Boolean((latest as any).classroomAccess);
+            token.classroomRequestStatus = (latest as any).classroomRequestStatus || 'NONE';
+            token.personalizedAccess = Boolean((latest as any).personalizedAccess);
+            token.personalizedRequestStatus = (latest as any).personalizedRequestStatus || 'NONE';
+            token.section = (latest as any).section || null;
+          }
+        } catch {
+          // Non-blocking
+        }
       }
       return token;
     },
@@ -80,7 +105,12 @@ export const authOptions: AuthOptions = {
           ...session.user,
           id: token.id as string,
           role: token.role as string,
-        } as import('next-auth').Session['user'];
+          classroomAccess: Boolean(token.classroomAccess),
+          classroomRequestStatus: (token.classroomRequestStatus as string) || 'NONE',
+          personalizedAccess: Boolean(token.personalizedAccess),
+          personalizedRequestStatus: (token.personalizedRequestStatus as string) || 'NONE',
+          section: (token.section as string) || null,
+        } as any;
       }
       return session;
     }

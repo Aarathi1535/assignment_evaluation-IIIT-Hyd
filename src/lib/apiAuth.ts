@@ -169,6 +169,61 @@ export async function requireGradingOrAnnotationAccess(): Promise<AuthResult> {
 }
 
 /**
+ * Helper to enforce that only professors with admin-approved personalizedAccess (or admins)
+ * can access Personalized Learning professor APIs.
+ */
+export async function requirePersonalizedProfessor() {
+  const auth = await requireAuth();
+  if (!auth.authorized) {
+    return auth;
+  }
+
+  const role = (auth.user.role || '').toUpperCase();
+  if (role !== 'PROFESSOR' && role !== 'ADMIN') {
+    return {
+      authorized: false as const,
+      user: auth.user,
+      response: NextResponse.json(
+        { success: false, message: 'Forbidden: Only professors or admins can access Personalized Learning', data: null },
+        { status: 403 }
+      ),
+    };
+  }
+
+  if (role === 'PROFESSOR') {
+    try {
+      const { connectDB } = await import('./db');
+      await connectDB();
+      const User = (await import('../models/User')).default;
+      const dbUser = await User.findById(auth.user.id).select('personalizedAccess role').lean();
+      if (dbUser && !dbUser.personalizedAccess) {
+        return {
+          authorized: false as const,
+          user: auth.user,
+          response: NextResponse.json(
+            {
+              success: false,
+              code: 'PERSONALIZED_ACCESS_DENIED',
+              message: 'Personalized Learning access has not been granted by administrator. Access is available on request only.',
+              data: null,
+            },
+            { status: 403 }
+          ),
+        };
+      }
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  return {
+    authorized: true as const,
+    user: auth.user,
+    response: null,
+  };
+}
+
+/**
  * Helper to enforce that a research feature flag is enabled before processing an API route.
  * Returns { authorized: false, response } with status 404 if disabled,
  * or { authorized: true, response: null } if enabled.

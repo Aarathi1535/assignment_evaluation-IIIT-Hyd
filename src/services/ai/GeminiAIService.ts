@@ -1,4 +1,13 @@
-import { GoogleGenAI } from '@google/genai';
+// Optional/Safe dynamic reference for @google/genai to avoid build-time bundling failures
+let GoogleGenAIClass: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  GoogleGenAIClass = require('@google/genai').GoogleGenAI;
+} catch {
+  GoogleGenAIClass = null;
+}
+type GoogleGenAI = any;
+
 import { HttpError } from '../../lib/errors';
 import {
   GeminiAIConfig,
@@ -184,8 +193,24 @@ export class GeminiAIService {
       );
     }
 
+    if (!GoogleGenAIClass) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        GoogleGenAIClass = require('@google/genai').GoogleGenAI;
+      } catch {
+        // Not installed
+      }
+    }
+
+    if (!GoogleGenAIClass) {
+      throw new HttpError(
+        `Gemini client package @google/genai is not available in the environment. Please configure custom caller or install @google/genai.`,
+        503
+      );
+    }
+
     if (!this.client || this.lastApiKey !== apiKey) {
-      this.client = new GoogleGenAI({ apiKey });
+      this.client = new GoogleGenAIClass({ apiKey });
       this.lastApiKey = apiKey;
     }
 
