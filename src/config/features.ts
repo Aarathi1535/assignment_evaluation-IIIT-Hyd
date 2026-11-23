@@ -25,14 +25,18 @@ export function isFeatureEnabled(flag: FeatureFlag): boolean {
   if (flag === 'CLASSROOM_ASSESSMENT') {
     return (
       parseBooleanFlag(process.env.FEATURE_CLASSROOM_ASSESSMENT) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_CLASSROOM_ASSESSMENT)
+      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_CLASSROOM_ASSESSMENT) ||
+      parseBooleanFlag(process.env.NEXT_PUBLIC_ENABLE_CLASSROOM_ASSESSMENT) ||
+      parseBooleanFlag(process.env.ENABLE_CLASSROOM_ASSESSMENT)
     );
   }
 
   if (flag === 'PERSONALIZED_ASSESSMENT') {
     return (
       parseBooleanFlag(process.env.FEATURE_PERSONALIZED_ASSESSMENT) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT)
+      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT) ||
+      parseBooleanFlag(process.env.NEXT_PUBLIC_ENABLE_PERSONALIZED_ASSESSMENT) ||
+      parseBooleanFlag(process.env.ENABLE_PERSONALIZED_ASSESSMENT)
     );
   }
 
