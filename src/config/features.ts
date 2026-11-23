@@ -23,21 +23,33 @@ export function parseBooleanFlag(val: string | undefined | null): boolean {
  */
 export function isFeatureEnabled(flag: FeatureFlag): boolean {
   if (flag === 'CLASSROOM_ASSESSMENT') {
-    return (
-      parseBooleanFlag(process.env.FEATURE_CLASSROOM_ASSESSMENT) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_CLASSROOM_ASSESSMENT) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_ENABLE_CLASSROOM_ASSESSMENT) ||
-      parseBooleanFlag(process.env.ENABLE_CLASSROOM_ASSESSMENT)
-    );
+    const envVal =
+      process.env.FEATURE_CLASSROOM_ASSESSMENT ??
+      process.env.NEXT_PUBLIC_FEATURE_CLASSROOM_ASSESSMENT ??
+      process.env.ENABLE_CLASSROOM_ASSESSMENT ??
+      process.env.NEXT_PUBLIC_ENABLE_CLASSROOM_ASSESSMENT;
+
+    if (envVal !== undefined) {
+      return parseBooleanFlag(envVal);
+    }
+
+    // Default to true in development and production for integrated product architecture
+    return process.env.NODE_ENV !== 'test';
   }
 
   if (flag === 'PERSONALIZED_ASSESSMENT') {
-    return (
-      parseBooleanFlag(process.env.FEATURE_PERSONALIZED_ASSESSMENT) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT) ||
-      parseBooleanFlag(process.env.NEXT_PUBLIC_ENABLE_PERSONALIZED_ASSESSMENT) ||
-      parseBooleanFlag(process.env.ENABLE_PERSONALIZED_ASSESSMENT)
-    );
+    const envVal =
+      process.env.FEATURE_PERSONALIZED_ASSESSMENT ??
+      process.env.NEXT_PUBLIC_FEATURE_PERSONALIZED_ASSESSMENT ??
+      process.env.ENABLE_PERSONALIZED_ASSESSMENT ??
+      process.env.NEXT_PUBLIC_ENABLE_PERSONALIZED_ASSESSMENT;
+
+    if (envVal !== undefined) {
+      return parseBooleanFlag(envVal);
+    }
+
+    // Default to true in development and production for integrated product architecture
+    return process.env.NODE_ENV !== 'test';
   }
 
   return false;
