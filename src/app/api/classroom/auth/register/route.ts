@@ -28,6 +28,19 @@ export async function POST(req: NextRequest) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Check if registration provides an explicit role (e.g. institutional invite / student setup)
+    // Anonymous public self-registration without role is disabled
+    if (!role) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Self-registration is disabled. Access to Classroom Activity is granted to professors by the administrator on request only.',
+          data: null,
+        },
+        { status: 403 }
+      );
+    }
+
     // Public registration strictly assigns STUDENT role.
     // Assigning PROFESSOR or TA requires valid admin invite code.
     const adminInviteCode = body.adminInviteCode || req.headers.get('x-admin-invite-code');

@@ -9,8 +9,42 @@ import ClassroomSubmission from '../models/ClassroomSubmission';
 import ClassroomEventService from '../services/ClassroomEventService';
 import { NextRequest } from 'next/server';
 
-// Mock requireAuth and next-auth
+// Mock requireAuth, classroomAuth, and next-auth
 let currentAuthUser: { id: string; role: string; name?: string; email?: string } | null = null;
+
+vi.mock('@/lib/classroomAuth', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/classroomAuth')>();
+    return {
+        ...actual,
+        requireClassroomProfessor: vi.fn(async (_req?: any) => {
+            if (!currentAuthUser) {
+                return {
+                    authorized: false,
+                    user: null,
+                    response: new Response(JSON.stringify({ success: false, message: 'Classroom authentication required' }), {
+                        status: 401,
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                };
+            }
+            if (currentAuthUser.role !== 'PROFESSOR' && currentAuthUser.role !== 'ADMIN') {
+                return {
+                    authorized: false,
+                    user: currentAuthUser,
+                    response: new Response(JSON.stringify({ success: false, message: 'Forbidden: Only professors' }), {
+                        status: 403,
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                };
+            }
+            return {
+                authorized: true,
+                user: currentAuthUser,
+                response: null
+            };
+        })
+    };
+});
 
 vi.mock('@/lib/apiAuth', () => ({
     requireAuth: vi.fn(async () => {
