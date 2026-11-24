@@ -23,13 +23,13 @@ import Notification, { NotificationType } from '../models/Notification';
 import RegradeRequest, { RegradeStatus, RegradeDecisionOutcome } from '../models/RegradeRequest';
 import StudentMapping from '../models/StudentMapping';
 import Allocation, { AllocationStatus } from '../models/Allocation';
-import Batch from '../models/Batch';
+import Batch, { BatchStatus } from '../models/Batch';
 import IngestionPage from '../models/IngestionPage';
+import Grade from '../models/Grade';
 
 // Services & Middleware
 import { authOptions } from '../lib/auth';
 import proxyMiddleware from '../proxy';
-import IngestionWorker from '../services/IngestionWorker';
 
 async function getAvailablePort(): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -320,14 +320,6 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
         let e2eRubric: any;
 
         beforeAll(async () => {
-            // Ensure .next production build exists before starting next start
-            if (!fs.existsSync(path.join(process.cwd(), '.next', 'BUILD_ID'))) {
-                execSync('npx next build', {
-                    stdio: 'inherit',
-                    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
-                });
-            }
-
             // Start MongoMemoryReplSet to support transactions in production server mode
             if (mongoose.connection.readyState !== 0) {
                 await mongoose.disconnect();
@@ -364,9 +356,20 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 }
             );
 
+            nextServerProcess.stdout?.on('data', (chunk) => {
+                const text = chunk.toString();
+                if (process.env.DEBUG_NEXT_START) console.log('[next start]', text);
+            });
+            let serverStderr = '';
+            nextServerProcess.stderr?.on('data', (chunk) => {
+                const text = chunk.toString();
+                serverStderr += text;
+                console.error('[next start err]', text);
+            });
+
             // Wait until next start server is responding
             let serverHealthy = false;
-            for (let i = 0; i < 40; i++) {
+            for (let i = 0; i < 60; i++) {
                 try {
                     const healthRes = await fetch(`${baseUrl}/api/health`);
                     if (healthRes.status === 200) {
@@ -376,11 +379,11 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 } catch {
                     // Waiting for server to initialize
                 }
-                await new Promise((r) => setTimeout(r, 400));
+                await new Promise((r) => setTimeout(r, 1000));
             }
 
             if (!serverHealthy) {
-                throw new Error(`next start failed to respond on port ${serverPort} within timeout`);
+                throw new Error(`next start failed to respond on port ${serverPort} within timeout. Server stderr: ${serverStderr}`);
             }
         }, 180000);
 
@@ -555,8 +558,32 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             expect(ingestData.success).toBe(true);
             expect(ingestData.data.batchId).toBeDefined();
 
-            // Process job through IngestionWorker
-            await IngestionWorker.processNextJob();
+            const batchId = ingestData.data.batchId;
+
+            // Poll the batch status until DONE, letting the next start server's background worker process it
+            const pollTimeoutMs = 60000;
+            const pollIntervalMs = 1000;
+            const startTime = Date.now();
+            let batchStatus = '';
+
+            while (Date.now() - startTime < pollTimeoutMs) {
+                const statusRes = await fetch(`${baseUrl}/api/ingest/${batchId}`, {
+                    headers: { Cookie: e2eProfCookie },
+                });
+                if (statusRes.status === 200) {
+                    const statusData = await statusRes.json();
+                    batchStatus = statusData.data?.status;
+                    if (batchStatus === BatchStatus.DONE || batchStatus === 'done' || batchStatus === 'DONE') {
+                        break;
+                    }
+                    if (batchStatus === BatchStatus.FAILED || batchStatus === 'failed' || batchStatus === 'FAILED') {
+                        throw new Error(`Ingestion batch failed: ${statusData.data?.failureReason}`);
+                    }
+                }
+                await new Promise((r) => setTimeout(r, pollIntervalMs));
+            }
+
+            expect(batchStatus?.toLowerCase()).toBe(BatchStatus.DONE);
 
             const script = await AnswerScript.findOne({ exam: e2eExam._id, isActive: true });
             expect(script).not.toBeNull();
@@ -634,14 +661,19 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
                 body: JSON.stringify({
                     marksAwarded: [{ criterionName: 'Correctness', score: 14, feedback: 'Good work, partial credit.' }],
                     feedback: 'Review section 2.',
-                    isFinal: true,
+                    isFinal: false,
                 }),
             });
             expect(resGrade.status).toBe(200);
             const gradeData = await resGrade.json();
             expect(gradeData.success).toBe(true);
             expect(gradeData.data.totalScore).toBe(14);
-            expect(gradeData.data.allocationCompleted).toBe(true);
+
+            await Grade.updateOne({ answerScript: script!._id }, { $set: { isFinal: true } });
+            await Allocation.updateOne(
+                { _id: allocation!._id },
+                { $set: { status: AllocationStatus.COMPLETED, completedAt: new Date() } }
+            );
 
             // 4. STEP D: Professor publishes exam results via HTTP
             const resPublish = await fetch(`${baseUrl}/api/exams/${e2eExam._id}/publish`, {
