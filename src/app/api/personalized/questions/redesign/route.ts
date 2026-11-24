@@ -93,8 +93,14 @@ Provide your response strictly as valid JSON matching this schema:
 }`;
 
         let redesignedData: any = null;
+        let isLiveAI = false;
+        let aiError: string | null = null;
 
         try {
+            if (body.userApiKey && typeof body.userApiKey === 'string' && body.userApiKey.trim()) {
+                process.env.GEMINI_API_KEY = body.userApiKey.trim();
+            }
+
             const aiResponseText = await geminiAIService.generateContent({
                 promptText: userPrompt,
                 responseMimeType: 'application/json',
@@ -105,8 +111,11 @@ Provide your response strictly as valid JSON matching this schema:
             const jsonMatch = aiResponseText.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
                 redesignedData = JSON.parse(jsonMatch[0]);
+                isLiveAI = true;
             }
-        } catch {
+        } catch (err: any) {
+            aiError = err?.message || 'Gemini API call failed';
+            console.warn('[Personalized Redesign] Gemini API call error:', aiError);
             // Fallback intelligent redesign if Gemini API is offline or key missing
         }
 
@@ -158,10 +167,15 @@ Provide your response strictly as valid JSON matching this schema:
         return NextResponse.json(
             {
                 success: true,
-                message: 'Question redesigned successfully with AI grounding',
+                message: isLiveAI
+                    ? 'Question redesigned successfully with Gemini 3.8-flash grounding'
+                    : 'Question redesigned with syllabus grounding (Gemini API fallback)',
                 data: {
                     redesigned: redesignedData,
-                    savedQuestion
+                    savedQuestion,
+                    isLiveAI,
+                    usedModel: geminiAIService.getModelName(),
+                    aiError: isLiveAI ? null : aiError
                 }
             },
             { status: 200 }

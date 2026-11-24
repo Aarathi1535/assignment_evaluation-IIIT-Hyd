@@ -141,6 +141,18 @@ export default function ProfessorPersonalizedAssessmentPage() {
     const [redesigning, setRedesigning] = useState(false);
     const [redesignedQuestion, setRedesignedQuestion] = useState<any | null>(null);
     const [savingToBank, setSavingToBank] = useState(false);
+    const [studioMode, setStudioMode] = useState<'CHAT_ASSISTANT' | 'QUICK_REDESIGN'>('CHAT_ASSISTANT');
+    const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; questions?: any[] }>>([
+        {
+            role: 'assistant',
+            content: 'Hello Professor! I am your AI Question Design Co-Pilot powered by Gemini 3.8-flash. Ask me to brainstorm questions, convert syllabus topics into challenging multi-step problems, or draft code/theory assessments for your students.'
+        }
+    ]);
+    const [chatInput, setChatInput] = useState('');
+    const [chatSending, setChatSending] = useState(false);
+    const [customApiKey, setCustomApiKey] = useState('');
+    const [showKeyConfig, setShowKeyConfig] = useState(false);
+    const [aiStatusBadge, setAiStatusBadge] = useState<string>('Gemini 3.8-flash Grounded');
 
     // Notifications
     const [formError, setFormError] = useState<string | null>(null);
@@ -489,17 +501,89 @@ export default function ProfessorPersonalizedAssessmentPage() {
                 topic: draftTopic || syllabus?.extractedTopics?.[0] || 'Core Concepts',
                 difficulty: draftDifficulty,
                 syllabusContext: syllabus?.rawText || '',
-                courseId: selectedCourseId
+                courseId: selectedCourseId,
+                userApiKey: customApiKey.trim() || undefined
             })
         });
 
         if (res.ok && res.data?.redesigned) {
             setRedesignedQuestion(res.data.redesigned);
+            if ((res.data as any)?.isLiveAI) {
+                setAiStatusBadge('Live Gemini 3.8-flash');
+            }
             setFormSuccess('Question successfully redesigned and grounded in course syllabus!');
         } else {
             setFormError(formatError(res, 'Failed to redesign question with AI'));
         }
         setRedesigning(false);
+    };
+
+    const handleSendChatMessage = async (presetPrompt?: string, action: string = 'CHAT') => {
+        const textToSend = (presetPrompt || chatInput).trim();
+        if (!textToSend) return;
+
+        const newUserMessage = { role: 'user' as const, content: textToSend };
+        const updatedHistory = [...chatMessages, newUserMessage];
+        setChatMessages(updatedHistory);
+        if (!presetPrompt) setChatInput('');
+        setChatSending(true);
+        setFormError(null);
+
+        const res = await safeFetchJson<{ reply: string; extractedQuestions: any[]; isLiveAI: boolean; usedModel: string }>('/api/personalized/assistant', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                messages: updatedHistory.map((m) => ({ role: m.role, content: m.content })),
+                currentPrompt: textToSend,
+                courseId: selectedCourseId,
+                topic: draftTopic || syllabus?.extractedTopics?.[0] || 'Core Concepts',
+                difficulty: draftDifficulty,
+                action,
+                userApiKey: customApiKey.trim() || undefined
+            })
+        });
+
+        if (res.ok && res.data) {
+            setChatMessages([
+                ...updatedHistory,
+                {
+                    role: 'assistant',
+                    content: res.data.reply,
+                    questions: res.data.extractedQuestions
+                }
+            ]);
+            if (res.data.isLiveAI) {
+                setAiStatusBadge(`Live ${res.data.usedModel || 'Gemini 3.8-flash'}`);
+            }
+        } else {
+            setFormError(formatError(res, 'Failed to communicate with Question Design Assistant'));
+        }
+        setChatSending(false);
+    };
+
+    const handleSaveAnyQuestionToBank = async (qItem: any) => {
+        setSavingToBank(true);
+        setFormError(null);
+
+        const res = await safeFetchJson<{ savedQuestion: any }>('/api/personalized/questions/redesign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                rawPrompt: qItem.questionPrompt,
+                topic: qItem.topic || draftTopic || 'Core Concept',
+                difficulty: qItem.difficulty || draftDifficulty || 'MEDIUM',
+                courseId: selectedCourseId,
+                saveToBank: true
+            })
+        });
+
+        if (res.ok) {
+            setFormSuccess(`Question "${qItem.title || 'Item'}" saved to Question Bank!`);
+            await loadCourseQuestions(selectedCourseId);
+        } else {
+            setFormError(formatError(res, 'Failed to save question to question bank'));
+        }
+        setSavingToBank(false);
     };
 
     const handleSaveRedesignedToBank = async () => {
@@ -827,227 +911,502 @@ Unit 4: Advanced Data Structures
                             <div className="flex items-center gap-2">
                                 <h2 className="text-lg font-bold text-slate-900">NotebookLLM Question Designer Studio</h2>
                                 <span className="bg-violet-100 text-violet-800 text-3xs font-extrabold uppercase px-2 py-0.5 rounded-full border border-violet-200">
-                                    AI Grounded
+                                    {aiStatusBadge}
                                 </span>
                             </div>
                             <p className="text-xs text-slate-500 mt-0.5">
-                                Ground your questions directly in course syllabus notes. Draft raw ideas and let AI redesign them into complete learning exercises.
+                                Interactive LLM co-pilot inside your platform. Ground questions directly in syllabus notes, converse with the assistant, and save directly to your question bank.
                             </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
+                                <button
+                                    type="button"
+                                    onClick={() => setStudioMode('CHAT_ASSISTANT')}
+                                    className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+                                        studioMode === 'CHAT_ASSISTANT'
+                                            ? 'bg-white text-violet-700 shadow-sm'
+                                            : 'text-slate-600 hover:text-slate-900'
+                                    }`}
+                                >
+                                    💬 LLM Co-Pilot Chat
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setStudioMode('QUICK_REDESIGN')}
+                                    className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+                                        studioMode === 'QUICK_REDESIGN'
+                                            ? 'bg-white text-violet-700 shadow-sm'
+                                            : 'text-slate-600 hover:text-slate-900'
+                                    }`}
+                                >
+                                    ✨ Quick Redesign
+                                </button>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowKeyConfig(!showKeyConfig)}
+                                className="text-xs font-semibold px-2.5 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 flex items-center gap-1"
+                                title="Configure Gemini API Key"
+                            >
+                                ⚙️ {customApiKey ? 'Key Active' : 'API Key'}
+                            </button>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                        {/* Left column: Source context & Drafting */}
-                        <div className="lg:col-span-6 space-y-5">
-                            {/* Source Grounding info */}
-                            <Card className="p-5 bg-white border-slate-200 space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
+                    {showKeyConfig && (
+                        <Card className="p-4 bg-amber-50/60 border border-amber-200 space-y-2">
+                            <div className="flex items-center justify-between">
+                                <h4 className="text-xs font-bold text-amber-900 uppercase">Gemini 3.8-flash API Key Configuration</h4>
+                                <span className="text-3xs text-amber-700">Client/Session Override</span>
+                            </div>
+                            <p className="text-xs text-amber-800">
+                                If your system environment key experiences service-account errors, you can provide an active Gemini API key here for live interactive design:
+                            </p>
+                            <div className="flex gap-2">
+                                <input
+                                    type="password"
+                                    value={customApiKey}
+                                    onChange={(e) => setCustomApiKey(e.target.value)}
+                                    placeholder="Enter Gemini API key (AIzaSy...)"
+                                    className="flex-1 rounded-xl border border-amber-300 p-2 text-xs font-mono bg-white"
+                                />
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => {
+                                        setShowKeyConfig(false);
+                                        setAiStatusBadge(customApiKey ? 'Custom Gemini Key Set' : 'Gemini 3.8-flash Grounded');
+                                    }}
+                                    className="bg-amber-600 hover:bg-amber-700 text-white"
+                                >
+                                    Apply Key
+                                </Button>
+                            </div>
+                        </Card>
+                    )}
+
+                    {studioMode === 'CHAT_ASSISTANT' ? (
+                        /* LLM Interactive Co-Pilot Conversation */
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                            {/* Left context column */}
+                            <div className="lg:col-span-4 space-y-4">
+                                <Card className="p-4 bg-white border-slate-200 space-y-3">
+                                    <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
                                         <BookOpen className="h-4 w-4 text-violet-600" />
-                                        <h3 className="text-sm font-bold text-slate-900">Syllabus Grounding Source</h3>
+                                        <h3 className="text-xs font-bold text-slate-900 uppercase">Syllabus Grounding</h3>
                                     </div>
-                                    <span className="text-2xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                                        {syllabus?.extractedTopics?.length || 0} Topics Available
-                                    </span>
-                                </div>
-                                <p className="text-xs text-slate-600">
-                                    {syllabus?.rawText ? `${syllabus.rawText.slice(0, 250)}...` : 'No syllabus raw text uploaded yet. Using standard computer science coursework principles.'}
-                                </p>
-                                {syllabus?.extractedTopics && syllabus.extractedTopics.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5 pt-2">
-                                        {syllabus.extractedTopics.slice(0, 8).map((topic, i) => (
-                                            <button
-                                                key={i}
-                                                type="button"
-                                                onClick={() => setDraftTopic(topic)}
-                                                className={`text-2xs font-semibold px-2 py-1 rounded-md border transition-colors ${draftTopic === topic
-                                                        ? 'bg-violet-600 text-white border-violet-600'
-                                                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-violet-50'
-                                                    }`}
-                                            >
-                                                {topic}
-                                            </button>
-                                        ))}
+                                    <div className="space-y-1">
+                                        <p className="text-2xs font-semibold text-slate-500 uppercase">Active Course</p>
+                                        <p className="text-xs font-bold text-slate-800">{currentCourse?.courseCode} - {currentCourse?.courseName}</p>
                                     </div>
-                                )}
-                            </Card>
-
-                            {/* Question Crafting form */}
-                            <Card className="p-5 bg-white border-slate-200 space-y-4">
-                                <div className="flex items-center gap-2">
-                                    <Sparkles className="h-4 w-4 text-violet-600" />
-                                    <h3 className="text-sm font-bold text-slate-900">Craft or Draft Raw Question</h3>
-                                </div>
-
-                                <div className="space-y-3">
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                                            Target Topic
-                                        </label>
-                                        <input
-                                            type="text"
-                                            value={draftTopic}
-                                            onChange={(e) => setDraftTopic(e.target.value)}
-                                            placeholder="e.g. AVL Tree Rotations, Dynamic Programming"
-                                            className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-semibold"
-                                        />
+                                    <div className="space-y-1">
+                                        <p className="text-2xs font-semibold text-slate-500 uppercase">Available Topics ({syllabus?.extractedTopics?.length || 0})</p>
+                                        <div className="flex flex-wrap gap-1 max-h-36 overflow-y-auto">
+                                            {syllabus?.extractedTopics && syllabus.extractedTopics.length > 0 ? (
+                                                syllabus.extractedTopics.map((top, i) => (
+                                                    <button
+                                                        key={i}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setDraftTopic(top);
+                                                            handleSendChatMessage(`Help me create a rigorous question testing ${top} at ${draftDifficulty} difficulty.`, 'CHAT');
+                                                        }}
+                                                        className="text-3xs font-semibold px-2 py-0.5 rounded bg-slate-100 hover:bg-violet-100 text-slate-700 hover:text-violet-800 transition-colors"
+                                                    >
+                                                        + {top}
+                                                    </button>
+                                                ))
+                                            ) : (
+                                                <p className="text-2xs text-slate-500 italic">Upload syllabus in Tab 1 to unlock topic shortcuts.</p>
+                                            )}
+                                        </div>
                                     </div>
-
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                                            Difficulty Level
-                                        </label>
-                                        <div className="grid grid-cols-3 gap-2">
+                                    <div className="pt-2 border-t border-slate-100 space-y-2">
+                                        <p className="text-2xs font-bold text-slate-700 uppercase">Target Difficulty</p>
+                                        <div className="grid grid-cols-3 gap-1.5">
                                             {(['EASY', 'MEDIUM', 'HARD'] as const).map((lvl) => (
                                                 <button
                                                     key={lvl}
                                                     type="button"
                                                     onClick={() => setDraftDifficulty(lvl)}
-                                                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${draftDifficulty === lvl
-                                                            ? lvl === 'EASY'
-                                                                ? 'bg-emerald-600 text-white border-emerald-600'
-                                                                : lvl === 'MEDIUM'
-                                                                    ? 'bg-amber-600 text-white border-amber-600'
-                                                                    : 'bg-rose-600 text-white border-rose-600'
-                                                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                                                        }`}
+                                                    className={`py-1 text-2xs font-bold rounded-lg border transition-all ${
+                                                        draftDifficulty === lvl
+                                                            ? 'bg-violet-600 text-white border-violet-600'
+                                                            : 'bg-slate-50 text-slate-600 border-slate-200'
+                                                    }`}
                                                 >
                                                     {lvl}
                                                 </button>
                                             ))}
                                         </div>
                                     </div>
-
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                                            Draft Question / Core Concept Idea *
-                                        </label>
-                                        <textarea
-                                            rows={4}
-                                            value={draftPrompt}
-                                            onChange={(e) => setDraftPrompt(e.target.value)}
-                                            placeholder="e.g. Ask how to insert a key into a binary search tree without violating the binary search property, and what happens when the tree is unbalanced."
-                                            className="w-full rounded-xl border border-slate-300 p-3 text-xs leading-relaxed"
-                                        />
+                                    <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                                        <p className="text-2xs font-bold text-slate-700 uppercase">Quick Actions</p>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSendChatMessage(`Generate 3 distinct questions for ${draftTopic || 'the current module'} covering theoretical, algorithmic, and edge-case perspectives at ${draftDifficulty} difficulty.`, 'GENERATE_BANK')}
+                                            className="w-full text-left text-xs font-semibold p-2 rounded-lg bg-violet-50 text-violet-800 hover:bg-violet-100 transition-all flex items-center justify-between"
+                                        >
+                                            <span>⚡ Generate 3 Topic Questions</span>
+                                            <span>→</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleSendChatMessage(`What are common misconceptions students have in ${draftTopic || 'this topic'} and how can we design a question that catches them?`, 'CHAT')}
+                                            className="w-full text-left text-xs font-semibold p-2 rounded-lg bg-slate-50 text-slate-700 hover:bg-slate-100 transition-all flex items-center justify-between"
+                                        >
+                                            <span>💡 Diagnose Student Misconceptions</span>
+                                            <span>→</span>
+                                        </button>
                                     </div>
+                                </Card>
+                            </div>
 
+                            {/* Chat Thread */}
+                            <div className="lg:col-span-8 flex flex-col h-[650px] bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Sparkles className="h-4 w-4 text-violet-600" />
+                                        <span className="text-xs font-bold text-slate-800">Curriculum Co-Pilot Chat</span>
+                                    </div>
+                                    <span className="text-3xs font-semibold text-slate-500">Gemini 3.8-flash Session</span>
+                                </div>
+
+                                <div className="flex-1 p-4 overflow-y-auto space-y-4">
+                                    {chatMessages.map((msg, idx) => (
+                                        <div
+                                            key={idx}
+                                            className={`flex flex-col ${
+                                                msg.role === 'user' ? 'items-end' : 'items-start'
+                                            }`}
+                                        >
+                                            <div
+                                                className={`max-w-[85%] rounded-2xl p-4 text-xs leading-relaxed ${
+                                                    msg.role === 'user'
+                                                        ? 'bg-violet-600 text-white rounded-tr-none'
+                                                        : 'bg-slate-100 text-slate-900 rounded-tl-none border border-slate-200/80'
+                                                }`}
+                                            >
+                                                <div className="whitespace-pre-wrap font-sans">
+                                                    {msg.content}
+                                                </div>
+
+                                                {/* Render Extracted Questions for 1-Click Save */}
+                                                {msg.questions && msg.questions.length > 0 && (
+                                                    <div className="mt-3 space-y-3 pt-3 border-t border-slate-200">
+                                                        <p className="text-2xs font-bold uppercase tracking-wider text-violet-900">
+                                                            Proposed Assessment Questions ({msg.questions.length})
+                                                        </p>
+                                                        {msg.questions.map((q, qIdx) => (
+                                                            <div
+                                                                key={qIdx}
+                                                                className="p-3 bg-white rounded-xl border border-violet-200 shadow-sm space-y-2 text-slate-800"
+                                                            >
+                                                                <div className="flex items-center justify-between">
+                                                                    <span className="font-bold text-xs text-violet-900">
+                                                                        {q.title || `Question ${qIdx + 1}`}
+                                                                    </span>
+                                                                    <div className="flex items-center gap-1">
+                                                                        <span className="text-3xs font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                                                                            {q.difficulty || draftDifficulty}
+                                                                        </span>
+                                                                        <span className="text-3xs font-extrabold px-1.5 py-0.5 rounded bg-violet-100 text-violet-800">
+                                                                            {q.topic || draftTopic}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                                <p className="text-xs text-slate-700">{q.questionPrompt}</p>
+                                                                {q.options && q.options.length > 0 && (
+                                                                    <div className="space-y-1 pt-1">
+                                                                        {q.options.map((opt: string, oIdx: number) => {
+                                                                            const isCorr = opt === q.correctAnswer || (q.correctAnswer && opt.includes(q.correctAnswer));
+                                                                            return (
+                                                                                <div
+                                                                                    key={oIdx}
+                                                                                    className={`p-1.5 rounded text-2xs ${
+                                                                                        isCorr ? 'bg-emerald-50 text-emerald-900 font-semibold border border-emerald-200' : 'text-slate-600'
+                                                                                    }`}
+                                                                                >
+                                                                                    {isCorr ? '✓ ' : '• '} {opt}
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                )}
+                                                                <div className="flex items-center justify-end pt-2">
+                                                                    <Button
+                                                                        variant="primary"
+                                                                        size="sm"
+                                                                        type="button"
+                                                                        disabled={savingToBank}
+                                                                        onClick={() => handleSaveAnyQuestionToBank(q)}
+                                                                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs py-1 px-3"
+                                                                    >
+                                                                        <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                                                        <span>Add to Question Bank</span>
+                                                                    </Button>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <span className="text-3xs text-slate-400 mt-1 px-1">
+                                                {msg.role === 'user' ? 'You' : 'AI Co-Pilot'}
+                                            </span>
+                                        </div>
+                                    ))}
+                                    {chatSending && (
+                                        <div className="flex items-center gap-2 text-xs text-slate-500 italic p-2">
+                                            <LoadingSpinner size="sm" />
+                                            <span>Co-Pilot is reasoning with Gemini 3.8-flash...</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="p-3 bg-slate-50 border-t border-slate-200 flex gap-2">
+                                    <textarea
+                                        rows={2}
+                                        value={chatInput}
+                                        onChange={(e) => setChatInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                handleSendChatMessage();
+                                            }
+                                        }}
+                                        placeholder="Ask Co-Pilot to craft, refine, or critique questions... (Press Enter to send)"
+                                        className="flex-1 rounded-xl border border-slate-300 p-2 text-xs bg-white resize-none"
+                                    />
                                     <Button
                                         variant="primary"
                                         size="md"
                                         type="button"
-                                        onClick={handleRedesignQuestion}
-                                        disabled={redesigning || !draftPrompt.trim()}
-                                        className="w-full bg-violet-600 hover:bg-violet-700 text-white"
+                                        disabled={chatSending || !chatInput.trim()}
+                                        onClick={() => handleSendChatMessage()}
+                                        className="bg-violet-600 hover:bg-violet-700 text-white px-4"
                                     >
-                                        <Sparkles className="h-4 w-4 mr-1.5" />
-                                        <span>{redesigning ? 'Redesigning with LLM Grounding...' : 'Redesign with LLM (Notebook Style)'}</span>
+                                        Send
                                     </Button>
                                 </div>
-                            </Card>
+                            </div>
                         </div>
-
-                        {/* Right column: Live Redesigned Question Artifact */}
-                        <div className="lg:col-span-6 space-y-4">
-                            {redesignedQuestion ? (
-                                <Card className="p-6 bg-gradient-to-br from-violet-50/50 via-white to-slate-50 border-2 border-violet-200 space-y-5 shadow-sm">
-                                    <div className="flex items-center justify-between pb-3 border-b border-violet-100">
-                                        <div>
-                                            <span className="text-3xs font-extrabold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-800">
-                                                AI Redesigned Result
-                                            </span>
-                                            <h3 className="text-base font-bold text-slate-900 mt-1">
-                                                {redesignedQuestion.title}
-                                            </h3>
+                    ) : (
+                        /* Quick Redesign Mode (Existing Studio) */
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                            {/* Left column: Source context & Drafting */}
+                            <div className="lg:col-span-6 space-y-5">
+                                {/* Source Grounding info */}
+                                <Card className="p-5 bg-white border-slate-200 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <BookOpen className="h-4 w-4 text-violet-600" />
+                                            <h3 className="text-sm font-bold text-slate-900">Syllabus Grounding Source</h3>
                                         </div>
-                                        <div className="flex items-center gap-1.5">
-                                            <span className="text-2xs font-extrabold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                                                {redesignedQuestion.topic}
-                                            </span>
-                                            <span className="text-2xs font-extrabold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
-                                                {redesignedQuestion.difficulty}
-                                            </span>
-                                        </div>
+                                        <span className="text-2xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                            {syllabus?.extractedTopics?.length || 0} Topics Available
+                                        </span>
                                     </div>
-
-                                    <div>
-                                        <p className="text-xs font-bold text-slate-700 uppercase mb-1">Scenario Problem Statement</p>
-                                        <p className="text-xs text-slate-900 leading-relaxed bg-white p-3.5 rounded-xl border border-slate-200">
-                                            {redesignedQuestion.questionPrompt}
-                                        </p>
-                                    </div>
-
-                                    {redesignedQuestion.options && redesignedQuestion.options.length > 0 && (
-                                        <div>
-                                            <p className="text-xs font-bold text-slate-700 uppercase mb-2">Options & Distractors</p>
-                                            <div className="space-y-2">
-                                                {redesignedQuestion.options.map((opt: string, i: number) => {
-                                                    const isCorrect = opt === redesignedQuestion.correctAnswer || (redesignedQuestion.correctAnswer && opt.includes(redesignedQuestion.correctAnswer));
-                                                    return (
-                                                        <div
-                                                            key={i}
-                                                            className={`p-2.5 rounded-lg text-xs font-medium border flex items-start gap-2 ${isCorrect
-                                                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold'
-                                                                    : 'bg-white border-slate-200 text-slate-700'
-                                                                }`}
-                                                        >
-                                                            <span className="shrink-0">{isCorrect ? '✅' : '○'}</span>
-                                                            <span>{opt}</span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {redesignedQuestion.hints && redesignedQuestion.hints.length > 0 && (
-                                        <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
-                                            <p className="text-2xs font-bold text-amber-900 uppercase">Conceptual Guidance Hints</p>
-                                            {redesignedQuestion.hints.map((h: string, idx: number) => (
-                                                <p key={idx} className="text-xs text-amber-800">• {h}</p>
+                                    <p className="text-xs text-slate-600">
+                                        {syllabus?.rawText ? `${syllabus.rawText.slice(0, 250)}...` : 'No syllabus raw text uploaded yet. Using standard computer science coursework principles.'}
+                                    </p>
+                                    {syllabus?.extractedTopics && syllabus.extractedTopics.length > 0 && (
+                                        <div className="flex flex-wrap gap-1.5 pt-2">
+                                            {syllabus.extractedTopics.slice(0, 8).map((topic, i) => (
+                                                <button
+                                                    key={i}
+                                                    type="button"
+                                                    onClick={() => setDraftTopic(topic)}
+                                                    className={`text-2xs font-semibold px-2 py-1 rounded-md border transition-colors ${draftTopic === topic
+                                                            ? 'bg-violet-600 text-white border-violet-600'
+                                                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-violet-50'
+                                                        }`}
+                                                >
+                                                    {topic}
+                                                </button>
                                             ))}
                                         </div>
                                     )}
+                                </Card>
 
-                                    {redesignedQuestion.explanation && (
-                                        <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
-                                            <p className="text-2xs font-bold text-blue-900 uppercase">Syllabus-Grounded Explanation</p>
-                                            <p className="text-xs text-blue-800 leading-relaxed">{redesignedQuestion.explanation}</p>
+                                {/* Question Crafting form */}
+                                <Card className="p-5 bg-white border-slate-200 space-y-4">
+                                    <div className="flex items-center gap-2">
+                                        <Sparkles className="h-4 w-4 text-violet-600" />
+                                        <h3 className="text-sm font-bold text-slate-900">Craft or Draft Raw Question</h3>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                                Target Topic
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={draftTopic}
+                                                onChange={(e) => setDraftTopic(e.target.value)}
+                                                placeholder="e.g. AVL Tree Rotations, Dynamic Programming"
+                                                className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-semibold"
+                                            />
                                         </div>
-                                    )}
 
-                                    <div className="flex items-center justify-end gap-3 pt-3 border-t border-violet-100">
-                                        <Button
-                                            variant="secondary"
-                                            size="sm"
-                                            onClick={() => setRedesignedQuestion(null)}
-                                        >
-                                            Discard
-                                        </Button>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                                Difficulty Level
+                                            </label>
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {(['EASY', 'MEDIUM', 'HARD'] as const).map((lvl) => (
+                                                    <button
+                                                        key={lvl}
+                                                        type="button"
+                                                        onClick={() => setDraftDifficulty(lvl)}
+                                                        className={`py-2 text-xs font-bold rounded-xl border transition-all ${draftDifficulty === lvl
+                                                                ? lvl === 'EASY'
+                                                                    ? 'bg-emerald-600 text-white border-emerald-600'
+                                                                    : lvl === 'MEDIUM'
+                                                                        ? 'bg-amber-600 text-white border-amber-600'
+                                                                        : 'bg-rose-600 text-white border-rose-600'
+                                                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                                            }`}
+                                                    >
+                                                        {lvl}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                                                Draft Question / Core Concept Idea *
+                                            </label>
+                                            <textarea
+                                                rows={4}
+                                                value={draftPrompt}
+                                                onChange={(e) => setDraftPrompt(e.target.value)}
+                                                placeholder="e.g. Ask how to insert a key into a binary search tree without violating the binary search property, and what happens when the tree is unbalanced."
+                                                className="w-full rounded-xl border border-slate-300 p-3 text-xs leading-relaxed"
+                                            />
+                                        </div>
+
                                         <Button
                                             variant="primary"
-                                            size="sm"
-                                            onClick={handleSaveRedesignedToBank}
-                                            disabled={savingToBank}
-                                            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                            size="md"
+                                            type="button"
+                                            onClick={handleRedesignQuestion}
+                                            disabled={redesigning || !draftPrompt.trim()}
+                                            className="w-full bg-violet-600 hover:bg-violet-700 text-white"
                                         >
-                                            <CheckCircle2 className="h-4 w-4 mr-1.5" />
-                                            <span>{savingToBank ? 'Saving to Question Bank...' : 'Save to Course Question Bank'}</span>
+                                            <Sparkles className="h-4 w-4 mr-1.5" />
+                                            <span>{redesigning ? 'Redesigning with LLM Grounding...' : 'Redesign with LLM (Notebook Style)'}</span>
                                         </Button>
                                     </div>
                                 </Card>
-                            ) : (
-                                <Card className="p-12 text-center bg-slate-50 border-dashed border-2 border-slate-300 rounded-2xl flex flex-col items-center justify-center space-y-3">
-                                    <div className="h-12 w-12 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center">
-                                        <Sparkles className="h-6 w-6" />
-                                    </div>
-                                    <h4 className="text-sm font-bold text-slate-800">AI Redesign Preview Waiting</h4>
-                                    <p className="text-xs text-slate-500 max-w-sm">
-                                        Enter your raw question or lecture topic on the left and click &quot;Redesign with LLM&quot;. Your scenario-based question, options, hints, and explanations will appear here.
-                                    </p>
-                                </Card>
-                            )}
+                            </div>
+
+                            {/* Right column: Live Redesigned Question Artifact */}
+                            <div className="lg:col-span-6 space-y-4">
+                                {redesignedQuestion ? (
+                                    <Card className="p-6 bg-gradient-to-br from-violet-50/50 via-white to-slate-50 border-2 border-violet-200 space-y-5 shadow-sm">
+                                        <div className="flex items-center justify-between pb-3 border-b border-violet-100">
+                                            <div>
+                                                <span className="text-3xs font-extrabold uppercase px-2 py-0.5 rounded bg-violet-100 text-violet-800">
+                                                    AI Redesigned Result
+                                                </span>
+                                                <h3 className="text-base font-bold text-slate-900 mt-1">
+                                                    {redesignedQuestion.title}
+                                                </h3>
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-2xs font-extrabold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                                                    {redesignedQuestion.topic}
+                                                </span>
+                                                <span className="text-2xs font-extrabold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+                                                    {redesignedQuestion.difficulty}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <p className="text-xs font-bold text-slate-700 uppercase mb-1">Scenario Problem Statement</p>
+                                            <p className="text-xs text-slate-900 leading-relaxed bg-white p-3.5 rounded-xl border border-slate-200">
+                                                {redesignedQuestion.questionPrompt}
+                                            </p>
+                                        </div>
+
+                                        {redesignedQuestion.options && redesignedQuestion.options.length > 0 && (
+                                            <div>
+                                                <p className="text-xs font-bold text-slate-700 uppercase mb-2">Options & Distractors</p>
+                                                <div className="space-y-2">
+                                                    {redesignedQuestion.options.map((opt: string, i: number) => {
+                                                        const isCorrect = opt === redesignedQuestion.correctAnswer || (redesignedQuestion.correctAnswer && opt.includes(redesignedQuestion.correctAnswer));
+                                                        return (
+                                                            <div
+                                                                key={i}
+                                                                className={`p-2.5 rounded-lg text-xs font-medium border flex items-start gap-2 ${isCorrect
+                                                                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold'
+                                                                        : 'bg-white border-slate-200 text-slate-700'
+                                                                    }`}
+                                                            >
+                                                                <span className="shrink-0">{isCorrect ? '✅' : '○'}</span>
+                                                                <span>{opt}</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {redesignedQuestion.hints && redesignedQuestion.hints.length > 0 && (
+                                            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
+                                                <p className="text-2xs font-bold text-amber-900 uppercase">Conceptual Guidance Hints</p>
+                                                {redesignedQuestion.hints.map((h: string, idx: number) => (
+                                                    <p key={idx} className="text-xs text-amber-800">• {h}</p>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {redesignedQuestion.explanation && (
+                                            <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
+                                                <p className="text-2xs font-bold text-blue-900 uppercase">Syllabus-Grounded Explanation</p>
+                                                <p className="text-xs text-blue-800 leading-relaxed">{redesignedQuestion.explanation}</p>
+                                            </div>
+                                        )}
+
+                                        <div className="flex items-center justify-end gap-3 pt-3 border-t border-violet-100">
+                                            <Button
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => setRedesignedQuestion(null)}
+                                            >
+                                                Discard
+                                            </Button>
+                                            <Button
+                                                variant="primary"
+                                                size="sm"
+                                                onClick={handleSaveRedesignedToBank}
+                                                disabled={savingToBank}
+                                                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                            >
+                                                <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                                                <span>{savingToBank ? 'Saving to Question Bank...' : 'Save to Course Question Bank'}</span>
+                                            </Button>
+                                        </div>
+                                    </Card>
+                                ) : (
+                                    <Card className="p-12 text-center bg-slate-50 border-dashed border-2 border-slate-300 rounded-2xl flex flex-col items-center justify-center space-y-3">
+                                        <div className="h-12 w-12 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center">
+                                            <Sparkles className="h-6 w-6" />
+                                        </div>
+                                        <h4 className="text-sm font-bold text-slate-800">AI Redesign Preview Waiting</h4>
+                                        <p className="text-xs text-slate-500 max-w-sm">
+                                            Enter your raw question or lecture topic on the left and click &quot;Redesign with LLM&quot;. Your scenario-based question, options, hints, and explanations will appear here.
+                                        </p>
+                                    </Card>
+                                )}
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
 
