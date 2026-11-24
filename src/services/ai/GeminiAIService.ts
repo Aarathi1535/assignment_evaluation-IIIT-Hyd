@@ -111,16 +111,21 @@ export class GeminiAIService {
   }
 
   /**
-   * Returns the model name. Defaults to currently supported 'gemini-2.5-flash'.
+   * Returns the model name. Defaults to 'gemini-3.8-flash'.
    */
   public getModelName(): string {
-    return (
+    const raw = (
       process.env.GEMINI_PERSONALIZED_MODEL?.trim() ||
       process.env.GEMINI_CLASSROOM_MODEL?.trim() ||
       process.env.GEMINI_MODEL?.trim() ||
       process.env.AI_MODEL?.trim() ||
-      'gemini-2.5-flash'
+      'gemini-3.8-flash'
     );
+    // Normalize user variants like 'gemini 3.8flash' or 'gemini-3.8flash'
+    return raw
+      .replace(/\s+/g, '-')
+      .replace(/(\d+(?:\.\d+)?)(flash|pro)/i, '$1-$2')
+      .toLowerCase();
   }
 
   /**
@@ -262,10 +267,10 @@ export class GeminiAIService {
         config.responseSchema = responseSchema;
       }
 
-      const response = await client.models.generateContent({
+      const response = await (client.models.generateContent as any)({
         model,
         contents: promptText,
-        config: config as unknown as Parameters<typeof client.models.generateContent>[0]['config'],
+        config: config as any,
       });
 
       // Robust response text extraction across SDK formats and candidate parts

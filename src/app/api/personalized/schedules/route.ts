@@ -125,10 +125,10 @@ export async function POST(req: NextRequest) {
         const code = message.includes('insufficient') || message.includes('capacity')
             ? 'INSUFFICIENT_POOL'
             : status === 400
-            ? 'VALIDATION_FAILED'
-            : status === 403
-            ? 'FORBIDDEN'
-            : 'INTERNAL_ERROR';
+                ? 'VALIDATION_FAILED'
+                : status === 403
+                    ? 'FORBIDDEN'
+                    : 'INTERNAL_ERROR';
 
         return NextResponse.json(
             {

@@ -500,7 +500,7 @@ export class GeminiAIQuestionGenerationProvider implements IAIQuestionGeneration
         if (typeof this.sharedGeminiService?.getModelName === 'function') {
             return this.sharedGeminiService.getModelName();
         }
-        return 'gemini-2.5-flash';
+        return 'gemini-3.8-flash';
     }
 
     isConfigured(): boolean {
