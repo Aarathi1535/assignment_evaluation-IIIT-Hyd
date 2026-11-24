@@ -535,7 +535,8 @@ describe('Classroom Activity Regression Suite: Professor Isolation & Accurate Pa
 
             // Query as Prof A
             currentAuthUser = { id: profAId, role: 'PROFESSOR' };
-            const resA = await GET();
+            const reqA = new NextRequest('http://localhost:3000/api/classroom/sessions');
+            const resA = await GET(reqA);
             expect(resA.status).toBe(200);
             const dataA = (await resA.json()).data;
             expect(dataA).toHaveLength(2);
@@ -543,7 +544,8 @@ describe('Classroom Activity Regression Suite: Professor Isolation & Accurate Pa
 
             // Query as Prof B
             currentAuthUser = { id: profBId, role: 'PROFESSOR' };
-            const resB = await GET();
+            const reqB = new NextRequest('http://localhost:3000/api/classroom/sessions');
+            const resB = await GET(reqB);
             expect(resB.status).toBe(200);
             const dataB = (await resB.json()).data;
             expect(dataB).toHaveLength(1);
