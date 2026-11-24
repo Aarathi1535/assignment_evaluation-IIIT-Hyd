@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import mongoose from 'mongoose';
-import { connectDB } from '../../../../../lib/db';
-import { requireFeature, requirePersonalizedProfessor } from '../../../../../lib/apiAuth';
-import { geminiAIService } from '../../../../../services/ai/GeminiAIService';
-import PersonalizedQuestion from '../../../../../models/PersonalizedQuestion';
-import CourseSyllabus from '../../../../../models/CourseSyllabus';
+import { connectDB } from '@/lib/db';
+import { requireFeature, requirePersonalizedProfessor } from '@/lib/apiAuth';
+import { geminiAIService } from '@/services/ai/GeminiAIService';
+import PersonalizedQuestion from '@/models/PersonalizedQuestion';
+import CourseSyllabus from '@/models/CourseSyllabus';
 
 interface ChatMessage {
     role: 'user' | 'assistant' | 'system';
