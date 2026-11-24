@@ -696,7 +696,7 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             expect(pubAudit!.outcome).toBe('SUCCESS');
 
             const pubNotification = await Notification.findOne({
-                recipient: studentUser!._id,
+                recipient: student._id,
                 type: NotificationType.PUBLISH,
             });
             expect(pubNotification).not.toBeNull();
