@@ -73,9 +73,9 @@ describe('Shared Gemini AI Service Layer (@google/genai)', () => {
       expect(Object.keys(config)).not.toContain('apiKey');
     });
 
-    it('defaults model to gemini-2.5-flash and supports environment override', () => {
+    it('defaults model to gemini-3.8-flash and supports environment override', () => {
       const service = new GeminiAIService();
-      expect(service.getModelName()).toBe('gemini-2.5-flash');
+      expect(service.getModelName()).toBe('gemini-3.8-flash');
 
       process.env.GEMINI_MODEL = 'gemini-2.0-flash';
       expect(service.getModelName()).toBe('gemini-2.0-flash');

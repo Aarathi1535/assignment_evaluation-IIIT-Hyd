@@ -75,17 +75,17 @@ describe('Personalized Assessment End-to-End Suite & Fixes', () => {
     // 1. GEMINI MODEL CONFIGURATION & RESOLUTION
     // =========================================================================
     describe('1. Supported Gemini Model Configuration & Secret Handling', () => {
-        it('resolves model dynamically defaulting to currently supported gemini-2.5-flash', () => {
+        it('resolves model dynamically defaulting to currently supported gemini-3.8-flash', () => {
             delete process.env.GEMINI_PERSONALIZED_MODEL;
             delete process.env.GEMINI_CLASSROOM_MODEL;
             delete process.env.GEMINI_MODEL;
             delete process.env.AI_MODEL;
 
             const service = new GeminiAIService();
-            expect(service.getModelName()).toBe('gemini-2.5-flash');
+            expect(service.getModelName()).toBe('gemini-3.8-flash');
 
             const provider = new GeminiAIQuestionGenerationProvider(service);
-            expect(provider.getModelName()).toBe('gemini-2.5-flash');
+            expect(provider.getModelName()).toBe('gemini-3.8-flash');
         });
 
         it('supports GEMINI_PERSONALIZED_MODEL override for personalized assessment', () => {
