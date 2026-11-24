@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
     }
 
     const role = (user.role || '').toUpperCase();
-    if (role !== 'PROFESSOR' && role !== 'ADMIN') {
+    if (role !== 'PROFESSOR' && role !== 'ADMIN' && !isIndependentClassroomUser) {
       return NextResponse.json(
         { success: false, message: 'Classroom portal login is restricted to faculty professors and administrators', data: null },
         { status: 403 }
@@ -64,7 +64,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Classroom Activity access gate: Admin grants access on request only
-    const hasClassroomAccess = role === 'ADMIN' || Boolean(user.classroomAccess);
+    // Note: Registered ClassroomUser accounts already represent granted independent access
+    const hasClassroomAccess = role === 'ADMIN' || isIndependentClassroomUser || Boolean(user.classroomAccess);
     if (!hasClassroomAccess) {
       return NextResponse.json(
         {

@@ -105,20 +105,22 @@ export async function getClassroomUser(req?: NextRequest) {
     }
   }
 
-  // Also accept active NextAuth session for seamless platform navigation
-  try {
-    const session = await getServerSession(authOptions);
-    if (session?.user?.id) {
-      return {
-        id: session.user.id,
-        email: session.user.email || '',
-        name: session.user.name || '',
-        role: (session.user.role as ClassroomUserRole) || 'PROFESSOR',
-        exp: Math.floor(Date.now() / 1000) + 86400,
-      };
+  // Optional Phase 2 shared platform login: strictly disabled by default to guarantee auth isolation
+  if (process.env.CLASSROOM_ENABLE_SHARED_AUTH === 'true') {
+    try {
+      const session = await getServerSession(authOptions);
+      if (session?.user?.id) {
+        return {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: session.user.name || '',
+          role: (session.user.role as ClassroomUserRole) || 'PROFESSOR',
+          exp: Math.floor(Date.now() / 1000) + 86400,
+        };
+      }
+    } catch {
+      // Non-blocking
     }
-  } catch {
-    // Non-blocking
   }
 
   return null;

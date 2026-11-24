@@ -1,12 +1,83 @@
 import { NextRequest, NextResponse } from 'next/server';
+import bcrypt from 'bcryptjs';
+import { connectPersonalizedDB } from '@/lib/personalizedDb';
+import PersonalizedUser, { PersonalizedUserRole } from '@/models/PersonalizedUser';
+import { signPersonalizedToken } from '@/lib/personalizedAuth';
 
 export async function POST(req: NextRequest) {
-  return NextResponse.json(
-    {
-      success: false,
-      message: 'Self-registration is disabled. Access to Personalized Learning is granted to professors by the administrator on request only.',
-      data: null,
-    },
-    { status: 403 }
-  );
+  try {
+    await connectPersonalizedDB();
+    const body = await req.json();
+    const { name, email, password, role, skillLevel } = body;
+
+    if (!name || !email || !password) {
+      return NextResponse.json(
+        { success: false, message: 'Name, email, and password are required', data: null },
+        { status: 400 }
+      );
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const existing = await PersonalizedUser.findOne({ email: trimmedEmail });
+    if (existing) {
+      return NextResponse.json(
+        { success: false, message: 'Personalized learning user with this email already exists', data: null },
+        { status: 409 }
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Public registration strictly assigns STUDENT role.
+    const adminInviteCode = body.adminInviteCode || req.headers.get('x-admin-invite-code');
+    const validAdminCode = process.env.ADMIN_INVITE_CODE || 'ADMIN-INVITE-2026';
+    const isStaffAuthorized = Boolean(adminInviteCode && adminInviteCode === validAdminCode);
+
+    let assignedRole: PersonalizedUserRole = 'STUDENT';
+    if (isStaffAuthorized && role === 'PROFESSOR') {
+      assignedRole = 'PROFESSOR';
+    }
+
+    const newUser = await PersonalizedUser.create({
+      name: name.trim(),
+      email: trimmedEmail,
+      password: hashedPassword,
+      role: assignedRole,
+      skillLevel: skillLevel || 'BEGINNER',
+    });
+
+    const tokenPayload = {
+      id: newUser._id.toString(),
+      email: newUser.email,
+      name: newUser.name,
+      role: newUser.role,
+    };
+
+    const token = signPersonalizedToken(tokenPayload);
+
+    const response = NextResponse.json(
+      {
+        success: true,
+        message: 'Personalized learning user registered successfully',
+        data: {
+          user: tokenPayload,
+          token,
+        },
+      },
+      { status: 201 }
+    );
+
+    response.cookies.set('personalized_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 7 * 24 * 3600,
+    });
+
+    return response;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Personalized learning registration failed';
+    return NextResponse.json({ success: false, message, data: null }, { status: 500 });
+  }
 }
