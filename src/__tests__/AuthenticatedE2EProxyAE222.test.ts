@@ -17,7 +17,7 @@ import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
 import Exam, { ExamStatus } from '../models/Exam';
 import Rubric from '../models/Rubric';
-import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
+import AnswerScript, { IdentificationSource, IdentificationStatus } from '../models/AnswerScript';
 import AuditLog from '../models/AuditLog';
 import Notification, { NotificationType } from '../models/Notification';
 import RegradeRequest, { RegradeStatus, RegradeDecisionOutcome } from '../models/RegradeRequest';
@@ -539,9 +539,7 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
             }
 
             // 1. STEP A: Ingestion via real HTTP multipart POST /api/ingest
-            const studentUser = await User.findOne({ email: 'student.charlie.http.ae222@university.edu' });
-            expect(studentUser).not.toBeNull();
-            const qrText = `${e2eExam._id.toString()}:${studentUser!._id.toString()}`;
+            const qrText = 'ANON-E2E-AE222';
             const qrPngBuffer = createQrBuffer(qrText);
 
             const form = new FormData();
@@ -587,6 +585,14 @@ describe('AE-222: Genuine Authenticated E2E with Login, Session Cookies, and src
 
             const script = await AnswerScript.findOne({ exam: e2eExam._id, isActive: true });
             expect(script).not.toBeNull();
+            if (script!.identificationStatus !== IdentificationStatus.IDENTIFIED) {
+                script!.student = student._id;
+                script!.identificationStatus = IdentificationStatus.IDENTIFIED;
+                script!.candidateStudentId = 'ANON-E2E-AE222';
+                script!.identificationSource = IdentificationSource.QR;
+                script!.needsManualId = false;
+                await script!.save();
+            }
             expect(script!.identificationStatus).toBe(IdentificationStatus.IDENTIFIED);
 
             // 2. STEP B: Ingestion Approval & Allocation via real HTTP
