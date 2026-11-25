@@ -76,7 +76,7 @@ The system governs capabilities via discrete granular permissions defined in `sr
 ### 4.1 Authentication & System Health (5 routes)
 | Route | Method(s) | Auth Required | Allowed Roles / Code-Enforced Guard | Ownership / Tenancy Guard | Denied Status |
 | :--- | :---: | :---: | :--- | :--- | :---: |
-| `/api/auth/[...nextauth]` | GET, POST | Yes | Public (NextAuth session handler) | Credentials / Session validation | 400 / 401 |
+| `/api/auth/[...nextauth]` | GET, POST | No | Public (NextAuth authentication & session handler) | Credentials / Session validation | 400 / 401 |
 | `/api/auth/register` | POST | No | Public registration | Self-registration forced to `STUDENT` | 400 |
 | `/api/auth/reset` | POST | No | Public password reset request | Generates reset token via registered email | 400 / 404 |
 | `/api/auth/reset-password` | POST | No | Public password reset confirmation | Token expiration & signature validation | 400 |
