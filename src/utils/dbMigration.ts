@@ -67,6 +67,6 @@ export async function migrateIndexes(): Promise<void> {
     const RegradeRequest = (await import('../models/RegradeRequest')).default;
 
     await Allocation.createIndexes();
-    await Grade.syncIndexes();
+    await Grade.createIndexes();
     await RegradeRequest.createIndexes();
 }

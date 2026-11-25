@@ -13,6 +13,7 @@ import AnswerScript, { IdentificationStatus } from '../models/AnswerScript';
 import Allocation, { AllocationStatus, AllocationRule } from '../models/Allocation';
 import Grade from '../models/Grade';
 import allocationService from '../services/AllocationService';
+import { isConflictError } from '../lib/errors';
 
 interface MockSessionUser {
     id: string;
@@ -61,8 +62,8 @@ describe('AE-224: Concurrent TA Grading & Transaction Locking', () => {
         gradePOST = (await import('../app/api/scripts/[id]/questions/[questionNumber]/grade/route')).POST;
 
         // Build composite unique indexes first
-        await Grade.syncIndexes();
-        await Allocation.syncIndexes();
+        await Grade.createIndexes();
+        await Allocation.createIndexes();
     }, 60000);
 
     afterAll(async () => {
@@ -86,8 +87,8 @@ describe('AE-224: Concurrent TA Grading & Transaction Locking', () => {
         ]);
 
         // Ensure indexes are built cleanly
-        await Grade.syncIndexes();
-        await Allocation.syncIndexes();
+        await Grade.createIndexes();
+        await Allocation.createIndexes();
 
         profUser = await User.create({
             name: 'Prof Minerva',
@@ -421,5 +422,53 @@ describe('AE-224: Concurrent TA Grading & Transaction Locking', () => {
 
         const updatedAlloc = await Allocation.findById(alloc._id);
         expect(updatedAlloc?.status).toBe(AllocationStatus.IN_PROGRESS);
+    });
+
+    describe('isConflictError: Focused Conflict Classification', () => {
+        it('classifies Grade unique index E11000 duplicate key error as conflict', () => {
+            const errWithKeyPattern = {
+                code: 11000,
+                keyPattern: { answerScript: 1, question: 1 },
+                message: 'E11000 duplicate key error collection: grades index: answerScript_1_question_1 dup key: { answerScript: ObjectId("..."), question: 1 }',
+            };
+            expect(isConflictError(errWithKeyPattern)).toBe(true);
+
+            const errWithMessageOnly = {
+                code: 11000,
+                message: 'E11000 duplicate key error dup key on answerScript and question',
+            };
+            expect(isConflictError(errWithMessageOnly)).toBe(true);
+
+            const rawStringError = 'E11000 duplicate key error collection: grades index: answerScript_1_question_1';
+            expect(isConflictError(rawStringError)).toBe(true);
+        });
+
+        it('classifies MongoDB WriteConflict as conflict', () => {
+            const code112Error = { code: 112, message: 'WriteConflict error in transaction' };
+            expect(isConflictError(code112Error)).toBe(true);
+
+            const codeNameError = { codeName: 'WriteConflict', message: 'Transaction write conflict' };
+            expect(isConflictError(codeNameError)).toBe(true);
+
+            const rawStringError = 'WriteConflict: retry transaction';
+            expect(isConflictError(rawStringError)).toBe(true);
+        });
+
+        it('rejects unrelated duplicate key errors not on Grade unique index', () => {
+            const unrelatedDupKey = {
+                code: 11000,
+                keyPattern: { email: 1 },
+                message: 'E11000 duplicate key error collection: users index: email_1 dup key: { email: "test@example.com" }',
+            };
+            expect(isConflictError(unrelatedDupKey)).toBe(false);
+        });
+
+        it('rejects non-conflict errors: VersionError, validation, network, null', () => {
+            expect(isConflictError(null)).toBe(false);
+            expect(isConflictError(undefined)).toBe(false);
+            expect(isConflictError(new Error('Validation failed'))).toBe(false);
+            expect(isConflictError({ name: 'VersionError', message: 'No matching document found' })).toBe(false);
+            expect(isConflictError({ code: 500, message: 'Internal Server Error' })).toBe(false);
+        });
     });
 });

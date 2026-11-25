@@ -33,49 +33,65 @@ export function isDuplicateKeyError(error: unknown): boolean {
 }
 
 /**
- * Checks if the given error is a database concurrency or transaction conflict,
- * including MongoDB duplicate key errors (code 11000), write conflicts (code 112 / WriteConflict),
- * Mongoose VersionErrors, or transient transaction conflicts.
+ * Checks if the given error is a concurrency conflict:
+ * narrowed strictly to the Grade unique-index E11000 ({ answerScript, question })
+ * and MongoDB WriteConflict (code 112 / WriteConflict) cases only.
  */
 export function isConflictError(error: unknown): boolean {
     if (!error) return false;
-    if (isDuplicateKeyError(error)) return true;
 
     if (typeof error === 'object') {
         const errObj = error as Record<string, unknown>;
+
+        // 1. WriteConflict case (code 112 or codeName WriteConflict)
         if (errObj.code === 112 || errObj.codeName === 'WriteConflict') {
             return true;
         }
-        if (errObj.name === 'VersionError') {
-            return true;
+
+        // 2. Grade unique-index E11000 duplicate key case
+        if (errObj.code === 11000) {
+            const keyPattern = errObj.keyPattern as Record<string, unknown> | undefined;
+            if (keyPattern && ('answerScript' in keyPattern || 'question' in keyPattern)) {
+                return true;
+            }
+            if (typeof errObj.message === 'string') {
+                const msg = errObj.message;
+                if (
+                    msg.includes('answerScript_1_question_1') ||
+                    (msg.includes('answerScript') && msg.includes('question')) ||
+                    msg.includes('grades')
+                ) {
+                    return true;
+                }
+            }
+            return false;
         }
-        if (Array.isArray(errObj.errorLabels) && errObj.errorLabels.includes('TransientTransactionError')) {
-            return true;
-        }
+
         if (typeof errObj.message === 'string') {
             const msg = errObj.message;
+            if (msg.includes('WriteConflict')) {
+                return true;
+            }
             if (
-                msg.includes('WriteConflict') ||
-                msg.includes('duplicate key') ||
-                msg.includes('dup key') ||
-                msg.includes('E11000') ||
-                msg.includes('TransientTransactionError') ||
-                msg.includes('transaction was aborted') ||
-                msg.includes('could not serialize access')
+                (msg.includes('E11000') || msg.includes('duplicate key') || msg.includes('dup key')) &&
+                (msg.includes('answerScript_1_question_1') || (msg.includes('answerScript') && msg.includes('question')) || msg.includes('grades'))
             ) {
                 return true;
             }
         }
     }
+
     if (typeof error === 'string') {
-        return (
-            error.includes('WriteConflict') ||
-            error.includes('duplicate key') ||
-            error.includes('dup key') ||
-            error.includes('E11000') ||
-            error.includes('TransientTransactionError') ||
-            error.includes('transaction was aborted')
-        );
+        if (error.includes('WriteConflict')) {
+            return true;
+        }
+        if (
+            (error.includes('E11000') || error.includes('duplicate key') || error.includes('dup key')) &&
+            (error.includes('answerScript_1_question_1') || (error.includes('answerScript') && error.includes('question')) || error.includes('grades'))
+        ) {
+            return true;
+        }
     }
+
     return false;
 }

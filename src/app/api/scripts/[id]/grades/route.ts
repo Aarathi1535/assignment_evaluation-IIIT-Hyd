@@ -127,16 +127,6 @@ export const GET = withServerTiming(async (
       { status: 200 }
     );
   } catch (error: unknown) {
-    if (isConflictError(error)) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: 'Conflict: This question was concurrently graded or finalized.',
-          data: null,
-        },
-        { status: 409 }
-      );
-    }
     const message = error instanceof Error ? error.message : 'An unexpected error occurred';
     const status = error instanceof HttpError ? error.statusCode : 500;
     return NextResponse.json(
