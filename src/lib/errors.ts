@@ -34,7 +34,7 @@ export function isDuplicateKeyError(error: unknown): boolean {
 
 /**
  * Checks if the given error is a concurrency conflict:
- * narrowed strictly to the Grade unique-index E11000 ({ answerScript, question })
+ * narrowed strictly to the Grade composite unique index { answerScript: 1, question: 1 }
  * and MongoDB WriteConflict (code 112 / WriteConflict) cases only.
  */
 export function isConflictError(error: unknown): boolean {
@@ -48,21 +48,19 @@ export function isConflictError(error: unknown): boolean {
             return true;
         }
 
-        // 2. Grade unique-index E11000 duplicate key case
+        // 2. Grade composite unique-index E11000 duplicate key case
         if (errObj.code === 11000) {
             const keyPattern = errObj.keyPattern as Record<string, unknown> | undefined;
-            if (keyPattern && ('answerScript' in keyPattern || 'question' in keyPattern)) {
-                return true;
+            if (keyPattern) {
+                // Must have BOTH fields of the composite index
+                return 'answerScript' in keyPattern && 'question' in keyPattern;
             }
             if (typeof errObj.message === 'string') {
                 const msg = errObj.message;
-                if (
+                return (
                     msg.includes('answerScript_1_question_1') ||
-                    (msg.includes('answerScript') && msg.includes('question')) ||
-                    msg.includes('grades')
-                ) {
-                    return true;
-                }
+                    (msg.includes('answerScript') && msg.includes('question'))
+                );
             }
             return false;
         }
@@ -74,7 +72,7 @@ export function isConflictError(error: unknown): boolean {
             }
             if (
                 (msg.includes('E11000') || msg.includes('duplicate key') || msg.includes('dup key')) &&
-                (msg.includes('answerScript_1_question_1') || (msg.includes('answerScript') && msg.includes('question')) || msg.includes('grades'))
+                (msg.includes('answerScript_1_question_1') || (msg.includes('answerScript') && msg.includes('question')))
             ) {
                 return true;
             }
@@ -87,7 +85,7 @@ export function isConflictError(error: unknown): boolean {
         }
         if (
             (error.includes('E11000') || error.includes('duplicate key') || error.includes('dup key')) &&
-            (error.includes('answerScript_1_question_1') || (error.includes('answerScript') && error.includes('question')) || error.includes('grades'))
+            (error.includes('answerScript_1_question_1') || (error.includes('answerScript') && error.includes('question')))
         ) {
             return true;
         }

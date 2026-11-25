@@ -454,13 +454,44 @@ describe('AE-224: Concurrent TA Grading & Transaction Locking', () => {
             expect(isConflictError(rawStringError)).toBe(true);
         });
 
-        it('rejects unrelated duplicate key errors not on Grade unique index', () => {
+        it('rejects unrelated duplicate key errors not on Grade composite unique index', () => {
             const unrelatedDupKey = {
                 code: 11000,
                 keyPattern: { email: 1 },
                 message: 'E11000 duplicate key error collection: users index: email_1 dup key: { email: "test@example.com" }',
             };
             expect(isConflictError(unrelatedDupKey)).toBe(false);
+
+            // Single-field index on answerScript only
+            const singleFieldAnswerScript = {
+                code: 11000,
+                keyPattern: { answerScript: 1 },
+                message: 'E11000 duplicate key error collection: grades index: answerScript_1 dup key: { answerScript: ObjectId("...") }',
+            };
+            expect(isConflictError(singleFieldAnswerScript)).toBe(false);
+
+            // Single-field index on question only
+            const singleFieldQuestion = {
+                code: 11000,
+                keyPattern: { question: 1 },
+                message: 'E11000 duplicate key error collection: grades index: question_1 dup key: { question: 1 }',
+            };
+            expect(isConflictError(singleFieldQuestion)).toBe(false);
+
+            // Unrelated duplicate-key error in the grades collection (e.g. hypothetical student_1 index)
+            const unrelatedGradesCollectionDupKey = {
+                code: 11000,
+                keyPattern: { student: 1 },
+                message: 'E11000 duplicate key error collection: grades index: student_1 dup key: { student: ObjectId("...") }',
+            };
+            expect(isConflictError(unrelatedGradesCollectionDupKey)).toBe(false);
+
+            // Message-based error referencing grades collection without composite index
+            const genericGradesMessage = {
+                code: 11000,
+                message: 'E11000 duplicate key error collection: grades index: custom_unique_1 dup key: { custom: "val" }',
+            };
+            expect(isConflictError(genericGradesMessage)).toBe(false);
         });
 
         it('rejects non-conflict errors: VersionError, validation, network, null', () => {

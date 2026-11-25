@@ -2,7 +2,7 @@
 
 ## Status
 - **Ticket**: AE-224 (PR #342)
-- **Issue Reference**: Resolves grading concurrency conflict (Issue #344: HTTP 500 on concurrent grade submission instead of 409 Conflict)
+- **Issue Reference**: Resolves grading concurrency conflict (Issue #375: HTTP 500 on concurrent grade submission instead of 409 Conflict)
 - **Priority**: High (Data Integrity & API Concurrency Contract)
 - **Status**: Resolved
 - **Impact Area**: Grading API (`POST /api/scripts/[id]/questions/[questionNumber]/grade`, `POST /api/scripts/[id]/grades`), `GradingService`, `src/lib/errors.ts`
