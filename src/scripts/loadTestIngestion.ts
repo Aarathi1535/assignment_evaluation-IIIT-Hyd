@@ -49,12 +49,17 @@ export interface IngestionLoadTestMetrics {
         heapUsedDeltaMb: number;
         rssMb: number;
     };
+    coverPageIdentified: boolean;
+    scriptAssembled: boolean;
+    assembledScriptId?: string;
+    assembledPageCount?: number;
     stageBreakdownMs: {
         renderMs: number;
         qrDetectMs: number;
         thumbnailMs: number;
         storageWriteMs: number;
         dbPersistMs: number;
+        otherMs: number;
     };
     stagePercentages: {
         renderPct: number;
@@ -62,6 +67,7 @@ export interface IngestionLoadTestMetrics {
         thumbnailPct: number;
         storageWritePct: number;
         dbPersistPct: number;
+        otherPct: number;
     };
 }
 
@@ -122,34 +128,16 @@ async function createRealisticScannedPdfBuffer(
     const p1 = pdfDoc.addPage([595.28, 841.89]);
     p1.drawImage(embeddedCover, { x: 0, y: 0, width: 595.28, height: 841.89 });
 
-    // 2. Pre-generate realistic student answer pages with handwriting-sized text and diagrams
-    const sampleTemplates: Buffer[] = [];
-    const questions = [
-        {
-            title: 'Q1: Dynamic Programming Solution for 0/1 Knapsack',
-            code: 'def knapsack(W, wt, val, n):\n    K = [[0 for w in range(W + 1)] for i in range(n + 1)]\n    for i in range(n + 1):\n        for w in range(W + 1):\n            if i == 0 or w == 0: K[i][w] = 0\n            elif wt[i-1] <= w:\n                K[i][w] = max(val[i-1] + K[i-1][w-wt[i-1]], K[i-1][w])\n            else: K[i][w] = K[i-1][w]\n    return K[n][W]',
-            math: 'Recurrence: T(i, w) = max(T(i-1, w), val[i] + T(i-1, w - wt[i]))'
-        },
-        {
-            title: 'Q2: Dijkstra Algorithm & Priority Queue Implementation',
-            code: 'dist[s] = 0\nPQ.insert((0, s))\nwhile not PQ.empty():\n    d, u = PQ.extract_min()\n    if d > dist[u]: continue\n    for v, weight in adj[u]:\n        if dist[u] + weight < dist[v]:\n            dist[v] = dist[u] + weight\n            PQ.insert((dist[v], v))',
-            math: 'Time Complexity: O((V + E) log V) using Fibonacci heap'
-        },
-        {
-            title: 'Q3: Proof of Minimum Spanning Tree Cut Property',
-            code: 'Cut Property Theorem:\nLet G = (V, E) be a connected undirected graph.\nLet (S, V - S) be any cut in G.\nIf edge e is the light edge crossing (S, V - S), then e is in some MST.',
-            math: 'Induction: Assume T is an MST not containing e. T + e contains a cycle C.'
-        }
-    ];
-
-    for (const q of questions) {
+    // 2. Generate realistic student answer pages with handwriting-sized text and diagrams
+    // Each page is uniquely generated with distinct content to prevent duplicate detection (dHash) false positives
+    for (let p = 2; p <= pageCount; p++) {
         const pageCanvas = createCanvas(1000, 1400);
         const pCtx = pageCanvas.getContext('2d');
-        pCtx.fillStyle = '#fafaf8'; // Realistic scanned paper color
+        pCtx.fillStyle = '#f8f9fa'; // Scanned paper color
         pCtx.fillRect(0, 0, 1000, 1400);
 
-        // Ruled paper lines
-        pCtx.strokeStyle = '#e0e4ee';
+        // Ruled paper lines with varied spacing
+        pCtx.strokeStyle = '#e2e8f0';
         pCtx.lineWidth = 1;
         for (let y = 140; y < 1340; y += 40) {
             pCtx.beginPath();
@@ -159,46 +147,56 @@ async function createRealisticScannedPdfBuffer(
         }
 
         // Left margin rule
-        pCtx.strokeStyle = '#f8cccc';
+        pCtx.strokeStyle = '#fca5a5';
         pCtx.lineWidth = 1.5;
         pCtx.beginPath();
         pCtx.moveTo(120, 60);
         pCtx.lineTo(120, 1340);
         pCtx.stroke();
 
-        // Simulated student handwriting content
-        pCtx.fillStyle = '#0f244a';
+        // Unique student handwriting content per page
+        pCtx.fillStyle = '#0f172a';
         pCtx.font = 'bold 22px serif';
-        pCtx.fillText(q.title, 140, 130);
+        pCtx.fillText(`Question ${p}: Derivation & Implementation Analysis (Page ${p})`, 140, 130);
 
-        pCtx.font = '18px monospace';
-        const lines = q.code.split('\n');
-        let curY = 180;
-        for (const line of lines) {
-            pCtx.fillText(line, 140, curY);
-            curY += 38;
-        }
+        pCtx.font = '16px monospace';
+        pCtx.fillText(`// Execution trace for problem variant #${p * 7}`, 140, 175);
+        pCtx.fillText(`const bufferSize_${p} = ${p * 1024};`, 140, 205);
+        pCtx.fillText(`function evaluateStep${p}(state: State<${p}>): Result {`, 140, 235);
+        pCtx.fillText(`    let accumulator = ${p * 13.5};`, 140, 265);
+        pCtx.fillText(`    for (let i = 0; i < ${p + 5}; i++) {`, 140, 295);
+        pCtx.fillText(`        accumulator += Math.sqrt(i * ${p}) + ${p % 3};`, 140, 325);
+        pCtx.fillText(`    }`, 140, 355);
+        pCtx.fillText(`    return { status: "VALID", metric: accumulator };`, 140, 385);
+        pCtx.fillText(`}`, 140, 415);
 
-        pCtx.font = 'italic 20px serif';
-        pCtx.fillText(q.math, 140, curY + 20);
+        pCtx.font = 'italic 18px serif';
+        pCtx.fillText(`Recurrence relation #${p}: T_${p}(n) = ${p} * T(n / 2) + Theta(n^${(p % 3) + 1})`, 140, 460);
+        pCtx.fillText(`By Master Theorem Case ${(p % 3) + 1}, asymptotic complexity is Theta(n^${(p % 3) + 1} log n).`, 140, 490);
 
-        // Vector handwriting stroke sketch
-        pCtx.strokeStyle = '#183b70';
+        // Unique handwriting / vector stroke diagram per page
+        pCtx.strokeStyle = '#1e3a8a';
         pCtx.lineWidth = 2;
         pCtx.beginPath();
-        pCtx.moveTo(150, curY + 70);
-        for (let x = 150; x < 750; x += 15) {
-            pCtx.lineTo(x, curY + 70 + Math.sin(x / 20) * 10);
+        const startY = 550 + (p * 5) % 100;
+        pCtx.moveTo(150, startY);
+        for (let x = 150; x < 850; x += 20) {
+            const waveY = startY + Math.sin((x + p * 30) / (25 + (p % 5))) * (20 + (p % 15));
+            pCtx.lineTo(x, waveY);
         }
         pCtx.stroke();
 
-        sampleTemplates.push(pageCanvas.toBuffer('image/png'));
-    }
+        // Draw geometric illustration box with varied shapes
+        pCtx.strokeStyle = '#64748b';
+        pCtx.lineWidth = 1.5;
+        pCtx.strokeRect(150, startY + 70, 350, 180);
+        pCtx.fillStyle = '#334155';
+        pCtx.font = '14px sans-serif';
+        pCtx.fillText(`Diagram ${p}.1: Phase Plot & State Boundary Map`, 165, startY + 95);
+        pCtx.strokeRect(180, startY + 115, 60 + (p * 8) % 100, 40 + (p * 5) % 60);
 
-    // Embed content pages for page 2 .. pageCount
-    for (let p = 2; p <= pageCount; p++) {
-        const tplIndex = (p - 2) % sampleTemplates.length;
-        const embeddedImg = await pdfDoc.embedPng(sampleTemplates[tplIndex]);
+        const pageImg = pageCanvas.toBuffer('image/png');
+        const embeddedImg = await pdfDoc.embedPng(pageImg);
         const page = pdfDoc.addPage([595.28, 841.89]);
         page.drawImage(embeddedImg, { x: 0, y: 0, width: 595.28, height: 841.89 });
     }
@@ -207,11 +205,62 @@ async function createRealisticScannedPdfBuffer(
     return Buffer.from(pdfBytes);
 }
 
+/**
+ * Validates whether the target MongoDB host is permitted for load test execution.
+ * Only local development/test hosts or explicitly configured demo clusters are allowed.
+ * Reject malformed URIs, unknown hosts, and substring matches.
+ */
+export function isDatabaseHostAllowed(uri?: string): boolean {
+    if (!uri || typeof uri !== 'string') return false;
+    try {
+        const trimmed = uri.trim();
+        if (!trimmed.startsWith('mongodb://') && !trimmed.startsWith('mongodb+srv://')) {
+            return false;
+        }
+
+        const parsed = new URL(trimmed.replace(/^mongodb(\+srv)?:\/\//, 'http://'));
+        if (!parsed.host) return false;
+
+        const hosts = parsed.host.split(',');
+        const demoClusterHost = process.env.DEMO_CLUSTER_HOST?.toLowerCase().trim();
+
+        return hosts.every(h => {
+            if (!h) return false;
+            let hostname = h.trim();
+            if (hostname.startsWith('[')) {
+                const closeBracketIdx = hostname.indexOf(']');
+                if (closeBracketIdx !== -1) {
+                    hostname = hostname.substring(1, closeBracketIdx);
+                }
+            } else {
+                hostname = hostname.split(':')[0];
+            }
+            hostname = hostname.toLowerCase();
+
+            return (
+                hostname === 'localhost' ||
+                hostname === '127.0.0.1' ||
+                hostname === '::1' ||
+                (Boolean(demoClusterHost) && hostname === demoClusterHost)
+            );
+        });
+    } catch {
+        return false;
+    }
+}
+
 export async function runIngestionLoadTest(
     options: IngestionLoadTestOptions = {}
 ): Promise<IngestionLoadTestMetrics> {
     if (process.env.NODE_ENV === 'production') {
         throw new Error('Load testing is forbidden against production environments');
+    }
+
+    const mongoUri = process.env.MONGODB_URI;
+    if (!isDatabaseHostAllowed(mongoUri)) {
+        throw new Error(
+            'Load testing is forbidden on non-allowlisted database hosts. Refusing connection to host outside allowlist (allowed: localhost, 127.0.0.1, or explicit demo cluster).'
+        );
     }
 
     const totalPages = Math.max(1, options.totalPages ?? 50);
@@ -458,16 +507,29 @@ export async function runIngestionLoadTest(
     const jobFailed = jobResult?.status === IngestionStatus.DONE ? 0 : 1;
     const errorCount = failedPages + jobFailed;
 
-    // Stage percentage calculation
-    const totalStageMs = renderMs + qrDetectMs + thumbnailMs + storageWriteMs + dbPersistMs;
-    const safeTotal = totalStageMs > 0 ? totalStageMs : totalDurationMs;
+    // Stage percentage calculation (measured against total duration of pipeline run)
+    const measuredStageMs = renderMs + qrDetectMs + thumbnailMs + storageWriteMs + dbPersistMs;
+    const otherMs = Math.max(0, totalDurationMs - measuredStageMs);
     const stagePercentages = {
-        renderPct: Math.round((renderMs / safeTotal) * 1000) / 10,
-        qrDetectPct: Math.round((qrDetectMs / safeTotal) * 1000) / 10,
-        thumbnailPct: Math.round((thumbnailMs / safeTotal) * 1000) / 10,
-        storageWritePct: Math.round((storageWriteMs / safeTotal) * 1000) / 10,
-        dbPersistPct: Math.round((dbPersistMs / safeTotal) * 1000) / 10,
+        renderPct: Math.round((renderMs / totalDurationMs) * 1000) / 10,
+        qrDetectPct: Math.round((qrDetectMs / totalDurationMs) * 1000) / 10,
+        thumbnailPct: Math.round((thumbnailMs / totalDurationMs) * 1000) / 10,
+        storageWritePct: Math.round((storageWriteMs / totalDurationMs) * 1000) / 10,
+        dbPersistPct: Math.round((dbPersistMs / totalDurationMs) * 1000) / 10,
+        otherPct: Math.round((otherMs / totalDurationMs) * 1000) / 10,
     };
+
+    // Verify cover sheet identification and script assembly before optional cleanup
+    const { default: AnswerScript, IdentificationStatus } = await import('../models/AnswerScript');
+    const assembledScript = await AnswerScript.findOne({ exam: exam._id });
+    const coverPageDoc = await IngestionPage.findOne({ batchId, pageNumber: 1 });
+    const coverPageIdentified = Boolean(
+        coverPageDoc?.isCoverPage && coverPageDoc?.status === PageProcessingStatus.PROCESSED
+    );
+    const scriptAssembled = Boolean(
+        assembledScript &&
+        (assembledScript.identificationStatus === IdentificationStatus.IDENTIFIED || Boolean(assembledScript.student))
+    );
 
     // System and machine information
     let commitSha = 'UNKNOWN';
@@ -502,6 +564,10 @@ export async function runIngestionLoadTest(
         targetPagesPerHour,
         meetsTarget,
         errorCount,
+        coverPageIdentified,
+        scriptAssembled,
+        assembledScriptId: assembledScript?._id?.toString(),
+        assembledPageCount: assembledScript?.pageCount,
         machineInfo,
         runInfo,
         memoryUsage: {
@@ -516,6 +582,7 @@ export async function runIngestionLoadTest(
             thumbnailMs: Math.round(thumbnailMs * 100) / 100,
             storageWriteMs: Math.round(storageWriteMs * 100) / 100,
             dbPersistMs: Math.round(dbPersistMs * 100) / 100,
+            otherMs: Math.round(otherMs * 100) / 100,
         },
         stagePercentages,
     };
@@ -526,10 +593,13 @@ export async function runIngestionLoadTest(
                 immutableStorageService.cleanupBatch(batchId),
                 derivedStorageService.cleanupDerivedBatch(batchId),
             ]);
+            await AnswerScript.deleteMany({ exam: exam._id });
+            await StudentMapping.deleteMany({ exam: exam._id });
             await IngestionPage.deleteMany({ batchId });
             await IngestionJob.deleteMany({ batchId });
             await Exam.deleteOne({ _id: exam._id });
             await Course.deleteOne({ _id: course._id });
+            await User.deleteMany({ _id: { $in: [instructor._id, student._id] } });
         } catch {
             // Ignore cleanup errors
         }
@@ -563,6 +633,8 @@ if (process.argv[1] && process.argv[1].endsWith('loadTestIngestion.ts')) {
             console.log(`Throughput:           ${metrics.pagesPerSecond} pages/sec (${metrics.extrapolatedPagesPerHour} pages/hour)`);
             console.log(`Design Target:        ${metrics.targetPagesPerHour} pages/hour`);
             console.log(`Target Status:        ${metrics.meetsTarget ? 'PASS (Exceeds Target)' : 'BELOW TARGET (Environment-constrained)'}`);
+            console.log(`Cover Page ID:        ${metrics.coverPageIdentified ? 'IDENTIFIED (Cover Sheet Found)' : 'UNIDENTIFIED'}`);
+            console.log(`Script Assembly:      ${metrics.scriptAssembled ? `ASSEMBLED (ID: ${metrics.assembledScriptId}, ${metrics.assembledPageCount} pages)` : 'NOT ASSEMBLED'}`);
             console.log('--------------------------------------------------');
             console.log('Per-Stage Measured Breakdown:');
             console.log(`- PDF Render & Raster: ${metrics.stageBreakdownMs.renderMs.toFixed(2)} ms (${metrics.stagePercentages.renderPct}%)`);
@@ -570,6 +642,7 @@ if (process.argv[1] && process.argv[1].endsWith('loadTestIngestion.ts')) {
             console.log(`- Thumbnail Generate:  ${metrics.stageBreakdownMs.thumbnailMs.toFixed(2)} ms (${metrics.stagePercentages.thumbnailPct}%)`);
             console.log(`- Storage Writes:      ${metrics.stageBreakdownMs.storageWriteMs.toFixed(2)} ms (${metrics.stagePercentages.storageWritePct}%)`);
             console.log(`- DB Persistence:      ${metrics.stageBreakdownMs.dbPersistMs.toFixed(2)} ms (${metrics.stagePercentages.dbPersistPct}%)`);
+            console.log(`- Other (Pipeline):    ${metrics.stageBreakdownMs.otherMs.toFixed(2)} ms (${metrics.stagePercentages.otherPct}%)`);
             console.log('--------------------------------------------------');
             console.log(`Memory Heap Delta:    ${metrics.memoryUsage.heapUsedDeltaMb} MB (RSS: ${metrics.memoryUsage.rssMb} MB)`);
             console.log('==================================================');

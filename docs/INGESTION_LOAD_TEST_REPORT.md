@@ -66,22 +66,23 @@ The following numbers are directly measured and recorded by `loadTestIngestion.t
 
 ## Per-Stage Measured Breakdown
 
-Stage timing is captured using precise high-resolution timestamps (`perf_hooks.performance.now()`) wrapping each stage service:
+Stage timing is captured using precise high-resolution timestamps (`perf_hooks.performance.now()`) wrapping each stage service. Percentages are measured against the total run duration (24,588.94 ms), with the remaining uninstrumented batch loop, candidate assembly, and file coordination accounted for in the `Other` row:
 
 ```
-[ PDF Render & Raster ] ───> [ Storage Writes ] ───> [ Cover & QR Detect ] ───> [ DB Persistence ] ───> [ Thumbnail Gen ]
-      4,726.65 ms                  1,044.40 ms                879.57 ms                   748.45 ms               201.71 ms
-        (62.2%)                      (13.7%)                    (11.6%)                     (9.8%)                  (2.7%)
+[ PDF Render & Raster ] ───> [ Storage Writes ] ───> [ Cover & QR Detect ] ───> [ DB Persistence ] ───> [ Thumbnail Gen ] ───> [ Other / Orchestration ]
+      4,726.65 ms                  1,044.40 ms                879.57 ms                   748.45 ms               201.71 ms                  16,988.16 ms
+        (19.2%)                      (4.2%)                     (3.6%)                      (3.0%)                  (0.8%)                      (69.1%)
 ```
 
-| Stage | Measured Time (ms) | Percentage of Processing Time | Primary Resource |
+| Stage | Measured Time (ms) | Percentage of Total Run Time | Primary Resource |
 | :--- | :--- | :--- | :--- |
-| **PDF Render & Rasterization** | **4,726.65 ms** | **62.2%** | CPU (pdfjs-dist canvas decompression) |
-| **Derived Storage Writes** | **1,044.40 ms** | **13.7%** | Disk I/O & HMAC crypto calculation |
-| **Cover & QR Code Detection** | **879.57 ms** | **11.6%** | CPU (@zxing/library Reed-Solomon decode) |
-| **Database Persistence (Mongoose)** | **748.45 ms** | **9.8%** | Network / DB engine latency |
-| **Thumbnail Generation** | **201.71 ms** | **2.7%** | CPU (bicubic downsampling) |
-| **Total Measured Stages** | **7,600.78 ms** | **100.0%** | Core processing pipeline |
+| **PDF Render & Rasterization** | **4,726.65 ms** | **19.2%** | CPU (pdfjs-dist canvas decompression) |
+| **Derived Storage Writes** | **1,044.40 ms** | **4.2%** | Disk I/O & HMAC crypto calculation |
+| **Cover & QR Code Detection** | **879.57 ms** | **3.6%** | CPU (@zxing/library Reed-Solomon decode) |
+| **Database Persistence (Mongoose)** | **748.45 ms** | **3.0%** | Network / DB engine latency |
+| **Thumbnail Generation** | **201.71 ms** | **0.8%** | CPU (bicubic downsampling) |
+| **Other (Pipeline Orchestration / Job & Script Assembly)** | **16,988.16 ms** | **69.1%** | Batch ingestion loop, disk I/O, script assembly |
+| **Total Ingestion Pipeline** | **24,588.94 ms** | **100.0%** | Full end-to-end ingestion |
 
 ---
 
@@ -89,15 +90,17 @@ Stage timing is captured using precise high-resolution timestamps (`perf_hooks.p
 
 1. **Environment Constraints on Single-Worker Execution:**
    - Single-threaded Node.js execution on a shared developer workstation yields **~2,928 pages/hour** on a 20-page batch (consistent with reviewer observations of ~1,750 pages/hr on 5 pages and ~2,790 pages/hr on 20 pages).
-   - Over 62% of the total processing latency is dedicated to CPU-intensive vector-to-raster PDF decompression and rendering (`pdfjs-dist`).
-2. **Horizontal Scaling to Meet and Exceed the 5,000 Pages/Hour Target:**
-   - Because `IngestionWorker` instances are stateless and coordinate atomically via MongoDB conditional claims (`claimNextQueuedJob` with `$expr` and atomic status transitions), scaling throughput is strictly linear across CPU cores.
-   - **2 Worker Processes:** Deliver **~5,850 pages/hour**, surpassing the university intake SLA target of 5,000 pages/hour.
-   - **4 Worker Processes:** Deliver **~11,700 pages/hour**, providing robust headroom for peak examination intake spikes.
+   - Approximately 19.2% of total duration (62.2% of instrumented stage time) is dedicated to CPU-intensive vector-to-raster PDF decompression and rendering (`pdfjs-dist`).
+2. **Horizontal Scaling Projections vs Tested Configurations:**
+   - Because `IngestionWorker` instances are stateless and coordinate atomically via MongoDB conditional claims (`claimNextQueuedJob` with `$expr` and atomic status transitions), scaling throughput across CPU cores is projected:
+   - **2 Worker Processes (Theoretical Projection / Untested):** Projected to deliver **~5,850 pages/hour**, surpassing the university intake SLA target of 5,000 pages/hour.
+   - **4 Worker Processes (Theoretical Projection / Untested):** Projected to deliver **~11,700 pages/hour**, providing robust headroom for peak examination intake spikes.
 3. **Database and Error Robustness:**
    - Both worker-level and page-level statuses are tracked independently.
    - `processedPages` and `failedPages` are authoritatively queried from database state (`IngestionPage`), guaranteeing zero uncounted errors.
    - Scoped `batchId` targeting prevents workers from claiming unrelated jobs on shared MongoDB clusters.
+   - Automatic cleanup purges all test users, mappings, batches, and assembled answer scripts.
+   - Reuses the host allowlist safety approach from #343 (`localhost`, `127.0.0.1`, `::1`, or explicit `DEMO_CLUSTER_HOST`).
 
 ---
 
