@@ -324,6 +324,10 @@ export class ImmutableStorageService {
                 }
             } catch (err) {
                 if (err instanceof HttpError) throw err;
+                throw new HttpError(
+                    `Failed to verify sealed original file integrity: ${err instanceof Error ? err.message : String(err)}`,
+                    500
+                );
             }
         }
 

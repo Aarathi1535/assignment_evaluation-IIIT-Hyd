@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, vi } from 'vite
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
+import { NextRequest } from 'next/server';
 import { connectDB } from '../lib/db';
 import {
   generateHmacSeal,
@@ -16,6 +17,22 @@ import Batch, { IBindingMetadata, BatchStatus } from '../models/Batch';
 import Exam, { ExamStatus } from '../models/Exam';
 import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
+import examRepository from '../repositories/ExamRepository';
+import examService from '../services/ExamService';
+import batchRepository from '../repositories/BatchRepository';
+import { DELETE as deleteExamHandler } from '../app/api/exams/[id]/route';
+
+let mockSessionUser: { id: string; email: string; name: string; role: UserRole } | null = null;
+vi.mock('next-auth', async (importOriginal) => {
+  const original = await importOriginal<typeof import('next-auth')>();
+  return {
+    ...original,
+    getServerSession: vi.fn().mockImplementation(() => {
+      if (!mockSessionUser) return Promise.resolve(null);
+      return Promise.resolve({ user: mockSessionUser });
+    }),
+  };
+});
 
 const auditCalls: any[] = [];
 vi.mock('../lib/audit', () => ({
@@ -37,6 +54,7 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
   });
 
   beforeEach(async () => {
+    mockSessionUser = null;
     auditCalls.length = 0;
     originalStoragePath = process.env.ORIGINAL_STORAGE_PATH;
     originalSecret = process.env.ORIGINAL_STORAGE_HMAC_SECRET;
@@ -50,14 +68,20 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
     await fs.promises.mkdir(testStorageDir, { recursive: true });
 
     await Promise.all([
-      Batch.deleteMany({}),
-      Exam.deleteMany({}),
+      Batch.deleteMany({}, { bypassWorm: true }),
+      Exam.deleteMany({}, { bypassWorm: true }),
       Course.deleteMany({}),
       User.deleteMany({}),
     ]);
   });
 
   afterEach(async () => {
+    mockSessionUser = null;
+    await Promise.all([
+      Batch.deleteMany({}, { bypassWorm: true }),
+      Exam.deleteMany({}, { bypassWorm: true }),
+    ]);
+
     if (originalStoragePath === undefined) delete process.env.ORIGINAL_STORAGE_PATH;
     else process.env.ORIGINAL_STORAGE_PATH = originalStoragePath;
 
@@ -599,6 +623,502 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
 
       expect(auditCalls).toHaveLength(1);
       expect(auditCalls[0].action).toBe('INTEGRITY_MISMATCH');
+    });
+  });
+
+  describe('7. API and Repository Soft-Deletion Prevention on Published Exams', () => {
+    it('blocks soft deletion of a published exam via API endpoint DELETE /api/exams/[id]', async () => {
+      const prof = await User.create({
+        name: 'Prof. Turing',
+        email: 'turing@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const course = await Course.create({
+        courseCode: 'CS-WORM-101',
+        courseName: 'WORM Systems',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: prof._id,
+      });
+
+      const publishedExam = await Exam.create({
+        title: 'Final Exam - Published WORM',
+        course: course._id,
+        examDate: new Date(),
+        numberOfQuestions: 3,
+        totalMarks: 50,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+        createdBy: prof._id,
+      });
+
+      mockSessionUser = {
+        id: prof._id.toString(),
+        email: prof.email,
+        name: prof.name,
+        role: UserRole.PROFESSOR,
+      };
+
+      const req = new NextRequest(
+        `http://localhost:3000/api/exams/${publishedExam._id.toString()}`,
+        { method: 'DELETE' }
+      );
+      const res = await deleteExamHandler(req, {
+        params: Promise.resolve({ id: publishedExam._id.toString() }),
+      });
+
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.message).toMatch(/Cannot delete published exam.*WORM immutability enforcement/i);
+
+      // Verify in DB that exam remains active
+      const examInDb = await Exam.findById(publishedExam._id);
+      expect(examInDb).not.toBeNull();
+      expect(examInDb?.isActive).toBe(true);
+    });
+
+    it('blocks soft deletion of published exams via ExamRepository.deleteExam and ExamService.deleteExam', async () => {
+      const prof = await User.create({
+        name: 'Prof. Hopper',
+        email: 'hopper@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const course = await Course.create({
+        courseCode: 'CS-WORM-102',
+        courseName: 'Compilers WORM',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: prof._id,
+      });
+
+      const publishedExam = await Exam.create({
+        title: 'Compiler Midterm',
+        course: course._id,
+        examDate: new Date(),
+        numberOfQuestions: 4,
+        totalMarks: 60,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+        createdBy: prof._id,
+      });
+
+      // ExamRepository.deleteExam throws HttpError
+      await expect(
+        examRepository.deleteExam(publishedExam._id.toString(), prof._id.toString(), 'PROFESSOR')
+      ).rejects.toThrow(/Cannot delete published exam.*WORM immutability enforcement/i);
+
+      // ExamService.deleteExam throws HttpError
+      await expect(
+        examService.deleteExam(publishedExam._id.toString(), prof._id.toString(), 'PROFESSOR')
+      ).rejects.toThrow(/Cannot delete published exam.*WORM immutability enforcement/i);
+
+      // ExamRepository.updateExam with isActive: false throws HttpError
+      await expect(
+        examRepository.updateExam(publishedExam._id.toString(), { isActive: false }, prof._id.toString(), 'PROFESSOR')
+      ).rejects.toThrow(/Cannot delete published exam.*WORM immutability enforcement/i);
+
+      const examInDb = await Exam.findById(publishedExam._id);
+      expect(examInDb?.isActive).toBe(true);
+    });
+  });
+
+  describe('8. Document Save (doc.save) Mutation Protection for Exam and Batch', () => {
+    it('rejects altering course, totalMarks, or isActive via examDoc.save() on published exam', async () => {
+      const prof = await User.create({
+        name: 'Prof. Dijkstra',
+        email: 'dijkstra@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const courseA = await Course.create({
+        courseCode: 'CS-ALG-1',
+        courseName: 'Algorithms',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: prof._id,
+      });
+      const courseB = await Course.create({
+        courseCode: 'CS-ALG-2',
+        courseName: 'Advanced Algorithms',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: prof._id,
+      });
+
+      const exam = await Exam.create({
+        title: 'Algorithms Final',
+        course: courseA._id,
+        examDate: new Date(),
+        numberOfQuestions: 5,
+        totalMarks: 100,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+        createdBy: prof._id,
+      });
+
+      // 1. Mutate course and save
+      const doc1 = await Exam.findById(exam._id);
+      doc1!.course = courseB._id;
+      await expect(doc1!.save()).rejects.toThrow(/Cannot alter course.*WORM immutability enforcement/i);
+
+      // 2. Mutate totalMarks and save
+      const doc2 = await Exam.findById(exam._id);
+      doc2!.totalMarks = 200;
+      await expect(doc2!.save()).rejects.toThrow(/Cannot update totalMarks.*WORM immutability enforcement/i);
+
+      // 3. Mutate isActive (soft delete) and save
+      const doc3 = await Exam.findById(exam._id);
+      doc3!.isActive = false;
+      await expect(doc3!.save()).rejects.toThrow(/Cannot delete published exam.*WORM immutability enforcement/i);
+    });
+
+    it('rejects tampering or removing sealed files via batchDoc.save()', async () => {
+      const storageService = new ImmutableStorageService();
+      const prof = await User.create({
+        name: 'Prof. Save',
+        email: 'save@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const stored = await storageService.storeOriginal({
+        batchId: 'BATCH-SAVE-HOOK',
+        fileId: 'file-save-1',
+        sequenceNumber: 1,
+        uploader: prof._id.toString(),
+        timestamp: Date.now(),
+        buffer: Buffer.from('Batch File Save Content'),
+        originalFilename: 'save.pdf',
+        fileExtension: 'pdf',
+      });
+
+      const batch = await Batch.create({
+        batchId: 'BATCH-SAVE-HOOK',
+        uploadedBy: prof._id,
+        files: [
+          {
+            fileId: stored.fileId,
+            fileIndex: 0,
+            originalFilename: 'save.pdf',
+            fileType: 'pdf',
+            mimeType: 'application/pdf',
+            size: stored.size,
+            pageCount: 1,
+            storageKey: stored.storageKey,
+            hmac: stored.hmac,
+            keyId: stored.keyId,
+            sequenceNumber: stored.sequenceNumber,
+            integrityMetadata: stored.integrityMetadata,
+          },
+        ],
+        status: BatchStatus.PROCESSING,
+        isActive: true,
+      });
+
+      // 1. Mutate storageKey in memory and save
+      const doc1 = await Batch.findById(batch._id);
+      doc1!.files[0].storageKey = 'tampered-key';
+      doc1!.markModified('files');
+      await expect(doc1!.save()).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+
+      // 2. Pop file in memory and save
+      const doc2 = await Batch.findById(batch._id);
+      doc2!.files.pop();
+      doc2!.markModified('files');
+      await expect(doc2!.save()).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+    });
+  });
+
+  describe('9. Advanced Mutation Bypass Protection (replaceOne, bulkWrite, $unset, $pop, dotted paths)', () => {
+    it('blocks replaceOne, bulkWrite, $unset, and dotted paths on published Exam', async () => {
+      const prof = await User.create({
+        name: 'Prof. Knuth',
+        email: 'knuth@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const course = await Course.create({
+        courseCode: 'CS-TAOCP',
+        courseName: 'Art of Programming',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: prof._id,
+      });
+
+      const exam = await Exam.create({
+        title: 'TAOCP Exam',
+        course: course._id,
+        examDate: new Date(),
+        numberOfQuestions: 1,
+        totalMarks: 100,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+        createdBy: prof._id,
+      });
+
+      // 1. replaceOne with modified marks
+      await expect(
+        Exam.replaceOne(
+          { _id: exam._id },
+          {
+            title: 'TAOCP Exam',
+            course: course._id,
+            examDate: new Date(),
+            numberOfQuestions: 1,
+            totalMarks: 50,
+            status: ExamStatus.PUBLISHED,
+            isActive: true,
+            createdBy: prof._id,
+          }
+        )
+      ).rejects.toThrow(/Cannot update totalMarks.*WORM immutability enforcement/i);
+
+      // 2. bulkWrite deleteOne on published exam
+      await expect(
+        Exam.bulkWrite([{ deleteOne: { filter: { _id: exam._id } } }])
+      ).rejects.toThrow(/Cannot delete published exam.*WORM immutability enforcement/i);
+
+      // 3. bulkWrite updateOne totalMarks on published exam
+      await expect(
+        Exam.bulkWrite([
+          {
+            updateOne: {
+              filter: { _id: exam._id },
+              update: { $set: { totalMarks: 42 } },
+            },
+          },
+        ])
+      ).rejects.toThrow(/Cannot update totalMarks.*WORM immutability enforcement/i);
+
+      // 4. $unset totalMarks
+      await expect(
+        Exam.updateOne({ _id: exam._id }, { $unset: { totalMarks: '' } })
+      ).rejects.toThrow(/Cannot alter course\/totalMarks\/isActive.*WORM immutability enforcement/i);
+
+      // 5. dotted path totalMarks update
+      await expect(
+        Exam.updateOne({ _id: exam._id }, { $set: { 'totalMarks': 88 } })
+      ).rejects.toThrow(/Cannot update totalMarks.*WORM immutability enforcement/i);
+    });
+
+    it('blocks replaceOne, bulkWrite, $unset, $pop, and dotted-path updates on sealed Batch', async () => {
+      const storageService = new ImmutableStorageService();
+      const prof = await User.create({
+        name: 'Prof. Bypass',
+        email: 'bypass@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const stored = await storageService.storeOriginal({
+        batchId: 'BATCH-BYPASS-TEST',
+        fileId: 'file-bypass-1',
+        sequenceNumber: 1,
+        uploader: prof._id.toString(),
+        timestamp: Date.now(),
+        buffer: Buffer.from('Bypass Test Content'),
+        originalFilename: 'bypass.pdf',
+        fileExtension: 'pdf',
+      });
+
+      const batch = await Batch.create({
+        batchId: 'BATCH-BYPASS-TEST',
+        uploadedBy: prof._id,
+        files: [
+          {
+            fileId: stored.fileId,
+            fileIndex: 0,
+            originalFilename: 'bypass.pdf',
+            fileType: 'pdf',
+            mimeType: 'application/pdf',
+            size: stored.size,
+            pageCount: 1,
+            storageKey: stored.storageKey,
+            hmac: stored.hmac,
+            keyId: stored.keyId,
+            sequenceNumber: stored.sequenceNumber,
+            integrityMetadata: stored.integrityMetadata,
+          },
+        ],
+        status: BatchStatus.PROCESSING,
+        isActive: true,
+      });
+
+      // 1. replaceOne without sealed files
+      await expect(
+        Batch.replaceOne(
+          { _id: batch._id },
+          {
+            batchId: 'BATCH-BYPASS-TEST',
+            files: [],
+            status: BatchStatus.DONE,
+            isActive: true,
+          }
+        )
+      ).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+
+      // 2. bulkWrite deleteOne on sealed batch
+      await expect(
+        Batch.bulkWrite([{ deleteOne: { filter: { _id: batch._id } } }])
+      ).rejects.toThrow(/Cannot delete batch.*WORM immutability enforcement/i);
+
+      // 3. bulkWrite $pop on sealed batch
+      await expect(
+        Batch.bulkWrite([
+          {
+            updateOne: {
+              filter: { _id: batch._id },
+              update: { $pop: { files: 1 } },
+            },
+          },
+        ])
+      ).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+
+      // 4. $pop on sealed batch
+      await expect(
+        Batch.updateOne({ _id: batch._id }, { $pop: { files: 1 } })
+      ).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+
+      // 5. $unset on sealed batch files
+      await expect(
+        Batch.updateOne({ _id: batch._id }, { $unset: { files: '' } })
+      ).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+
+      // 6. dotted path update on sealed batch file storageKey
+      await expect(
+        Batch.updateOne({ _id: batch._id }, { $set: { 'files.0.storageKey': 'injected-key' } })
+      ).rejects.toThrow(/Cannot modify sealed files.*WORM immutability enforcement/i);
+    });
+  });
+
+  describe('10. Fail-Closed Integrity Reader on Non-HttpError Lookup Failure', () => {
+    it('readOriginalContent fails closed when database lookup throws an unexpected error', async () => {
+      const storageService = new ImmutableStorageService();
+      const content = Buffer.from('Sealed Content Fail Closed Test', 'utf-8');
+
+      const stored = await storageService.storeOriginal({
+        batchId: 'BATCH-FAIL-CLOSED',
+        fileId: 'file-fc-1',
+        sequenceNumber: 1,
+        uploader: 'prof-fc',
+        timestamp: Date.now(),
+        buffer: content,
+        originalFilename: 'fc.pdf',
+        fileExtension: 'pdf',
+      });
+
+      // Mock Batch.findOne to simulate sudden database connection failure
+      const findOneSpy = vi.spyOn(Batch, 'findOne').mockRejectedValueOnce(
+        new Error('MongoNetworkTimeoutException: lost primary replica')
+      );
+
+      try {
+        await expect(
+          storageService.readOriginalContent(stored.storageKey)
+        ).rejects.toThrow(/Failed to verify sealed original file integrity.*MongoNetworkTimeoutException/i);
+      } finally {
+        findOneSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('11. Verification of Test-Bypass Removal (NODE_ENV === test removed)', () => {
+    it('blocks empty-filter deleteMany({}) on published exams when bypassWorm is not passed', async () => {
+      const prof = await User.create({
+        name: 'Prof. Lovelace',
+        email: 'lovelace@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const course = await Course.create({
+        courseCode: 'CS-ADA',
+        courseName: 'Ada Programming',
+        semester: 1,
+        academicYear: '2026-2027',
+        professor: prof._id,
+      });
+
+      const publishedExam = await Exam.create({
+        title: 'Ada Published Test',
+        course: course._id,
+        examDate: new Date(),
+        numberOfQuestions: 2,
+        totalMarks: 40,
+        status: ExamStatus.PUBLISHED,
+        isActive: true,
+        createdBy: prof._id,
+      });
+
+      // Calling deleteMany({}) without bypassWorm must fail even in test environment
+      await expect(Exam.deleteMany({})).rejects.toThrow(
+        /Cannot delete published exam "Ada Published Test" \(WORM immutability enforcement\)/i
+      );
+
+      // Calling deleteMany with explicit { bypassWorm: true } succeeds for teardown
+      await Exam.deleteMany({}, { bypassWorm: true });
+      const remaining = await Exam.findById(publishedExam._id);
+      expect(remaining).toBeNull();
+    });
+
+    it('blocks empty-filter deleteMany({}) on sealed batches when bypassWorm is not passed', async () => {
+      const storageService = new ImmutableStorageService();
+      const prof = await User.create({
+        name: 'Prof. EmptyDel',
+        email: 'emptydel@test.edu',
+        password: 'Pass',
+        role: UserRole.PROFESSOR,
+      });
+
+      const stored = await storageService.storeOriginal({
+        batchId: 'BATCH-EMPTY-DEL',
+        fileId: 'file-ed-1',
+        sequenceNumber: 1,
+        uploader: prof._id.toString(),
+        timestamp: Date.now(),
+        buffer: Buffer.from('Batch Empty Del Content'),
+        originalFilename: 'ed.pdf',
+        fileExtension: 'pdf',
+      });
+
+      const batch = await Batch.create({
+        batchId: 'BATCH-EMPTY-DEL',
+        uploadedBy: prof._id,
+        files: [
+          {
+            fileId: stored.fileId,
+            fileIndex: 0,
+            originalFilename: 'ed.pdf',
+            fileType: 'pdf',
+            mimeType: 'application/pdf',
+            size: stored.size,
+            pageCount: 1,
+            storageKey: stored.storageKey,
+            hmac: stored.hmac,
+            keyId: stored.keyId,
+            sequenceNumber: stored.sequenceNumber,
+            integrityMetadata: stored.integrityMetadata,
+          },
+        ],
+        status: BatchStatus.PROCESSING,
+        isActive: true,
+      });
+
+      // Calling deleteMany({}) without bypassWorm must fail even in test environment
+      await expect(Batch.deleteMany({})).rejects.toThrow(
+        /Cannot delete batch "BATCH-EMPTY-DEL" containing sealed original files \(WORM immutability enforcement\)/i
+      );
+
+      // Calling deleteMany with explicit { bypassWorm: true } succeeds for teardown
+      await Batch.deleteMany({}, { bypassWorm: true });
+      const remaining = await Batch.findById(batch._id);
+      expect(remaining).toBeNull();
     });
   });
 });

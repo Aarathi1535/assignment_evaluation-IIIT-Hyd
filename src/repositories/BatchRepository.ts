@@ -2,6 +2,7 @@ import Batch, { IBatch, IBatchFile } from '../models/Batch';
 import IngestionJob, { IIngestionJob, IngestionStatus } from '../models/IngestionJob';
 import mongoose, { QueryFilter } from 'mongoose';
 import { SYSTEM_ROLE } from '../constants/permissions';
+import { HttpError } from '../lib/errors';
 
 class BatchRepository {
     async createBatch(data: Partial<IBatch>): Promise<IBatch> {
@@ -80,6 +81,18 @@ class BatchRepository {
         const query = this.buildBatchQuery(id, actingUserId, actingUserRole);
         if (!query) {
             return null;
+        }
+        const existing = await Batch.findOne(query);
+        if (existing && existing.files && existing.files.some(f => Boolean(f.hmac))) {
+            if (data.files) {
+                const existingSealed = (existing.files || []).filter(f => Boolean(f.hmac));
+                for (const sf of existingSealed) {
+                    const matching = (data.files as IBatchFile[]).find(f => f.fileId === sf.fileId);
+                    if (!matching || matching.storageKey !== sf.storageKey || matching.hmac !== sf.hmac) {
+                        throw new HttpError(`Cannot modify sealed files in batch "${existing.batchId}" (WORM immutability enforcement)`, 400);
+                    }
+                }
+            }
         }
         return await Batch.findOneAndUpdate(
             query,

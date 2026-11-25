@@ -190,6 +190,9 @@ BatchSchema.index({ uploadedBy: 1, createdAt: -1 });
 /**
  * WORM Immutability Hooks:
  * Protect sealed original scan batches and their file records from deletion or modification.
+ * Covers: deleteOne, deleteMany, findOneAndDelete, updateOne, updateMany,
+ * findOneAndUpdate, replaceOne, findOneAndReplace, bulkWrite, save,
+ * $unset, $pop, $pull, $push, and dotted-path updates on files.
  */
 BatchSchema.pre(['deleteOne', 'deleteMany', 'findOneAndDelete'], async function () {
     const options = this.getOptions();
@@ -197,10 +200,6 @@ BatchSchema.pre(['deleteOne', 'deleteMany', 'findOneAndDelete'], async function 
         return;
     }
     const filter = this.getFilter();
-    // Allow teardown/clearing collection during automated test runs when empty filter is passed
-    if (process.env.NODE_ENV === 'test' && (!filter || Object.keys(filter).length === 0)) {
-        return;
-    }
     const existingBatches = await (this.model as Model<IBatch>).find(filter);
     for (const batch of existingBatches) {
         if (batch.files && batch.files.some(f => Boolean(f.hmac))) {
@@ -216,7 +215,7 @@ BatchSchema.pre('deleteOne', { document: true, query: false }, function () {
     }
 });
 
-BatchSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], async function () {
+BatchSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace'], async function () {
     const options = this.getOptions();
     if (options && (options as Record<string, unknown>).bypassWorm) {
         return;
@@ -231,15 +230,114 @@ BatchSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], async function 
                 const set = (update.$set || update) as Record<string, unknown>;
                 const pull = update.$pull as Record<string, unknown> | undefined;
                 const push = update.$push as Record<string, unknown> | undefined;
-                if (pull?.files || push?.files) {
+                const pop = update.$pop as Record<string, unknown> | undefined;
+                const unset = update.$unset as Record<string, unknown> | undefined;
+
+                if (pull?.files || push?.files || pop?.files || unset?.files) {
                     throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
                 }
+
+                // Check $unset, $pop, $pull for any dotted path touching files
+                const mutatingOps = [unset, pop, pull];
+                for (const op of mutatingOps) {
+                    if (op) {
+                        for (const key of Object.keys(op)) {
+                            if (key === 'files' || key.startsWith('files.') || key.startsWith('files[')) {
+                                throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                            }
+                        }
+                    }
+                }
+
+                // Check dotted paths in set / root update (e.g. files.0.storageKey)
+                for (const key of Object.keys(set)) {
+                    if (key.startsWith('files.') || key.startsWith('files[')) {
+                        throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                    }
+                }
+
                 if (set.files && Array.isArray(set.files)) {
                     const existingSealed = (batch.files || []).filter(f => Boolean(f.hmac));
                     for (const sf of existingSealed) {
                         const matching = (set.files as IBatchFile[]).find(f => f.fileId === sf.fileId);
                         if (!matching || matching.storageKey !== sf.storageKey || matching.hmac !== sf.hmac) {
                             throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                        }
+                    }
+                }
+            }
+        }
+    }
+});
+
+BatchSchema.pre('save', async function () {
+    if (!this.isNew) {
+        const existing = await (this.constructor as Model<IBatch>).findById(this._id);
+        if (existing && existing.files && existing.files.some(f => Boolean(f.hmac))) {
+            if (this.isModified('files')) {
+                const existingSealed = existing.files.filter(f => Boolean(f.hmac));
+                for (const sf of existingSealed) {
+                    const matching = (this.files || []).find(f => f.fileId === sf.fileId);
+                    if (!matching || matching.storageKey !== sf.storageKey || matching.hmac !== sf.hmac) {
+                        throw new Error(`Cannot modify sealed files in batch "${this.batchId}" (WORM immutability enforcement)`);
+                    }
+                }
+            }
+        }
+    }
+});
+
+BatchSchema.pre('bulkWrite', async function (ops: Array<Record<string, Record<string, unknown>>>) {
+    if (!Array.isArray(ops)) return;
+    const model = this as unknown as Model<IBatch>;
+    for (const op of ops) {
+        if (op.deleteOne || op.deleteMany) {
+            const filter = (op.deleteOne || op.deleteMany).filter as QueryFilter<IBatch>;
+            const existingBatches = await model.find(filter);
+            for (const batch of existingBatches) {
+                if (batch.files && batch.files.some((f: IBatchFile) => Boolean(f.hmac))) {
+                    throw new Error(`Cannot delete batch "${batch.batchId}" containing sealed original files (WORM immutability enforcement)`);
+                }
+            }
+        }
+        if (op.updateOne || op.updateMany || op.replaceOne) {
+            const action = op.updateOne || op.updateMany || op.replaceOne;
+            const filter = action.filter as QueryFilter<IBatch>;
+            const update = (action.update || action.replacement) as Record<string, unknown> | null;
+            const existingBatches = await model.find(filter);
+            for (const batch of existingBatches) {
+                const hasSealedFiles = batch.files && batch.files.some((f: IBatchFile) => Boolean(f.hmac));
+                if (hasSealedFiles && update) {
+                    const set = (update.$set || update) as Record<string, unknown>;
+                    const pull = update.$pull as Record<string, unknown> | undefined;
+                    const push = update.$push as Record<string, unknown> | undefined;
+                    const pop = update.$pop as Record<string, unknown> | undefined;
+                    const unset = update.$unset as Record<string, unknown> | undefined;
+                    if (pull?.files || push?.files || pop?.files || unset?.files) {
+                        throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                    }
+                    const mutatingOps = [unset, pop, pull];
+                    for (const o of mutatingOps) {
+                        if (o) {
+                            for (const key of Object.keys(o)) {
+                                if (key === 'files' || key.startsWith('files.') || key.startsWith('files[')) {
+                                    throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                                }
+                            }
+                        }
+                    }
+                    for (const key of Object.keys(set)) {
+                        if (key.startsWith('files.') || key.startsWith('files[')) {
+                            throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                        }
+                    }
+                    if (set.files && Array.isArray(set.files)) {
+                        const existingSealed = (batch.files || []).filter((f: IBatchFile) => Boolean(f.hmac));
+                        for (const sf of existingSealed) {
+                            const matching = (set.files as IBatchFile[]).find(f => f.fileId === sf.fileId);
+                            if (!matching || matching.storageKey !== sf.storageKey || matching.hmac !== sf.hmac) {
+                                throw new Error(`Cannot modify sealed files in batch "${batch.batchId}" (WORM immutability enforcement)`);
+                            }
                         }
                     }
                 }

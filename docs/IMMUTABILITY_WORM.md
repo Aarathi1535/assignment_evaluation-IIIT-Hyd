@@ -22,35 +22,41 @@ This document specifies the **Write-Once-Read-Many (WORM)** architecture, Mongoo
 
 | Dimension | Application-Level WORM (Enforced in Code) | Infrastructure-Level WORM (Cloud Compliance) |
 | :--- | :--- | :--- |
-| **Enforcement Mechanism** | `ImmutableStorageService` (POSIX `wx` / GCS `ifGenerationMatch: 0`) + Mongoose schema pre-hooks | GCS Bucket Lock / AWS S3 Object Lock (Compliance Mode) |
+| **Enforcement Mechanism** | `ImmutableStorageService` (POSIX `wx` / GCS `ifGenerationMatch: 0`) + Central Repositories (`ExamRepository`, `BatchRepository`) + Mongoose Schema Hooks (`pre('save')`, `pre('bulkWrite')`, query hooks) | GCS Bucket Lock / AWS S3 Object Lock (Compliance Mode) |
 | **Overwrite Protection** | Throws HTTP `409 Conflict` if target file or object exists | Cloud storage API rejects overwrite regardless of credentials |
-| **Deletion Protection** | Pre-delete hooks block deletion of sealed `Batch` and published `Exam` records | Cloud rejects object/bucket deletion until retention period expires (even by root/owner) |
-| **File Mutation Protection** | Pre-update hooks block modification of sealed files in `Batch` or course/marks on published `Exam` | Underlying cloud objects cannot be modified or replaced |
-| **Tamper Detection on Read** | Cryptographic HMAC-SHA256 seal verified on **every read** (`readOriginalContent`, `readOriginal`) | Storage backend immutability + client-side integrity validation |
+| **Deletion Protection** | Pre-delete hooks and repository/service guards block both hard deletion (`deleteOne`, `deleteMany`, `findOneAndDelete`, `bulkWrite`) and soft deletion (`isActive: false` via API, `save()`, or update queries) for sealed `Batch` and published `Exam` records | Cloud rejects object/bucket deletion until retention period expires (even by root/owner) |
+| **Mutation Protection** | Pre-update, `save()`, `replaceOne`, `findOneAndReplace`, and `bulkWrite` hooks reject modification of sealed files in `Batch` ($unset, $pop, $pull, dotted paths like `files.0.storageKey`) and core parameters/isActive on published `Exam` | Underlying cloud objects cannot be modified or replaced |
+| **Tamper Detection on Read** | Cryptographic HMAC-SHA256 seal verified on **every read** (`readOriginalContent`, `readOriginal`) with fail-closed enforcement on lookup failures | Storage backend immutability + client-side integrity validation |
 | **Audit on Tampering** | Emits `INTEGRITY_MISMATCH` audit event with caller and file details | Cloud Audit Logs / S3 Server Access Logs record unauthorized API attempts |
 | **Privileged Bypass Risk (Gap)** | **Vulnerable** to direct MongoDB shell commands or direct OS filesystem manipulation | **Immune**; cloud compliance locks cannot be bypassed or shortened even by project owners |
-| **Current Platform Status** | **Fully Enforced in Code & Verified in CI** | **Architecture Config Option (Requires Cloud Bucket Retention Policy)** |
+| **Current Platform Status** | **Enforced in Code & Verified in CI (Full mutation & soft-deletion guards; fail-closed reader; no test-env bypasses)** | **Architecture Config Option (Requires Cloud Bucket Retention Policy)** |
 
 ---
 
-## 3. Model-Level WORM Immutability Hooks
+## 3. Model-Level & Repository WORM Immutability Hooks
 
-To prevent application-level tampering or accidental deletion through admin interfaces or scripts, the platform implements pre-execution hooks in Mongoose:
+To prevent application-level tampering or accidental deletion through admin interfaces, direct document updates, or scripts, the platform implements comprehensive pre-execution hooks in Mongoose and validation in central repositories:
 
 ### 3.1 Batch Model Hooks (`src/models/Batch.ts`)
-1. **Deletion Guard (`deleteOne`, `deleteMany`, `findOneAndDelete`):**
+1. **Deletion Guard (`deleteOne`, `deleteMany`, `findOneAndDelete`, `bulkWrite`):**
    - Inspects target batches. If any batch contains sealed files (records with an `hmac` seal), deletion is blocked with:
      `Cannot delete batch "<batchId>" containing sealed original files (WORM immutability enforcement)`
-2. **File Modification Guard (`updateOne`, `updateMany`, `findOneAndUpdate`):**
-   - Blocks any update query attempting to `$set`, `$pull`, or `$push` the `files` array of a sealed batch, preserving original scan references.
+   - No `NODE_ENV === 'test'` bypass exists; automated test teardown uses explicit driver-level collection clearing or sanctioned bypass options.
+2. **File Mutation Guard (`updateOne`, `updateMany`, `findOneAndUpdate`, `replaceOne`, `findOneAndReplace`, `bulkWrite`, `save`):**
+   - Blocks any mutation attempting to `$set`, `$pull`, `$push`, `$pop`, or `$unset` the `files` array of a sealed batch.
+   - Detects and blocks dotted-path mutations such as `files.0.storageKey` or index-based property overrides.
+   - Enforces `save()` document middleware preventing in-memory modification of sealed files.
 
 ### 3.2 Exam Model Hooks (`src/models/Exam.ts`)
-1. **Deletion Guard (`deleteOne`, `deleteMany`, `findOneAndDelete`):**
+1. **Deletion Guard (`deleteOne`, `deleteMany`, `findOneAndDelete`, `bulkWrite`):**
    - If an exam has status `PUBLISHED`, deletion is rejected with:
      `Cannot delete published exam "<title>" (WORM immutability enforcement)`
-2. **Core Parameter Guard (`updateOne`, `updateMany`, `findOneAndUpdate`):**
-   - For published exams, alterations to `course` (preventing tenancy kidnapping) or `totalMarks` (preventing grade corruption) are rejected with:
-     `Cannot alter course/totalMarks of published exam "<title>" (WORM immutability enforcement)`
+2. **Soft Deletion & Core Parameter Guard (`updateOne`, `updateMany`, `findOneAndUpdate`, `replaceOne`, `findOneAndReplace`, `bulkWrite`, `save`):**
+   - For published exams, alterations to `course` (preventing tenancy kidnapping), `totalMarks` (preventing grade corruption), or `isActive: false` (preventing soft deletion) are rejected with:
+     `Cannot alter course/totalMarks/isActive of published exam "<title>" (WORM immutability enforcement)`
+   - Document-level `pre('save')` hook blocks property reassignments and status/activity tampering.
+3. **Repository & Service Layer Enforcement (`ExamRepository`, `ExamService`):**
+   - `ExamRepository.deleteExam` and `ExamService.deleteExam` check publication status and throw HTTP `400` WORM error before performing soft-deletion.
 
 ---
 
