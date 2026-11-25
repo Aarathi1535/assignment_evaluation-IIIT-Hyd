@@ -9,6 +9,7 @@ export interface IStudentMapping extends Document {
     ltiSub?: string | null;
     isVerified: boolean;
     verifiedBy?: mongoose.Types.ObjectId;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -52,6 +53,11 @@ const StudentMappingSchema = new Schema<IStudentMapping>(
         verifiedBy: {
             type: Schema.Types.ObjectId,
             ref: 'User'
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         }
     },
     {

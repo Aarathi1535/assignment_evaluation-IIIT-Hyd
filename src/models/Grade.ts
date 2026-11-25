@@ -16,6 +16,7 @@ export interface IGrade extends Document {
     tagIds?: mongoose.Types.ObjectId[];
     isFinal: boolean;
     question?: number;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -80,6 +81,11 @@ const GradeSchema = new Schema<IGrade>(
         question: {
             type: Number,
             required: false,
+            index: true
+        },
+        demo: {
+            type: Boolean,
+            default: false,
             index: true
         }
     },

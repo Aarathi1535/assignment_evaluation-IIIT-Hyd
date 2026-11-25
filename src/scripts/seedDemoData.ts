@@ -42,6 +42,21 @@ export interface SeedDemoResult {
 }
 
 /**
+ * Validates whether the target storage bucket is permitted for demo data generation.
+ * If DERIVED_PAGE_STORAGE_BUCKET is configured, it must be explicitly a demo bucket
+ * (contains "demo" or matches DEMO_STORAGE_BUCKET).
+ */
+export function isStorageBucketAllowed(bucketName?: string): boolean {
+    if (!bucketName || !bucketName.trim()) return true;
+    const lower = bucketName.trim().toLowerCase();
+    const demoStorageBucket = process.env.DEMO_STORAGE_BUCKET?.toLowerCase().trim();
+    if (demoStorageBucket && lower === demoStorageBucket) {
+        return true;
+    }
+    return lower.includes('demo');
+}
+
+/**
  * Validates whether the target MongoDB host is permitted for demo data generation.
  * Only local development/test hosts or explicitly configured demo clusters are allowed.
  * Reject malformed URIs, unknown hosts, and substring matches.
@@ -140,6 +155,13 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
         );
     }
 
+    const storageBucket = process.env.DERIVED_PAGE_STORAGE_BUCKET;
+    if (storageBucket && !isStorageBucketAllowed(storageBucket)) {
+        throw new Error(
+            `Demo data generation is forbidden on non-demo storage buckets. Refusing to operate on bucket "${storageBucket}" outside demo allowlist.`
+        );
+    }
+
     const { connectDB } = await import('../lib/db');
     await connectDB();
 
@@ -163,35 +185,97 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
 
     // 2. Safe selective clean: ONLY delete records tagged by demo identifiers
     if (options.cleanFirst) {
-        const demoCourses = await Course.find({ courseCode: /^DEMO-/ }).select('_id');
+        const demoCourses = await Course.find({
+            $or: [{ demo: true }, { courseCode: /^DEMO-/ }]
+        }).select('_id');
         const demoCourseIds = demoCourses.map(c => c._id);
 
         const demoExams = await Exam.find({
-            course: { $in: demoCourseIds }
+            $or: [{ demo: true }, { course: { $in: demoCourseIds } }]
         }).select('_id');
         const demoExamIds = demoExams.map(e => e._id);
 
-        const demoRubrics = await Rubric.find({ exam: { $in: demoExamIds } }).select('_id');
+        const demoRubrics = await Rubric.find({
+            $or: [{ demo: true }, { exam: { $in: demoExamIds } }]
+        }).select('_id');
         const demoRubricIds = demoRubrics.map(r => r._id);
 
         const demoScripts = await AnswerScript.find({
-            exam: { $in: demoExamIds }
-        }).select('_id');
+            $or: [
+                { demo: true },
+                { exam: { $in: demoExamIds } },
+                { batchId: /^DEMO-BATCH/ }
+            ]
+        }).select('_id batchId');
         const demoScriptIds = demoScripts.map(s => s._id);
 
+        // Delete corresponding demo images from storage via DerivedStorageService.cleanupDerivedBatch(batchId)
+        const demoBatchIds = new Set<string>();
+        for (const script of demoScripts) {
+            if (script.batchId) {
+                demoBatchIds.add(script.batchId);
+            }
+        }
+        for (const batchId of demoBatchIds) {
+            await defaultDerivedStorageService.cleanupDerivedBatch(batchId);
+        }
+
         await Grade.deleteMany({
-            $or: [{ answerScript: { $in: demoScriptIds } }, { rubric: { $in: demoRubricIds } }]
+            $or: [
+                { demo: true },
+                { answerScript: { $in: demoScriptIds } },
+                { rubric: { $in: demoRubricIds } }
+            ]
         });
         await Allocation.deleteMany({
-            $or: [{ exam: { $in: demoExamIds } }, { answerScript: { $in: demoScriptIds } }]
+            $or: [
+                { demo: true },
+                { exam: { $in: demoExamIds } },
+                { answerScript: { $in: demoScriptIds } }
+            ]
         });
-        await Page.deleteMany({ answerScript: { $in: demoScriptIds } });
-        await AnswerScript.deleteMany({ _id: { $in: demoScriptIds } });
-        await StudentMapping.deleteMany({ exam: { $in: demoExamIds } });
-        await Rubric.deleteMany({ _id: { $in: demoRubricIds } });
-        await Exam.deleteMany({ _id: { $in: demoExamIds } });
-        await Course.deleteMany({ _id: { $in: demoCourseIds } });
-        await User.deleteMany({ email: /\.demo@university\.edu$/ });
+        await Page.deleteMany({
+            $or: [
+                { demo: true },
+                { answerScript: { $in: demoScriptIds } }
+            ]
+        });
+        await AnswerScript.deleteMany({
+            $or: [
+                { demo: true },
+                { _id: { $in: demoScriptIds } }
+            ]
+        });
+        await StudentMapping.deleteMany({
+            $or: [
+                { demo: true },
+                { exam: { $in: demoExamIds } }
+            ]
+        });
+        await Rubric.deleteMany({
+            $or: [
+                { demo: true },
+                { _id: { $in: demoRubricIds } }
+            ]
+        });
+        await Exam.deleteMany({
+            $or: [
+                { demo: true },
+                { _id: { $in: demoExamIds } }
+            ]
+        });
+        await Course.deleteMany({
+            $or: [
+                { demo: true },
+                { _id: { $in: demoCourseIds } }
+            ]
+        });
+        await User.deleteMany({
+            $or: [
+                { demo: true },
+                { email: /\.demo@university\.edu$/ }
+            ]
+        });
     }
 
     // 3. Dynamic or configured password
@@ -207,9 +291,10 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
             password: passwordHash,
             role: UserRole.PROFESSOR,
             isActive: true,
+            demo: true,
         });
     } else {
-        await User.updateOne({ _id: prof._id }, { $set: { password: passwordHash, isActive: true } });
+        await User.updateOne({ _id: prof._id }, { $set: { password: passwordHash, isActive: true, demo: true } });
     }
 
     // 5. Ensure / Upsert TAs
@@ -224,9 +309,10 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 password: passwordHash,
                 role: UserRole.TA,
                 isActive: true,
+                demo: true,
             });
         } else {
-            await User.updateOne({ _id: ta._id }, { $set: { password: passwordHash, isActive: true } });
+            await User.updateOne({ _id: ta._id }, { $set: { password: passwordHash, isActive: true, demo: true } });
         }
         taUsers.push(ta);
     }
@@ -243,9 +329,10 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 password: passwordHash,
                 role: UserRole.STUDENT,
                 isActive: true,
+                demo: true,
             });
         } else {
-            await User.updateOne({ _id: student._id }, { $set: { password: passwordHash, isActive: true } });
+            await User.updateOne({ _id: student._id }, { $set: { password: passwordHash, isActive: true, demo: true } });
         }
         studentUsers.push(student);
     }
@@ -271,6 +358,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 enrolledStudents: studentUsers.map(s => s._id),
                 teachingAssistants: taUsers.map(t => t._id),
                 isActive: true,
+                demo: true,
             });
         } else {
             await Course.updateOne(
@@ -281,6 +369,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                         enrolledStudents: studentUsers.map(s => s._id),
                         teachingAssistants: taUsers.map(t => t._id),
                         isActive: true,
+                        demo: true,
                     },
                 }
             );
@@ -304,6 +393,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                     regradeWindowOpensAt: new Date(Date.now() - 3600000),
                     regradeWindowClosesAt: new Date(Date.now() + 86400000),
                     isActive: true,
+                    demo: true,
                 });
             } else {
                 await Exam.updateOne(
@@ -314,6 +404,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                             totalMarks: questionsCount * 10,
                             enrolledStudents: studentUsers.map(s => s._id),
                             isActive: true,
+                            demo: true,
                         },
                     }
                 );
@@ -342,11 +433,12 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                     scoreStep: 0.5,
                     questions: rubricQuestions,
                     isActive: true,
+                    demo: true,
                 });
             } else {
                 await Rubric.updateOne(
                     { _id: rubric._id },
-                    { $set: { questions: rubricQuestions, isActive: true } }
+                    { $set: { questions: rubricQuestions, isActive: true, demo: true } }
                 );
             }
 
@@ -363,6 +455,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                             anonymousId: `ANON-${sIdx + 1}`,
                             rollNumber,
                             isVerified: true,
+                            demo: true,
                         },
                     },
                     { upsert: true, new: true }
@@ -384,6 +477,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                         filename: `${rollNumber}_exam.pdf`,
                         pageCount: pagesPerScript,
                         isActive: true,
+                        demo: true,
                     });
                 } else {
                     await AnswerScript.updateOne(
@@ -397,6 +491,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                                 filename: `${rollNumber}_exam.pdf`,
                                 pageCount: pagesPerScript,
                                 isActive: true,
+                                demo: true,
                             },
                         }
                     );
@@ -422,6 +517,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                                 width: 800,
                                 height: 1000,
                                 isActive: true,
+                                demo: true,
                             },
                         },
                         { upsert: true, new: true }
@@ -431,6 +527,8 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
 
                 // Allocate script to TA round-robin
                 const assignedTa = taUsers[sIdx % taUsers.length];
+                const allocationStatus = withGrades ? AllocationStatus.COMPLETED : AllocationStatus.IN_PROGRESS;
+                const completedAt = withGrades ? new Date() : undefined;
                 let allocation: any = await Allocation.findOne({
                     exam: exam._id,
                     ta: assignedTa._id,
@@ -441,15 +539,24 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                         exam: exam._id,
                         ta: assignedTa._id,
                         allocatedBy: prof._id,
-                        status: AllocationStatus.IN_PROGRESS,
+                        status: allocationStatus,
                         rule: AllocationRule.EQUAL,
                         answerScript: script._id,
                         claimedAt: new Date(),
+                        completedAt,
+                        demo: true,
                     });
                 } else {
                     await Allocation.updateOne(
                         { _id: allocation._id },
-                        { $set: { status: AllocationStatus.IN_PROGRESS, claimedAt: new Date() } }
+                        {
+                            $set: {
+                                status: allocationStatus,
+                                claimedAt: new Date(),
+                                completedAt,
+                                demo: true,
+                            }
+                        }
                     );
                 }
                 createdAllocationIds.push(allocation._id.toString());
@@ -471,6 +578,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                                     totalScore: score1 + score2,
                                     feedback: `Demo evaluation for Q${q}`,
                                     isFinal: true,
+                                    demo: true,
                                 },
                             },
                             { upsert: true, new: true }

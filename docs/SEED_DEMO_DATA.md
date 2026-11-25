@@ -17,10 +17,11 @@ It creates:
 
 ## Safety Guards & Host Allowlist
 
-The generator strictly forbids execution in production and requires the target MongoDB database host to be in an allowlist:
+The generator strictly forbids execution in production and requires the target MongoDB database host and storage bucket to be in an allowlist:
 1. **Production Guard:** Blocked if `NODE_ENV === 'production'`.
-2. **Database Host Allowlist:** Only allows connections to `localhost`, `127.0.0.1`, `::1`, in-memory test databases (`mongodb-memory-server`), or explicit demo clusters (`DEMO_CLUSTER_HOST`).
-3. **Safe Scoped Cleaning:** When running with `--clean`, only records tagged by demo keys (`courseCode: /^DEMO-/`, demo exams, demo scripts, demo rubrics, and demo users) are deleted. Real exams, scripts, and grades are strictly preserved.
+2. **Database Host Allowlist:** Only allows connections to `localhost`, `127.0.0.1`, `::1`, or in-memory test databases (`mongodb-memory-server`). Connecting to an external cluster requires an explicit opt-in via the `DEMO_CLUSTER_HOST` environment variable matching the cluster hostname exactly; generic substring matches or unconfigured hosts containing "demo" are strictly rejected.
+3. **Derived Storage Bucket Guard:** When `DERIVED_PAGE_STORAGE_BUCKET` is configured, the generator refuses to operate unless the target bucket is explicitly a demo bucket (bucket name contains `demo` or matches `DEMO_STORAGE_BUCKET`).
+4. **Safe Scoped Cleaning:** When running with `--clean`, records tagged with `demo: true` (as well as linked demo entities) are deleted. In addition, all corresponding demo images are removed from storage via `DerivedStorageService.cleanupDerivedBatch(batchId)`. Real courses, exams, scripts, and grades are strictly preserved.
 
 ---
 
@@ -43,6 +44,7 @@ npx tsx src/scripts/seedDemoData.ts --clean --students=10 --tas=3
 
 Passwords are no longer hardcoded:
 - A unique random password is generated per run (or configured via the `DEMO_PASSWORD` environment variable) and printed upon completion.
+- **Demo Passwords Reset on Each Run:** Every time the seed script executes (with or without `--clean`), all demo users' passwords are reset to the newly generated password (or `DEMO_PASSWORD`). Always use the credentials printed in the latest run summary.
 - Example login credentials:
   - **Professor:** `prof.demo@university.edu`
   - **Teaching Assistant 1:** `ta1.demo@university.edu`

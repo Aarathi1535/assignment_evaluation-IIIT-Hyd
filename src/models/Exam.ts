@@ -84,6 +84,7 @@ export interface IExam extends Document {
     regradeWindowClosesAt?: Date | null;
     published_by?: mongoose.Types.ObjectId | null;
     published_at?: Date | null;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -175,6 +176,11 @@ const ExamSchema = new Schema<IExam>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         },
         ingestionApprovalStatus: {
             type: String,

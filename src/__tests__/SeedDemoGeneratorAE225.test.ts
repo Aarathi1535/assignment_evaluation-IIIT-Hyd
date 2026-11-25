@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
-import { seedDemoData, isDatabaseHostAllowed } from '../scripts/seedDemoData';
+import { seedDemoData, isDatabaseHostAllowed, isStorageBucketAllowed } from '../scripts/seedDemoData';
 import defaultDerivedStorageService from '../services/DerivedStorageService';
 import User, { UserRole } from '../models/User';
 import Course from '../models/Course';
@@ -73,6 +73,43 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
         expect(isDatabaseHostAllowed(undefined)).toBe(false);
     });
 
+    it('protects derived storage bucket and refuses non-demo buckets', async () => {
+        expect(isStorageBucketAllowed(undefined)).toBe(true);
+        expect(isStorageBucketAllowed('')).toBe(true);
+        expect(isStorageBucketAllowed(' ')).toBe(true);
+        expect(isStorageBucketAllowed('demo-pages-bucket')).toBe(true);
+        expect(isStorageBucketAllowed('eval-DEMO-storage')).toBe(true);
+        expect(isStorageBucketAllowed('production-eval-bucket')).toBe(false);
+        expect(isStorageBucketAllowed('customer-assets-live')).toBe(false);
+
+        const originalDemoBucket = process.env.DEMO_STORAGE_BUCKET;
+        try {
+            process.env.DEMO_STORAGE_BUCKET = 'custom-evaluation-target';
+            expect(isStorageBucketAllowed('custom-evaluation-target')).toBe(true);
+            expect(isStorageBucketAllowed('other-live-target')).toBe(false);
+        } finally {
+            if (originalDemoBucket !== undefined) {
+                process.env.DEMO_STORAGE_BUCKET = originalDemoBucket;
+            } else {
+                delete process.env.DEMO_STORAGE_BUCKET;
+            }
+        }
+
+        const originalBucket = process.env.DERIVED_PAGE_STORAGE_BUCKET;
+        try {
+            process.env.DERIVED_PAGE_STORAGE_BUCKET = 'prod-eval-bucket';
+            await expect(seedDemoData({ studentsCount: 1 })).rejects.toThrow(
+                /non-demo storage buckets/i
+            );
+        } finally {
+            if (originalBucket !== undefined) {
+                process.env.DERIVED_PAGE_STORAGE_BUCKET = originalBucket;
+            } else {
+                delete process.env.DERIVED_PAGE_STORAGE_BUCKET;
+            }
+        }
+    });
+
     it('generates complete demonstration environment with valid referential integrity, pages, and dynamic credentials', async () => {
         const result = await seedDemoData({
             coursesCount: 1,
@@ -97,15 +134,18 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
         // Verify referential integrity in MongoDB
         const course = await Course.findById(result.courseIds[0]);
         expect(course).not.toBeNull();
+        expect(course?.demo).toBe(true);
         expect(course?.enrolledStudents?.length).toBe(3);
         expect(course?.teachingAssistants?.length).toBe(2);
 
         const exam = await Exam.findById(result.examIds[0]);
         expect(exam).not.toBeNull();
+        expect(exam?.demo).toBe(true);
         expect(exam?.numberOfQuestions).toBe(2);
 
         const rubric = await Rubric.findOne({ exam: exam?._id });
         expect(rubric).not.toBeNull();
+        expect(rubric?.demo).toBe(true);
         expect(rubric?.questions.length).toBe(2);
 
         // Verify allocations
@@ -114,12 +154,16 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
         for (const alloc of allocations) {
             expect(result.taIds).toContain(alloc.ta.toString());
             expect(result.scriptIds).toContain(alloc.answerScript.toString());
+            expect(alloc.demo).toBe(true);
+            expect(alloc.status).toBe(AllocationStatus.COMPLETED);
+            expect(alloc.completedAt).toBeDefined();
         }
 
         // Verify pages and derived image storage
         const pages = await Page.find({ answerScript: { $in: result.scriptIds } });
         expect(pages.length).toBe(6);
         for (const page of pages) {
+            expect(page.demo).toBe(true);
             expect(page.imagePath).toBeDefined();
             expect(page.imagePath.length).toBeGreaterThan(0);
             expect(page.width).toBe(800);
@@ -140,14 +184,34 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
         const grades = await Grade.find({ rubric: rubric?._id });
         expect(grades.length).toBe(6);
         for (const grade of grades) {
+            expect(grade.demo).toBe(true);
             expect(grade.isFinal).toBe(true);
             expect(grade.totalScore).toBeGreaterThan(0);
         }
 
         // Verify password hash against the returned generated password
         const prof = await User.findById(course?.professor);
+        expect(prof?.demo).toBe(true);
         const matches = await bcrypt.compare(result.generatedPassword!, prof!.password!);
         expect(matches).toBe(true);
+    });
+
+    it('sets allocation status to IN_PROGRESS when withGrades is false', async () => {
+        const result = await seedDemoData({
+            coursesCount: 1,
+            examsPerCourse: 1,
+            studentsCount: 2,
+            tasCount: 1,
+            withGrades: false,
+        });
+
+        const allocations = await Allocation.find({ exam: { $in: result.examIds } });
+        expect(allocations.length).toBe(2);
+        for (const alloc of allocations) {
+            expect(alloc.status).toBe(AllocationStatus.IN_PROGRESS);
+            expect(alloc.completedAt).toBeUndefined();
+        }
+        expect(await Grade.countDocuments({ answerScript: { $in: result.scriptIds } })).toBe(0);
     });
 
     it('--clean deletes ONLY demo records without touching real production or non-demo exams', async () => {
@@ -262,6 +326,34 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
 
         // Assert demo course also exists
         expect(await Course.countDocuments({ courseCode: /^DEMO-/ })).toBe(1);
+    });
+
+    it('--clean invokes cleanupDerivedBatch on DerivedStorageService to remove demo images', async () => {
+        // Seed initial data
+        await seedDemoData({
+            coursesCount: 1,
+            examsPerCourse: 1,
+            studentsCount: 2,
+            tasCount: 1,
+            cleanFirst: false,
+        });
+
+        const cleanupSpy = vi.spyOn(defaultDerivedStorageService, 'cleanupDerivedBatch');
+        try {
+            await seedDemoData({
+                coursesCount: 1,
+                examsPerCourse: 1,
+                studentsCount: 2,
+                tasCount: 1,
+                cleanFirst: true,
+            });
+
+            expect(cleanupSpy).toHaveBeenCalled();
+            const cleanedBatchIds = cleanupSpy.mock.calls.map(args => args[0]);
+            expect(cleanedBatchIds.some(b => b.startsWith('DEMO-BATCH-'))).toBe(true);
+        } finally {
+            cleanupSpy.mockRestore();
+        }
     });
 
     it('is repeatable and idempotent across multiple runs without --clean', async () => {
