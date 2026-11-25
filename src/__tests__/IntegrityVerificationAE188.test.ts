@@ -322,7 +322,8 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
                 $set: {
                     'files.0.integrityMetadata.timestamp': originalMeta.timestamp + 50000
                 }
-            }
+            },
+            { bypassWorm: true } as any
         );
 
         const summary = await integrityVerificationService.verifyExamIntegrity(exam._id.toString());
@@ -344,7 +345,8 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
                     'files.0.hmac': '',
                     'files.0.integrityMetadata': ''
                 }
-            }
+            },
+            { bypassWorm: true } as any
         );
 
         const summary = await integrityVerificationService.verifyExamIntegrity(exam._id.toString());
@@ -366,7 +368,8 @@ describe('AE-188: Exam Integrity Verification (#266)', () => {
                 $set: {
                     'files.0.keyId': 'v999_unknown'
                 }
-            }
+            },
+            { bypassWorm: true } as any
         );
 
         const summary = await integrityVerificationService.verifyExamIntegrity(exam._id.toString());

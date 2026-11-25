@@ -378,6 +378,10 @@ class ExamService {
             return null;
         }
 
+        if (examBefore.status === ExamStatus.PUBLISHED) {
+            throw new HttpError(`Cannot delete published exam "${examBefore.title}" (WORM immutability enforcement)`, 400);
+        }
+
         try {
             const deletedExam = await ExamRepository.deleteExam(id, actingUserId, actingUserRole);
 

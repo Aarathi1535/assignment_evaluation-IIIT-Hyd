@@ -283,10 +283,10 @@ export class IntegrityVerificationService {
                     continue;
                 }
 
-                // Read original content from immutable storage
+                // Read original content from immutable storage (skipping automatic verification so we can perform comparative audit)
                 let contentBuffer: Buffer;
                 try {
-                    contentBuffer = await immutableStorageService.readOriginalContent(file.storageKey);
+                    contentBuffer = await immutableStorageService.readOriginalContent(file.storageKey, true);
                 } catch (readErr: unknown) {
                     errorOriginal += 1;
                     const isNotFound = readErr && typeof readErr === 'object' && ('code' in readErr) && (readErr as { code?: string | number }).code === 'ENOENT';

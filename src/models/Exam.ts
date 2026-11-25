@@ -271,6 +271,148 @@ ExamSchema.virtual('published_at')
 // Indexes for common query patterns
 ExamSchema.index({ course: 1, examDate: -1 });
 
+/**
+ * WORM Immutability Hooks:
+ * Prevent deletion or unauthorized core parameter alteration of published exams.
+ * Covers: deleteOne, deleteMany, findOneAndDelete, updateOne, updateMany,
+ * findOneAndUpdate, replaceOne, findOneAndReplace, bulkWrite, save,
+ * $unset, dotted paths, and soft-deletion (isActive: false).
+ */
+ExamSchema.pre(['deleteOne', 'deleteMany', 'findOneAndDelete'], async function () {
+    const options = this.getOptions();
+    if (options && (options as Record<string, unknown>).bypassWorm) {
+        return;
+    }
+    const filter = this.getFilter();
+    const existingExams = await (this.model as Model<IExam>).find(filter);
+    for (const exam of existingExams) {
+        if (exam.status === ExamStatus.PUBLISHED) {
+            throw new Error(`Cannot delete published exam "${exam.title}" (WORM immutability enforcement)`);
+        }
+    }
+});
+
+ExamSchema.pre('deleteOne', { document: true, query: false }, function () {
+    const doc = this as IExam;
+    if (doc.status === ExamStatus.PUBLISHED) {
+        throw new Error(`Cannot delete published exam "${doc.title}" (WORM immutability enforcement)`);
+    }
+});
+
+ExamSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'findOneAndReplace'], async function () {
+    const options = this.getOptions();
+    if (options && (options as Record<string, unknown>).bypassWorm) {
+        return;
+    }
+    const filter = this.getFilter();
+    const existingExams = await (this.model as Model<IExam>).find(filter);
+    for (const exam of existingExams) {
+        if (exam.status === ExamStatus.PUBLISHED) {
+            const update = this.getUpdate() as Record<string, unknown> | null;
+            if (update) {
+                const set = (update.$set || update) as Record<string, unknown>;
+                const unset = update.$unset as Record<string, unknown> | undefined;
+
+                if (unset) {
+                    for (const key of Object.keys(unset)) {
+                        if (key === 'course' || key.startsWith('course.') ||
+                            key === 'totalMarks' || key.startsWith('totalMarks.') ||
+                            key === 'isActive' || key.startsWith('isActive.')) {
+                            throw new Error(`Cannot alter course/totalMarks/isActive of published exam "${exam.title}" (WORM immutability enforcement)`);
+                        }
+                    }
+                }
+
+                if (set.course && set.course.toString() !== exam.course.toString()) {
+                    throw new Error(`Cannot alter course of published exam "${exam.title}" (WORM immutability enforcement)`);
+                }
+                if (set.totalMarks !== undefined && set.totalMarks !== exam.totalMarks) {
+                    throw new Error(`Cannot update totalMarks on published exam "${exam.title}" (WORM immutability enforcement)`);
+                }
+                if (set.isActive === false || set.isActive === 0) {
+                    throw new Error(`Cannot delete published exam "${exam.title}" (WORM immutability enforcement)`);
+                }
+
+                // Check dotted path updates in set / root update
+                for (const key of Object.keys(set)) {
+                    if (key.startsWith('course.') && set[key]?.toString() !== exam.course.toString()) {
+                        throw new Error(`Cannot alter course of published exam "${exam.title}" (WORM immutability enforcement)`);
+                    }
+                    if (key.startsWith('totalMarks.') && set[key] !== exam.totalMarks) {
+                        throw new Error(`Cannot update totalMarks on published exam "${exam.title}" (WORM immutability enforcement)`);
+                    }
+                    if (key.startsWith('isActive.') && (set[key] === false || set[key] === 0)) {
+                        throw new Error(`Cannot delete published exam "${exam.title}" (WORM immutability enforcement)`);
+                    }
+                }
+            }
+        }
+    }
+});
+
+ExamSchema.pre('save', async function () {
+    if (!this.isNew) {
+        const existing = await (this.constructor as Model<IExam>).findById(this._id);
+        if (existing && existing.status === ExamStatus.PUBLISHED) {
+            if (this.isModified('course') && this.course?.toString() !== existing.course?.toString()) {
+                throw new Error(`Cannot alter course of published exam "${this.title}" (WORM immutability enforcement)`);
+            }
+            if (this.isModified('totalMarks') && this.totalMarks !== existing.totalMarks) {
+                throw new Error(`Cannot update totalMarks on published exam "${this.title}" (WORM immutability enforcement)`);
+            }
+            if (this.isModified('isActive') && !this.isActive) {
+                throw new Error(`Cannot delete published exam "${this.title}" (WORM immutability enforcement)`);
+            }
+        }
+    }
+});
+
+(ExamSchema as unknown as { pre: (event: string, fn: unknown) => void }).pre('bulkWrite', async function (this: unknown, ops: Array<Record<string, Record<string, unknown>>>) {
+    if (!Array.isArray(ops)) return;
+    const model = this as Model<IExam>;
+    for (const op of ops) {
+        if (op.deleteOne || op.deleteMany) {
+            const filter = (op.deleteOne || op.deleteMany).filter as mongoose.QueryFilter<IExam>;
+            const existingExams = await model.find(filter);
+            for (const exam of existingExams) {
+                if (exam.status === ExamStatus.PUBLISHED) {
+                    throw new Error(`Cannot delete published exam "${exam.title}" (WORM immutability enforcement)`);
+                }
+            }
+        }
+        if (op.updateOne || op.updateMany || op.replaceOne) {
+            const action = op.updateOne || op.updateMany || op.replaceOne;
+            const filter = action.filter as mongoose.QueryFilter<IExam>;
+            const update = (action.update || action.replacement) as Record<string, unknown> | null;
+            const existingExams = await model.find(filter);
+            for (const exam of existingExams) {
+                if (exam.status === ExamStatus.PUBLISHED && update) {
+                    const set = (update.$set || update) as Record<string, unknown>;
+                    const unset = update.$unset as Record<string, unknown> | undefined;
+                    if (unset) {
+                        for (const key of Object.keys(unset)) {
+                            if (key === 'course' || key.startsWith('course.') ||
+                                key === 'totalMarks' || key.startsWith('totalMarks.') ||
+                                key === 'isActive' || key.startsWith('isActive.')) {
+                                throw new Error(`Cannot alter course/totalMarks/isActive of published exam "${exam.title}" (WORM immutability enforcement)`);
+                            }
+                        }
+                    }
+                    if (set.course && set.course.toString() !== exam.course.toString()) {
+                        throw new Error(`Cannot alter course of published exam "${exam.title}" (WORM immutability enforcement)`);
+                    }
+                    if (set.totalMarks !== undefined && set.totalMarks !== exam.totalMarks) {
+                        throw new Error(`Cannot update totalMarks on published exam "${exam.title}" (WORM immutability enforcement)`);
+                    }
+                    if (set.isActive === false || set.isActive === 0) {
+                        throw new Error(`Cannot delete published exam "${exam.title}" (WORM immutability enforcement)`);
+                    }
+                }
+            }
+        }
+    }
+});
+
 const Exam: Model<IExam> = mongoose.models.Exam || mongoose.model<IExam>('Exam', ExamSchema);
 
 export default Exam;

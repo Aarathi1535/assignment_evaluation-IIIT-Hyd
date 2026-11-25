@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import path from 'path';
 import fs from 'fs';
 import { loadEnvConfig } from '@next/env';
@@ -43,6 +44,33 @@ beforeAll(async () => {
   // Establish connection to in-memory DB
   const { connectDB } = await import('../lib/db');
   await connectDB();
+
+  // Patch Exam.deleteMany and Batch.deleteMany in test environment to use bypassWorm when filter is empty,
+  // allowing legacy test teardown to clean test data without model-level NODE_ENV === 'test' bypasses.
+  const Exam = (await import('../models/Exam')).default;
+  const Batch = (await import('../models/Batch')).default;
+
+  const origExamDeleteMany = Exam.deleteMany.bind(Exam);
+  Exam.deleteMany = function (filter?: unknown, options?: Record<string, unknown>) {
+    if (options && options.bypassWorm === false) {
+      return origExamDeleteMany(filter as any, options);
+    }
+    if (!filter || Object.keys(filter as Record<string, unknown>).length === 0) {
+      return origExamDeleteMany(filter as any, { ...options, bypassWorm: true });
+    }
+    return origExamDeleteMany(filter as any, options);
+  } as any;
+
+  const origBatchDeleteMany = Batch.deleteMany.bind(Batch);
+  Batch.deleteMany = function (filter?: unknown, options?: Record<string, unknown>) {
+    if (options && options.bypassWorm === false) {
+      return origBatchDeleteMany(filter as any, options);
+    }
+    if (!filter || Object.keys(filter as Record<string, unknown>).length === 0) {
+      return origBatchDeleteMany(filter as any, { ...options, bypassWorm: true });
+    }
+    return origBatchDeleteMany(filter as any, options);
+  } as any;
 });
 
 afterAll(async () => {

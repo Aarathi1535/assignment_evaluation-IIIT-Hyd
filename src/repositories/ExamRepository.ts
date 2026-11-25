@@ -1,6 +1,7 @@
 import Exam, { IExam, ExamStatus } from '../models/Exam';
 import mongoose, { QueryFilter } from 'mongoose';
 import { SYSTEM_ROLE } from '../constants/permissions';
+import { HttpError } from '../lib/errors';
 
 export interface IStudentExamResponse {
     _id: string;
@@ -133,6 +134,18 @@ class ExamRepository {
         if (!query) {
             return null;
         }
+        const existing = await Exam.findOne(query);
+        if (existing && existing.status === ExamStatus.PUBLISHED) {
+            if (data.course && data.course.toString() !== existing.course.toString()) {
+                throw new HttpError(`Cannot alter course of published exam "${existing.title}" (WORM immutability enforcement)`, 400);
+            }
+            if (data.totalMarks !== undefined && data.totalMarks !== existing.totalMarks) {
+                throw new HttpError(`Cannot update totalMarks on published exam "${existing.title}" (WORM immutability enforcement)`, 400);
+            }
+            if (data.isActive === false) {
+                throw new HttpError(`Cannot delete published exam "${existing.title}" (WORM immutability enforcement)`, 400);
+            }
+        }
         return await Exam.findOneAndUpdate(
             query,
             data,
@@ -144,6 +157,13 @@ class ExamRepository {
         const query = await this.buildExamQuery(id, actingUserId, actingUserRole);
         if (!query) {
             return null;
+        }
+        const existing = await Exam.findOne(query);
+        if (!existing) {
+            return null;
+        }
+        if (existing.status === ExamStatus.PUBLISHED) {
+            throw new HttpError(`Cannot delete published exam "${existing.title}" (WORM immutability enforcement)`, 400);
         }
         return await Exam.findOneAndUpdate(
             query,
