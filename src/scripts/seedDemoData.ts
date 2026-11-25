@@ -185,9 +185,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
 
     // 2. Safe selective clean: ONLY delete records tagged by demo identifiers
     if (options.cleanFirst) {
-        const demoCourses = await Course.find({
-            $or: [{ demo: true }, { courseCode: /^DEMO-/ }]
-        }).select('_id');
+        const demoCourses = await Course.find({ demo: true }).select('_id');
         const demoCourseIds = demoCourses.map(c => c._id);
 
         const demoExams = await Exam.find({
@@ -201,11 +199,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
         const demoRubricIds = demoRubrics.map(r => r._id);
 
         const demoScripts = await AnswerScript.find({
-            $or: [
-                { demo: true },
-                { exam: { $in: demoExamIds } },
-                { batchId: /^DEMO-BATCH/ }
-            ]
+            $or: [{ demo: true }, { exam: { $in: demoExamIds } }]
         }).select('_id batchId');
         const demoScriptIds = demoScripts.map(s => s._id);
 
@@ -270,12 +264,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 { _id: { $in: demoCourseIds } }
             ]
         });
-        await User.deleteMany({
-            $or: [
-                { demo: true },
-                { email: /\.demo@university\.edu$/ }
-            ]
-        });
+        await User.deleteMany({ demo: true });
     }
 
     // 3. Dynamic or configured password
@@ -293,7 +282,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
             isActive: true,
             demo: true,
         });
-    } else {
+    } else if (prof.demo) {
         await User.updateOne({ _id: prof._id }, { $set: { password: passwordHash, isActive: true, demo: true } });
     }
 
@@ -311,7 +300,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 isActive: true,
                 demo: true,
             });
-        } else {
+        } else if (ta.demo) {
             await User.updateOne({ _id: ta._id }, { $set: { password: passwordHash, isActive: true, demo: true } });
         }
         taUsers.push(ta);
@@ -331,7 +320,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 isActive: true,
                 demo: true,
             });
-        } else {
+        } else if (student.demo) {
             await User.updateOne({ _id: student._id }, { $set: { password: passwordHash, isActive: true, demo: true } });
         }
         studentUsers.push(student);
@@ -346,8 +335,20 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
 
     // 7. Idempotent Course & Exam Generation (Deterministic demo keys)
     for (let c = 1; c <= coursesCount; c++) {
-        const courseCode = `DEMO-CS${100 + c}`;
+        let courseCode = `DEMO-CS${100 + c}`;
         let course: any = await Course.findOne({ courseCode });
+
+        // Ensure course upsert cannot take over an existing real course merely because its courseCode matches.
+        // Only update an existing course explicitly tagged demo: true; otherwise use a safe unique demo identifier.
+        if (course && !course.demo) {
+            let suffix = 1;
+            while (await Course.findOne({ courseCode: `DEMO-CS${100 + c}-DEMO-${suffix}` })) {
+                suffix++;
+            }
+            courseCode = `DEMO-CS${100 + c}-DEMO-${suffix}`;
+            course = await Course.findOne({ courseCode, demo: true });
+        }
+
         if (!course) {
             course = await Course.create({
                 courseCode,
@@ -360,7 +361,7 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                 isActive: true,
                 demo: true,
             });
-        } else {
+        } else if (course.demo) {
             await Course.updateOne(
                 { _id: course._id },
                 {
@@ -395,9 +396,9 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                     isActive: true,
                     demo: true,
                 });
-            } else {
+            } else if (exam.demo) {
                 await Exam.updateOne(
-                    { _id: exam._id },
+                    { _id: exam._id, demo: true },
                     {
                         $set: {
                             numberOfQuestions: questionsCount,
@@ -435,9 +436,9 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                     isActive: true,
                     demo: true,
                 });
-            } else {
+            } else if (rubric.demo) {
                 await Rubric.updateOne(
-                    { _id: rubric._id },
+                    { _id: rubric._id, demo: true },
                     { $set: { questions: rubricQuestions, isActive: true, demo: true } }
                 );
             }
@@ -479,9 +480,9 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                         isActive: true,
                         demo: true,
                     });
-                } else {
+                } else if (script.demo) {
                     await AnswerScript.updateOne(
-                        { _id: script._id },
+                        { _id: script._id, demo: true },
                         {
                             $set: {
                                 batchId,
@@ -546,9 +547,9 @@ export async function seedDemoData(options: SeedDemoOptions = {}): Promise<SeedD
                         completedAt,
                         demo: true,
                     });
-                } else {
+                } else if (allocation.demo) {
                     await Allocation.updateOne(
-                        { _id: allocation._id },
+                        { _id: allocation._id, demo: true },
                         {
                             $set: {
                                 status: allocationStatus,

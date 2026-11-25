@@ -328,6 +328,66 @@ describe('AE-225: Repeatable Seed/Demo Data Generator', () => {
         expect(await Course.countDocuments({ courseCode: /^DEMO-/ })).toBe(1);
     });
 
+    it('proves that a real course whose courseCode starts with DEMO- is neither modified nor deleted by normal seeding or --clean', async () => {
+        const realFaculty = await User.create({
+            name: 'Prof. Real Faculty Member',
+            email: 'real.democode.faculty@university.edu',
+            password: 'RealPassword123!',
+            role: UserRole.PROFESSOR,
+            isActive: true,
+            demo: false,
+        });
+
+        const originalCourseName = 'Real Advanced Algorithms';
+        const realCourseWithDemoCode = await Course.create({
+            courseCode: 'DEMO-CS101',
+            courseName: originalCourseName,
+            professor: realFaculty._id,
+            semester: 1,
+            academicYear: '2026-2027',
+            isActive: true,
+            demo: false,
+        });
+
+        // 1. Normal seeding without cleanFirst
+        const seedResult = await seedDemoData({
+            coursesCount: 1,
+            studentsCount: 2,
+            tasCount: 1,
+            cleanFirst: false,
+        });
+
+        // Verify the real course was not taken over, overwritten, or modified
+        const afterNormalSeed = await Course.findById(realCourseWithDemoCode._id);
+        expect(afterNormalSeed).not.toBeNull();
+        expect(afterNormalSeed?.courseName).toBe(originalCourseName);
+        expect(afterNormalSeed?.professor.toString()).toBe(realFaculty._id.toString());
+        expect(afterNormalSeed?.demo).toBe(false);
+
+        // Verify that a separate demo course was generated using a safe unique demo identifier
+        expect(seedResult.courseIds.length).toBe(1);
+        expect(seedResult.courseIds[0]).not.toBe(realCourseWithDemoCode._id.toString());
+        const createdDemoCourse = await Course.findById(seedResult.courseIds[0]);
+        expect(createdDemoCourse?.demo).toBe(true);
+        expect(createdDemoCourse?.courseCode).not.toBe('DEMO-CS101');
+        expect(createdDemoCourse?.courseCode).toContain('DEMO-CS101');
+
+        // 2. Seeding with cleanFirst
+        await seedDemoData({
+            coursesCount: 1,
+            studentsCount: 2,
+            tasCount: 1,
+            cleanFirst: true,
+        });
+
+        // Verify the real course was NOT deleted by --clean despite courseCode starting with DEMO-
+        const afterCleanSeed = await Course.findById(realCourseWithDemoCode._id);
+        expect(afterCleanSeed).not.toBeNull();
+        expect(afterCleanSeed?.courseName).toBe(originalCourseName);
+        expect(afterCleanSeed?.professor.toString()).toBe(realFaculty._id.toString());
+        expect(afterCleanSeed?.demo).toBe(false);
+    });
+
     it('--clean invokes cleanupDerivedBatch on DerivedStorageService to remove demo images', async () => {
         // Seed initial data
         await seedDemoData({
