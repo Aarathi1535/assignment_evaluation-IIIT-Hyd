@@ -18,8 +18,8 @@ To ensure full reproducibility, the benchmark records the exact host machine spe
 | **OS / Platform** | Windows 10/11 x64 (`win32`) |
 | **Node.js Runtime** | v22.20.0 |
 | **TypeScript Runner** | `tsx` v4.23.11 |
-| **Git Commit** | `81e3bb1b7146d47d48c0ef056b0287c07f650d21` |
-| **Benchmark Date** | 2026-11-21T10:56:14.375Z |
+| **Git Commit** | `d0e94059d35aca1b7cd19b215773ce62fa0be978` |
+| **Benchmark Date** | 2026-11-25T06:12:00Z |
 | **Exact Command** | `npx tsx src/scripts/loadTestIngestion.ts 20` |
 
 ---
