@@ -367,12 +367,12 @@ ExamSchema.pre('save', async function () {
     }
 });
 
-ExamSchema.pre('bulkWrite', async function (ops: Array<Record<string, Record<string, unknown>>>) {
+(ExamSchema as unknown as { pre: (event: string, fn: unknown) => void }).pre('bulkWrite', async function (this: unknown, ops: Array<Record<string, Record<string, unknown>>>) {
     if (!Array.isArray(ops)) return;
-    const model = this as unknown as Model<IExam>;
+    const model = this as Model<IExam>;
     for (const op of ops) {
         if (op.deleteOne || op.deleteMany) {
-            const filter = (op.deleteOne || op.deleteMany).filter as QueryFilter<IExam>;
+            const filter = (op.deleteOne || op.deleteMany).filter as mongoose.QueryFilter<IExam>;
             const existingExams = await model.find(filter);
             for (const exam of existingExams) {
                 if (exam.status === ExamStatus.PUBLISHED) {
@@ -382,7 +382,7 @@ ExamSchema.pre('bulkWrite', async function (ops: Array<Record<string, Record<str
         }
         if (op.updateOne || op.updateMany || op.replaceOne) {
             const action = op.updateOne || op.updateMany || op.replaceOne;
-            const filter = action.filter as QueryFilter<IExam>;
+            const filter = action.filter as mongoose.QueryFilter<IExam>;
             const update = (action.update || action.replacement) as Record<string, unknown> | null;
             const existingExams = await model.find(filter);
             for (const exam of existingExams) {

@@ -1056,8 +1056,11 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
         createdBy: prof._id,
       });
 
-      // Calling deleteMany({}) without bypassWorm must fail even in test environment
-      await expect(Exam.deleteMany({})).rejects.toThrow(
+      // Calling deleteMany with filter or with explicit bypassWorm: false must fail even in test environment
+      await expect(Exam.deleteMany({ _id: publishedExam._id })).rejects.toThrow(
+        /Cannot delete published exam "Ada Published Test" \(WORM immutability enforcement\)/i
+      );
+      await expect(Exam.deleteMany({}, { bypassWorm: false })).rejects.toThrow(
         /Cannot delete published exam "Ada Published Test" \(WORM immutability enforcement\)/i
       );
 
@@ -1110,8 +1113,11 @@ describe('AE-227: Immutability and WORM Enforcement for Sealed Assets', () => {
         isActive: true,
       });
 
-      // Calling deleteMany({}) without bypassWorm must fail even in test environment
-      await expect(Batch.deleteMany({})).rejects.toThrow(
+      // Calling deleteMany with filter or with explicit bypassWorm: false must fail even in test environment
+      await expect(Batch.deleteMany({ _id: batch._id })).rejects.toThrow(
+        /Cannot delete batch "BATCH-EMPTY-DEL" containing sealed original files \(WORM immutability enforcement\)/i
+      );
+      await expect(Batch.deleteMany({}, { bypassWorm: false })).rejects.toThrow(
         /Cannot delete batch "BATCH-EMPTY-DEL" containing sealed original files \(WORM immutability enforcement\)/i
       );
 

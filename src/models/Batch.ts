@@ -287,12 +287,12 @@ BatchSchema.pre('save', async function () {
     }
 });
 
-BatchSchema.pre('bulkWrite', async function (ops: Array<Record<string, Record<string, unknown>>>) {
+(BatchSchema as unknown as { pre: (event: string, fn: unknown) => void }).pre('bulkWrite', async function (this: unknown, ops: Array<Record<string, Record<string, unknown>>>) {
     if (!Array.isArray(ops)) return;
-    const model = this as unknown as Model<IBatch>;
+    const model = this as Model<IBatch>;
     for (const op of ops) {
         if (op.deleteOne || op.deleteMany) {
-            const filter = (op.deleteOne || op.deleteMany).filter as QueryFilter<IBatch>;
+            const filter = (op.deleteOne || op.deleteMany).filter as mongoose.QueryFilter<IBatch>;
             const existingBatches = await model.find(filter);
             for (const batch of existingBatches) {
                 if (batch.files && batch.files.some((f: IBatchFile) => Boolean(f.hmac))) {
@@ -302,7 +302,7 @@ BatchSchema.pre('bulkWrite', async function (ops: Array<Record<string, Record<st
         }
         if (op.updateOne || op.updateMany || op.replaceOne) {
             const action = op.updateOne || op.updateMany || op.replaceOne;
-            const filter = action.filter as QueryFilter<IBatch>;
+            const filter = action.filter as mongoose.QueryFilter<IBatch>;
             const update = (action.update || action.replacement) as Record<string, unknown> | null;
             const existingBatches = await model.find(filter);
             for (const batch of existingBatches) {
