@@ -10,6 +10,7 @@ export interface IPage extends Document {
     height?: number;
     annotations?: SerializedPageAnnotations | null;
     annotatedBy?: mongoose.Types.ObjectId | null;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -52,6 +53,11 @@ const PageSchema = new Schema<IPage>(
             type: Schema.Types.ObjectId,
             ref: 'User',
             default: null
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         }
     },
     {

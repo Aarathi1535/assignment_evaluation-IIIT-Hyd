@@ -19,6 +19,7 @@ export interface IRubric extends Document {
     createdBy: mongoose.Types.ObjectId;
     isActive: boolean;
     version: number;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -90,6 +91,11 @@ const RubricSchema = new Schema<IRubric>(
         version: {
             type: Number,
             default: 1
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         }
     },
     {

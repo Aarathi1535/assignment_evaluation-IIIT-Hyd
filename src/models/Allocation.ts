@@ -23,6 +23,7 @@ export interface IAllocation extends Document {
     seed?: number;
     claimedAt?: Date;
     completedAt?: Date;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -81,6 +82,11 @@ const AllocationSchema = new Schema<IAllocation>(
         completedAt: {
             type: Date,
             required: false
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         }
     },
     {

@@ -9,6 +9,7 @@ export interface ICourse extends Document {
     teachingAssistants: mongoose.Types.ObjectId[];
     enrolledStudents?: mongoose.Types.ObjectId[];
     isActive: boolean;
+    demo?: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -55,6 +56,11 @@ const CourseSchema = new Schema<ICourse>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         }
     },
     {

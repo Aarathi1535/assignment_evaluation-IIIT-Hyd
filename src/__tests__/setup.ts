@@ -20,6 +20,12 @@ try {
   // Ignore font loading errors if environment restricts file access
 }
 
+try {
+  (GlobalFonts as unknown as { loadSystemFonts?: () => void }).loadSystemFonts?.();
+} catch {
+  // Ignore in headless/container environments where system fonts cannot be enumerated
+}
+
 // Override MONGODB_URI immediately with a local placeholder to isolate tests from development database
 process.env.MONGODB_URI = 'mongodb://127.0.0.1:27017/test-placeholder-safety';
 

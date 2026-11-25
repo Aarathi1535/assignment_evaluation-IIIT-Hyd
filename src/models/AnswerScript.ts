@@ -46,6 +46,7 @@ export interface IAnswerScript extends Document {
     manualIdReason?: ManualIdReason | string | null;
     metadata?: Record<string, unknown>;
     isActive: boolean;
+    demo?: boolean;
     qrStudentId?: string | null;
     qrDecodeOutcome?: string | null;
     omrStudentId?: string | null;
@@ -185,6 +186,11 @@ const AnswerScriptSchema = new Schema<IAnswerScript>(
         isActive: {
             type: Boolean,
             default: true
+        },
+        demo: {
+            type: Boolean,
+            default: false,
+            index: true
         }
     },
     {
