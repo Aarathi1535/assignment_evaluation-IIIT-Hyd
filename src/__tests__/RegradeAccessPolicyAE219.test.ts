@@ -458,7 +458,7 @@ describe('AE-219 regrade access policy', () => {
 
     it('uniformly denies queue, assignment, decision, and script pages when exam is inactive', async () => {
         const fixture = await createFixture();
-        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { isActive: false } });
+        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { isActive: false } }, { bypassWorm: true } as unknown as Parameters<typeof Exam.updateOne>[2]);
 
         // For Course Professor:
         mockSessionUser = { id: fixture.courseProfessor._id.toString(), role: UserRole.PROFESSOR };
@@ -542,7 +542,7 @@ describe('AE-219 regrade access policy', () => {
 
     it('uniformly returns 404 for analytics, export, LMS, LTI, and audit routes when exam is inactive', async () => {
         const fixture = await createFixture();
-        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { status: ExamStatus.PUBLISHED, isActive: false } });
+        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { status: ExamStatus.PUBLISHED, isActive: false } }, { bypassWorm: true } as unknown as Parameters<typeof Exam.updateOne>[2]);
         const examIdStr = fixture.exam._id.toString();
         const makeContext = (id: string) => ({ params: Promise.resolve({ id }) });
 
@@ -616,7 +616,7 @@ describe('AE-219 regrade access policy', () => {
 
         // Reactivate course, deactivate exam -> TA queue excludes requests from inactive exam
         await Course.updateOne({ _id: fixture.course._id }, { $set: { isActive: true } });
-        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { isActive: false } });
+        await Exam.updateOne({ _id: fixture.exam._id }, { $set: { isActive: false } }, { bypassWorm: true } as unknown as Parameters<typeof Exam.updateOne>[2]);
         const inactiveExamRes = await callGetQueue();
         expect(inactiveExamRes.status).toBe(200);
         const inactiveExamData = await inactiveExamRes.json();
