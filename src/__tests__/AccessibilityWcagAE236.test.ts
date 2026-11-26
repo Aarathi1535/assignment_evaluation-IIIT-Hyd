@@ -75,8 +75,20 @@ describe('AE-236: Accessibility Standards and WCAG 2.1 AA Verification', () => {
       expect(green600TextEval.passesAA).toBe(false); // fails for normal text (< 4.5:1)
 
       const green700TextEval = evaluateWcagCompliance('#FFFFFF', '#15803D', { isUiComponent: false });
-      expect(green700TextEval.ratio).toBeGreaterThanOrEqual(4.5);
+      expect(green700TextEval.ratio).toBeCloseTo(5.02, 2);
       expect(green700TextEval.passesAA).toBe(true);
+    });
+
+    it('identifies contrast gaps in production globals.css theme tokens (#10b981 and #94a3b8)', () => {
+      // Secondary button token: White on #10b981
+      const emeraldEval = evaluateWcagCompliance('#FFFFFF', '#10b981');
+      expect(emeraldEval.ratio).toBeCloseTo(2.54, 2);
+      expect(emeraldEval.passesAA).toBe(false);
+
+      // Light/muted text token: #94a3b8 on white
+      const slate400Eval = evaluateWcagCompliance('#94a3b8', '#FFFFFF');
+      expect(slate400Eval.ratio).toBeCloseTo(2.56, 2);
+      expect(slate400Eval.passesAA).toBe(false);
     });
 
     it('should verify UI border (#767676 on #FFFFFF) passes UI component threshold (3.0:1) while low-contrast gray fails normal text', () => {
