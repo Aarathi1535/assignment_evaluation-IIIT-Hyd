@@ -20,24 +20,49 @@ if (!cached) {
 const mongooseCache = cached;
 
 export interface MongoPoolConfig {
-  maxPoolSize: number;
-  minPoolSize: number;
-  maxIdleTimeMS: number;
-  serverSelectionTimeoutMS: number;
+  maxPoolSize?: number;
+  minPoolSize?: number;
+  maxIdleTimeMS?: number;
+  serverSelectionTimeoutMS?: number;
 }
 
+/**
+ * Retrieves opt-in MongoDB connection pool configuration from environment variables.
+ * If an environment variable is unset, the corresponding option is omitted,
+ * allowing the MongoDB driver / Mongoose defaults to remain in effect.
+ */
 export function getMongoPoolConfig(): MongoPoolConfig {
-  const maxPoolSize = parseInt(process.env.MONGO_MAX_POOL_SIZE || '50', 10);
-  const minPoolSize = parseInt(process.env.MONGO_MIN_POOL_SIZE || '5', 10);
-  const maxIdleTimeMS = parseInt(process.env.MONGO_MAX_IDLE_TIME_MS || '30000', 10);
-  const serverSelectionTimeoutMS = parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || '5000', 10);
+  const config: MongoPoolConfig = {};
 
-  return {
-    maxPoolSize: isNaN(maxPoolSize) || maxPoolSize <= 0 ? 50 : maxPoolSize,
-    minPoolSize: isNaN(minPoolSize) || minPoolSize < 0 ? 5 : minPoolSize,
-    maxIdleTimeMS: isNaN(maxIdleTimeMS) || maxIdleTimeMS <= 0 ? 30000 : maxIdleTimeMS,
-    serverSelectionTimeoutMS: isNaN(serverSelectionTimeoutMS) || serverSelectionTimeoutMS <= 0 ? 5000 : serverSelectionTimeoutMS,
-  };
+  if (process.env.MONGO_MAX_POOL_SIZE) {
+    const val = parseInt(process.env.MONGO_MAX_POOL_SIZE, 10);
+    if (!isNaN(val) && val > 0) {
+      config.maxPoolSize = val;
+    }
+  }
+
+  if (process.env.MONGO_MIN_POOL_SIZE) {
+    const val = parseInt(process.env.MONGO_MIN_POOL_SIZE, 10);
+    if (!isNaN(val) && val >= 0) {
+      config.minPoolSize = val;
+    }
+  }
+
+  if (process.env.MONGO_MAX_IDLE_TIME_MS) {
+    const val = parseInt(process.env.MONGO_MAX_IDLE_TIME_MS, 10);
+    if (!isNaN(val) && val > 0) {
+      config.maxIdleTimeMS = val;
+    }
+  }
+
+  if (process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS) {
+    const val = parseInt(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS, 10);
+    if (!isNaN(val) && val > 0) {
+      config.serverSelectionTimeoutMS = val;
+    }
+  }
+
+  return config;
 }
 
 export async function connectDB() {
@@ -50,10 +75,10 @@ export async function connectDB() {
     const opts: mongoose.ConnectOptions = {
       bufferCommands: false,
       monitorCommands: true,
-      maxPoolSize: poolConfig.maxPoolSize,
-      minPoolSize: poolConfig.minPoolSize,
-      maxIdleTimeMS: poolConfig.maxIdleTimeMS,
-      serverSelectionTimeoutMS: poolConfig.serverSelectionTimeoutMS,
+      ...(poolConfig.maxPoolSize !== undefined && { maxPoolSize: poolConfig.maxPoolSize }),
+      ...(poolConfig.minPoolSize !== undefined && { minPoolSize: poolConfig.minPoolSize }),
+      ...(poolConfig.maxIdleTimeMS !== undefined && { maxIdleTimeMS: poolConfig.maxIdleTimeMS }),
+      ...(poolConfig.serverSelectionTimeoutMS !== undefined && { serverSelectionTimeoutMS: poolConfig.serverSelectionTimeoutMS }),
     };
 
     const MONGODB_URI = process.env.MONGODB_URI;
