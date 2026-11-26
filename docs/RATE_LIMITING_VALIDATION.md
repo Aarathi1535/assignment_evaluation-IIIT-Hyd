@@ -69,27 +69,34 @@ flowchart TD
 > **Cloud Run Multi-Instance Gap Analysis**  
 > In serverless environments like Google Cloud Run, requests are distributed across multiple ephemeral container instances. An in-memory store in Container A cannot observe requests hitting Container B. A distributed attacker whose requests round-robin across 5 instances could theoretically make up to $5 \times 5 = 25$ attempts before individual containers saturate.
 
-### 3.3 Target Cloud Architecture
-For true cluster-wide rate limiting across horizontal Cloud Run instances:
-1. **Google Cloud Armor (Recommended at Ingress):**
+### 3.3 Architectural Alternatives for Discussion
+The architectural approach for cluster-wide rate limiting across horizontal Cloud Run instances remains an open discussion point. The evaluated options include:
+
+1. **Google Cloud Armor (Ingress / Edge Limiting):**
    - Configured on Google Cloud HTTP(S) Load Balancer.
-   - Throttles malicious IP ranges and credential stuffing before traffic ever reaches Cloud Run containers, saving compute resources.
-2. **Centralized Redis Store (Memorystore):**
-   - Cloud Run instances connect via Serverless VPC Access to a managed Redis instance.
-   - Atomic Redis commands (`ZADD`, `ZREMRANGEBYSCORE`, `ZCARD`) provide cluster-synchronized sliding windows.
-3. **MongoDB Token Bucket (Low Traffic Alternative):**
-   - Atomic `$inc` and TTL index document updates directly in MongoDB collections.
+   - Throttles IP ranges and high-volume traffic at network ingress before requests reach Cloud Run containers.
+2. **Shared Application Store (e.g., Redis / Memorystore):**
+   - Cloud Run instances connect via Serverless VPC Access to a centralized cache.
+   - Coordinates cluster-wide sliding windows or token buckets across instances.
+3. **Process-Local In-Memory Limiting (Current Baseline):**
+   - In-memory sliding-window store per container instance without external dependencies, with multi-instance capacity caveats described above.
+
+> [!NOTE]
+> No architectural solution has been chosen or selected. Deciding between Cloud Armor, a shared store like Redis, or process-local limiting is pending discussion and alignment with Murthy and the infrastructure owner.
 
 ---
 
-## 4. Safe Client IP Resolution & Memory Management
+## 4. Client IP Header Extraction & Memory Management
 
-### 4.1 Client-Controlled `X-Forwarded-For` Vulnerability Defense
-- **The Vulnerability:** An attacker can craft requests with `X-Forwarded-For: 1.1.1.1`. If an application blindly reads `x-forwarded-for.split(',')[0]`, the attacker can rotate the header value on every request to bypass rate limiting completely.
-- **The Defense:** `getClientIdentifier` in `src/lib/rateLimit.ts`:
-  1. Checks `x-real-ip` first (set directly by the authoritative edge reverse-proxy).
-  2. If using `x-forwarded-for`, reads the **rightmost** (last) entry appended by the trusted ingress reverse proxy (`parts[parts.length - 1]`), ensuring client-injected headers cannot bypass quota tracking.
-  3. Falls back to user identifier (`user:<userId>`) for authenticated student/instructor routes.
+### 4.1 Client IP Header Selection & Unconfirmed Trust Model
+- **Current Header Selection (`getClientIdentifier` in `src/lib/rateLimit.ts`):**
+  1. Inspects `x-real-ip` first if present.
+  2. If absent, falls back to reading the rightmost comma-separated entry of `x-forwarded-for` (`parts[parts.length - 1]`).
+  3. Uses user identifier (`user:<userId>`) for authenticated context when provided.
+  4. Defaults to `ip:127.0.0.1` when no headers or user identifier are present.
+- **Unconfirmed Proxy Trust Status:**
+  > [!IMPORTANT]
+  > The authoritative client IP source remains **unconfirmed pending agreement with the Cloud Run / load-balancer infrastructure owner**. Neither `x-real-ip` nor the rightmost `x-forwarded-for` entry is verified as authoritative or guaranteed to be proxy-appended in the current deployment setup. The current header extraction does not guarantee spoofing prevention until trusted proxy header configuration is finalized with the infrastructure team.
 
 ### 4.2 Memory Management & Pruning Behavior
 - **Pruning Trigger Threshold:** The store triggers a cleanup sweep when `rateLimitStore.size >= MAX_RATE_LIMIT_ENTRIES` (10,000 entries) upon encountering an unregistered key.

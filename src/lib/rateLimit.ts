@@ -135,13 +135,17 @@ export function checkRateLimit(
 }
 
 /**
- * Extracts a sanitized client identifier from request headers or user context.
+ * Extracts a client identifier from request headers or user context.
  *
- * When behind a reverse proxy (e.g. Cloud Run, Cloud Load Balancing, Nginx):
- * - `x-real-ip` is authoritative from the edge proxy and cannot be forged by the client.
- * - In `x-forwarded-for`, the client controls the initial entries. Reverse proxies append
- *   the true upstream peer IP to the rightmost side of the list. We use the rightmost IP
- *   or x-real-ip to prevent client spoofing.
+ * Header-selection behavior:
+ * - Uses `user:<userId>` when an authenticated user context is provided.
+ * - Otherwise inspects `x-real-ip` first.
+ * - If absent, falls back to the rightmost entry in `x-forwarded-for`.
+ * - Defaults to `ip:127.0.0.1` if no header is present.
+ *
+ * Note: The authoritative client IP source remains unconfirmed pending agreement
+ * with the Cloud Run / load-balancer owner. Current extraction does not assume or
+ * verify that either header is trusted or that spoofing is prevented.
  */
 export function getClientIdentifier(
   req: { headers: { get: (name: string) => string | null } },
@@ -163,11 +167,11 @@ export function getClientIdentifier(
       .map((p) => p.trim())
       .filter(Boolean);
 
-    // Prefer the last entry appended by the trusted reverse proxy to defend against client spoofing
+    // Current fallback inspects the rightmost entry; trusted proxy source pending confirmation
     if (parts.length > 0) {
-      const trustedClientIp = parts[parts.length - 1];
-      if (trustedClientIp) {
-        return `ip:${trustedClientIp}`;
+      const candidateIp = parts[parts.length - 1];
+      if (candidateIp) {
+        return `ip:${candidateIp}`;
       }
     }
   }
