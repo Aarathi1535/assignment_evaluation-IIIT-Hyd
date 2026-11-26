@@ -16,7 +16,7 @@
 ## 1. Executive Summary
 
 This document specifies the production containerization architecture for the Exam Evaluation Platform, providing:
-1. **Next.js Standalone Multi-Stage Build (`Dockerfile`):** Minimizes image size from ~1.2 GB to ~150 MB using Next.js `output: 'standalone'`, copying only traced production modules.
+1. **Next.js Standalone Multi-Stage Build (`Dockerfile`):** Minimizes image size from ~1.2 GB to ~367 MB using Next.js `output: 'standalone'`, copying only traced production modules.
 2. **Reproducible Dependency Hygiene:** Strictly enforces `npm ci --ignore-scripts` without fallback to `npm install`, preventing silent lockfile drift.
 3. **MongoDB Replica Set Orchestration (`docker-compose.yml`):** Automatically initializes a single-node replica set (`rs0`) required for multi-document Mongoose transactions.
 4. **Network & Credential Isolation:** Removes unauthenticated public MongoDB host port exposure, restricting database traffic strictly to the internal Docker bridge network.
@@ -25,14 +25,14 @@ This document specifies the production containerization architecture for the Exa
 
 ## 2. Multi-Stage Dockerfile Architecture
 
-The production `Dockerfile` uses a 4-stage build pipeline based on `node:20-slim`:
+The production `Dockerfile` uses a 4-stage build pipeline based on `node:22-slim`:
 
 ```mermaid
 flowchart TD
-    Base["Stage 1: Base Runtime (node:20-slim)<br>Installs fontconfig, dejavu fonts, ca-certificates, curl"]
+    Base["Stage 1: Base Runtime (node:22-slim)<br>Installs fontconfig, dejavu fonts, ca-certificates, curl"]
     Deps["Stage 2: Dependencies (npm ci --ignore-scripts)<br>Strict lockfile-based install"]
     Builder["Stage 3: Builder (next build with output: 'standalone')<br>Compiles Next.js & generates traced standalone bundle"]
-    Runner["Stage 4: Runner (Minimal Production Image ~150 MB)<br>Copies only .next/standalone, .next/static, public<br>Non-root nextjs:nodejs user, data volume, healthcheck"]
+    Runner["Stage 4: Runner (Minimal Production Image ~367 MB)<br>Copies only .next/standalone, .next/static, public<br>Non-root nextjs:nodejs user, data volume, healthcheck"]
 
     Base --> Deps
     Deps --> Builder
@@ -49,7 +49,7 @@ The final runner stage copies only:
 - `/app/.next/standalone`
 - `/app/.next/static`
 
-**Resulting Image Size:** ~150 MB (an 87.5% reduction).
+**Resulting Image Size:** ~367 MB (a ~70% reduction vs full node_modules).
 
 ### 2.2 Security Controls
 - **Unprivileged Execution:** Runs strictly under `USER nextjs` (UID 1001 / GID 1001).
@@ -86,12 +86,13 @@ healthcheck:
 ```
 3. Connecting the application via:
 ```
-MONGODB_URI=mongodb://mongodb:27017/assignment_evaluator?replicaSet=rs0&directConnection=true
+MONGODB_URI=mongodb://mongodb:27017/assignment_evaluator?replicaSet=rs0
 ```
+*(Note: `directConnection=true` is deliberately omitted so the MongoDB Node.js driver discovers the `rs0` replica set topology rather than reporting "Single", allowing `validateMongoTopology` to succeed in production mode).*
 
 ### 3.2 Network Isolation & Secrets
 - **No Host Port Exposure:** Port `27017` is removed from host port mappings (`ports:`). MongoDB is accessible solely to containers joined to `assignment_evaluator_network`.
-- **Environment Overrides:** Secrets (`NEXTAUTH_SECRET`, `ORIGINAL_STORAGE_HMAC_SECRET`) are read from environment variables or `.env` rather than hardcoded in the compose definition.
+- **Enforced Secrets:** Critical secrets (`NEXTAUTH_SECRET`, `ORIGINAL_STORAGE_HMAC_SECRET`) are strictly enforced using `${VAR:?error}` variable expansion in `docker-compose.yml`. Compose fails fast if these are unset, preventing default or hard-coded secrets. A template is provided in `.env.compose.example`.
 
 ---
 

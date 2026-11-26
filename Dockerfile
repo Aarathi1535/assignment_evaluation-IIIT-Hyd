@@ -1,7 +1,7 @@
 # ==========================================
 # Stage 1: Base Runtime Environment
 # ==========================================
-FROM node:20-slim AS base
+FROM node:22-slim AS base
 WORKDIR /app
 ENV NODE_ENV=production
 
