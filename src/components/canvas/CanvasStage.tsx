@@ -10,7 +10,6 @@ import React, {
 } from 'react';
 import Konva from 'konva';
 import type { CanvasDimensions, CanvasStageProps } from './types';
-import { clampCanvasDimensions } from '@/lib/browserCompatibility';
 
 interface CanvasStageContextValue {
   stage: Konva.Stage | null;
@@ -41,10 +40,8 @@ export function CanvasStage({
   // Resize handler
   const handleDimensionUpdate = useCallback(
     (w: number, h: number) => {
-      const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-      const clamped = clampCanvasDimensions(w, h, dpr);
-      const validW = Math.max(0, clamped.width);
-      const validH = Math.max(0, clamped.height);
+      const validW = Math.max(0, Math.floor(w));
+      const validH = Math.max(0, Math.floor(h));
 
       setDimensions((prev) => {
         if (prev.width === validW && prev.height === validH) return prev;
@@ -75,13 +72,16 @@ export function CanvasStage({
         ? height
         : containerRef.current.clientHeight || 600;
 
-    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-    const clamped = clampCanvasDimensions(initialW, initialH, dpr);
+    // Cap Konva.pixelRatio to at most 2 on high-DPI/Retina screens to bound GPU memory usage,
+    // while keeping stage dimensions in CSS pixels to avoid clipping.
+    if (typeof window !== 'undefined' && window.devicePixelRatio) {
+      Konva.pixelRatio = Math.min(window.devicePixelRatio, 2);
+    }
 
     const newStage = new Konva.Stage({
       container: containerRef.current,
-      width: clamped.width,
-      height: clamped.height,
+      width: initialW,
+      height: initialH,
     });
 
     stageRef.current = newStage;
@@ -130,6 +130,7 @@ export function CanvasStage({
           width: typeof width === 'number' ? `${width}px` : '100%',
           height: typeof height === 'number' ? `${height}px` : '100%',
           backgroundColor,
+          touchAction: 'none',
         }}
         data-testid="canvas-stage-container"
       >

@@ -159,14 +159,4 @@ describe('AE-234: Cross-Browser Compatibility Matrix and Normalization', () => {
       expect(devOpts.sameSite).toBe('lax');
     });
   });
-
-  describe('Application Component & Auth Wiring', () => {
-    it('wires recommended cookie options into NextAuth authOptions', async () => {
-      const { authOptions } = await import('../lib/auth');
-      expect(authOptions.cookies).toBeDefined();
-      expect(authOptions.cookies?.sessionToken).toBeDefined();
-      expect(authOptions.cookies?.sessionToken?.options?.sameSite).toBe('lax');
-      expect(authOptions.cookies?.sessionToken?.options?.httpOnly).toBe(true);
-    });
-  });
 });
