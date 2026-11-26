@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { SHORTCUT_MAP } from '../lib/shortcutMap';
+import { UserRole } from '../constants/permissions';
+import { RegradeStatus, RegradeDecisionOutcome } from '../models/RegradeRequest';
+import { FlagReason } from '../models/ScriptFlag';
 
 describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () => {
   const rootDir = process.cwd();
@@ -14,7 +17,6 @@ describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () =>
     it('should reference existing dashboard routes in USER_GUIDE_PROFESSOR.md', () => {
       const content = fs.readFileSync(profGuidePath, 'utf8');
 
-      // Verify referenced professor pages exist in src/app/(dashboard)
       expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'page.tsx'))).toBe(true);
       expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'courses', 'page.tsx'))).toBe(true);
       expect(fs.existsSync(path.join(rootDir, 'src', 'app', '(dashboard)', 'professor', 'exams', 'page.tsx'))).toBe(true);
@@ -62,7 +64,47 @@ describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () =>
       expect(content).toContain('/admin');
       expect(content).toContain('/admin/users');
       expect(content).toContain('/admin/audit-logs');
-      expect(content).not.toContain('/admin/audit\n');
+      expect(content).not.toContain('Academic Settings');
+      expect(content).not.toContain('/professor/courses');
+    });
+  });
+
+  describe('Model & Value Alignment across all Manuals', () => {
+    it('aligns with UserRole enum values (ADMIN, PROFESSOR, TA, STUDENT)', () => {
+      const adminContent = fs.readFileSync(adminGuidePath, 'utf8');
+      expect(adminContent).toContain('`ADMIN`');
+      expect(adminContent).toContain('`PROFESSOR`');
+      expect(adminContent).toContain('`TA`');
+      expect(adminContent).toContain('`STUDENT`');
+      expect(adminContent).not.toContain('`TEACHING_ASSISTANT`');
+      expect(UserRole.TA).toBe('TA');
+    });
+
+    it('aligns with RegradeStatus and Decision enum values (OPEN, REVIEWING, RESOLVED)', () => {
+      const profContent = fs.readFileSync(profGuidePath, 'utf8');
+      const studentContent = fs.readFileSync(studentGuidePath, 'utf8');
+
+      expect(profContent).toContain('`OPEN`');
+      expect(profContent).toContain('`REVIEWING`');
+      expect(profContent).toContain('`RESOLVED`');
+
+      expect(studentContent).toContain('**OPEN**');
+      expect(studentContent).toContain('**REVIEWING**');
+      expect(studentContent).toContain('**RESOLVED**');
+
+      expect(RegradeStatus.OPEN).toBe('OPEN');
+      expect(RegradeStatus.REVIEWING).toBe('REVIEWING');
+      expect(RegradeStatus.RESOLVED).toBe('RESOLVED');
+      expect(RegradeDecisionOutcome.APPROVED).toBe('APPROVED');
+      expect(RegradeDecisionOutcome.REJECTED).toBe('REJECTED');
+    });
+
+    it('aligns with FlagReason definitions without inventing fictional buttons in TA guide', () => {
+      const taContent = fs.readFileSync(taGuidePath, 'utf8');
+      expect(taContent).not.toContain('Flag Script');
+      expect(FlagReason.CHEATING_SUSPECTED).toBe('CHEATING_SUSPECTED');
+      expect(FlagReason.ILLEGIBLE).toBe('ILLEGIBLE');
+      expect(FlagReason.OTHER).toBe('OTHER');
     });
   });
 
@@ -70,7 +112,6 @@ describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () =>
     it('should match actual shortcut keys in SHORTCUT_MAP', () => {
       const content = fs.readFileSync(taGuidePath, 'utf8');
 
-      // Verify that every single key combination mentioned in the manual is in SHORTCUT_MAP
       const validKeys = new Set<string>();
       for (const item of SHORTCUT_MAP) {
         validKeys.add(item.key.toUpperCase());
@@ -81,7 +122,6 @@ describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () =>
         }
       }
 
-      // Hotkeys: P (Pen), E (Eraser), C (Check), X (Cross), H (Highlighter), T (Text), V (Select)
       expect(validKeys.has('P')).toBe(true);
       expect(validKeys.has('E')).toBe(true);
       expect(validKeys.has('C')).toBe(true);
@@ -90,13 +130,11 @@ describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () =>
       expect(validKeys.has('T')).toBe(true);
       expect(validKeys.has('V')).toBe(true);
 
-      // Save Draft vs Submit Final: Enter is draft, Ctrl+Enter is final
       expect(content).toContain('[Enter]');
       expect(content).toContain('Save current question marks and feedback as draft');
       expect(content).toContain('[Ctrl+Enter]');
       expect(content).toContain('Finalize and submit evaluation');
 
-      // Must not claim Tab or Shift+Tab are captured for grading
       expect(content).not.toContain('[Tab] / [Shift+Tab]');
     });
   });
@@ -128,19 +166,20 @@ describe('AE-238: Role-Based User Manuals Accuracy and Integration Suite', () =>
   });
 
   describe('Disaster Recovery Safeguards (USER_GUIDE_ADMIN.md)', () => {
-    it('should NOT instruct admins to execute an unsafeguarded database restore', () => {
+    it('points to Atlas backups only and removes nonexistent backupDatabase/restoreDatabase scripts', () => {
       const adminContent = fs.readFileSync(adminGuidePath, 'utf8');
-      expect(adminContent).not.toMatch(/npx tsx src\/scripts\/restoreDatabase\.ts backups\/latest(?!\s+--dry-run)/);
-      expect(adminContent).toContain('--dry-run');
+      expect(adminContent).not.toContain('backupDatabase.ts');
+      expect(adminContent).not.toContain('restoreDatabase.ts');
       expect(adminContent).toContain('MongoDB Atlas Continuous Cloud Backups');
     });
 
-    it('should accurately describe the /api/health JSON structure', () => {
+    it('accurately describes the /api/health JSON structure without fabricated uptime field', () => {
       const adminContent = fs.readFileSync(adminGuidePath, 'utf8');
       expect(adminContent).toContain('/api/health');
       expect(adminContent).toContain('"success": true');
       expect(adminContent).toContain('"status": "healthy"');
       expect(adminContent).toContain('"database": "connected"');
+      expect(adminContent).not.toContain('"uptime"');
     });
   });
 });

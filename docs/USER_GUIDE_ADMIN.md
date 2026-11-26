@@ -4,37 +4,32 @@ Welcome to the Platform Administrator Guide. This manual covers system configura
 
 ---
 
-## 1. Academic Configuration & Course Lifecycle
+## 1. System Administration & Overview
 
-### 1.1 Managing Terms and Departments
+### 1.1 Administrator Dashboard
 1. Log in with Administrator credentials at `/login`.
-2. Navigate to **Academic Settings** in the Admin Dashboard (`/admin`):
-   - Define active academic years (e.g. `2026-27`) and semesters (`Monsoon`, `Spring`).
-   - Configure term start and end boundaries.
-3. Verify active academic departments (CSE, ECE, CND, etc.).
-
-### 1.2 Course Provisioning
-1. Navigate to **Course Administration** (`/professor/courses` or via Admin console).
-2. Specify course code, title, credits, department, and assign the lead **Course Professor**.
-3. Once provisioned, the assigned professor gains immediate administration over exam creation, rubric configuration, and TA allocations.
+2. Navigate to the Admin Dashboard (`/admin`):
+   - Review overview metrics, active exams, and system health status.
+   - Access user directory, audit trails, and examination batches.
 
 ---
 
 ## 2. User Administration & Role-Based Access Control (RBAC)
 
-The platform enforces strict role-based authorization across four discrete roles:
+The platform enforces strict role-based authorization across four discrete roles defined in `UserRole`:
 
 | Role Identifier | Description & Access Scope |
 |-----------------|----------------------------|
 | `ADMIN` | Global governance, user administration, system health monitoring, and audit log inspection. |
 | `PROFESSOR` | Complete control over owned courses, exams, rubrics, TA allocations, result publication, and regrade arbitration. |
-| `TEACHING_ASSISTANT` | Access strictly scoped to assigned grading queues; student identities anonymized. |
+| `TA` | Teaching Assistant access strictly scoped to assigned grading queues; student identities anonymized. |
 | `STUDENT` | Access restricted to personal published examination results and owned regrade requests. |
 
-### Assigning and Revoking Roles
+### 2.1 User Directory & Account Management
 1. Navigate to **User Directory** (`/admin/users`).
-2. Search for user accounts by email or campus name.
-3. Update the user role in the **Role Assignment** dropdown and save. Updated session tokens reflect new permissions on their next API request.
+2. Search for user accounts by name or email address.
+3. Review user role badges (`ADMIN`, `PROFESSOR`, `TA`, `STUDENT`) and active account status.
+4. Manage accounts via creation modals, CSV bulk onboarding, or account deactivation dialogs.
 
 ---
 
@@ -56,7 +51,7 @@ npx tsx src/scripts/verifyIntegrity.ts
 
 ---
 
-## 4. Operational Health & Disaster Recovery
+## 4. Operational Health & Backup Architecture
 
 ### 4.1 System Health Monitoring Endpoint
 Monitor live infrastructure health through the automated JSON health probe:
@@ -70,21 +65,12 @@ Response format:
   "data": {
     "status": "healthy",
     "database": "connected",
-    "timestamp": "2026-11-22T12:00:00.000Z",
-    "uptime": 3600
+    "timestamp": "2026-11-24T12:00:00.000Z"
   }
 }
 ```
 
-### 4.2 Backup & Disaster Recovery Strategy
+### 4.2 Backup & Disaster Recovery Architecture
 - **Production Standard**: Primary disaster recovery and point-in-time recovery (PITR) are managed through **MongoDB Atlas Continuous Cloud Backups**, providing automated snapshots and continuous oplog replay.
-- **Local Validation Drills**: For testing and offline archival, the repository provides non-destructive dry-run inspection:
-  ```bash
-  # Generate local archive backup
-  npx tsx src/scripts/backupDatabase.ts
-
-  # Validate backup archive integrity in dry-run mode (read-only, non-destructive)
-  npx tsx src/scripts/restoreDatabase.ts backups/latest --dry-run
-  ```
 > [!CAUTION]
-> Never execute raw destructive database restores against a live database. Production restores are managed exclusively through cloud provider snapshot rollbacks to prevent catastrophic data loss.
+> Production restores are managed exclusively through cloud provider snapshot rollbacks to prevent data loss.

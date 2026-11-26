@@ -35,12 +35,12 @@ If you believe a question was marked inconsistently with the published grading r
 
 ### 3.1 Verification Window Check
 - Regrade appeals are only accepted while the **Regrade Window** is active (configured by the course instructor following result publication).
-- Once the closing timestamp passes, submissions are strictly rejected (zero grace period).
+- Once the closing timestamp passes, submissions are strictly rejected.
 
 ### 3.2 Submission Steps
 1. In the Evaluated Script Viewer or the **Regrade Requests** page (`/student/regrade-requests`), click **Request Regrade**.
 2. Select the specific question number to dispute.
-3. Enter a clear explanation (minimum 10 characters, maximum 2,000 characters) citing the relevant rubric criteria or page derivation.
+3. Enter a clear explanation citing the relevant rubric criteria or page derivation.
 4. Click **Submit Regrade Request**.
 
 ---
@@ -49,7 +49,6 @@ If you believe a question was marked inconsistently with the published grading r
 
 1. Navigate to **My Regrade Requests** (`/student/regrade-requests`).
 2. Track your request through its lifecycle:
-   - 🟡 **Pending**: Awaiting instructor or TA review.
-   - 🔵 **Under Review**: Assigned to course staff for re-examination.
-   - 🟢 **Approved**: Marks adjusted. The updated score is automatically reflected in your results.
-   - ⚪ **Rejected**: Original marks upheld with explanatory instructor feedback.
+   - 🟡 **OPEN**: Submitted by student, awaiting review.
+   - 🔵 **REVIEWING**: Under re-examination by course staff.
+   - 🟢 **RESOLVED**: Evaluated with a final decision outcome (`APPROVED` or `REJECTED`).

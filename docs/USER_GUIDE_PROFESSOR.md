@@ -4,12 +4,12 @@ Welcome to the Course Professor User Guide. This manual details the operational 
 
 ---
 
-## 1. Course Setup and Roster Management
+## 1. Course Setup and Management
 
 ### 1.1 Accessing Your Course Dashboard
 1. Log in to the platform with your credentials at `/login`.
 2. Navigate to the **Professor Dashboard** (`/professor`) or **Courses** (`/professor/courses`).
-3. View your active courses for the current academic term.
+3. View and manage your assigned courses.
 
 ### 1.2 Managing Examinations
 1. In your exams menu (`/professor/exams`), click **Create New Exam** (`/professor/exams/create`).
@@ -28,7 +28,7 @@ Welcome to the Course Professor User Guide. This manual details the operational 
 2. For each question, define:
    - **Question Number & Title**.
    - **Maximum Marks**: Total marks allocated to this question.
-   - **Score Step Granularity**: Incremental point steps (`0.5`, `1.0`, or `2.0`).
+   - **Score Step**: Numerical step increment (default `0.5`, configurable positive number).
    - **Criteria & Deduction Rules**: Explicit checklist items describing point awards and common deductions.
 3. Save rubric definitions. Rubrics are locked once grading commences to ensure consistent standards.
 
@@ -36,10 +36,14 @@ Welcome to the Course Professor User Guide. This manual details the operational 
 
 ## 3. TA Grading Allocation & Progress Tracking
 
-### 3.1 Allocation Strategies
+### 3.1 Allocation Configuration
 Navigate to **Grading Allocations** (`/professor/exams/[id]/allocate`):
-- **Question-Level Allocation**: Assign specific questions across all answer scripts to designated TAs (e.g., TA 1 evaluates Question 1; TA 2 evaluates Question 2). This maximizes evaluation consistency.
-- **Script-Level Allocation**: Allocate subsets of student scripts across teaching assistants.
+- Select participating Teaching Assistants (`TA` role).
+- Select allocation rule:
+  - **Equal Distribution**: Distributes eligible scripts equally across selected TAs.
+  - **Question-Wise**: Allocates scripts by question across graders.
+  - **Random Assignment**: Uses a pseudorandom seed to allocate scripts fairly.
+- Preview distribution counts before confirming execution.
 
 ### 3.2 Real-Time Progress Monitoring
 The **Exam Progress Monitor** (`/professor/exams/[id]/progress`) and **Analytics** (`/professor/exams/[id]/analytics`) provide:
@@ -71,10 +75,11 @@ Before releasing results to students, ensure:
 
 ### 5.1 Reviewing the Regrade Queue
 1. Navigate to **Regrade Requests** (`/professor/regrade-requests`).
-2. Filter requests by question, status (`PENDING`, `UNDER_REVIEW`, `RESOLVED`), or submission date.
+2. Filter requests by question, status (`OPEN`, `REVIEWING`, `RESOLVED`), or submission date.
 3. Review student rationale alongside the annotated script pages and rubric breakdown.
 
-### 5.2 Approving or Rejecting Appeals
-- **Approve Regrade**: Update the question score with explanatory remarks. The student's total marks update immediately.
-- **Reject Regrade**: Maintain original marks with constructive rationale explaining why the original evaluation stands.
+### 5.2 Deciding Regrade Appeals
+- **Approve Appeal**: Adjust marks in accordance with rubric score step increments.
+- **Reject Appeal**: Uphold original evaluation with explanatory feedback.
+- Status advances to `RESOLVED` with the recorded decision outcome (`APPROVED` or `REJECTED`).
 - All decisions are immutably logged in the course audit record.

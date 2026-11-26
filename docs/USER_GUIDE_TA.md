@@ -1,6 +1,6 @@
 # Teaching Assistant (TA) User Guide: IIIT Hyderabad Assignment Evaluation Platform
 
-Welcome to the Teaching Assistant Grading Manual. This guide provides comprehensive operational instructions for navigating your assigned grading queues, utilizing interactive canvas annotation tools, leveraging keyboard shortcuts, managing offline drafts, and escalating anomalous student submissions.
+Welcome to the Teaching Assistant Grading Manual. This guide provides comprehensive operational instructions for navigating your assigned grading queues, utilizing interactive canvas annotation tools, leveraging keyboard shortcuts, managing offline drafts, and evaluating student submissions.
 
 ---
 
@@ -72,16 +72,3 @@ Grading continuity is protected against campus Wi-Fi interruptions:
   - 🟢 **Synced**: All grades and annotations successfully committed to the database.
   - 🟡 **Syncing...**: Submissions are actively uploading in the background.
   - 🔴 **Offline Draft**: Internet connection interrupted. You may continue grading uninterrupted; all changes will synchronize automatically once reconnected.
-
----
-
-## 5. Flagging Anomalous or Illegible Scripts
-
-If you encounter an issue that prevents fair evaluation:
-1. Click the **Flag Script** button in the canvas toolbar.
-2. Select the flag category:
-   - **Illegible Handwriting / Dark Scan**: Pages cannot be deciphered.
-   - **Suspected Malpractice**: Identical derivation patterns or unapproved notes.
-   - **Missing / Out-of-Order Answers**: Question answers written in unconventional sections.
-3. Enter explanatory notes detailing the observation.
-4. Submit the flag. The script is routed to the Professor's review queue (`/professor/flags`), and your grading workspace advances to the next script.
