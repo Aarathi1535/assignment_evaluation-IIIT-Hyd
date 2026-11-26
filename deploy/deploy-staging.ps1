@@ -1,10 +1,14 @@
-﻿# ==============================================================================
+# ==============================================================================
 # Staging Deployment Script: Google Cloud Run (PowerShell - Draft / Reference)
 # ==============================================================================
 # NOTE: Review comments on PR #355:
 # - Do not use made-up project IDs; require GCP_PROJECT_ID explicitly.
 # - Exit non-zero on auth/access errors (never exit 0 on missing auth).
-# - Deploy with --no-traffic preview first, run health smoke test, then shift traffic.
+# - Use Artifact Registry instead of deprecated gcr.io.
+# - Deploy with --no-traffic preview first.
+# - Look up the preview URL for $tagName specifically.
+# - Include identity token with curl if the service is private.
+# - Shift traffic to the exact verified revision rather than --to-latest.
 # - Do not grant allUsers invoker on every run.
 # ==============================================================================
 param (
@@ -20,12 +24,13 @@ if (-not $ProjectId) {
     exit 1
 }
 
-$ImageTag = "gcr.io/$ProjectId/assignment-evaluator:staging-latest"
+$ImageTag = "$Region-docker.pkg.dev/$ProjectId/assignment-evaluator/app:staging-latest"
 
 Write-Host "=== IIIT Hyd Assignment Evaluation Platform: Staging Deploy ===" -ForegroundColor Cyan
 Write-Host "Target Project: $ProjectId"
 Write-Host "Target Region:  $Region"
 Write-Host "Target Service: $ServiceName"
+Write-Host "Image Tag:      $ImageTag"
 Write-Host ""
 
 # Pre-flight Check 1: Verify gcloud CLI is available
@@ -73,20 +78,31 @@ $tagName = "preview-$timestamp"
     --tag="$tagName"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$previewUrl = (& gcloud run services describe $ServiceName --project="$ProjectId" --region="$Region" --format="value(status.traffic[0].url)").Trim()
+# Look up the preview URL specifically for $tagName
+$previewUrl = (& gcloud run services describe $ServiceName --project="$ProjectId" --region="$Region" --format="value(status.traffic.filter(tag=$tagName).url)").Trim()
+$revisionName = (& gcloud run services describe $ServiceName --project="$ProjectId" --region="$Region" --format="value(status.traffic.filter(tag=$tagName).revisionName)").Trim()
+
+Write-Host "Preview Revision: $revisionName"
+Write-Host "Preview URL:      $previewUrl"
 
 Write-Host "Running smoke test on preview revision URL: $previewUrl/api/health..."
 try {
-    $healthCheck = Invoke-RestMethod -Uri "$previewUrl/api/health" -TimeoutSec 15
+    $idToken = (& gcloud auth print-identity-token 2>$null)
+    $headers = @{}
+    if ($idToken) {
+        $headers["Authorization"] = "Bearer $idToken"
+    }
+
+    $healthCheck = Invoke-RestMethod -Uri "$previewUrl/api/health" -Headers $headers -TimeoutSec 15
     if ($healthCheck.success -ne $true -and $healthCheck.status -ne 'healthy') {
         throw "Health probe returned unhealthy payload"
     }
-    Write-Host "✅ Smoke test passed. Migrating 100% traffic to latest revision..." -ForegroundColor Green
-    & gcloud run services update-traffic $ServiceName --project="$ProjectId" --region="$Region" --to-latest
+    Write-Host "✅ Smoke test passed. Migrating 100% traffic to verified revision $revisionName..." -ForegroundColor Green
+    & gcloud run services update-traffic $ServiceName --project="$ProjectId" --region="$Region" --to-revisions="$revisionName=100"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 catch {
-    Write-Host "❌ Smoke test failed on preview revision. Rolling back / leaving existing traffic intact." -ForegroundColor Red
+    Write-Host "❌ Smoke test failed on preview revision. Leaving existing traffic intact." -ForegroundColor Red
     exit 1
 }
 

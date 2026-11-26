@@ -7,7 +7,11 @@ set -euo pipefail
 # NOTE: Review comments on PR #355:
 # - Do not use made-up project IDs; require GCP_PROJECT_ID explicitly.
 # - Exit non-zero on auth/access errors (never exit 0 on missing auth).
-# - Deploy with --no-traffic preview first, run health smoke test, then shift traffic.
+# - Use Artifact Registry instead of deprecated gcr.io.
+# - Deploy with --no-traffic preview first.
+# - Look up the preview URL for TAG_NAME specifically.
+# - Include identity token with curl if the service is private.
+# - Shift traffic to the exact verified revision rather than --to-latest.
 # - Do not grant allUsers invoker on every run.
 # ==============================================================================
 
@@ -20,12 +24,13 @@ fi
 PROJECT_ID="${GCP_PROJECT_ID}"
 REGION="${GCP_REGION:-asia-south1}"
 SERVICE_NAME="assignment-evaluator-staging"
-IMAGE_TAG="gcr.io/${PROJECT_ID}/assignment-evaluator:staging-latest"
+IMAGE_TAG="${REGION}-docker.pkg.dev/${PROJECT_ID}/assignment-evaluator/app:staging-latest"
 
 echo "=== IIIT Hyd Assignment Evaluation Platform: Staging Deploy ==="
 echo "Target Project: ${PROJECT_ID}"
 echo "Target Region:  ${REGION}"
 echo "Target Service: ${SERVICE_NAME}"
+echo "Image Tag:      ${IMAGE_TAG}"
 echo ""
 
 # Pre-flight Check 1: Verify gcloud CLI is available
@@ -61,20 +66,37 @@ gcloud run deploy "${SERVICE_NAME}" \
     --no-traffic \
     --tag="${TAG_NAME}"
 
+# Look up the preview URL specifically for $TAG_NAME
 PREVIEW_URL=$(gcloud run services describe "${SERVICE_NAME}" \
     --project="${PROJECT_ID}" \
     --region="${REGION}" \
-    --format="value(status.traffic[0].url)")
+    --format="value(status.traffic.filter(tag=${TAG_NAME}).url)")
+
+# Look up the specific revision name deployed with $TAG_NAME
+REVISION_NAME=$(gcloud run services describe "${SERVICE_NAME}" \
+    --project="${PROJECT_ID}" \
+    --region="${REGION}" \
+    --format="value(status.traffic.filter(tag=${TAG_NAME}).revisionName)")
+
+echo "Preview Revision: ${REVISION_NAME}"
+echo "Preview URL:      ${PREVIEW_URL}"
+
+# Obtain identity token in case Cloud Run service is private
+ID_TOKEN=$(gcloud auth print-identity-token 2>/dev/null || echo "")
+AUTH_HEADER=()
+if [[ -n "${ID_TOKEN}" ]]; then
+    AUTH_HEADER=(-H "Authorization: Bearer ${ID_TOKEN}")
+fi
 
 echo "Running smoke test on preview revision URL: ${PREVIEW_URL}/api/health..."
-if curl -sf --max-time 15 "${PREVIEW_URL}/api/health"; then
-    echo "✅ Smoke test passed. Migrating 100% traffic to latest revision..."
+if curl -sf --max-time 15 "${AUTH_HEADER[@]}" "${PREVIEW_URL}/api/health"; then
+    echo "✅ Smoke test passed. Migrating 100% traffic to verified revision ${REVISION_NAME}..."
     gcloud run services update-traffic "${SERVICE_NAME}" \
         --project="${PROJECT_ID}" \
         --region="${REGION}" \
-        --to-latest
+        --to-revisions="${REVISION_NAME}=100"
 else
-    echo "❌ Smoke test failed on preview revision. Rolling back / leaving existing traffic intact."
+    echo "❌ Smoke test failed on preview revision. Leaving existing traffic intact."
     exit 1
 fi
 

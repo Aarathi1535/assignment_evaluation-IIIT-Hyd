@@ -95,10 +95,10 @@ describe('AE-231: Google Cloud Run Deployment & Staging Architecture', () => {
 
       // Both scripts must probe health before update-traffic
       expect(bashContent).toMatch(/\/api\/health/);
-      expect(bashContent).toMatch(/update-traffic[\s\S]*--to-latest/);
+      expect(bashContent).toMatch(/update-traffic[\s\S]*--to-revisions/);
 
       expect(psContent).toMatch(/\/api\/health/);
-      expect(psContent).toMatch(/update-traffic[\s\S]*--to-latest/);
+      expect(psContent).toMatch(/update-traffic[\s\S]*--to-revisions/);
     });
 
     it('verifies deploy scripts exit with error code 1 when unauthenticated', () => {
