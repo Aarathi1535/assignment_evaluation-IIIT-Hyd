@@ -12,22 +12,22 @@ describe('AE-239: Operations Runbook & Production Deployment Verification', () =
       expect(fs.existsSync(runbookPath)).toBe(true);
       const content = fs.readFileSync(runbookPath, 'utf8');
 
-      expect(content).toContain('Local Development Environment');
-      expect(content).toContain('Staging Environment (GCP)');
-      expect(content).toContain('Production Environment (GCP)');
-      expect(content).toContain('docker-compose.yml');
-      expect(content).toContain('deploy/cloudrun-service.yaml');
+      expect(content).toContain('Google Cloud Run');
+      expect(content).toContain('MongoDB Atlas');
+      // Must not assert or refer to missing files from unmerged branches
+      expect(content).not.toContain('docker-compose.yml');
+      expect(content).not.toContain('deploy/cloudrun-service.yaml');
+      expect(content).not.toContain('backupDatabase.ts');
+      expect(content).not.toContain('restoreDatabase.ts');
     });
 
     it('should mandate GCP_PROJECT_ID and explicit --region for all cloud commands without made-up projects', () => {
       const content = fs.readFileSync(runbookPath, 'utf8');
 
-      // Must require GCP_PROJECT_ID environment variable
       expect(content).toContain('GCP_PROJECT_ID');
       expect(content).toContain('asia-south1');
-      expect(content).not.toContain('iiit-hyd-assignment-eval.iam');
+      expect(content).not.toContain('iiit-hyd-assignment-eval');
 
-      // Cloud Run commands must specify project and region
       expect(content).toContain('--project="${PROJECT_ID}"');
       expect(content).toContain('--region="${REGION}"');
     });
@@ -39,7 +39,8 @@ describe('AE-239: Operations Runbook & Production Deployment Verification', () =
       expect(content).toContain('"success": true');
       expect(content).toContain('"status": "healthy"');
       expect(content).toContain('"database": "connected"');
-      expect(content).not.toContain('"storage": "available"'); // Fictional property eliminated
+      expect(content).not.toContain('"storage": "available"');
+      expect(content).not.toContain('"uptime"');
     });
 
     it('should define preview deployments with explicit --tag and --no-traffic', () => {
@@ -48,22 +49,23 @@ describe('AE-239: Operations Runbook & Production Deployment Verification', () =
       expect(content).toContain('--no-traffic');
       expect(content).toContain('--tag="${TAG_NAME}"');
       expect(content).toContain('TAG_NAME="preview-');
-      expect(content).toContain('/api/health');
+      expect(content).toContain('status.traffic.filter(tag=${TAG_NAME}).url');
     });
 
-    it('should verify health before executing revision rollbacks', () => {
+    it('should record serving revision before traffic shift and roll back to known good revision', () => {
       const content = fs.readFileSync(runbookPath, 'utf8');
 
-      // Must check that revision is healthy / ready before rolling back
-      expect(content).toContain('status.conditions.type:Ready AND status.conditions.status:True');
-      expect(content).toContain('--to-revisions="${PREVIOUS_HEALTHY_REV}=100"');
+      expect(content).toContain('CURRENT_SERVING_REV=');
+      expect(content).toContain('PREVIOUS_GOOD_REV');
+      expect(content).toContain('--to-revisions="${PREVIOUS_GOOD_REV}=100"');
     });
 
     it('should document real disaster recovery standard via MongoDB Atlas PITR', () => {
       const content = fs.readFileSync(runbookPath, 'utf8');
 
       expect(content).toContain('MongoDB Atlas Continuous Cloud Backups');
-      expect(content).toContain('--dry-run');
+      expect(content).not.toContain('npx tsx src/scripts/backupDatabase.ts');
+      expect(content).not.toContain('npx tsx src/scripts/restoreDatabase.ts');
     });
   });
 
