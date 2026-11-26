@@ -3,9 +3,16 @@ import { connectDB } from '@/lib/db';
 import AuthService from '@/services/AuthService';
 import { registerSchema } from '@/validations/authValidation';
 import { HttpError } from '@/lib/errors';
+import { checkRateLimit, createRateLimitResponse, getClientIdentifier, RATE_LIMIT_TIERS } from '@/lib/rateLimit';
 
 export async function POST(req: NextRequest) {
   try {
+    const clientId = getClientIdentifier(req);
+    const rateLimitResult = checkRateLimit(`auth:register:${clientId}`, RATE_LIMIT_TIERS.AUTH);
+    if (!rateLimitResult.allowed) {
+      return createRateLimitResponse(rateLimitResult, 'Too many registration attempts. Please try again later.');
+    }
+
     await connectDB();
 
     let body;
