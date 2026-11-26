@@ -27,6 +27,7 @@ import {
 } from '@/lib/canvasProfiling';
 
 import type { RenderedImageBounds } from '@/lib/annotations';
+import { StylusInputManager } from '@/lib/stylusInputManager';
 
 export interface PenLayerProps {
   /** Parent Konva stage instance */
@@ -107,6 +108,7 @@ export function PenLayer({
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
   const baseBoundsRef = useRef(baseBounds);
+  const stylusInputManagerRef = useRef<StylusInputManager>(new StylusInputManager());
 
   useEffect(() => {
     transformRef.current = transform;
@@ -346,6 +348,23 @@ export function PenLayer({
       // Only draw/erase on primary pointer button (left click or stylus tip or touch)
       if (e.button !== 0 && e.buttons !== 1 && e.pointerType === 'mouse') return;
 
+      // Stylus prioritization and palm rejection filtering (AE-235)
+      const resolution = stylusInputManagerRef.current.handlePointerDown({
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        pressure: e.pressure,
+        width: e.width,
+        height: e.height,
+        timestamp: e.timeStamp,
+      });
+
+      if (!resolution.accepted) {
+        // Palm rejection active (temporal cooldown or large contact area)
+        return;
+      }
+
       const rect = container.getBoundingClientRect();
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
@@ -386,7 +405,7 @@ export function PenLayer({
       const newStroke = createStroke(pageKeyRef.current, imagePoint, {
         color: colorRef.current,
         strokeWidth: strokeWidthRef.current,
-        pressure: e.pressure,
+        pressure: resolution.strokePoint?.pressure ?? e.pressure,
       });
 
       isDrawingRef.current = true;
@@ -411,6 +430,20 @@ export function PenLayer({
     };
 
     const handlePointerMove = (e: PointerEvent) => {
+      // Evaluate pointermove against palm rejection
+      const resolution = stylusInputManagerRef.current.handlePointerMove({
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        pressure: e.pressure,
+        width: e.width,
+        height: e.height,
+        timestamp: e.timeStamp,
+      });
+
+      if (!resolution.accepted) return;
+
       const pointerEventTime = e.timeStamp;
       const isDevProfiling = isCanvasProfilingEnabled();
 
@@ -477,7 +510,14 @@ export function PenLayer({
       }
     };
 
-    const handlePointerUp = () => {
+    const handlePointerUp = (e: PointerEvent) => {
+      stylusInputManagerRef.current.handlePointerUp({
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        timestamp: e.timeStamp,
+      });
       if (isErasingRef.current) {
         finalizeErasingGesture();
       }
@@ -486,7 +526,14 @@ export function PenLayer({
       }
     };
 
-    const handlePointerCancel = () => {
+    const handlePointerCancel = (e: PointerEvent) => {
+      stylusInputManagerRef.current.handlePointerUp({
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        timestamp: e.timeStamp,
+      });
       if (isErasingRef.current) {
         finalizeErasingGesture();
       }
