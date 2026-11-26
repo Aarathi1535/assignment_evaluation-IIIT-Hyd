@@ -410,22 +410,22 @@ AuditLogSchema.pre('save', async function () {
         this.integrityKeyId = allocation.integrityKeyId;
         this.allocationToken = allocation.allocationToken;
         this.createdAt = allocation.createdAt;
-    }
-
-    // 2. Fencing verification: prove that this writer's allocation token is still current and valid.
+    // 2. Fencing verification for pre-allocated sequences: prove that this writer's allocation token is still current and valid.
     // An instance whose lease expired or was recovered by another instance will be fenced and rejected.
-    if (this.allocationToken) {
+    } else if (this.allocationToken) {
         const currentState = await AuditLogIntegrityState.findById('global').lean();
         const isLeaseActive = currentState?.leaseExpiresAt
             ? new Date(currentState.leaseExpiresAt).getTime() > Date.now()
             : false;
 
-        const isCurrent = currentState &&
-            currentState.lastSequence === this.sequence &&
-            currentState.allocationToken === this.allocationToken &&
-            isLeaseActive;
-
-        if (!isCurrent) {
+        if (currentState && currentState.lastSequence === this.sequence) {
+            const isCurrent = currentState.allocationToken === this.allocationToken && isLeaseActive;
+            if (!isCurrent) {
+                throw new Error(
+                    `Stale write rejected: allocation token for sequence ${this.sequence} has expired or been superseded.`
+                );
+            }
+        } else if (currentState && currentState.lastSequence < this.sequence) {
             throw new Error(
                 `Stale write rejected: allocation token for sequence ${this.sequence} has expired or been superseded.`
             );
