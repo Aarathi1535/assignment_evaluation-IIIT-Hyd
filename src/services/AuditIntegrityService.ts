@@ -66,9 +66,20 @@ export class AuditIntegrityService {
             // Legacy pre-cutover records or records with no sequence
             if (!Number.isSafeInteger(sequence) || !sequence || sequence < cutoverSequence) {
                 if (hasSeal) {
-                    // A record carrying an integrity seal must NOT be treated as a legacy unsealed record
-                    invalidSeals += 1;
-                    addDiagnostic({ code: 'SEAL_INVALID', sequence: sequence ?? undefined });
+                    if (!Number.isSafeInteger(sequence) || !sequence) {
+                        // Flag records that carry a seal but have no sequence number
+                        invalidSeals += 1;
+                        addDiagnostic({ code: 'SEAL_INVALID', sequence: undefined });
+                        continue;
+                    }
+                    // For sealed records below cutoverSequence with a valid sequence number:
+                    // Verify using verifyAuditIntegritySeal (which accepts legacy v1 seals below cutover)
+                    if (verifyAuditIntegritySeal(integrityRecord, cutoverSequence).valid) {
+                        sealedRecords += 1;
+                    } else {
+                        invalidSeals += 1;
+                        addDiagnostic({ code: 'SEAL_INVALID', sequence });
+                    }
                     continue;
                 }
                 // If cutover is active and an unsealed record was created after cutover date, it is an invalid injection
