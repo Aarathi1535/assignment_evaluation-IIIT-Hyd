@@ -72,6 +72,12 @@ export function CanvasStage({
         ? height
         : containerRef.current.clientHeight || 600;
 
+    // Cap Konva.pixelRatio to at most 2 on high-DPI/Retina screens to bound GPU memory usage,
+    // while keeping stage dimensions in CSS pixels to avoid clipping.
+    if (typeof window !== 'undefined' && window.devicePixelRatio) {
+      Konva.pixelRatio = Math.min(window.devicePixelRatio, 2);
+    }
+
     const newStage = new Konva.Stage({
       container: containerRef.current,
       width: initialW,
@@ -124,6 +130,7 @@ export function CanvasStage({
           width: typeof width === 'number' ? `${width}px` : '100%',
           height: typeof height === 'number' ? `${height}px` : '100%',
           backgroundColor,
+          touchAction: 'none',
         }}
         data-testid="canvas-stage-container"
       >

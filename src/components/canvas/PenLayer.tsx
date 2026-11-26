@@ -27,6 +27,7 @@ import {
 } from '@/lib/canvasProfiling';
 
 import type { RenderedImageBounds } from '@/lib/annotations';
+import { normalizePointerPressure } from '@/lib/browserCompatibility';
 
 export interface PenLayerProps {
   /** Parent Konva stage instance */
@@ -383,10 +384,11 @@ export function PenLayer({
 
       if (!isPenActiveRef.current) return;
 
+      const normalizedPointer = normalizePointerPressure(e);
       const newStroke = createStroke(pageKeyRef.current, imagePoint, {
         color: colorRef.current,
         strokeWidth: strokeWidthRef.current,
-        pressure: e.pressure,
+        pressure: normalizedPointer.pressure,
       });
 
       isDrawingRef.current = true;
