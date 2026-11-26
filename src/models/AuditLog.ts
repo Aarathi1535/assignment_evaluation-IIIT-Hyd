@@ -102,9 +102,23 @@ async function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function checkRecordExists(sequence: number, session?: mongoose.ClientSession): Promise<boolean> {
+    if (session) {
+        try {
+            const inSession = await AuditLog.exists({ sequence }).session(session);
+            if (inSession) return true;
+        } catch {
+            // Best effort session check
+        }
+    }
+    const inDb = await AuditLog.exists({ sequence });
+    return !!inDb;
+}
+
 export interface ReconcileOptions {
     maxWaitMs?: number;
     force?: boolean;
+    session?: mongoose.ClientSession;
 }
 
 /**
@@ -129,7 +143,7 @@ export async function reconcileOrphanedIntegrityState(
     }
 
     // 1. Check if the record for state.lastSequence actually exists in AuditLog
-    let recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+    let recordExists = await checkRecordExists(state.lastSequence, options.session);
     if (recordExists) {
         return state;
     }
@@ -147,7 +161,7 @@ export async function reconcileOrphanedIntegrityState(
         const startTime = Date.now();
         while (Date.now() - startTime < maxWaitMs) {
             await sleep(pollInterval);
-            recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+            recordExists = await checkRecordExists(state.lastSequence, options.session);
             if (recordExists) {
                 return state;
             }
@@ -158,7 +172,7 @@ export async function reconcileOrphanedIntegrityState(
     }
 
     // 4. Re-check existence after wait
-    recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+    recordExists = await checkRecordExists(state.lastSequence, options.session);
     if (recordExists) {
         return state;
     }
@@ -173,6 +187,7 @@ export async function reconcileOrphanedIntegrityState(
     const actualLatestRecord = await AuditLog.findOne({
         sequence: { $exists: true, $ne: null }
     })
+        .session(options.session || null)
         .select('+integritySeal sequence')
         .sort({ sequence: -1 })
         .lean()
@@ -257,7 +272,7 @@ export async function allocateAuditSequence(
         ipAddress?: string;
         createdAt?: Date;
     },
-    options?: { leaseDurationMs?: number }
+    options?: { leaseDurationMs?: number; session?: mongoose.ClientSession }
 ): Promise<AllocatedAuditSequence> {
     return withSequenceLock(async () => {
         const maxRetries = 10;
@@ -295,11 +310,11 @@ export async function allocateAuditSequence(
                 }
 
                 // Check and reconcile any crashed/orphaned allocation before advancing sequence.
-                state = await reconcileOrphanedIntegrityState(state);
+                state = await reconcileOrphanedIntegrityState(state, { session: options?.session });
 
                 // If another instance is actively persisting state.lastSequence within its lease,
                 // wait for it to commit before allocating nextSequence.
-                if (state.lastSequence > 0 && !await AuditLog.exists({ sequence: state.lastSequence })) {
+                if (state.lastSequence > 0 && !await checkRecordExists(state.lastSequence, options?.session)) {
                     const isLeaseActive = state.leaseExpiresAt && new Date(state.leaseExpiresAt).getTime() > Date.now();
                     if (isLeaseActive && attempt < maxRetries) {
                         await sleep(50 * attempt);
@@ -390,6 +405,7 @@ AuditLogSchema.pre('save', async function () {
 
     // 1. If sequence was not yet allocated, allocate it now
     if (!this.sequence) {
+        const session = this.$session();
         const allocation = await allocateAuditSequence({
             user: this.user,
             action: this.action,
@@ -399,7 +415,7 @@ AuditLogSchema.pre('save', async function () {
             details: this.details,
             ipAddress: this.ipAddress,
             createdAt: this.createdAt
-        });
+        }, { session: session || undefined });
 
         this.sequence = allocation.sequence;
         this.previousSeal = allocation.previousSeal;
@@ -407,22 +423,22 @@ AuditLogSchema.pre('save', async function () {
         this.integrityKeyId = allocation.integrityKeyId;
         this.allocationToken = allocation.allocationToken;
         this.createdAt = allocation.createdAt;
-    }
-
-    // 2. Fencing verification: prove that this writer's allocation token is still current and valid.
+    // 2. Fencing verification for pre-allocated sequences: prove that this writer's allocation token is still current and valid.
     // An instance whose lease expired or was recovered by another instance will be fenced and rejected.
-    if (this.allocationToken) {
+    } else if (this.allocationToken) {
         const currentState = await AuditLogIntegrityState.findById('global').lean();
         const isLeaseActive = currentState?.leaseExpiresAt
             ? new Date(currentState.leaseExpiresAt).getTime() > Date.now()
             : false;
 
-        const isCurrent = currentState &&
-            currentState.lastSequence === this.sequence &&
-            currentState.allocationToken === this.allocationToken &&
-            isLeaseActive;
-
-        if (!isCurrent) {
+        if (currentState && currentState.lastSequence === this.sequence) {
+            const isCurrent = currentState.allocationToken === this.allocationToken && isLeaseActive;
+            if (!isCurrent) {
+                throw new Error(
+                    `Stale write rejected: allocation token for sequence ${this.sequence} has expired or been superseded.`
+                );
+            }
+        } else if (currentState && currentState.lastSequence < this.sequence) {
             throw new Error(
                 `Stale write rejected: allocation token for sequence ${this.sequence} has expired or been superseded.`
             );
@@ -431,6 +447,11 @@ AuditLogSchema.pre('save', async function () {
 });
 
 AuditLogSchema.post('save', async function () {
+    // If saving within an uncommitted transaction session, do not unset leaseExpiresAt yet
+    // so in-flight transaction writes remain protected from premature orphan recovery.
+    if (this.$session()) {
+        return;
+    }
     if (this.sequence && this.allocationToken) {
         try {
             await AuditLogIntegrityState.updateOne(
