@@ -1,0 +1,72 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: assignment-evaluator-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - MONGODB_URI=mongodb://mongodb:27017/assignment_evaluator?replicaSet=rs0
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET}
+      - ORIGINAL_STORAGE_HMAC_SECRET=${ORIGINAL_STORAGE_HMAC_SECRET:?set ORIGINAL_STORAGE_HMAC_SECRET}
+      - ORIGINAL_STORAGE_KEY_ID=${ORIGINAL_STORAGE_KEY_ID:-v1}
+      - ORIGINAL_STORAGE_PATH=/app/data/originals
+      - STUDENT_RESULTS_ENABLED=${STUDENT_RESULTS_ENABLED:-true}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - evaluator_network
+
+  mongodb:
+    image: mongo:7.0
+    container_name: assignment-evaluator-mongo
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    # MongoDB port is unmapped from host to prevent unauthenticated external access;
+    # accessible strictly within the internal docker bridge network.
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "
+          try {
+            rs.status().ok
+          } catch (e) {
+            rs.initiate({
+              _id: 'rs0',
+              members: [{ _id: 0, host: 'mongodb:27017' }]
+            }).ok || rs.status().ok
+          }
+        "
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    networks:
+      - evaluator_network
+
+volumes:
+  mongo_data:
+    name: assignment_evaluator_mongo_data
+  app_data:
+    name: assignment_evaluator_app_data
+
+networks:
+  evaluator_network:
+    name: assignment_evaluator_network
+    driver: bridge
