@@ -14,47 +14,55 @@ This document specifies the platform's sliding-window rate limiting engine, clie
 
 ## 2. Multi-Tiered Rate Limiting Policies
 
-The platform enforces sliding-window rate limiting across sensitive operations via `src/lib/rateLimit.ts`:
+The platform defines sliding-window rate limiting policies via `src/lib/rateLimit.ts`. Route-level enforcement is phased: authentication registration and password reset links are actively enforced, while login, token reset, and higher-tier operations are distinguished below.
 
 ```mermaid
 flowchart TD
     Client["Incoming HTTP Request"] --> Proxy["Reverse Proxy / Ingress Gateway"]
-    Proxy --> HeaderExtract["Safe IP Resolution (x-real-ip / rightmost x-forwarded-for)"]
-    HeaderExtract --> RouteCheck{"Target Endpoint Tier"}
+    Proxy --> HeaderExtract["IP Resolution (x-real-ip / rightmost x-forwarded-for)"]
+    HeaderExtract --> RouteCheck{"Target Endpoint"}
 
-    RouteCheck -->|Registration / Reset| AuthLimit["Auth Tier: 5 req / 1 min per IP"]
-    RouteCheck -->|Batch Upload| UploadLimit["Upload Tier: 10 uploads / 1 hr per User/IP"]
-    RouteCheck -->|PDF Export| ExportLimit["Export Tier: 5 exports / 1 hr per Student"]
-    RouteCheck -->|Regrade Submission| RegradeLimit["Regrade Tier: 10 req / 24 hr per Student"]
+    RouteCheck -->|POST /api/auth/register| AuthLimit["Enforced: 5 req / 1 min per IP"]
+    RouteCheck -->|POST /api/auth/reset| ResetLinkLimit["Enforced: 5 req / 1 min per IP"]
+    RouteCheck -->|POST /api/auth/reset-password| NotLimited1["Not Currently Rate Limited"]
+    RouteCheck -->|NextAuth authorize (Login)| NotLimited2["Not Currently Rate Limited"]
+    RouteCheck -->|Batch Upload| ConfiguredOnly1["Upload Tier: Configured, Not Enforced in Route"]
+    RouteCheck -->|PDF Export| ConfiguredOnly2["Export Tier: Configured, Not Enforced in Route"]
+    RouteCheck -->|Regrade Submission| ConfiguredOnly3["Regrade Tier: Configured, Not Enforced in Route"]
 
     AuthLimit --> CheckLimit{"Within Quota?"}
-    UploadLimit --> CheckLimit
-    ExportLimit --> CheckLimit
-    RegradeLimit --> CheckLimit
+    ResetLinkLimit --> CheckLimit
 
     CheckLimit -->|Yes| Allow["200/201 Success (Record Timestamp)"]
     CheckLimit -->|No| Reject["429 Too Many Requests (Retry-After Header)"]
 ```
 
-### 2.1 Configuration Tiers & Thresholds
+### 2.1 Configuration Tiers & Enforcement Status
 
-| Tier | Window | Max Quota | Key Namespace | Target Attack / Risk Mitigated |
-| :--- | :---: | :---: | :--- | :--- |
-| **`AUTH`** | 1 minute | 5 requests | `auth:register:ip:<ip>`, `auth:reset:ip:<ip>` | Brute-force credential stuffing, registration flooding, password reset spamming |
-| **`UPLOAD`** | 1 hour | 10 uploads | `upload:user:<userId>` | Storage backend flooding, OCR worker overload, disk exhaustion |
-| **`STUDENT_EXPORT`** | 1 hour | 5 exports | `export:user:<studentId>` | Canvas rendering CPU exhaustion, memory buffer starvation |
-| **`REGRADE_REQUEST`** | 24 hours | 10 requests | `regrade:user:<studentId>` | Teaching assistant evaluation queue spamming |
+| Tier | Window | Max Quota | Key Namespace | Route Enforcement Status | Target Risk |
+| :--- | :---: | :---: | :--- | :--- | :--- |
+| **`AUTH`** | 1 minute | 5 requests | `auth:register:ip:<ip>`, `auth:reset:ip:<ip>` | **Enforced** on `/api/auth/register` and `/api/auth/reset`.<br>*(Note: `/api/auth/reset-password` and NextAuth credentials `authorize` are **not currently rate limited**)* | Registration flooding, reset-link spamming |
+| **`UPLOAD`** | 1 hour | 10 uploads | `upload:user:<userId>` | **Configured only** in `RATE_LIMIT_TIERS.UPLOAD`; not yet enforced in upload routes | Storage backend flooding, disk exhaustion |
+| **`STUDENT_EXPORT`** | 1 hour | 5 exports | `export:user:<studentId>` | **Configured only** in `RATE_LIMIT_TIERS.STUDENT_EXPORT`; not yet enforced in export routes | Rendering CPU exhaustion, buffer starvation |
+| **`REGRADE_REQUEST`** | 24 hours | 10 requests | `regrade:user:<studentId>` | **Configured only** in `RATE_LIMIT_TIERS.REGRADE_REQUEST`; not yet enforced in regrade routes | Evaluation queue spamming |
 
 ---
 
 ## 3. Architecture & Gap Analysis: In-Memory vs. Distributed Cloud Limiting
 
-### 3.1 Node-Local In-Memory Scope
+### 3.1 Node-Local In-Memory Scope & Enforcement Status
 - **Mechanism:** In-process sliding-window bucket store (`Map<string, number[]>`) in `src/lib/rateLimit.ts`.
-- **Application Endpoints:** Enforced directly in route handlers:
+- **Currently Enforced Endpoints:**
   - `POST /api/auth/register` (5 attempts / 60s per IP)
-  - `POST /api/auth/reset` (5 attempts / 60s per IP)
-- **Single-Instance Guarantee:** On a single server instance or local container, bursts exceeding the threshold are immediately rejected with `429 Too Many Requests`.
+  - `POST /api/auth/reset` (5 attempts / 60s per IP for password reset-link requests)
+- **Endpoints Not Currently Rate Limited:**
+  - `POST /api/auth/reset-password` (password reset completion with token — currently unenforced)
+  - NextAuth credentials `authorize` (primary user login / credential authentication — currently unenforced)
+- **Tiers Configured but Not Enforced in Routes:**
+  - Batch upload routes (`UPLOAD` tier defined, not wired to route handlers)
+  - Student export routes (`STUDENT_EXPORT` tier defined, not wired to route handlers)
+  - Regrade request routes (`REGRADE_REQUEST` tier defined, not wired to route handlers)
+- **Single-Instance Guarantee:** On a single server instance or local container, bursts exceeding the threshold on enforced endpoints are immediately rejected with `429 Too Many Requests`.
 
 ### 3.2 Horizontal Scaling Limitation (Cloud Run Multi-Instance)
 > [!IMPORTANT]
@@ -83,10 +91,13 @@ For true cluster-wide rate limiting across horizontal Cloud Run instances:
   2. If using `x-forwarded-for`, reads the **rightmost** (last) entry appended by the trusted ingress reverse proxy (`parts[parts.length - 1]`), ensuring client-injected headers cannot bypass quota tracking.
   3. Falls back to user identifier (`user:<userId>`) for authenticated student/instructor routes.
 
-### 4.2 Memory Leak Prevention & Eviction Bounds
-- **Bounded Capacity:** Capped at `MAX_RATE_LIMIT_ENTRIES = 10,000` entries.
-- **Active Timestamp Pruning:** Expired timestamps older than the sliding window are pruned on every check.
-- **Store Size Recovery:** When the store reaches capacity, `pruneRateLimitStore()` executes a sweep, deleting inactive buckets where all timestamps have lapsed.
+### 4.2 Memory Management & Pruning Behavior
+- **Pruning Trigger Threshold:** The store triggers a cleanup sweep when `rateLimitStore.size >= MAX_RATE_LIMIT_ENTRIES` (10,000 entries) upon encountering an unregistered key.
+- **Active Timestamp Pruning:** On each request check, timestamps older than the configured tier window are filtered out for the queried key.
+- **Retention Sweep:** `pruneRateLimitStore()` iterates over store entries and deletes only buckets whose timestamps are completely older than 24 hours (`maxRetention = 24 * 60 * 60 * 1000`).
+- **Pruning Limitation (Not a Guaranteed Hard Cap):**
+  > [!WARNING]
+  > `MAX_RATE_LIMIT_ENTRIES = 10,000` is **not a guaranteed hard cap**. Because `pruneRateLimitStore` only removes inactive keys whose timestamps are older than 24 hours, if 10,000 or more distinct keys remain active within the 24-hour window, the pruning sweep removes 0 entries. Since the current implementation does not implement an eviction policy (such as LRU or FIFO) or a fail-closed rejection policy when full, `rateLimitStore.set(key, activeTimestamps)` continues to add new keys and the in-memory map will grow past 10,000 entries. Enforcing a strict memory cap requires an agreed architectural decision on eviction/rejection or moving to an external store (e.g. Redis).
 
 ---
 
