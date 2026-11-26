@@ -43,6 +43,7 @@ export class AuditIntegrityService {
         let invalidSeals = 0;
         let missingSequences = 0;
         let highestSequence = 0;
+        let anyRecordHasSeal = false;
         const cutoverSequence = integrityState?.cutoverSequence ?? 1;
         let expectedSequence = cutoverSequence;
         let lastSealedRecordHmac: string | undefined = undefined;
@@ -57,9 +58,30 @@ export class AuditIntegrityService {
             checkedRecords += 1;
             const integrityRecord: AuditIntegrityRecord = record;
             const sequence = integrityRecord.sequence;
+            const hasSeal = Boolean(integrityRecord.integritySeal && integrityRecord.integrityKeyId);
+            if (hasSeal || (typeof sequence === 'number' && Number.isSafeInteger(sequence) && sequence > 0) || integrityRecord.previousSeal) {
+                anyRecordHasSeal = true;
+            }
 
             // Legacy pre-cutover records or records with no sequence
             if (!Number.isSafeInteger(sequence) || !sequence || sequence < cutoverSequence) {
+                if (hasSeal) {
+                    if (!Number.isSafeInteger(sequence) || !sequence) {
+                        // Flag records that carry a seal but have no sequence number
+                        invalidSeals += 1;
+                        addDiagnostic({ code: 'SEAL_INVALID', sequence: undefined });
+                        continue;
+                    }
+                    // For sealed records below cutoverSequence with a valid sequence number:
+                    // Verify using verifyAuditIntegritySeal (which accepts legacy v1 seals below cutover)
+                    if (verifyAuditIntegritySeal(integrityRecord, cutoverSequence).valid) {
+                        sealedRecords += 1;
+                    } else {
+                        invalidSeals += 1;
+                        addDiagnostic({ code: 'SEAL_INVALID', sequence });
+                    }
+                    continue;
+                }
                 // If cutover is active and an unsealed record was created after cutover date, it is an invalid injection
                 const isAfterCutover = Boolean(
                     integrityState?.cutoverDate && integrityRecord.createdAt &&
@@ -115,7 +137,7 @@ export class AuditIntegrityService {
 
         const recordedHighWater = integrityState?.lastSequence ?? 0;
         const integrityStateRecord: AuditIntegrityState | null = integrityState;
-        const trailHasBeenSealed = highestSequence > 0 || sealedRecords > 0 || Boolean(
+        const trailHasBeenSealed = highestSequence > 0 || sealedRecords > 0 || anyRecordHasSeal || Boolean(
             integrityStateRecord && (
                 integrityStateRecord.integritySeal ||
                 integrityStateRecord.lastRecordHmac ||
