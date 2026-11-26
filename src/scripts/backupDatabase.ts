@@ -2,9 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
-import { EJSON } from 'bson';
+import { BSON } from 'mongodb';
 import mongoose from 'mongoose';
 import { connectDB } from '../lib/db';
+
+const { EJSON } = BSON;
 
 export interface CollectionBackupMeta {
   name: string;

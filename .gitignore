@@ -46,6 +46,7 @@ scratch/
 
 # Runtime and test storage
 /data/
+backups/
 
 next_extracted/
 

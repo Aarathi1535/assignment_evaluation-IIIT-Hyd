@@ -2,10 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
-import { EJSON } from 'bson';
+import { BSON } from 'mongodb';
 import mongoose from 'mongoose';
 import { connectDB, isTransactionCapable } from '../lib/db';
 import { BackupManifest, computeManifestHash } from './backupDatabase';
+
+const { EJSON } = BSON;
 
 export interface RestoreOptions {
   backupDir: string;
@@ -13,6 +15,7 @@ export interface RestoreOptions {
   dropExisting?: boolean;
   confirmDestructive?: boolean;
   allowProductionRestore?: boolean;
+  targetDb?: string;
   collections?: string[];
   connection?: mongoose.Connection;
 }
@@ -28,13 +31,40 @@ export interface RestoreResult {
 export async function restoreDatabase(options: RestoreOptions): Promise<RestoreResult> {
   const { backupDir, dryRun = false, dropExisting = false, confirmDestructive = false } = options;
 
-  // Safety Guard 1: Block production restoration unless explicitly granted
-  if (process.env.NODE_ENV === 'production' && !options.allowProductionRestore) {
-    throw new Error(
-      'CRITICAL SAFETY ERROR: Direct database restoration is blocked in NODE_ENV=production. ' +
-      'Use MongoDB Atlas Point-in-Time Recovery (PITR) for production disaster recovery, ' +
-      'or pass allowProductionRestore: true for verified recovery drills.'
-    );
+  let conn = options.connection;
+  if (!conn) {
+    const mongooseInstance = await connectDB();
+    conn = mongooseInstance.connection;
+  }
+
+  const db = conn.db;
+  if (!db) {
+    throw new Error('Database connection is not ready or has no active db instance');
+  }
+
+  // Safety Guard 1: Guard against accidental restore on remote or production databases
+  const host = conn.host || '';
+  const isLocalHost = /^(localhost|127\.0\.0\.1|::1|mongodb)$/i.test(host) ||
+    host.includes('localhost') ||
+    host.includes('127.0.0.1');
+
+  if (process.env.NODE_ENV === 'production' || !isLocalHost) {
+    if (!options.allowProductionRestore) {
+      throw new Error(
+        `CRITICAL SAFETY ERROR: Direct database restoration is blocked for host "${host}" ` +
+        `(NODE_ENV="${process.env.NODE_ENV}"). Remote/production restore is prohibited without explicit authorization. ` +
+        `Use MongoDB Atlas Point-in-Time Recovery (PITR) for production disaster recovery, ` +
+        `or pass allowProductionRestore: true along with matching targetDb for verified recovery drills.`
+      );
+    }
+
+    if (!options.targetDb || options.targetDb !== db.databaseName) {
+      throw new Error(
+        `TARGET DATABASE MISMATCH: Target database on host "${host}" is "${db.databaseName}", ` +
+        `but targetDb is "${options.targetDb || '<omitted>'}". ` +
+        `To prevent accidental restoration into the wrong database, targetDb must explicitly match the connected database name.`
+      );
+    }
   }
 
   // Safety Guard 2: Require explicit confirmation for destructive collection drop
@@ -68,17 +98,6 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
     if (manifestSha256 !== expectedManifestHash) {
       errors.push(`Manifest integrity hash mismatch: expected ${expectedManifestHash}, got ${manifestSha256}`);
     }
-  }
-
-  let conn = options.connection;
-  if (!conn) {
-    const mongooseInstance = await connectDB();
-    conn = mongooseInstance.connection;
-  }
-
-  const db = conn.db;
-  if (!db) {
-    throw new Error('Database connection is not ready or has no active db instance');
   }
 
   const targetCollectionNames = options.collections && options.collections.length > 0
@@ -184,7 +203,21 @@ export async function restoreDatabase(options: RestoreOptions): Promise<RestoreR
       await session.endSession();
     }
   } else {
-    // Standalone fallback for isolated local development
+    // Standalone fallback: Require an empty target collection if not dropping existing
+    if (!dropExisting) {
+      for (const colName of targetCollectionNames) {
+        const col = db.collection(colName);
+        const count = await col.countDocuments();
+        if (count > 0) {
+          throw new Error(
+            `NON-TRANSACTIONAL RESTORE BLOCKED: Target collection "${colName}" already contains ${count} documents. ` +
+            `Without replica set transactions, restoring into a non-empty collection can result in partial or duplicate records if interrupted. ` +
+            `Either use a replica set with transaction support, pass dropExisting: true (with confirmDestructive: true), or restore into an empty database.`
+          );
+        }
+      }
+    }
+
     for (const colName of targetCollectionNames) {
       const docs = parsedDataPerCollection[colName];
       const col = db.collection(colName);
@@ -214,10 +247,12 @@ if (require.main === module) {
   const dropExisting = args.includes('--drop-existing');
   const confirmDestructive = args.includes('--confirm-destructive');
   const allowProd = args.includes('--allow-production-restore');
-  const backupDirArg = args.find((a) => !a.startsWith('--'));
+  const targetDbIndex = args.indexOf('--target-db');
+  const targetDb = targetDbIndex !== -1 && args[targetDbIndex + 1] ? args[targetDbIndex + 1] : undefined;
+  const backupDirArg = args.find((a) => !a.startsWith('--') && a !== targetDb);
 
   if (!backupDirArg) {
-    console.error('Usage: tsx src/scripts/restoreDatabase.ts <backup-directory> [--dry-run] [--drop-existing --confirm-destructive]');
+    console.error('Usage: tsx src/scripts/restoreDatabase.ts <backup-directory> [--dry-run] [--drop-existing --confirm-destructive] [--target-db <name>] [--allow-production-restore]');
     process.exit(1);
   }
 
@@ -227,6 +262,7 @@ if (require.main === module) {
     dropExisting,
     confirmDestructive,
     allowProductionRestore: allowProd,
+    targetDb,
   })
     .then((res) => {
       if (res.success) {

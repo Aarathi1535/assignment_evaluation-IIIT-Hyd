@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
-import { ObjectId } from 'bson';
+import { ObjectId } from 'mongodb';
 import { createDatabaseBackup } from '../scripts/backupDatabase';
 import { restoreDatabase } from '../scripts/restoreDatabase';
 
@@ -106,7 +106,24 @@ describe('AE-233: Backup and Disaster Recovery Engine', () => {
           backupDir,
           connection: mongoose.connection,
         })
-      ).rejects.toThrow(/CRITICAL SAFETY ERROR: Direct database restoration is blocked in NODE_ENV=production/);
+      ).rejects.toThrow(/CRITICAL SAFETY ERROR: Direct database restoration is blocked/);
+    });
+
+    it('blocks restoration when targetDb is omitted or does not match connected database', async () => {
+      Object.assign(process.env, { NODE_ENV: 'production' });
+
+      const backupDir = path.join(testOutputDir, 'target-db-guard-test');
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, 'manifest.json'), JSON.stringify({ collections: {} }), 'utf8');
+
+      await expect(
+        restoreDatabase({
+          backupDir,
+          allowProductionRestore: true,
+          targetDb: 'wrong_database_name',
+          connection: mongoose.connection,
+        })
+      ).rejects.toThrow(/TARGET DATABASE MISMATCH/);
     });
 
     it('rejects dropExisting without explicit confirmDestructive flag', async () => {
