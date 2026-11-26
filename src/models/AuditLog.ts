@@ -102,6 +102,19 @@ async function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function checkRecordExists(sequence: number, session?: mongoose.ClientSession): Promise<boolean> {
+    if (session) {
+        try {
+            const inSession = await AuditLog.exists({ sequence }).session(session);
+            if (inSession) return true;
+        } catch {
+            // Best effort session check
+        }
+    }
+    const inDb = await AuditLog.exists({ sequence });
+    return !!inDb;
+}
+
 export interface ReconcileOptions {
     maxWaitMs?: number;
     force?: boolean;
@@ -130,7 +143,7 @@ export async function reconcileOrphanedIntegrityState(
     }
 
     // 1. Check if the record for state.lastSequence actually exists in AuditLog
-    let recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+    let recordExists = await checkRecordExists(state.lastSequence, options.session);
     if (recordExists) {
         return state;
     }
@@ -148,7 +161,7 @@ export async function reconcileOrphanedIntegrityState(
         const startTime = Date.now();
         while (Date.now() - startTime < maxWaitMs) {
             await sleep(pollInterval);
-            recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+            recordExists = await checkRecordExists(state.lastSequence, options.session);
             if (recordExists) {
                 return state;
             }
@@ -159,7 +172,7 @@ export async function reconcileOrphanedIntegrityState(
     }
 
     // 4. Re-check existence after wait
-    recordExists = await AuditLog.exists({ sequence: state.lastSequence });
+    recordExists = await checkRecordExists(state.lastSequence, options.session);
     if (recordExists) {
         return state;
     }
@@ -301,7 +314,7 @@ export async function allocateAuditSequence(
 
                 // If another instance is actively persisting state.lastSequence within its lease,
                 // wait for it to commit before allocating nextSequence.
-                if (state.lastSequence > 0 && !await AuditLog.exists({ sequence: state.lastSequence })) {
+                if (state.lastSequence > 0 && !await checkRecordExists(state.lastSequence, options?.session)) {
                     const isLeaseActive = state.leaseExpiresAt && new Date(state.leaseExpiresAt).getTime() > Date.now();
                     if (isLeaseActive && attempt < maxRetries) {
                         await sleep(50 * attempt);
