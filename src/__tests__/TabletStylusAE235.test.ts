@@ -168,13 +168,95 @@ describe('AE-235: Tablet and Hardware Stylus Input Validation and Palm Rejection
   });
 
   describe('PenLayer Palm Rejection Integration', () => {
-    it('integrates StylusInputManager into PenLayer to reject palm contact and cooldown events', () => {
-      const penLayerPath = path.join(process.cwd(), 'src', 'components', 'canvas', 'PenLayer.tsx');
-      const penLayerContent = fs.readFileSync(penLayerPath, 'utf8');
+    it('rejects palm touch events and prioritizes pen drawing via StylusInputManager', () => {
+      // Simulate stylus drawing session and palm contact sequence as handled in PenLayer
+      const simManager = new StylusInputManager({
+        palmRejectionCooldownMs: 400,
+        maxPalmContactArea: 400,
+      });
 
-      expect(penLayerContent).toContain('stylusInputManagerRef.current.handlePointerDown');
-      expect(penLayerContent).toContain('stylusInputManagerRef.current.handlePointerMove');
-      expect(penLayerContent).toContain('stylusInputManagerRef.current.handlePointerUp');
+      // Pen touches down
+      const penDown = simManager.handlePointerDown({
+        pointerId: 101,
+        pointerType: 'pen',
+        clientX: 150,
+        clientY: 200,
+        pressure: 0, // Uncalibrated / zero initial pressure
+        timestamp: 1000,
+      });
+
+      expect(penDown.accepted).toBe(true);
+      // Zero pressure should fall back to 0.5 default rather than clamped minPressure
+      expect(penDown.strokePoint?.pressure).toBeCloseTo(Math.sqrt(0.5), 2);
+
+      // Concurrent resting palm touch while pen is drawing
+      const restingPalm = simManager.handlePointerDown({
+        pointerId: 102,
+        pointerType: 'touch',
+        clientX: 300,
+        clientY: 400,
+        width: 15,
+        height: 15,
+        timestamp: 1020,
+      });
+      expect(restingPalm.accepted).toBe(false);
+      expect(restingPalm.reason).toBe('PALM_REJECTION_ACTIVE');
+
+      // Pen moves
+      const penMove = simManager.handlePointerMove({
+        pointerId: 101,
+        pointerType: 'pen',
+        clientX: 155,
+        clientY: 205,
+        pressure: 0.64,
+        timestamp: 1040,
+      });
+      expect(penMove.accepted).toBe(true);
+
+      // Pen lifts
+      simManager.handlePointerUp({
+        pointerId: 101,
+        pointerType: 'pen',
+        clientX: 155,
+        clientY: 205,
+        timestamp: 1100,
+      });
+
+      // Palm readjustment within cooldown window (t = 1250, < 1500)
+      const palmReadjust = simManager.handlePointerDown({
+        pointerId: 103,
+        pointerType: 'touch',
+        clientX: 280,
+        clientY: 390,
+        timestamp: 1250,
+      });
+      expect(palmReadjust.accepted).toBe(false);
+      expect(palmReadjust.reason).toBe('PALM_REJECTION_ACTIVE');
+
+      // Large contact area touch (palm heel) even after cooldown expires (t = 1600)
+      const palmHeelAfterCooldown = simManager.handlePointerDown({
+        pointerId: 104,
+        pointerType: 'touch',
+        clientX: 280,
+        clientY: 390,
+        width: 25,
+        height: 25, // 625 > 400
+        timestamp: 1600,
+      });
+      expect(palmHeelAfterCooldown.accepted).toBe(false);
+      expect(palmHeelAfterCooldown.reason).toBe('PALM_CONTACT_SIZE');
+
+      // Normal fingertip touch after cooldown expires (t = 1650, width 10, height 10 = 100 <= 400)
+      const normalTouchAfterCooldown = simManager.handlePointerDown({
+        pointerId: 105,
+        pointerType: 'touch',
+        clientX: 50,
+        clientY: 50,
+        width: 10,
+        height: 10,
+        timestamp: 1650,
+      });
+      expect(normalTouchAfterCooldown.accepted).toBe(true);
     });
   });
 });

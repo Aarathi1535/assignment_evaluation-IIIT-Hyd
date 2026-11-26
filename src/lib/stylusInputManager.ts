@@ -66,7 +66,10 @@ export class StylusInputManager {
     if (type === 'pen') {
       this.activeStylusPointerId = event.pointerId;
       this.lastStylusTimestamp = now;
-      const mappedPressure = this.mapPressure(event.pressure ?? 0.5);
+      // When raw pressure is 0 or undefined, default to 0.5 to coordinate with
+      // cross-browser/Apple Pencil initial contact behavior (#361) rather than producing a hairline stroke.
+      const rawPressure = event.pressure !== undefined && event.pressure > 0 ? event.pressure : 0.5;
+      const mappedPressure = this.mapPressure(rawPressure);
 
       return {
         accepted: true,
@@ -132,7 +135,8 @@ export class StylusInputManager {
 
     if (type === 'pen') {
       this.lastStylusTimestamp = now;
-      const mappedPressure = this.mapPressure(event.pressure ?? 0.5);
+      const rawPressure = event.pressure !== undefined && event.pressure > 0 ? event.pressure : 0.5;
+      const mappedPressure = this.mapPressure(rawPressure);
 
       return {
         accepted: true,
